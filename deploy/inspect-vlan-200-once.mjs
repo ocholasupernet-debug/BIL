@@ -117,6 +117,34 @@ try {
       }
 
       result.routerApiReachable = true;
+      result.serviceSubnet = diagnostics.assignment?.subnet ?? port.subnet_range ?? null;
+      result.serviceGateway = diagnostics.assignment?.gateway ?? null;
+      result.vlanInterfaceAddresses = Array.isArray(diagnostics.addresses)
+        ? diagnostics.addresses.map(row => ({
+          address: row.address ?? null,
+          interface: row.interface ?? null,
+          disabled: row.disabled ?? null,
+        }))
+        : [];
+      const dhcpServer = Array.isArray(diagnostics.dhcpServers) ? diagnostics.dhcpServers[0] : undefined;
+      result.dhcpServer = dhcpServer ? {
+        name: dhcpServer.name ?? null,
+        interface: dhcpServer.interface ?? null,
+        addressPool: dhcpServer["address-pool"] ?? dhcpServer.address_pool ?? null,
+        disabled: dhcpServer.disabled ?? null,
+        running: dhcpServer.running ?? null,
+      } : null;
+      const dhcpNetwork = Array.isArray(diagnostics.dhcpNetworks) ? diagnostics.dhcpNetworks[0] : undefined;
+      result.dhcpNetwork = dhcpNetwork ? {
+        address: dhcpNetwork.address ?? null,
+        gateway: dhcpNetwork.gateway ?? null,
+        dnsServer: dhcpNetwork["dns-server"] ?? dhcpNetwork.dns_server ?? null,
+      } : null;
+      result.boundLeaseCount = Array.isArray(diagnostics.leases)
+        ? diagnostics.leases.filter(row => String(row.status ?? "").toLowerCase() === "bound").length
+        : null;
+      result.hotspotHostCount = Array.isArray(diagnostics.hotspotHosts) ? diagnostics.hotspotHosts.length : null;
+      result.arpEntryCount = Array.isArray(diagnostics.arp) ? diagnostics.arp.length : null;
       const bridge = (diagnostics.bridge ?? []).find(row =>
         row.name === diagnostics.assignment?.parentBridge,
       );
@@ -199,6 +227,7 @@ try {
       linkDetected: port.link_detected ?? null,
       lastLinkCheckedAt: port.last_link_checked_at ?? null,
       handoffInterface: port.handoff_interface ?? null,
+      subnetRange: port.subnet_range ?? null,
     })),
     routerDiagnostics: results,
   };
