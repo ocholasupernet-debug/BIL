@@ -8,17 +8,21 @@ import {
   CartesianGrid, Line, LineChart, Legend, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
 } from "recharts";
+import { formatBinaryBytes } from "@/lib/formatBinaryBytes";
+import "./Storage.css";
 
 const C = {
-  card: "rgba(255,255,255,0.04)",
-  border: "var(--isp-accent-glow)",
+  card: "var(--sa-panel-strong)",
+  inner: "var(--storage-inner)",
+  input: "var(--isp-input-bg)",
+  border: "var(--sa-line)",
   accent: "var(--isp-accent)",
-  text: "#e2e8f0",
-  muted: "#64748b",
-  sub: "#94a3b8",
-  green: "#4ade80",
-  red: "#f87171",
-  amber: "#fbbf24",
+  text: "var(--sa-ink)",
+  muted: "var(--sa-muted)",
+  sub: "var(--isp-text-muted)",
+  green: "var(--storage-green)",
+  red: "var(--storage-red)",
+  amber: "var(--storage-amber)",
 };
 
 interface AdminUsage {
@@ -160,10 +164,7 @@ interface StorageData {
 
 function formatBytes(value: number | null): string {
   if (value === null) return "Not configured";
-  if (value <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-  const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
-  return `${(value / 1024 ** exponent).toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
+  return formatBinaryBytes(value);
 }
 
 function formatDate(value: string | null): string {
@@ -213,13 +214,13 @@ function StatCard({ label, value, detail, icon: Icon, color = C.accent }: {
   color?: string;
 }) {
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: "16px 18px" }}>
+    <div className="storage-stat-card" style={{ "--storage-stat-color": color } as React.CSSProperties}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-        <span style={{ color: C.muted, fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase" }}>{label}</span>
+        <span className="storage-stat-label">{label}</span>
         <Icon size={16} color={color} />
       </div>
-      <strong style={{ display: "block", color, fontSize: "1.45rem", marginTop: 10 }}>{value}</strong>
-      <span style={{ color: C.sub, fontSize: 11 }}>{detail}</span>
+      <strong className="storage-stat-value" style={{ display: "block", fontSize: "1.3rem", marginTop: 8 }}>{value}</strong>
+      <span className="storage-stat-detail">{detail}</span>
     </div>
   );
 }
@@ -238,9 +239,9 @@ function Button({ children, onClick, disabled = false, danger = false, secondary
       style={{
         display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
         borderRadius: 8, padding: "8px 12px", fontSize: 11, fontWeight: 800, cursor: disabled ? "not-allowed" : "pointer",
-        color: danger ? C.red : secondary ? C.sub : "white",
-        background: danger ? "rgba(239,68,68,0.1)" : secondary ? "rgba(255,255,255,0.05)" : C.accent,
-        border: `1px solid ${danger ? "rgba(239,68,68,0.25)" : secondary ? "rgba(255,255,255,0.1)" : C.accent}`,
+        color: danger ? C.red : secondary ? C.text : "hsl(var(--primary-foreground))",
+        background: danger ? C.card : secondary ? C.input : C.accent,
+        border: `1px solid ${danger ? C.red : secondary ? C.border : C.accent}`,
         opacity: disabled ? 0.5 : 1,
       }}
     >
@@ -437,10 +438,10 @@ export default function SuperAdminStorage() {
 
   return (
     <SuperAdminLayout>
-      <div style={{ maxWidth: 1180 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 22 }}>
+      <div className="storage-page" style={{ maxWidth: 1180 }}>
+        <div className="storage-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 16 }}>
           <div>
-            <h1 style={{ color: "white", fontSize: "1.45rem", fontWeight: 850, margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
+            <h1 style={{ color: C.text, fontSize: "1.4rem", fontWeight: 700, margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
               <HardDrive size={23} color={C.accent} /> Storage governance
             </h1>
             <p style={{ color: C.muted, fontSize: 12, margin: "5px 0 0" }}>Measure tenant-owned data and manage reviewed cleanup without touching live service records.</p>
@@ -460,7 +461,7 @@ export default function SuperAdminStorage() {
           <div style={{ color: C.muted, padding: 60, textAlign: "center" }}><Loader2 size={24} style={{ animation: "spin 1s linear infinite" }} /><p>Loading measured storage…</p></div>
         ) : data && (
           <>
-            <div className="storage-stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 14, marginBottom: 18 }}>
+            <div className="storage-stat-grid">
               <StatCard label="Measured in use" value={formatBytes(data.totalUsedBytes)} detail={data.measurement.tenantRowPayload.status === "available" ? `Tenant row estimate · ${formatDate(data.measurement.tenantRowPayload.measuredAt)}` : "Tenant estimate unavailable"} icon={Database} color={data.totalUsedBytes === null ? C.amber : C.accent} />
               <StatCard label="Platform capacity" value={formatBytes(data.capacityBytes)} detail={data.capacityBytes === null ? "Configure a capacity budget below" : `${data.usagePercent?.toFixed(1)}% · ${data.capacity.source} · ${formatDate(data.capacity.measuredAt)}`} icon={HardDrive} color={data.capacityBytes === null ? C.amber : C.accent} />
               <StatCard label="Storage left" value={formatBytes(data.freeBytes)} detail={data.freeSpace.source ? `${data.freeSpace.source} · ${formatDate(data.freeSpace.measuredAt)}` : "Remaining capacity is unknown"} icon={ShieldCheck} color={data.freeBytes === null ? C.amber : C.green} />
@@ -474,32 +475,32 @@ export default function SuperAdminStorage() {
               </span>
             </div>
 
-            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
+            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
               <div style={{ marginBottom: 12 }}>
-                <h2 style={{ margin: 0, color: "white", fontSize: 14 }}>Connected physical storage sources</h2>
+                <h2 style={{ margin: 0, color: C.text, fontSize: 14 }}>Connected physical storage sources</h2>
                 <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 11 }}>These measurements are kept separate from tenant row-payload estimates. Every value carries its source and measurement time.</p>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+              <div className="storage-source-grid">
                 {data.measurement.physicalSources.map(source => {
                   const sourceStatusColor = statusColor(source.status);
                   const buckets = source.details.buckets ?? [];
                   return (
-                    <div key={source.source} style={{ background: "rgba(0,0,0,0.16)", border: `1px solid ${C.border}`, borderRadius: 10, padding: 13 }}>
+                    <div key={source.source} style={{ background: C.inner, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-                        <strong style={{ color: "white", fontSize: 12 }}>{sourceLabel(source.source)}</strong>
+                        <strong style={{ color: C.text, fontSize: 12 }}>{sourceLabel(source.source)}</strong>
                         <span style={{ color: sourceStatusColor, fontSize: 9, fontWeight: 800, textTransform: "uppercase" }}>{source.status}</span>
                       </div>
                       <p style={{ color: C.muted, fontSize: 10, margin: "6px 0 10px" }}>{source.measurementKind}</p>
-                      <div style={{ color: source.usedBytes === null ? C.amber : C.accent, fontWeight: 800, fontSize: 16 }}>{formatBytes(source.usedBytes)} used</div>
-                      <div style={{ color: C.sub, fontSize: 10, marginTop: 4 }}>
+                      <div className="storage-technical" style={{ color: C.text, fontWeight: 700, fontSize: 15 }}>{formatBytes(source.usedBytes)} used</div>
+                      <div className="storage-technical" style={{ color: C.sub, fontSize: 10, marginTop: 4 }}>
                         {source.capacityBytes === null ? "Capacity: unavailable" : `Capacity: ${formatBytes(source.capacityBytes)}`}
                         {" · "}
                         {source.freeBytes === null ? "Free: unavailable" : `Free: ${formatBytes(source.freeBytes)}`}
                       </div>
-                      <div style={{ color: C.muted, fontSize: 9, marginTop: 8 }}>Measured {formatDate(source.measuredAt)}</div>
+                      <div className="storage-technical" style={{ color: C.muted, fontSize: 9, marginTop: 8 }}>Measured {formatDate(source.measuredAt)}</div>
                       {source.error && <div style={{ color: sourceStatusColor, fontSize: 10, marginTop: 7 }}>{source.error}</div>}
                       {buckets.length > 0 && <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 9, paddingTop: 8 }}>
-                        {buckets.map(bucket => <div key={bucket.bucket} style={{ display: "flex", justifyContent: "space-between", color: bucket.status === "available" ? C.sub : C.red, fontSize: 10, padding: "2px 0" }}><span>{bucket.bucket}</span><span>{bucket.status === "available" ? formatBytes(bucket.usedBytes) : "unavailable"}</span></div>)}
+                        {buckets.map(bucket => <div key={bucket.bucket} style={{ display: "flex", justifyContent: "space-between", color: bucket.status === "available" ? C.sub : C.red, fontSize: 10, padding: "2px 0" }}><span>{bucket.bucket}</span><span className="storage-technical">{bucket.status === "available" ? formatBytes(bucket.usedBytes) : "unavailable"}</span></div>)}
                       </div>}
                     </div>
                   );
@@ -507,12 +508,12 @@ export default function SuperAdminStorage() {
               </div>
             </section>
 
-            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
+            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
               <div style={{ marginBottom: 14 }}>
-                <h2 style={{ margin: 0, color: "white", fontSize: 14 }}>Storage history &amp; capacity trends</h2>
+                <h2 style={{ margin: 0, color: C.text, fontSize: 14 }}>Storage history &amp; capacity trends</h2>
                 <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 11 }}>Last {data.history.windowDays} days of server snapshots. Only available samples are plotted; partial, stale, and unavailable samples are kept in the status ledger and never treated as zero.</p>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.55fr) minmax(240px, 0.75fr)", gap: 18, alignItems: "stretch" }}>
+              <div className="storage-trend-grid">
                 <div style={{ minWidth: 0, minHeight: 300 }}>
                   {trendData.length < 2 ? (
                     <div style={{ height: 300, display: "grid", placeItems: "center", color: C.muted, fontSize: 12, border: `1px dashed ${C.border}`, borderRadius: 10 }}>
@@ -521,22 +522,22 @@ export default function SuperAdminStorage() {
                   ) : (
                     <ResponsiveContainer width="100%" height={300}>
                       <LineChart data={trendData} margin={{ top: 8, right: 12, left: 8, bottom: 4 }}>
-                        <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                        <CartesianGrid stroke="var(--storage-chart-grid)" strokeDasharray="3 3" />
                         <XAxis dataKey="timestamp" type="number" domain={["dataMin", "dataMax"]} tickFormatter={value => new Date(Number(value)).toLocaleDateString("en-KE", { month: "short", day: "numeric" })} stroke={C.muted} tick={{ fontSize: 10 }} />
-                        <YAxis tickFormatter={value => formatBytes(Number(value))} stroke={C.muted} tick={{ fontSize: 10 }} width={68} />
-                        <Tooltip labelFormatter={value => new Date(Number(value)).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short", timeZone: "Africa/Nairobi" })} formatter={(value, name) => [formatBytes(Number(value)), ({ postgres: "Supabase Postgres", storage: "Supabase Storage objects", vps: "VPS filesystem", tenant: "Tenant row estimate" } as Record<string, string>)[String(name)] || String(name)]} contentStyle={{ background: "#17151b", border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontSize: 11 }} />
-                        <Legend formatter={value => ({ postgres: "Supabase Postgres", storage: "Storage objects", vps: "VPS filesystem", tenant: "Tenant estimate" } as Record<string, string>)[String(value)] || String(value)} wrapperStyle={{ fontSize: 10 }} />
-                        <Line type="monotone" dataKey="postgres" stroke="#60a5fa" strokeWidth={2} dot={false} connectNulls={false} />
-                        <Line type="monotone" dataKey="storage" stroke="#c084fc" strokeWidth={2} dot={false} connectNulls={false} />
-                        <Line type="monotone" dataKey="vps" stroke="#4ade80" strokeWidth={2} dot={false} connectNulls={false} />
-                        <Line type="monotone" dataKey="tenant" stroke={C.accent} strokeWidth={2} dot={false} connectNulls={false} />
+                        <YAxis tickFormatter={value => formatBinaryBytes(value)} stroke={C.muted} tick={{ fontSize: 10 }} width={68} />
+                        <Tooltip labelFormatter={value => new Date(Number(value)).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short", timeZone: "Africa/Nairobi" })} formatter={(value, name) => [formatBinaryBytes(value), ({ postgres: "Supabase Postgres", storage: "Supabase Storage objects", vps: "VPS filesystem", tenant: "Tenant row estimate" } as Record<string, string>)[String(name)] || String(name)]} contentStyle={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontSize: 11 }} />
+                        <Legend formatter={value => ({ postgres: "Supabase Postgres", storage: "Storage objects", vps: "VPS filesystem", tenant: "Tenant estimate" } as Record<string, string>)[String(value)] || String(value)} wrapperStyle={{ fontSize: 9, lineHeight: "14px" }} />
+                        <Line type="monotone" dataKey="postgres" stroke="var(--storage-chart-blue)" strokeWidth={1.8} dot={false} connectNulls={false} />
+                        <Line type="monotone" dataKey="storage" stroke="var(--storage-chart-violet)" strokeWidth={1.8} dot={false} connectNulls={false} />
+                        <Line type="monotone" dataKey="vps" stroke="var(--storage-chart-green)" strokeWidth={1.8} dot={false} connectNulls={false} />
+                        <Line type="monotone" dataKey="tenant" stroke={C.accent} strokeOpacity={0.85} strokeWidth={1.6} dot={false} connectNulls={false} />
                       </LineChart>
                     </ResponsiveContainer>
                   )}
                 </div>
-                <div style={{ background: "rgba(0,0,0,0.16)", border: `1px solid ${C.border}`, borderRadius: 10, padding: 14 }}>
+                <div style={{ background: C.inner, border: `1px solid ${C.border}`, borderRadius: 8, padding: 12 }}>
                   <div style={{ color: C.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em" }}>Capacity forecast</div>
-                  <strong style={{ display: "block", color: data.forecast.status === "available" ? C.accent : C.amber, fontSize: 17, marginTop: 9 }}>
+                  <strong className="storage-technical" style={{ display: "block", color: data.forecast.status === "available" ? C.text : C.amber, fontSize: 16, marginTop: 9 }}>
                     {data.forecast.status === "available" ? (data.forecast.projectedFullAt ? formatDate(data.forecast.projectedFullAt) : "At capacity") : data.forecast.status === "not_growing" ? "Not growing" : "Unavailable"}
                   </strong>
                   <p style={{ color: C.sub, fontSize: 11, lineHeight: 1.5, margin: "8px 0 0" }}>{data.forecast.reason || "Projected date uses the trend from available tenant row-estimate samples only."}</p>
@@ -545,7 +546,7 @@ export default function SuperAdminStorage() {
                   <div style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>Forecast source: tenant row estimates</div>
                 </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8, marginTop: 14 }}>
+              <div className="storage-ledger-grid" style={{ marginTop: 14 }}>
                 {[
                   ["supabase_postgres", data.history.physical.filter(point => point.source === "supabase_postgres")],
                   ["supabase_storage", data.history.physical.filter(point => point.source === "supabase_storage")],
@@ -557,8 +558,8 @@ export default function SuperAdminStorage() {
                     return counts;
                   }, {});
                   return (
-                    <div key={source as string} style={{ background: "rgba(0,0,0,0.12)", border: `1px solid ${C.border}`, borderRadius: 8, padding: 9, fontSize: 10 }}>
-                      <strong style={{ display: "block", color: "white", marginBottom: 6 }}>{source === "tenant_row_estimate" ? "Tenant estimate" : sourceLabel(source as string)}</strong>
+                    <div key={source as string} style={{ background: C.inner, border: `1px solid ${C.border}`, borderRadius: 8, padding: 9, fontSize: 10 }}>
+                      <strong style={{ display: "block", color: C.text, marginBottom: 6 }}>{source === "tenant_row_estimate" ? "Tenant estimate" : sourceLabel(source as string)}</strong>
                       {["available", "partial", "stale", "unavailable"].map(status => statuses[status] ? <span key={status} style={{ color: status === "available" ? C.green : status === "unavailable" ? C.red : C.amber, display: "block" }}>{status}: {statuses[status]}</span> : null)}
                       {!Object.keys(statuses).length && <span style={{ color: C.muted }}>No samples</span>}
                     </div>
@@ -567,16 +568,16 @@ export default function SuperAdminStorage() {
               </div>
             </section>
 
-            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+              <div className="storage-capacity-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
                 <div>
-                  <h2 style={{ margin: 0, color: "white", fontSize: 14 }}>Platform capacity</h2>
+                  <h2 style={{ margin: 0, color: C.text, fontSize: 14 }}>Platform capacity</h2>
                   <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 11 }}>Set the real storage budget used to calculate “Storage left”.</p>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <input value={capacityGb} onChange={event => setCapacityGb(event.target.value)} inputMode="decimal" placeholder="e.g. 250" style={{ width: 110, background: "rgba(0,0,0,0.2)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", color: C.text, fontSize: 12 }} />
+                <div className="storage-capacity-controls" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input className="storage-technical" value={capacityGb} onChange={event => setCapacityGb(event.target.value)} inputMode="decimal" placeholder="e.g. 250" aria-label="Platform capacity in gigabytes" style={{ width: 110, background: C.input, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", color: C.text, fontSize: 12 }} />
                   <span style={{ color: C.sub, fontSize: 11 }}>GB</span>
-                  <input value={warningPercent} onChange={event => setWarningPercent(event.target.value)} inputMode="numeric" min="1" max="100" placeholder="80" aria-label="Capacity warning threshold" style={{ width: 58, background: "rgba(0,0,0,0.2)", border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 8px", color: C.text, fontSize: 12 }} />
+                  <input className="storage-technical" value={warningPercent} onChange={event => setWarningPercent(event.target.value)} inputMode="numeric" min="1" max="100" placeholder="80" aria-label="Capacity warning threshold" style={{ width: 58, background: C.input, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 8px", color: C.text, fontSize: 12 }} />
                   <span style={{ color: C.sub, fontSize: 11 }}>% warning</span>
                   <Button onClick={() => void saveCapacity()} disabled={saving}>Save capacity</Button>
                 </div>
@@ -602,9 +603,9 @@ export default function SuperAdminStorage() {
               </div>
             </section>
 
-            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginBottom: 20 }}>
+            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", marginBottom: 14 }}>
               <div style={{ padding: "15px 18px", borderBottom: `1px solid ${C.border}` }}>
-                <h2 style={{ margin: 0, color: "white", fontSize: 14 }}>Usage by ISP admin</h2>
+                <h2 style={{ margin: 0, color: C.text, fontSize: 14 }}>Usage by ISP admin</h2>
                 <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 11 }}>Includes measured tenant-owned database row payloads and protected metadata; secrets are never displayed.</p>
               </div>
               <div style={{ overflowX: "auto" }}>
@@ -614,12 +615,12 @@ export default function SuperAdminStorage() {
                     {data.usage.map(admin => {
                       const share = data.totalUsedBytes !== null && data.totalUsedBytes > 0 && admin.bytes !== null ? admin.bytes / data.totalUsedBytes * 100 : 0;
                       return (
-                        <tr key={admin.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                          <td style={{ padding: "12px 16px" }}><div style={{ display: "flex", alignItems: "center", gap: 8 }}><UserRound size={14} color={C.accent} /><div><strong style={{ color: "white" }}>{admin.name || admin.username}</strong><span style={{ display: "block", color: C.muted, fontSize: 10 }}>{admin.email || admin.username}</span></div></div></td>
-                          <td style={{ padding: "12px 16px", color: C.accent, fontWeight: 800, whiteSpace: "nowrap" }}>{formatBytes(admin.bytes)}<div style={{ width: 110, height: 4, background: "rgba(255,255,255,0.08)", borderRadius: 4, marginTop: 6 }}><div style={{ width: `${Math.min(100, share)}%`, height: "100%", background: C.accent, borderRadius: 4 }} /></div></td>
-                          <td style={{ padding: "12px 16px", color: C.sub }}>{admin.rowCount === null ? "—" : admin.rowCount.toLocaleString()}</td>
-                          <td style={{ padding: "12px 16px", color: C.sub }}>{share.toFixed(1)}%</td>
-                          <td style={{ padding: "12px 16px", color: C.muted, maxWidth: 360 }}>{Object.entries(admin.breakdown).sort(([, a], [, b]) => b.bytes - a.bytes).slice(0, 4).map(([source, value]) => <span key={source} style={{ display: "inline-block", margin: "2px 6px 2px 0", padding: "3px 6px", background: "rgba(255,255,255,0.04)", borderRadius: 5, fontSize: 10 }}>{source}: {formatBytes(value.bytes)}</span>)}</td>
+                        <tr key={admin.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                          <td style={{ padding: "12px 16px" }}><div style={{ display: "flex", alignItems: "center", gap: 8 }}><UserRound size={14} color={C.accent} /><div><strong style={{ color: C.text }}>{admin.name || admin.username}</strong><span style={{ display: "block", color: C.muted, fontSize: 10 }}>{admin.email || admin.username}</span></div></div></td>
+                          <td className="storage-technical" style={{ padding: "12px 16px", color: C.text, fontWeight: 700, whiteSpace: "nowrap" }}>{formatBytes(admin.bytes)}<div style={{ width: 110, height: 4, background: C.inner, borderRadius: 4, marginTop: 6 }}><div style={{ width: `${Math.min(100, share)}%`, height: "100%", background: C.accent, borderRadius: 4 }} /></div></td>
+                          <td className="storage-technical" style={{ padding: "12px 16px", color: C.sub }}>{admin.rowCount === null ? "—" : admin.rowCount.toLocaleString()}</td>
+                          <td className="storage-technical" style={{ padding: "12px 16px", color: C.sub }}>{share.toFixed(1)}%</td>
+                          <td style={{ padding: "12px 16px", color: C.muted, maxWidth: 360 }}>{Object.entries(admin.breakdown).sort(([, a], [, b]) => b.bytes - a.bytes).slice(0, 4).map(([source, value]) => <span key={source} className="storage-technical" style={{ display: "inline-block", margin: "2px 6px 2px 0", padding: "3px 6px", background: C.inner, borderRadius: 5, fontSize: 10 }}>{source}: {formatBytes(value.bytes)}</span>)}</td>
                         </tr>
                       );
                     })}
@@ -628,51 +629,51 @@ export default function SuperAdminStorage() {
               </div>
             </section>
 
-            <div className="storage-work-grid" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.1fr) minmax(320px, 0.9fr)", gap: 18, alignItems: "start" }}>
-              <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden" }}>
+            <div className="storage-work-grid">
+              <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
                 <div style={{ padding: "15px 18px", borderBottom: `1px solid ${C.border}` }}>
-                  <h2 style={{ margin: 0, color: "white", fontSize: 14 }}>Eligible unused data</h2>
+                  <h2 style={{ margin: 0, color: C.text, fontSize: 14 }}>Eligible unused data</h2>
                   <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 11 }}>Only completed or failed router-migration packages older than 30 days can be selected.</p>
                 </div>
                 {data.candidates.length === 0 ? <div style={{ padding: 28, textAlign: "center", color: C.muted, fontSize: 12 }}><CheckCircle2 size={22} color={C.green} /><p>No eligible cleanup candidates found.</p></div> : (
                   <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                     <thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>{["", "ISP admin", "Source", "Age", "Size"].map(label => <th key={label} style={{ textAlign: "left", padding: "9px 12px", color: C.muted, fontSize: 9, textTransform: "uppercase" }}>{label}</th>)}</tr></thead>
-                    <tbody>{data.candidates.map(candidate => <tr key={candidate.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                    <tbody>{data.candidates.map(candidate => <tr key={candidate.id} style={{ borderBottom: `1px solid ${C.border}` }}>
                       <td style={{ padding: "10px 12px" }}><input type="checkbox" checked={selectedCandidateIds.includes(candidate.id)} onChange={() => toggleCandidate(candidate)} aria-label={`Select ${candidate.source_label}`} /></td>
                       <td style={{ padding: "10px 12px", color: C.sub }}>{adminsById.get(candidate.admin_id)?.name || `Admin #${candidate.admin_id}`}</td>
                       <td style={{ padding: "10px 12px", color: C.text }}>{candidate.source_label}<span style={{ display: "block", color: C.muted, fontSize: 9 }}>{candidate.status} · #{candidate.id}</span></td>
-                      <td style={{ padding: "10px 12px", color: C.sub }}>{formatDate(candidate.created_at)}</td>
-                      <td style={{ padding: "10px 12px", color: C.accent, fontWeight: 700 }}>{formatBytes(candidate.bytes)}</td>
+                      <td className="storage-technical" style={{ padding: "10px 12px", color: C.sub }}>{formatDate(candidate.created_at)}</td>
+                      <td className="storage-technical" style={{ padding: "10px 12px", color: C.text, fontWeight: 700 }}>{formatBytes(candidate.bytes)}</td>
                     </tr>)}</tbody>
                   </table></div>
                 )}
               </section>
 
-              <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18 }}>
-                <h2 style={{ margin: 0, color: "white", fontSize: 14 }}>Notify and schedule deletion</h2>
+              <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 14 }}>
+                <h2 style={{ margin: 0, color: C.text, fontSize: 14 }}>Notify and schedule deletion</h2>
                 <p style={{ color: C.muted, fontSize: 11, lineHeight: 1.5 }}>The admin receives an in-app notice and can recover the selected data before the countdown ends.</p>
                 <div style={{ display: "grid", gap: 10 }}>
                   <label style={{ color: C.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase" }}>Selected admin</label>
-                  <div style={{ padding: "9px 10px", background: "rgba(0,0,0,0.2)", borderRadius: 8, color: selectedAdmin ? C.text : C.muted, fontSize: 12 }}>{selectedAdmin?.name || "Select candidates from one admin"}</div>
+                  <div style={{ padding: "9px 10px", background: C.inner, border: `1px solid ${C.border}`, borderRadius: 8, color: selectedAdmin ? C.text : C.muted, fontSize: 12 }}>{selectedAdmin?.name || "Select candidates from one admin"}</div>
                   <label style={{ color: C.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase" }}>Selected data</label>
-                  <div style={{ color: selectedCandidates.length ? C.accent : C.muted, fontSize: 12 }}>{selectedCandidates.length} item(s) · {formatBytes(selectedCandidates.reduce((sum, candidate) => sum + candidate.bytes, 0))}</div>
+                  <div className="storage-technical" style={{ color: selectedCandidates.length ? C.text : C.muted, fontSize: 12 }}>{selectedCandidates.length} item(s) · {formatBytes(selectedCandidates.reduce((sum, candidate) => sum + candidate.bytes, 0))}</div>
                   <label style={{ color: C.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase" }}>Reason</label>
-                  <textarea value={reason} onChange={event => setReason(event.target.value)} placeholder="Explain why this aged data should be removed…" rows={3} maxLength={500} style={{ resize: "vertical", background: "rgba(0,0,0,0.2)", border: `1px solid ${C.border}`, borderRadius: 8, padding: 10, color: C.text, fontFamily: "inherit", fontSize: 12 }} />
+                  <textarea value={reason} onChange={event => setReason(event.target.value)} placeholder="Explain why this aged data should be removed…" rows={3} maxLength={500} style={{ resize: "vertical", background: C.input, border: `1px solid ${C.border}`, borderRadius: 8, padding: 10, color: C.text, fontFamily: "inherit", fontSize: 12 }} />
                   <label style={{ color: C.muted, fontSize: 10, fontWeight: 800, textTransform: "uppercase" }}>Recovery period</label>
-                  <select value={delayDays} onChange={event => setDelayDays(event.target.value)} style={{ background: "#111827", border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 10px", color: C.text, fontSize: 12 }}><option value="1">1 day</option><option value="7">7 days</option><option value="14">14 days</option><option value="30">30 days</option></select>
+                  <select value={delayDays} onChange={event => setDelayDays(event.target.value)} style={{ background: C.input, border: `1px solid ${C.border}`, borderRadius: 8, padding: "9px 10px", color: C.text, fontSize: 12 }}><option value="1">1 day</option><option value="7">7 days</option><option value="14">14 days</option><option value="30">30 days</option></select>
                   <Button onClick={() => void scheduleCleanup()} disabled={saving || !selectedAdminId || !selectedCandidateIds.length || reason.trim().length < 5}><Clock3 size={13} /> Notify admin and start countdown</Button>
                 </div>
               </section>
             </div>
 
-            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginTop: 18 }}>
-              <div style={{ padding: "15px 18px", borderBottom: `1px solid ${C.border}` }}><h2 style={{ margin: 0, color: "white", fontSize: 14 }}>Pending cleanups</h2></div>
-              {pendingRequests.length === 0 ? <div style={{ padding: 24, color: C.muted, fontSize: 12 }}>No pending deletion requests.</div> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}><thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>{["Admin", "Reason", "Items", "Deadline", "Status", "Actions"].map(label => <th key={label} style={{ textAlign: "left", padding: "9px 14px", color: C.muted, fontSize: 9, textTransform: "uppercase" }}>{label}</th>)}</tr></thead><tbody>{pendingRequests.map(request => <tr key={request.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}><td style={{ padding: "11px 14px", color: C.text }}>{adminsById.get(request.admin_id)?.name || `Admin #${request.admin_id}`}</td><td style={{ padding: "11px 14px", color: C.sub, maxWidth: 260 }}>{request.reason}</td><td style={{ padding: "11px 14px", color: C.sub }}>{Number(request.candidate_rows)} · {formatBytes(Number(request.candidate_bytes))}</td><td style={{ padding: "11px 14px", color: C.amber, whiteSpace: "nowrap" }}>{formatDate(request.scheduled_for)}<span style={{ display: "block", fontWeight: 800 }}>{countdown(request.scheduled_for, now)}</span></td><td style={{ padding: "11px 14px", color: request.status === "processing" ? C.amber : C.accent }}>{request.status}</td><td style={{ padding: "11px 14px" }}><div style={{ display: "flex", gap: 6 }}><Button onClick={() => void cancelRequest(request.id)} disabled={saving || request.status !== "pending"} secondary><XCircle size={12} /> Cancel</Button><Button onClick={() => { setConfirmDeleteId(request.id); setConfirmationText(""); }} disabled={saving || request.status !== "pending"} danger><Trash2 size={12} /> Delete anyway</Button></div></td></tr>)}</tbody></table></div>}
+            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", marginTop: 14 }}>
+              <div style={{ padding: "12px 14px", borderBottom: `1px solid ${C.border}` }}><h2 style={{ margin: 0, color: C.text, fontSize: 14 }}>Pending cleanups</h2></div>
+              {pendingRequests.length === 0 ? <div style={{ padding: 24, color: C.muted, fontSize: 12 }}>No pending deletion requests.</div> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}><thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>{["Admin", "Reason", "Items", "Deadline", "Status", "Actions"].map(label => <th key={label} style={{ textAlign: "left", padding: "9px 14px", color: C.muted, fontSize: 9, textTransform: "uppercase" }}>{label}</th>)}</tr></thead><tbody>{pendingRequests.map(request => <tr key={request.id} style={{ borderBottom: `1px solid ${C.border}` }}><td style={{ padding: "11px 14px", color: C.text }}>{adminsById.get(request.admin_id)?.name || `Admin #${request.admin_id}`}</td><td style={{ padding: "11px 14px", color: C.sub, maxWidth: 260 }}>{request.reason}</td><td className="storage-technical" style={{ padding: "11px 14px", color: C.sub }}>{Number(request.candidate_rows)} · {formatBytes(Number(request.candidate_bytes))}</td><td className="storage-technical" style={{ padding: "11px 14px", color: C.amber, whiteSpace: "nowrap" }}>{formatDate(request.scheduled_for)}<span style={{ display: "block", fontWeight: 800 }}>{countdown(request.scheduled_for, now)}</span></td><td style={{ padding: "11px 14px", color: request.status === "processing" ? C.amber : C.accent }}>{request.status}</td><td style={{ padding: "11px 14px" }}><div style={{ display: "flex", gap: 6 }}><Button onClick={() => void cancelRequest(request.id)} disabled={saving || request.status !== "pending"} secondary><XCircle size={12} /> Cancel</Button><Button onClick={() => { setConfirmDeleteId(request.id); setConfirmationText(""); }} disabled={saving || request.status !== "pending"} danger><Trash2 size={12} /> Delete anyway</Button></div></td></tr>)}</tbody></table></div>}
             </section>
 
-            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, overflow: "hidden", marginTop: 18 }}>
-              <div style={{ padding: "15px 18px", borderBottom: `1px solid ${C.border}` }}><h2 style={{ margin: 0, color: "white", fontSize: 14 }}>Cleanup history</h2></div>
-              {history.length === 0 ? <div style={{ padding: 24, color: C.muted, fontSize: 12 }}>No completed, cancelled, or failed cleanup requests yet.</div> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}><thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>{["Admin", "Scope", "Status", "Created", "Result"].map(label => <th key={label} style={{ textAlign: "left", padding: "9px 14px", color: C.muted, fontSize: 9, textTransform: "uppercase" }}>{label}</th>)}</tr></thead><tbody>{history.map(request => <tr key={request.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}><td style={{ padding: "11px 14px", color: C.text }}>{adminsById.get(request.admin_id)?.name || `Admin #${request.admin_id}`}</td><td style={{ padding: "11px 14px", color: C.sub }}>{request.scope} · #{request.id}</td><td style={{ padding: "11px 14px", color: request.status === "completed" ? C.green : request.status === "failed" ? C.red : C.muted }}>{request.status}</td><td style={{ padding: "11px 14px", color: C.muted }}>{formatDate(request.created_at)}</td><td style={{ padding: "11px 14px", color: request.failure_details ? C.red : C.sub }}>{request.failure_details || `${Number(request.candidate_rows)} row(s) · ${formatBytes(Number(request.candidate_bytes))}`}</td></tr>)}</tbody></table></div>}
+            <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden", marginTop: 14 }}>
+              <div style={{ padding: "12px 14px", borderBottom: `1px solid ${C.border}` }}><h2 style={{ margin: 0, color: C.text, fontSize: 14 }}>Cleanup history</h2></div>
+              {history.length === 0 ? <div style={{ padding: 24, color: C.muted, fontSize: 12 }}>No completed, cancelled, or failed cleanup requests yet.</div> : <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}><thead><tr style={{ borderBottom: `1px solid ${C.border}` }}>{["Admin", "Scope", "Status", "Created", "Result"].map(label => <th key={label} style={{ textAlign: "left", padding: "9px 14px", color: C.muted, fontSize: 9, textTransform: "uppercase" }}>{label}</th>)}</tr></thead><tbody>{history.map(request => <tr key={request.id} style={{ borderBottom: `1px solid ${C.border}` }}><td style={{ padding: "11px 14px", color: C.text }}>{adminsById.get(request.admin_id)?.name || `Admin #${request.admin_id}`}</td><td style={{ padding: "11px 14px", color: C.sub }}>{request.scope} · #{request.id}</td><td style={{ padding: "11px 14px", color: request.status === "completed" ? C.green : request.status === "failed" ? C.red : C.muted }}>{request.status}</td><td className="storage-technical" style={{ padding: "11px 14px", color: C.muted }}>{formatDate(request.created_at)}</td><td style={{ padding: "11px 14px", color: request.failure_details ? C.red : C.sub }}>{request.failure_details || `${Number(request.candidate_rows)} row(s) · ${formatBytes(Number(request.candidate_bytes))}`}</td></tr>)}</tbody></table></div>}
             </section>
           </>
         )}
@@ -680,17 +681,17 @@ export default function SuperAdminStorage() {
 
       {confirmDeleteId !== null && (
         <div style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(0,0,0,0.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}>
-          <div style={{ width: "100%", maxWidth: 440, background: "#111827", border: "1px solid rgba(239,68,68,0.35)", borderRadius: 14, padding: 22 }}>
-            <div style={{ display: "flex", gap: 10, alignItems: "center", color: C.red }}><AlertTriangle size={20} /><h2 style={{ margin: 0, color: "white", fontSize: 16 }}>Delete immediately?</h2></div>
+          <div className="storage-page" style={{ width: "100%", maxWidth: 440, background: C.card, border: `1px solid ${C.red}`, borderRadius: 10, padding: 20 }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", color: C.red }}><AlertTriangle size={20} /><h2 style={{ margin: 0, color: C.text, fontSize: 16 }}>Delete immediately?</h2></div>
             <p style={{ color: C.sub, fontSize: 12, lineHeight: 1.6 }}>This skips the admin recovery countdown and permanently removes the selected aged migration artifacts. Type <strong style={{ color: C.red }}>DELETE</strong> to continue.</p>
-            <input value={confirmationText} onChange={event => setConfirmationText(event.target.value)} placeholder="DELETE" autoFocus style={{ width: "100%", boxSizing: "border-box", background: "rgba(0,0,0,0.25)", border: "1px solid rgba(239,68,68,0.35)", borderRadius: 8, padding: 10, color: "white", fontSize: 13 }} />
+            <input value={confirmationText} onChange={event => setConfirmationText(event.target.value)} placeholder="DELETE" autoFocus style={{ width: "100%", boxSizing: "border-box", background: C.input, border: `1px solid ${C.red}`, borderRadius: 8, padding: 10, color: C.text, fontSize: 13 }} />
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}><Button secondary onClick={() => { setConfirmDeleteId(null); setConfirmationText(""); }}>Cancel</Button><Button danger disabled={saving || confirmationText !== "DELETE"} onClick={() => void deleteNow()}><Trash2 size={13} /> Delete anyway</Button></div>
           </div>
         </div>
       )}
 
-      {toast && <div style={{ position: "fixed", right: 22, bottom: 22, zIndex: 400, background: toast.ok ? "#052e24" : "#450a0a", border: `1px solid ${toast.ok ? C.green : C.red}`, borderRadius: 9, padding: "11px 16px", color: toast.ok ? C.green : C.red, fontSize: 12, fontWeight: 700 }}>{toast.message}</div>}
-      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}@media(max-width:900px){.storage-stat-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.storage-work-grid{grid-template-columns:1fr!important}}@media(max-width:560px){.storage-stat-grid{grid-template-columns:1fr!important}}`}</style>
+      {toast && <div style={{ position: "fixed", right: 22, bottom: 22, zIndex: 400, background: C.card, border: `1px solid ${toast.ok ? C.green : C.red}`, borderRadius: 9, padding: "11px 16px", color: toast.ok ? C.green : C.red, fontSize: 12, fontWeight: 700 }}>{toast.message}</div>}
+      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
     </SuperAdminLayout>
   );
 }

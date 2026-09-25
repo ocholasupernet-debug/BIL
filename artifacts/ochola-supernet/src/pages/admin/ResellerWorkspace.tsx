@@ -644,10 +644,10 @@ function AdminResellerManagement() {
               </div>
               {["One physical interface can have one active reseller owner.", "Router credentials stay on the API server.", "A root simple queue is created at the assigned cap.", "Failed RouterOS writes remain visible for retry or review."].map((item) => <div key={item} style={{ display: "flex", gap: 9, fontSize: 13, color: "var(--isp-text-muted)", margin: "12px 0" }}><CheckCircle2 size={16} color="#16a34a" />{item}</div>)}
             </div>
-            <div style={{ ...cardStyle, background: "linear-gradient(145deg, var(--isp-accent), #9a3412)", color: "#fff" }}>
+            <div className="reseller-binding-metric">
               <Gauge size={24} />
-              <div style={{ fontSize: 30, fontWeight: 900, marginTop: 14 }}>{assignments.filter((item) => item.status === "active").length}</div>
-              <div style={{ opacity: .85, fontSize: 13 }}>active reseller port bindings</div>
+              <div className="reseller-metric-label">Active reseller port bindings</div>
+              <div className="reseller-metric-value">{assignments.filter((item) => item.status === "active").length}</div>
             </div>
           </div>
         </div>
@@ -795,7 +795,12 @@ function MetricBarChart({ items, valueKey, suffix = "" }: {
         const value = Number(item[valueKey] ?? 0);
         return <div key={item.label} style={{ display: "grid", gap: 6, justifyItems: "center", alignItems: "end", height: "100%" }}>
           <div style={{ color: "var(--isp-text)", fontSize: 11, fontWeight: 800 }}>{value.toLocaleString("en-KE", { maximumFractionDigits: 1 })}{suffix}</div>
-          <div title={`${item.label}: ${value.toLocaleString("en-KE", { maximumFractionDigits: 1 })}${suffix}`} style={{ width: "100%", maxWidth: 38, height: `${Math.max(8, (value / max) * 92)}px`, borderRadius: "7px 7px 3px 3px", background: "linear-gradient(180deg, var(--isp-accent), rgba(217,104,53,.35))" }} />
+          <div
+            className="reseller-chart-bar"
+            title={`${item.label}: ${value.toLocaleString("en-KE", { maximumFractionDigits: 1 })}${suffix}`}
+            aria-label={`${item.label}: ${value.toLocaleString("en-KE", { maximumFractionDigits: 1 })}${suffix}`}
+            style={{ width: "100%", maxWidth: 38, height: `${Math.max(8, (value / max) * 92)}px`, borderRadius: "7px 7px 3px 3px", background: "linear-gradient(180deg, var(--isp-accent), rgba(217,104,53,.35))" }}
+          />
           <div style={{ color: "var(--isp-text-muted)", fontSize: 10, textAlign: "center" }}>{item.label}</div>
         </div>;
       }) : <div style={{ gridColumn: "1 / -1", alignSelf: "center", textAlign: "center", color: "var(--isp-text-muted)", fontSize: 13 }}>No data available yet.</div>}
@@ -929,21 +934,21 @@ function ResellerDashboard() {
         </div>
         <div style={{ display: "grid", gap: 16 }}>
         <Notice error={error} success={success} />
-         <div className="reseller-stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 12 }}>
+         <div className="reseller-stat-grid">
              {[
-             { label: "Income today", value: moneyOrZero(revenue?.incomeToday), icon: Gauge },
-             { label: "Income this month", value: moneyOrZero(revenue?.incomeMonth), icon: WalletCards },
-             { label: "Total transactions", value: String(revenue?.totalTransactions ?? 0), icon: ReceiptText },
-             { label: "Total revenue", value: moneyOrZero(revenue?.totalRevenue), icon: Banknote },
-          ].map(({ label, value, icon: Icon }) => <div key={label} style={cardStyle}><Icon size={18} color="var(--isp-accent)" /><div className="reseller-metric-value">{value}</div><div className="reseller-metric-label">{label}</div></div>)}
+             { label: "Income today", value: moneyOrZero(revenue?.incomeToday), icon: Gauge, tone: "green" },
+             { label: "Income this month", value: moneyOrZero(revenue?.incomeMonth), icon: WalletCards, tone: "green" },
+             { label: "Total transactions", value: String(revenue?.totalTransactions ?? 0), icon: ReceiptText, tone: "amber" },
+             { label: "Total revenue", value: moneyOrZero(revenue?.totalRevenue), icon: Banknote, tone: "green" },
+          ].map(({ label, value, icon: Icon, tone }) => <div key={label} className={`reseller-stat-card reseller-stat-card--${tone}`}><Icon size={18} aria-hidden="true" /><div className="reseller-metric-label">{label}</div><div className="reseller-metric-value">{value}</div></div>)}
         </div>
-         <div className="reseller-stat-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 12 }}>
+         <div className="reseller-stat-grid">
            {[
-             { label: "Total users", value: String(users?.total ?? 0), icon: Users },
-             { label: "Active users", value: String(users?.active ?? 0), icon: PlayCircle },
-             { label: "Expired users", value: String(users?.expired ?? 0), icon: PauseCircle },
-             { label: "Online on assigned router", value: String(telemetry?.totals.onlineUsers ?? 0), icon: RouterIcon },
-           ].map(({ label, value, icon: Icon }) => <div key={label} style={cardStyle}><Icon size={18} color="var(--isp-accent)" /><div className="reseller-metric-value">{value}</div><div className="reseller-metric-label">{label}</div></div>)}
+             { label: "Total users", value: String(users?.total ?? 0), icon: Users, tone: "accent" },
+             { label: "Active users", value: String(users?.active ?? 0), icon: PlayCircle, tone: "green" },
+             { label: "Expired users", value: String(users?.expired ?? 0), icon: PauseCircle, tone: "amber" },
+             { label: "Online on assigned router", value: String(telemetry?.totals.onlineUsers ?? 0), icon: RouterIcon, tone: "teal" },
+           ].map(({ label, value, icon: Icon, tone }) => <div key={label} className={`reseller-stat-card reseller-stat-card--${tone}`}><Icon size={18} aria-hidden="true" /><div className="reseller-metric-label">{label}</div><div className="reseller-metric-value">{value}</div></div>)}
          </div>
         <div style={{ ...cardStyle, borderColor: "rgba(217,104,53,.35)" }}>
              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}><div><div style={{ fontSize: 18, fontWeight: 850, color: "var(--isp-text)" }}>{port?.handoff_mode === "isp_router" ? "ISP router / XPON handoff" : port?.handoff_mode === "vlan_services" ? "VLAN Hotspot + PPPoE service" : "Assigned interface"}</div><div style={{ color: "var(--isp-text-muted)", fontSize: 13, marginTop: 5 }}>{port?.handoff_mode === "isp_router" ? "Connect your XPON router to the assigned ISP-router handoff. No MikroTik package or reseller-side RouterOS setup is required." : port?.handoff_mode === "vlan_services" ? "Use the service selector to switch between all VLANs assigned to your reseller account. Each service keeps its own gateway, packages, and RouterOS resources." : "Only the router connected to your assigned port is shown here."}</div></div><ShieldCheck color="var(--isp-accent)" /></div>

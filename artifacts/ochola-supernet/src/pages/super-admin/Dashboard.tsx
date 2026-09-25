@@ -5,7 +5,7 @@ import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { supabase } from "@/lib/supabase";
 import {
   Activity, AlertTriangle, ArrowUpRight, BarChart3, CheckCircle2,
-  Database, Gauge, Globe, Loader2, RefreshCw, Router, ShieldAlert,
+  Database, Gauge, Globe, RefreshCw, Router, ShieldAlert,
   Users, XCircle,
 } from "lucide-react";
 
@@ -67,7 +67,7 @@ function MetricCard({
         <div className="sa-metric-icon"><Icon size={16} /></div>
       </div>
       <p className="sa-metric-value">
-        {loading ? <Loader2 size={22} className="animate-spin" /> : value}
+        {loading ? <span className="sa-metric-skeleton" role="status" aria-label={`Loading ${label}`} /> : value}
       </p>
       <p className="sa-metric-sub">{detail}</p>
     </div>
@@ -201,7 +201,7 @@ export default function SuperAdminDashboard() {
           <div className="sa-snapshot" title="Time this dashboard last requested its data">
             <Database size={12} />
             <span>Snapshot {lastRefresh.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-            <button onClick={retryAll} aria-label="Refresh dashboard data" title="Refresh dashboard data" style={{ display: "inline-flex", border: 0, padding: 0, color: "inherit", background: "transparent", cursor: "pointer" }}>
+            <button type="button" onClick={retryAll} aria-label="Refresh dashboard data" title="Refresh dashboard data" style={{ display: "inline-flex", border: 0, padding: 0, color: "inherit", background: "transparent", cursor: "pointer" }}>
               <RefreshCw size={12} />
             </button>
           </div>

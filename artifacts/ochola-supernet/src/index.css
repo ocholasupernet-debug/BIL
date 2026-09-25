@@ -35,7 +35,7 @@
    LIGHT THEME (default) — Professional SaaS / Stripe-inspired
 ═══════════════════════════════════════════════════════════════════ */
 :root {
-  --background:            210 33% 96%;
+  --background:            210 36% 96%;
   --foreground:            215 28% 17%;
   --sidebar:               218 33% 18%;
   --card:                  0 0% 100%;
@@ -52,8 +52,8 @@
   --accent-foreground:     0 0% 100%;
   --destructive:           0 72% 51%;
   --destructive-foreground:0 0% 100%;
-  --border:                210 30% 88%;
-  --input:                 210 30% 88%;
+  --border:                211 32% 89%;
+  --input:                 211 32% 89%;
   --ring:                  221 83% 53%;
 
   /* ── ISP design tokens — Signal room ─────────────────────────────── */
@@ -102,12 +102,12 @@
    DARK THEME
 ═══════════════════════════════════════════════════════════════════ */
 [data-theme="dark"] {
-  --background:            222 49% 10%;
+  --background:            225 58% 10%;
   --foreground:            214 32% 94%;
   --sidebar:               225 49% 8%;
-  --card:                  224 37% 18%;
+  --card:                  226 40% 18%;
   --card-foreground:       214 32% 94%;
-  --popover:               224 37% 18%;
+  --popover:               226 40% 18%;
   --popover-foreground:    214 32% 94%;
   --primary:               217 91% 65%;
   --primary-foreground:    222 49% 10%;
@@ -119,8 +119,8 @@
   --accent-foreground:     222 49% 10%;
   --destructive:           0 84% 67%;
   --destructive-foreground:222 49% 10%;
-  --border:                210 28% 32%;
-  --input:                 210 28% 32%;
+  --border:                212 30% 32%;
+  --input:                 212 30% 32%;
   --ring:                  217 91% 65%;
 
   --isp-bg:            #0b1329;
@@ -155,7 +155,7 @@
   --shadow-card: 0 1px 2px rgba(0,0,0,0.24), 0 4px 14px rgba(0,0,0,0.18);
 
   --sa-bg: #0b1329;
-  --sa-panel: #141d35;
+  --sa-panel: #1c2541;
   --sa-panel-strong: #1c2541;
   --sa-line: #3a506b;
   --sa-line-soft: rgba(58,80,107,0.60);
@@ -2717,7 +2717,7 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
    light/dark slate treatment without requiring a page-by-page rewrite.
 ═══════════════════════════════════════════════════════════════════ */
 :root {
-  --background: 210 40% 98%;
+  --background: 210 36% 96%;
   --foreground: 222 47% 11%;
   --card: 0 0% 100%;
   --card-foreground: 222 47% 11%;
@@ -2727,8 +2727,8 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   --secondary-foreground: 222 47% 11%;
   --muted: 210 40% 96%;
   --muted-foreground: 215 16% 47%;
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
+  --border: 211 32% 89%;
+  --input: 211 32% 89%;
   --font-sans: 'Inter', system-ui, sans-serif;
   --font-display: 'Inter', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
@@ -2771,23 +2771,23 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
 }
 
 [data-theme="dark"] {
-  --background: 222 47% 11%;
+  --background: 225 58% 10%;
   --foreground: 210 40% 98%;
-  --card: 217 33% 17%;
+  --card: 226 40% 18%;
   --card-foreground: 210 40% 98%;
-  --popover: 217 33% 17%;
+  --popover: 226 40% 18%;
   --popover-foreground: 210 40% 98%;
   --secondary: 217 33% 17%;
   --secondary-foreground: 210 40% 98%;
   --muted: 217 33% 17%;
   --muted-foreground: 215 20% 65%;
-  --border: 215 25% 27%;
-  --input: 215 25% 27%;
+  --border: 212 30% 32%;
+  --input: 212 30% 32%;
   --isp-bg: #0b1329;
   --isp-header: #101a33;
   --isp-sidebar: #091226;
-  --isp-section: #1e293b;
-  --isp-card: #1e293b;
+  --isp-section: #1c2541;
+  --isp-card: #1c2541;
   --isp-inner-card: #141d35;
   --isp-border: #3a506b;
   --isp-border-subtle: rgba(58,80,107,0.60);
@@ -2812,8 +2812,8 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   --shadow-lg: 0 18px 40px rgba(0,0,0,0.32);
   --shadow-card: 0 1px 2px rgba(0,0,0,0.22), 0 6px 16px rgba(0,0,0,0.16);
   --sa-bg: #0b1329;
-  --sa-panel: #101a33;
-  --sa-panel-strong: #1e293b;
+  --sa-panel: #1c2541;
+  --sa-panel-strong: #1c2541;
   --sa-line: #3a506b;
   --sa-line-soft: rgba(58,80,107,0.60);
   --sa-ink: #edf2f7;
@@ -2837,16 +2837,16 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   [style*="var(--isp-section)"],
   [style*="var(--isp-inner-card)"]
 ) {
-  --isp-text: #0f172a;
-  --isp-text-muted: #64748b;
-  --isp-text-sub: #94a3b8;
-  --isp-border: #e2e8f0;
-  --isp-border-subtle: #eef2f7;
-  --isp-input-bg: #f8fafc;
-  --isp-input-border: #cbd5e1;
-  --isp-hover: #f1f5f9;
+  --isp-text: #102a43;
+  --isp-text-muted: #627d98;
+  --isp-text-sub: #829ab1;
+  --isp-border: #d9e2ec;
+  --isp-border-subtle: #e5ebf2;
+  --isp-input-bg: #ffffff;
+  --isp-input-border: #bcccdc;
+  --isp-hover: #f7fafd;
   --isp-table-bg: #ffffff;
-  --isp-table-border: #e2e8f0;
+  --isp-table-border: #e5ebf2;
 }
 
 [data-theme="dark"] :is(
@@ -2863,10 +2863,10 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   [style*="var(--isp-section)"],
   [style*="var(--isp-inner-card)"]
 ) {
-  --isp-text: #f8fafc;
-  --isp-text-muted: #94a3b8;
-  --isp-text-sub: #64748b;
-  --isp-border: #334155;
+  --isp-text: #edf2f7;
+  --isp-text-muted: #b8c7d9;
+  --isp-text-sub: #829ab1;
+  --isp-border: #3a506b;
   --isp-border-subtle: rgba(148,163,184,0.16);
   --isp-input-bg: #111827;
   --isp-input-border: #475569;
@@ -3024,7 +3024,7 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
    deliberately quiet chart chrome so the data carries the emphasis.
 ═══════════════════════════════════════════════════════════════════ */
 :root {
-  --chart-grid: rgba(148, 163, 184, 0.28);
+  --chart-grid: #e2e8f0;
   --chart-axis: #64748b;
   --chart-line: #4f46e5;
   --chart-cyan: #0891b2;
@@ -3032,7 +3032,7 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   --chart-amber: #d97706;
 }
 [data-theme="dark"] {
-  --chart-grid: rgba(148, 163, 184, 0.2);
+  --chart-grid: rgba(51, 65, 85, 0.4);
   --chart-axis: #94a3b8;
   --chart-line: #818cf8;
   --chart-cyan: #22d3ee;
@@ -3105,15 +3105,16 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: stretch;
-  gap: 12px;
-  margin-bottom: 18px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 .telemetry-comparison-card {
   display: flex;
-  min-height: 160px;
+  min-height: 128px;
   flex-direction: column;
   justify-content: space-between;
-  padding: 15px 16px;
+  padding: 12px 14px;
+  border-left: 4px solid #10b981;
 }
 .telemetry-card-label {
   margin: 0 0 13px;
@@ -3365,10 +3366,6 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
 .dashboard-error {
   border-left: 3px solid #f59e0b;
   background: color-mix(in srgb, #f59e0b 6%, var(--isp-card));
-}
-.reseller-workspace [style*="var(--isp-card)"] {
-  border-left: 3px solid #8b5cf6 !important;
-  background: color-mix(in srgb, #8b5cf6 4%, var(--isp-card)) !important;
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -4279,4 +4276,210 @@ table:not([role="grid"]) td [data-technical="true"] {
 .admin-vpn-surface .to-red-800,
 .admin-vpn-surface .to-teal-800 {
   --tw-gradient-to: var(--isp-accent-strong) !important;
+}
+
+/* Operations dashboard contract. Scoped to dashboard surfaces so authentication
+   and captive portal visual systems are not changed by these overrides. */
+.dashboard-page,
+.sa-dashboard,
+.reseller-dashboard,
+.reseller-admin {
+  font-family: 'Inter', system-ui, sans-serif;
+  color: var(--isp-text);
+}
+.dashboard-page { gap: 12px; }
+.dashboard-hero { padding: 3px 0 12px; }
+.dashboard-hero h1 { font-size: clamp(1.3rem, 2vw, 1.65rem); }
+.dashboard-hero p { font-size: .82rem; }
+.dashboard-date { padding: 7px 10px; background: var(--isp-card); font-family: var(--font-mono); font-size: .7rem; font-variant-numeric: tabular-nums; }
+.dashboard-kpi-grid, .dashboard-stat-grid { gap: 10px; }
+.dashboard-kpi,
+.dashboard-stat,
+.dashboard-telemetry-total {
+  border: 1px solid var(--isp-border);
+  border-left: 4px solid var(--metric-tone, var(--isp-accent));
+  border-radius: 8px;
+  background: var(--isp-card);
+  box-shadow: none;
+}
+.dashboard-kpi { min-height: 78px; padding: 11px 12px; }
+.dashboard-stat { min-height: 62px; padding: 10px 11px; }
+.dashboard-kpi--green,
+.dashboard-stat--green,
+.dashboard-telemetry-total--green { --metric-tone: #10b981; }
+.dashboard-kpi--accent,
+.dashboard-stat--accent,
+.dashboard-telemetry-total--accent { --metric-tone: #3577c5; }
+.dashboard-kpi--amber,
+.dashboard-stat--amber { --metric-tone: #c58b30; }
+.dashboard-kpi--plum { --metric-tone: #8275a9; }
+.dashboard-stat--teal,
+.dashboard-telemetry-total--teal { --metric-tone: #06b6d4; }
+.dashboard-kpi-icon,
+.dashboard-stat-icon {
+  color: var(--metric-tone);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  width: 26px;
+  height: 26px;
+  box-shadow: none;
+}
+.dashboard-kpi-copy { flex: 1; min-width: 0; }
+.dashboard-kpi-label,
+.dashboard-stat-label,
+.dashboard-telemetry-total span,
+.reseller-dashboard .reseller-metric-label,
+.reseller-admin .reseller-metric-label {
+  display: block;
+  margin: 0;
+  color: var(--isp-text-muted);
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: .64rem;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: .085em;
+  text-transform: uppercase;
+  white-space: normal;
+}
+.dashboard-kpi-value,
+.dashboard-stat-value,
+.dashboard-telemetry-total strong,
+.reseller-dashboard .reseller-metric-value,
+.reseller-admin .reseller-metric-value {
+  display: block;
+  margin-top: 7px;
+  color: var(--isp-text);
+  font-family: var(--font-mono);
+  font-size: clamp(1rem, 1.5vw, 1.4rem);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  letter-spacing: -.035em;
+  overflow-wrap: anywhere;
+}
+.dashboard-stat-value { margin-top: 4px; font-size: 1rem; }
+.dashboard-kpi:hover,
+.dashboard-stat:hover { border-color: var(--isp-border); border-left-color: var(--metric-tone); box-shadow: var(--shadow-sm); background: var(--isp-card); }
+.dashboard-telemetry-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  width: min(100%, 720px);
+  margin: 0 14px 12px auto;
+}
+.dashboard-telemetry-filters label { min-width: 0; }
+.dashboard-telemetry-filters select { max-width: 240px; }
+.dashboard-telemetry-totals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin: 0 14px 12px;
+}
+.dashboard-telemetry-total { min-width: 0; padding: 10px 12px; }
+.dashboard-telemetry-total strong { font-size: 1.12rem; }
+.dashboard-page .panel-heading { min-height: 0; padding: 12px 14px; }
+.dashboard-page .router-card-grid { padding: 10px 14px 14px; }
+.dashboard-page .gateway-strip,
+.dashboard-page .router-filter-bar { padding: 10px 12px; border: 1px solid var(--isp-border); background: var(--isp-card); box-shadow: none; }
+.dashboard-page .router-card { background: var(--isp-card); border-color: var(--isp-border); }
+.dashboard-page .chart-body { background: var(--isp-card); }
+.dashboard-page .transaction-table .table-amount,
+.dashboard-page .transaction-table .table-date,
+.dashboard-page .isp-table tbody td:nth-child(2),
+.dashboard-page .isp-table tbody td:nth-child(3),
+.dashboard-page .isp-table tbody td:nth-child(4) {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.reseller-dashboard .reseller-page-header,
+.reseller-admin .reseller-page-header { gap: 3px; }
+.reseller-dashboard .reseller-page-header h1,
+.reseller-admin .reseller-page-header h1 { font-size: 1.35rem; font-weight: 650; }
+.reseller-dashboard .reseller-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.reseller-dashboard .reseller-stat-card,
+.reseller-admin .reseller-binding-metric {
+  min-width: 0;
+  padding: 12px 13px;
+  border: 1px solid var(--isp-border);
+  border-left: 4px solid var(--metric-tone);
+  border-radius: 8px;
+  background: var(--isp-card);
+  box-shadow: none;
+}
+.reseller-stat-card--green { --metric-tone: #10b981; }
+.reseller-stat-card--accent { --metric-tone: #3577c5; }
+.reseller-stat-card--teal { --metric-tone: #06b6d4; }
+.reseller-stat-card--amber { --metric-tone: #c58b30; }
+.reseller-dashboard .reseller-stat-card svg,
+.reseller-admin .reseller-binding-metric svg { color: var(--metric-tone, var(--isp-accent)); margin-bottom: 8px; }
+.reseller-admin .reseller-binding-metric { --metric-tone: #06b6d4; }
+.reseller-dashboard .reseller-metric-value,
+.reseller-admin .reseller-metric-value { font-size: clamp(1rem, 1.5vw, 1.35rem); }
+.reseller-dashboard .reseller-technical-chip { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.reseller-dashboard .reseller-table td:last-child { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.sa-dashboard { gap: 14px; }
+.sa-content { padding: 16px clamp(14px, 2vw, 28px) 36px; }
+.sa-page-head { align-items: center; padding-bottom: 12px; }
+.sa-page-head h1 { font-size: clamp(1.35rem, 2vw, 1.65rem); }
+.sa-page-head p { font-size: .78rem; }
+.sa-command-grid { gap: 10px; }
+.sa-metric-card {
+  min-height: 116px;
+  padding: 13px 14px;
+  border: 1px solid var(--sa-line);
+  border-left: 4px solid var(--metric-tone);
+  border-radius: 8px;
+  background: var(--sa-panel-strong);
+  box-shadow: none;
+}
+.sa-metric-card::after { display: none; }
+.sa-metric-card:hover { transform: none; border-color: var(--sa-line); border-left-color: var(--metric-tone); box-shadow: var(--shadow-sm); }
+.sa-metric-card[data-tone="green"] { --metric-tone: #10b981; }
+.sa-metric-card[data-tone="accent"] { --metric-tone: #3577c5; }
+.sa-metric-card[data-tone="teal"] { --metric-tone: #06b6d4; }
+.sa-metric-card[data-tone="amber"] { --metric-tone: #c58b30; }
+.sa-metric-icon { width: 25px; height: 25px; border: 0; background: transparent; }
+.sa-metric-label { font-family: 'Inter', system-ui, sans-serif; letter-spacing: .085em; }
+.sa-metric-value { margin: 8px 0 5px; font-size: clamp(1.15rem, 2vw, 1.5rem); font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -.04em; }
+.sa-metric-skeleton { display: block; width: 70px; height: 20px; border-radius: 4px; background: var(--isp-border); opacity: .7; }
+.sa-metric-sub { color: var(--isp-text-muted); }
+.sa-snapshot button:focus-visible,
+.dashboard-amount-toggle:focus-visible { outline: 2px solid var(--isp-accent); outline-offset: 3px; }
+.sa-attention-item,
+.sa-attention-item.is-alert { background: var(--sa-panel); }
+.sa-columns, .sa-side-stack { gap: 12px; }
+.sa-card { border-radius: 8px; box-shadow: none; }
+.sa-card-head { min-height: 0; padding: 12px 14px; }
+
+@media (max-width: 1050px) {
+  .reseller-dashboard .reseller-stat-grid,
+  .sa-command-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) {
+  .dashboard-kpi-grid,
+  .dashboard-stat-grid,
+  .dashboard-telemetry-totals,
+  .reseller-dashboard .reseller-stat-grid,
+  .sa-command-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-telemetry-filters { grid-template-columns: minmax(0, 1fr); width: 100%; margin: 0 0 12px; padding: 0 12px; }
+  .dashboard-telemetry-filters select { max-width: none; }
+  .sa-page-head { align-items: flex-start; }
+}
+@media (max-width: 520px) {
+  .dashboard-kpi-grid,
+  .dashboard-stat-grid,
+  .dashboard-telemetry-totals,
+  .reseller-dashboard .reseller-stat-grid,
+  .sa-command-grid { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-telemetry-totals { margin-inline: 12px; }
+  .dashboard-date { align-self: flex-start; }
+  .sa-page-head { flex-direction: column; gap: 10px; }
+  .sa-content { padding-inline: 12px; }
 }

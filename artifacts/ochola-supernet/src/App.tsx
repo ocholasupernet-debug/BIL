@@ -75,6 +75,7 @@ import ResellerWorkspace from "./pages/admin/ResellerWorkspace";
 import CarrierControls from "./pages/admin/network/CarrierControls";
 import ResellerConnector from "./pages/admin/network/ResellerConnector";
 import AdminRegister from "./pages/admin/AdminRegister";
+import VisualCheckHarness from "./visual/VisualCheckHarness";
 
 function RoleAwareDashboard() {
   return getAdminRole() === "reseller" ? <ResellerWorkspace /> : <AdminDashboard />;
@@ -133,6 +134,7 @@ const queryClient = new QueryClient();
 function Router() {
   return (
     <Switch>
+      {import.meta.env.DEV && <Route path="/__visual/:page" component={VisualCheckHarness} />}
       <Route path="/" component={SubdomainGuard} />
       <Route path="/admin/login" component={AdminLogin} />
       <Route path="/admin/dashboard" component={RoleAwareDashboard} />

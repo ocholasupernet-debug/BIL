@@ -268,8 +268,8 @@ function KpiCard({
     <article className={`dashboard-kpi dashboard-kpi--${tone}`}>
       <div className="dashboard-kpi-icon" aria-hidden="true">{icon}</div>
       <div className="dashboard-kpi-copy">
-        <div className="dashboard-kpi-value">{value}</div>
         <div className="dashboard-kpi-label">{label}</div>
+        <div className="dashboard-kpi-value">{value}</div>
       </div>
     </article>
   );
@@ -556,8 +556,8 @@ export default function Dashboard() {
           </button>
         </div>
         <section className="dashboard-kpi-grid" aria-label="Revenue overview">
-           <KpiCard label="Income today" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} />
-           <KpiCard label="Income this month" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeMonth)} icon={<TrendingUp size={19} />} tone="green" />
+            <KpiCard label="Income today" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} tone="green" />
+            <KpiCard label="Income this month" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeMonth)} icon={<TrendingUp size={19} />} tone="green" />
            <KpiCard label="Total transactions" value={revenueLoading ? "…" : String(revenueSummary?.totalTransactions ?? 0)} icon={<ReceiptText size={19} />} tone="amber" />
            <KpiCard label="Total revenue" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(completedRevenue)} icon={<BarChart3 size={19} />} tone="plum" />
         </section>
@@ -565,7 +565,7 @@ export default function Dashboard() {
         <section className="dashboard-stat-grid" aria-label="Network quick stats">
           <StatMiniCard label="Total online users" value={totalOnlineValue} href="/admin/customers" icon={<Users size={16} />} tone="green" />
           <StatMiniCard label="PPPoE online" value={liveCountLoading && onlinePppoeUsers === 0 ? "…" : String(onlinePppoeUsers)} href="/admin/customers?type=pppoe" icon={<Wifi size={16} />} tone="accent" />
-          <StatMiniCard label="Hotspot online" value={liveCountLoading && onlineHotspotUsers === 0 ? "…" : String(onlineHotspotUsers)} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="teal" />
+            <StatMiniCard label="Hotspot online" value={liveCountLoading && onlineHotspotUsers === 0 ? "…" : String(onlineHotspotUsers)} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="teal" />
           <StatMiniCard label="VLAN users online" value={liveCountLoading && onlineVlanUsers === 0 && !vlanCountUnavailable ? "…" : onlineVlanValue} href="/admin/customers?type=vlan" icon={<Wifi size={16} />} tone="accent" />
            <StatMiniCard label="Static online" value={customersLoading ? "…" : String(onlineStaticUsers)} href="/admin/customers?type=static" icon={<Server size={16} />} tone="amber" />
            <StatMiniCard label="Active / expired users" value={customersLoading ? "…" : `${activeUsers}/${expiredUsers}`} href="/admin/customers" icon={<CircleCheck size={16} />} tone="green" />
@@ -674,7 +674,7 @@ export default function Dashboard() {
             </div>
             {telemetry?.fetchedAt && <span className="panel-heading-meta">Updated {new Date(telemetry.fetchedAt).toLocaleTimeString()}</span>}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.65rem", marginBottom: "0.8rem" }}>
+          <div className="dashboard-telemetry-filters">
             <label style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", fontWeight: 650 }}>
               Filter by router
               <select value={selectedRouter} onChange={(event) => { setSelectedRouter(event.target.value === "all" ? "all" : Number(event.target.value)); setSelectedTelemetryPort("all"); }} style={{ ...inputStyle, marginTop: "0.3rem" }}>
@@ -703,15 +703,15 @@ export default function Dashboard() {
             <div className="dashboard-empty"><CircleAlert size={17} /><span>{(telemetryQuery.error as Error).message}</span></div>
           ) : telemetry ? (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.55rem", marginBottom: "0.75rem" }}>
+              <div className="dashboard-telemetry-totals">
                 {[
-                  ["System-wide online users", telemetry.totals.onlineUsers, "#34d399"],
-                  ["Active PPPoE sessions", telemetry.totals.pppoeActive, "#60a5fa"],
-                  ["Active Hotspot leases", telemetry.totals.hotspotActive, "#c084fc"],
-                ].map(([label, value, color]) => (
-                  <div key={String(label)} style={{ padding: "0.7rem 0.8rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border-subtle)" }}>
-                    <span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: "0.67rem" }}>{label}</span>
-                    <strong style={{ display: "block", marginTop: "0.2rem", color: String(color), fontSize: "1.15rem", fontFamily: "monospace" }}>{String(value)}</strong>
+                  { label: "System-wide online users", value: telemetry.totals.onlineUsers, tone: "green" },
+                  { label: "Active PPPoE sessions", value: telemetry.totals.pppoeActive, tone: "accent" },
+                  { label: "Active Hotspot leases", value: telemetry.totals.hotspotActive, tone: "teal" },
+                ].map(({ label, value, tone }) => (
+                  <div key={label} className={`dashboard-telemetry-total dashboard-telemetry-total--${tone}`}>
+                    <span>{label}</span>
+                    <strong>{String(value)}</strong>
                   </div>
                 ))}
               </div>
@@ -796,8 +796,18 @@ export default function Dashboard() {
                     const barTop = 112 - barHeight;
                     return (
                       <g key={month.month}>
+                        <title>{`${month.month}: ${month.count} registered customers`}</title>
                         <line x1={x} y1="112" x2={x + 22} y2="112" stroke="var(--isp-border)" strokeWidth="1" />
-                        <rect x={x} y={barTop} width={22} height={barHeight} rx={4} fill="url(#customerBarGradient)" />
+                        <rect
+                          x={x}
+                          y={barTop}
+                          width={22}
+                          height={barHeight}
+                          rx={4}
+                          fill="url(#customerBarGradient)"
+                          data-tooltip={`${month.month}: ${month.count} registered customers`}
+                          aria-label={`${month.month}: ${month.count} registered customers`}
+                        />
                         <text x={x + 11} y={barTop - 6} textAnchor="middle" fill="var(--isp-text-muted)" fontSize="8">{month.count}</text>
                         <text x={x + 11} y="133" textAnchor="middle" fill="var(--isp-text-sub)" fontSize="8">{month.month}</text>
                       </g>
