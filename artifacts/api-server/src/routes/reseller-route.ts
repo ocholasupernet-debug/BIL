@@ -2419,6 +2419,10 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
       read(["/ip/hotspot/host/print", "=.proplist=.id,address,mac-address,server,bridge-port,uptime", `?server=${resources.hotspotServer}`]),
       read(["/ip/arp/print", "=.proplist=.id,address,mac-address,interface,complete,disabled", `?interface=${vlanInterface}`]),
     ]);
+    const handoffInterface = String(port.handoff_interface ?? "").trim();
+    const handoffLink = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(handoffInterface)
+      ? await detectRouterInterfaceLink(target, handoffInterface)
+      : null;
     res.json({
       ok: true,
       assignment: {
@@ -2427,6 +2431,7 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
         parentBridge,
         vlanInterface,
         vlanTag: port.vlan_tag,
+        handoffInterface: handoffInterface || null,
         subnet: network.network,
         gateway: network.gateway,
         hotspotServer: resources.hotspotServer,
@@ -2436,6 +2441,13 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
         name: target.name,
         vpnIp: target.vpn_ip,
       },
+      handoffLink: handoffLink ? {
+        exists: handoffLink.exists,
+        running: handoffLink.running,
+        disabled: handoffLink.disabled,
+        type: handoffLink.type,
+        error: handoffLink.error,
+      } : null,
       bridge: bridgeRows,
       bridgePorts: bridgePortRows,
       bridgeVlans: bridgeVlanRows,
