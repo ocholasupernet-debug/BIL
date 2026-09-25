@@ -13,16 +13,20 @@ if (!markerPath) throw new Error("A one-time portal refresh marker path is requi
 
 const marker = JSON.parse(readFileSync(markerPath, "utf8"));
 const markerId = String(marker.id ?? "");
-const resellerPortId = Number(marker.resellerPortId);
-const ispBridgeRouterId = Number(marker.ispBridgeRouterId);
+const parseOptionalId = value => value === undefined || value === null || value === "" ? null : Number(value);
+const resellerPortId = parseOptionalId(marker.resellerPortId);
+const ispBridgeRouterId = parseOptionalId(marker.ispBridgeRouterId);
 if (!/^[a-z0-9-]{1,80}$/.test(markerId)) {
   throw new Error("The one-time portal refresh marker has an invalid ID.");
 }
-if (!Number.isSafeInteger(resellerPortId) || resellerPortId < 1) {
+if (resellerPortId !== null && (!Number.isSafeInteger(resellerPortId) || resellerPortId < 1)) {
   throw new Error("The reseller port ID must be a positive integer.");
 }
-if (!Number.isSafeInteger(ispBridgeRouterId) || ispBridgeRouterId < 1) {
+if (ispBridgeRouterId !== null && (!Number.isSafeInteger(ispBridgeRouterId) || ispBridgeRouterId < 1)) {
   throw new Error("The ISP bridge router ID must be a positive integer.");
+}
+if (resellerPortId === null && ispBridgeRouterId === null) {
+  throw new Error("The one-time portal refresh marker must identify at least one target.");
 }
 
 const stateDirectory = process.env.OCHOLA_DEPLOY_STATE_DIR || "/var/lib/ocholasupernet";
@@ -77,16 +81,20 @@ try {
     }));
   }
 
-  await refreshPortal(
-    `/api/admin/reseller-handoffs/${resellerPortId}/portal`,
-    { overwrite: true },
-    "reseller VLAN",
-  );
-  await refreshPortal(
-    `/api/admin/router/${ispBridgeRouterId}/hotspot-portal/bridge-deploy`,
-    { bridgeName: "co-hotspot-bridge", overwrite: true },
-    "ISP bridge",
-  );
+  if (resellerPortId !== null) {
+    await refreshPortal(
+      `/api/admin/reseller-handoffs/${resellerPortId}/portal`,
+      { overwrite: true },
+      "reseller VLAN",
+    );
+  }
+  if (ispBridgeRouterId !== null) {
+    await refreshPortal(
+      `/api/admin/router/${ispBridgeRouterId}/hotspot-portal/bridge-deploy`,
+      { bridgeName: "co-hotspot-bridge", overwrite: true },
+      "ISP bridge",
+    );
+  }
 
   mkdirSync(stateDirectory, { recursive: true, mode: 0o750 });
   const temporaryPath = `${completionPath}.${process.pid}.tmp`;
