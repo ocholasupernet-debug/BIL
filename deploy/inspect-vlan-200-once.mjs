@@ -43,8 +43,11 @@ function recordCompletion(state) {
   renameSync(temporaryPath, completionPath);
 }
 
-function asRouterBoolean(value) {
-  return value === true || ["true", "yes", "1"].includes(String(value ?? "").toLowerCase());
+function routerBoolean(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (value === true || ["true", "yes", "1"].includes(normalized)) return true;
+  if (value === false || ["false", "no", "0"].includes(normalized)) return false;
+  return null;
 }
 
 function interfaceRows(rows, fields) {
@@ -89,6 +92,7 @@ try {
       status: port.status ?? null,
       linkStatus: port.link_status ?? null,
       linkDetected: port.link_detected ?? null,
+      lastLinkCheckedAt: port.last_link_checked_at ?? null,
       handoffInterface: port.handoff_interface ?? null,
       routerApiReachable: false,
       online: null,
@@ -124,24 +128,37 @@ try {
       const handoffPort = handoffName
         ? (diagnostics.bridgePorts ?? []).find(row => row.interface === handoffName)
         : undefined;
+      const handoffLink = diagnostics.handoffLink;
       const tagRows = (diagnostics.bridgeVlans ?? []).filter(row =>
         String(row["vlan-ids"] ?? row.vlan_ids ?? "")
           .split(/[,\s]+/)
           .includes(String(vlanTag)),
       );
 
-      result.bridgeRunning = bridge ? asRouterBoolean(bridge.running) : null;
+      result.bridgeRunning = bridge ? routerBoolean(bridge.running) : null;
       result.vlanInterface = vlanInterface?.name ?? diagnostics.assignment?.vlanInterface ?? null;
-      result.vlanInterfaceRunning = vlanInterface ? asRouterBoolean(vlanInterface.running) : null;
+      result.vlanInterfaceRunning = vlanInterface ? routerBoolean(vlanInterface.running) : null;
       const actualVlanTag = Number(vlanInterface?.["vlan-id"] ?? vlanInterface?.vlan_id);
       result.routerVlanTag = Number.isSafeInteger(actualVlanTag) ? actualVlanTag : null;
-      result.handoffLinkRunning = handoffPort ? asRouterBoolean(handoffPort.running) : null;
+      result.bridgeHandoffPortRunning = handoffPort ? routerBoolean(handoffPort.running) : null;
+      result.handoffInterfaceExists = typeof handoffLink?.exists === "boolean" ? handoffLink.exists : null;
+      result.handoffLinkRunning = handoffLink?.exists === true && typeof handoffLink.running === "boolean"
+        ? handoffLink.running
+        : null;
+      result.handoffInterfaceDisabled = handoffLink?.exists === true && typeof handoffLink.disabled === "boolean"
+        ? handoffLink.disabled
+        : null;
+      result.handoffInterfaceCheckError = handoffLink?.error
+        ? (String(handoffLink.error).toLowerCase().includes("not found") ? "interface_not_found" : "check_failed")
+        : null;
       result.bridgeVlanConfigured = tagRows.length > 0;
-      const bridgeVlanFiltering = bridge ? asRouterBoolean(bridge["vlan-filtering"]) : null;
+      const bridgeVlanFiltering = bridge ? routerBoolean(bridge["vlan-filtering"]) : null;
       if (
         result.bridgeRunning === false
         || result.vlanInterfaceRunning === false
         || result.handoffLinkRunning === false
+        || result.handoffInterfaceDisabled === true
+        || (result.handoffInterfaceExists === false && result.handoffInterfaceCheckError === "interface_not_found")
         || (result.routerVlanTag !== null && result.routerVlanTag !== vlanTag)
       ) {
         result.online = false;
@@ -149,7 +166,8 @@ try {
         result.bridgeRunning === null
         || result.vlanInterfaceRunning === null
         || result.routerVlanTag === null
-        || (handoffName && result.handoffLinkRunning === null)
+        || result.handoffInterfaceExists !== true
+        || result.handoffLinkRunning === null
         || bridgeVlanFiltering === null
         || (bridgeVlanFiltering === true && !result.bridgeVlanConfigured)
       ) {
@@ -179,6 +197,7 @@ try {
       status: port.status ?? null,
       linkStatus: port.link_status ?? null,
       linkDetected: port.link_detected ?? null,
+      lastLinkCheckedAt: port.last_link_checked_at ?? null,
       handoffInterface: port.handoff_interface ?? null,
     })),
     routerDiagnostics: results,
