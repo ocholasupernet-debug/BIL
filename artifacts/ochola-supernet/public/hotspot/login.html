@@ -673,7 +673,8 @@ function loadPortalTypography(done){
    planRequestInFlight=true;
     var query=(PORTAL_ADMIN_ID>0?"&adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"")+
        (PORTAL_ROUTER_ID>0?"&routerId="+encodeURIComponent(PORTAL_ROUTER_ID):"")+
-       (PORTAL_PORT_ID>0?"&portId="+encodeURIComponent(PORTAL_PORT_ID):"");
+        (PORTAL_PORT_ID>0?"&portId="+encodeURIComponent(PORTAL_PORT_ID):"")+
+        "&activeOnly=true&purchasableOnly=true";
    var finished=false;
     function finish(data,apiSucceeded){
      if(finished)return;
