@@ -174,6 +174,8 @@ test("HTML export preserves RouterOS macros and safely embeds tenant configurati
     assert.equal(calls.length, 3);
     assert.match(calls.find(url => url.includes("/api/plans")) || "", /routerId=3/);
     assert.match(calls.find(url => url.includes("/api/plans")) || "", /portId=88/);
+    assert.match(calls.find(url => url.includes("/api/plans")) || "", /activeOnly=true/);
+    assert.match(calls.find(url => url.includes("/api/plans")) || "", /purchasableOnly=true/);
     assert.ok(calls.every(url => !/\/api\/admin|\/router|\/sync|\/upload/i.test(url)));
   } finally {
     globalThis.fetch = realFetch;
