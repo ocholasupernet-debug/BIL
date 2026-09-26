@@ -1654,6 +1654,65 @@ export async function deployRouterFile(
   });
 }
 
+export async function ensureRouterFileDirectory(
+  creds: RouterCredentials,
+  directoryPath: string,
+): Promise<void> {
+  const directory = directoryPath
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\/+|\/+$/g, "");
+  const segments = directory.split("/");
+  if (
+    !directory
+    || segments.some(segment =>
+      !segment
+      || segment === "."
+      || segment === ".."
+      || !/^[A-Za-z0-9_.-]+$/.test(segment),
+    )
+  ) {
+    throw new Error("A valid RouterOS directory path is required.");
+  }
+
+  const findDirectory = async (): Promise<Record<string, string> | undefined> => {
+    const rows = await runRouterCommand(creds, [
+      "/file/print",
+      "=.proplist=.id,name,type",
+      `?name=${directory}`,
+    ]);
+    return (Array.isArray(rows) ? rows : [])
+      .find(row => row.name === directory);
+  };
+  const isDirectory = (row: Record<string, string> | undefined): boolean =>
+    String(row?.type ?? "").toLowerCase().includes("directory");
+
+  const existing = await findDirectory();
+  if (existing) {
+    if (isDirectory(existing)) return;
+    throw new Error(`RouterOS path "${directory}" already exists as a file.`);
+  }
+
+  try {
+    await runRouterCommand(creds, [
+      "/file/add",
+      `=name=${directory}`,
+      "=type=directory",
+    ]);
+  } catch (error) {
+    /* A concurrent retry may have created the directory before the write
+       response was lost. Accept only a verified directory, never a file. */
+    const afterError = await findDirectory().catch(() => undefined);
+    if (isDirectory(afterError)) return;
+    throw error;
+  }
+
+  const created = await findDirectory();
+  if (!isDirectory(created)) {
+    throw new Error(`RouterOS did not verify the directory "${directory}".`);
+  }
+}
+
 export async function fetchRouterFiles(creds: RouterCredentials): Promise<RouterFilesResult> {
   return withConn(creds, async (conn, connectedHost) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;

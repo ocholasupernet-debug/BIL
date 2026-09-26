@@ -4,6 +4,7 @@ import test from "node:test";
 import { RouterOSAPI } from "node-routeros";
 import {
   ensureHotspotServerAddressPool,
+  ensureRouterFileDirectory,
   fetchBridgePortLayout,
   pingRouter,
   testConnection,
@@ -207,5 +208,54 @@ test("a failed RouterOS mutation is not replayed with the alternate account", as
       commands.filter(({ command }) => command[0] === "/ip/pool/set").length,
       1,
     );
+  });
+});
+
+test("RouterOS hotspot directories use the supported file/add API command", async (t) => {
+  await t.test("creates and verifies a missing directory", async () => {
+    let created = false;
+    await withMockRouterApi((_username, command) => {
+      if (command[0] === "/file/print") {
+        return created
+          ? [{ ".id": "*1", name: "flash/hotspot/css", type: "directory" }]
+          : [];
+      }
+      if (command[0] === "/file/add") {
+        created = true;
+        return [];
+      }
+      return [];
+    }, async ({ port, commands }) => {
+      await ensureRouterFileDirectory(routerCredentials(port), "flash/hotspot/css");
+
+      assert.deepEqual(commands.map(item => item.command), [
+        ["/file/print", "=.proplist=.id,name,type", "?name=flash/hotspot/css"],
+        ["/file/add", "=name=flash/hotspot/css", "=type=directory"],
+        ["/file/print", "=.proplist=.id,name,type", "?name=flash/hotspot/css"],
+      ]);
+    });
+  });
+
+  await t.test("leaves an existing file at the directory path unchanged", async () => {
+    await withMockRouterApi(() => [
+      { ".id": "*1", name: "flash/hotspot/css", type: "file" },
+    ], async ({ port, commands }) => {
+      await assert.rejects(
+        ensureRouterFileDirectory(routerCredentials(port), "flash/hotspot/css"),
+        /already exists as a file/,
+      );
+      assert.deepEqual(commands.map(item => item.command[0]), ["/file/print"]);
+    });
+  });
+
+  await t.test("rejects path traversal before sending a RouterOS command", async () => {
+    await withMockRouterApi(() => [], async ({ port, connectedUsers, commands }) => {
+      await assert.rejects(
+        ensureRouterFileDirectory(routerCredentials(port), "flash/hotspot/../system"),
+        /valid RouterOS directory path/,
+      );
+      assert.deepEqual(connectedUsers, []);
+      assert.deepEqual(commands, []);
+    });
   });
 });

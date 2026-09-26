@@ -26,6 +26,7 @@ import {
   reconcileGeneratedServiceConfiguration,
   repairGeneratedServiceNetworking,
   fetchRouterFiles,
+  ensureRouterFileDirectory,
   runRouterCommand,
   fetchRouterSecurityState,
   deployRouterFile,
@@ -947,12 +948,15 @@ async function runBulkFileDeployment(
     const directoryDepth = (value: string) => value.split("/").length;
     for (const directory of [...parentDirectories].sort((left, right) => directoryDepth(left) - directoryDepth(right))) {
       try {
-        await runRouterCommand(creds, ["/file/make-dir", `=dir-name=${directory}`]);
+        await ensureRouterFileDirectory(creds, directory);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (!/already exists|already have|duplicate|such file/i.test(message)) {
-          logger.warn({ routerId: job.routerId, directory, error: message }, "Could not pre-create router hotspot directory; file transfers will report individual failures");
-        }
+        job.failed.push({
+          sourceName: directory,
+          destinationPath: directory,
+          error: message,
+        });
+        logger.warn({ routerId: job.routerId, directory, error: message }, "Could not create router hotspot directory");
       }
     }
 
