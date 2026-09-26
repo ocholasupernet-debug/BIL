@@ -282,6 +282,190 @@ type InstallDto = {
   result?: InstallerResultDto;
 };
 
+type ManagedResetPlan = {
+  id: string;
+  routerId: number;
+  routerName: string;
+  identity: string;
+  version: string;
+  connectedHost: string;
+  apiServiceAvailable: boolean;
+  protectedVpnClients: string[];
+  eligible: boolean;
+  blockedReason?: string;
+  items: Array<{ path: string; name: string; comment: string }>;
+  skippedPaths: string[];
+};
+type ManagedResetJob = {
+  id: string;
+  routerId: number;
+  status: "queued" | "running" | "complete" | "failed";
+  total: number;
+  processed: number;
+  current?: string;
+  backupFile?: string;
+  removed?: Array<{ path: string; name: string }>;
+  error?: string;
+};
+
+function ManagedResetModal({ routers, onClose }: { routers: DbRouter[]; onClose: () => void }) {
+  const [plans, setPlans] = useState<Record<number, ManagedResetPlan | undefined>>({});
+  const [planErrors, setPlanErrors] = useState<Record<number, string>>({});
+  const [loadingPlans, setLoadingPlans] = useState<Record<number, boolean>>({});
+  const [reviewed, setReviewed] = useState<Record<number, boolean>>({});
+  const [confirmNames, setConfirmNames] = useState<Record<number, string>>({});
+  const [jobs, setJobs] = useState<Record<number, ManagedResetJob | undefined>>({});
+  const [applyErrors, setApplyErrors] = useState<Record<number, string>>({});
+  const jobsRef = useRef(jobs);
+  jobsRef.current = jobs;
+  const activeJobKey = Object.entries(jobs)
+    .filter(([, job]) => job && (job.status === "queued" || job.status === "running"))
+    .map(([routerId, job]) => `${routerId}:${job!.id}`)
+    .join("|");
+  const closeModal = () => {
+    const hasActiveReset = Object.values(jobs).some(job => job?.status === "queued" || job?.status === "running");
+    if (hasActiveReset && !window.confirm("A router reset is still running. Closing this window will not stop it. Close anyway?")) {
+      return;
+    }
+    onClose();
+  };
+
+  const requestPlan = async (router: DbRouter) => {
+    setLoadingPlans(prev => ({ ...prev, [router.id]: true }));
+    setPlanErrors(prev => ({ ...prev, [router.id]: "" }));
+    setApplyErrors(prev => ({ ...prev, [router.id]: "" }));
+    setJobs(prev => ({ ...prev, [router.id]: undefined }));
+    try {
+      const response = await fetch(`/api/router/${router.id}/managed-reset/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminId: ADMIN_ID }),
+      });
+      const body = await response.json().catch(() => ({})) as { ok?: boolean; plan?: ManagedResetPlan; error?: string };
+      if (!response.ok || !body.ok || !body.plan) throw new Error(body.error || `Plan request failed (HTTP ${response.status})`);
+      setPlans(prev => ({ ...prev, [router.id]: body.plan }));
+      setReviewed(prev => ({ ...prev, [router.id]: false }));
+      setConfirmNames(prev => ({ ...prev, [router.id]: "" }));
+    } catch (error) {
+      setPlanErrors(prev => ({ ...prev, [router.id]: error instanceof Error ? error.message : "Could not load reset plan" }));
+    } finally {
+      setLoadingPlans(prev => ({ ...prev, [router.id]: false }));
+    }
+  };
+
+  const applyPlan = async (router: DbRouter) => {
+    const plan = plans[router.id];
+    if (!plan || !reviewed[router.id] || confirmNames[router.id] !== router.name || !plan.eligible) return;
+    setApplyErrors(prev => ({ ...prev, [router.id]: "" }));
+    try {
+      const response = await fetch(`/api/router/${router.id}/managed-reset/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminId: ADMIN_ID, planId: plan.id, confirmRouterName: confirmNames[router.id] }),
+      });
+      const body = await response.json().catch(() => ({})) as { ok?: boolean; jobId?: string; error?: string };
+      if (!response.ok || !body.ok || !body.jobId) throw new Error(body.error || `Apply failed (HTTP ${response.status})`);
+      setJobs(prev => ({ ...prev, [router.id]: { id: body.jobId!, routerId: router.id, status: "queued", total: plan.items.length, processed: 0 } }));
+    } catch (error) {
+      setApplyErrors(prev => ({ ...prev, [router.id]: error instanceof Error ? error.message : "Could not start reset" }));
+    }
+  };
+
+  useEffect(() => {
+    const poll = async () => {
+      const active = Object.entries(jobsRef.current)
+        .filter(([, job]) => job && (job.status === "queued" || job.status === "running"));
+      await Promise.all(active.map(async ([routerId, job]) => {
+        if (!job) return;
+        try {
+          const response = await fetch(`/api/router/${routerId}/managed-reset/jobs/${job.id}?adminId=${encodeURIComponent(String(ADMIN_ID))}`);
+          const body = await response.json().catch(() => ({})) as { ok?: boolean; job?: ManagedResetJob; error?: string };
+          if (response.status === 404 || response.status === 410) {
+            setJobs(prev => ({
+              ...prev,
+              [Number(routerId)]: {
+                ...job,
+                status: "failed",
+                error: "Reset status was lost. Check the router before starting another reset.",
+              },
+            }));
+            return;
+          }
+          if (!response.ok || !body.ok || !body.job) throw new Error(body.error || `Status check failed (HTTP ${response.status})`);
+          setJobs(prev => ({ ...prev, [Number(routerId)]: body.job }));
+        } catch (error) {
+          setApplyErrors(prev => ({ ...prev, [Number(routerId)]: error instanceof Error ? error.message : "Could not read reset progress" }));
+        }
+      }));
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 1500);
+    return () => window.clearInterval(timer);
+  }, [activeJobKey]);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.68)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }} onClick={closeModal}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "min(1050px, 100%)", maxHeight: "90vh", overflowY: "auto", background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 12, padding: "1.35rem" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 8 }}>
+          <div>
+            <h2 style={{ margin: 0, color: "var(--isp-text)", fontSize: "1rem" }}>Managed service reset</h2>
+            <p style={{ margin: "0.35rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.75rem" }}>Review each router separately. There is no apply-all action.</p>
+          </div>
+          <button onClick={closeModal} aria-label="Close" style={{ background: "none", border: "none", color: "var(--isp-text-muted)", cursor: "pointer" }}><X size={17} /></button>
+        </div>
+        <div style={{ margin: "0.85rem 0 1rem", padding: "0.7rem 0.8rem", borderRadius: 8, background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.22)", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.6 }}>
+          Only recognized, non-access Ochola service tags are removed. API users/services, all OVPN clients, certificates, IP addresses/routes, bridge/VLAN and firewall settings are preserved. Untagged or unknown settings are untouched. A backup containing sensitive router configuration is created on the router before deletion; store it securely and remove it after it is no longer needed.
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          {routers.map(router => {
+            const plan = plans[router.id];
+            const job = jobs[router.id];
+            const canApply = !!plan && plan.eligible && reviewed[router.id] && confirmNames[router.id] === router.name && !job;
+            return (
+              <div key={router.id} style={{ padding: "0.85rem", borderRadius: 9, border: "1px solid var(--isp-border-subtle)", background: "rgba(255,255,255,0.02)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <strong style={{ color: "var(--isp-text)", fontSize: "0.82rem" }}>{router.name}</strong>
+                  <span style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>#{router.id}</span>
+                  {(!plan || !job || (job.status !== "queued" && job.status !== "running")) && <button onClick={() => void requestPlan(router)} disabled={loadingPlans[router.id]} style={{ marginLeft: "auto", padding: "0.35rem 0.65rem", borderRadius: 6, border: "1px solid var(--isp-accent-border)", background: "rgba(20,184,166,.08)", color: "var(--isp-accent)", cursor: "pointer", fontSize: "0.7rem", fontFamily: "inherit" }}>{loadingPlans[router.id] ? <><Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> Loading…</> : plan ? "Refresh plan" : "Review read-only plan"}</button>}
+                  {plan && <span style={{ marginLeft: "auto", fontSize: "0.7rem", color: plan.eligible ? "#4ade80" : "#fbbf24" }}>{plan.eligible ? `${plan.items.length} tagged object${plan.items.length === 1 ? "" : "s"} planned` : "Blocked"}</span>}
+                </div>
+                {planErrors[router.id] && <div style={{ marginTop: 7, color: "#f87171", fontSize: "0.72rem" }}>{planErrors[router.id]}</div>}
+                {plan && (
+                  <div style={{ marginTop: 9, fontSize: "0.72rem" }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem 1rem", color: "var(--isp-text-muted)", marginBottom: 7 }}>
+                      <span>Identity: <strong style={{ color: "var(--isp-text)" }}>{plan.identity || "—"}</strong></span>
+                      <span>RouterOS: <strong style={{ color: "var(--isp-text)" }}>{plan.version || "—"}</strong></span>
+                      <span>Connected via: <code style={{ color: "var(--isp-accent)" }}>{plan.connectedHost || "—"}</code></span>
+                      <span>API: <strong style={{ color: plan.apiServiceAvailable ? "#4ade80" : "#f87171" }}>{plan.apiServiceAvailable ? "available" : "unavailable"}</strong></span>
+                    </div>
+                    {plan.protectedVpnClients.length > 0 && <div style={{ color: "#67e8f9", marginBottom: 6 }}>Protected OVPN: {plan.protectedVpnClients.join(", ")}</div>}
+                    {!plan.eligible && <div style={{ color: "#fbbf24", marginBottom: 6 }}>{plan.blockedReason || "This router cannot be reset safely."}</div>}
+                    {plan.items.length > 0 ? (
+                      <div style={{ overflowX: "auto", border: "1px solid var(--isp-border-subtle)", borderRadius: 6 }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.68rem" }}><thead><tr>{["PATH", "NAME", "COMMENT"].map(label => <th key={label} style={{ textAlign: "left", padding: "0.4rem", color: "var(--isp-text-muted)", borderBottom: "1px solid var(--isp-border-subtle)" }}>{label}</th>)}</tr></thead><tbody>{plan.items.map((item, index) => <tr key={`${item.path}-${item.name}-${index}`}><td style={{ padding: "0.35rem 0.4rem", color: "var(--isp-accent)", fontFamily: "monospace" }}>{item.path}</td><td style={{ padding: "0.35rem 0.4rem", color: "var(--isp-text)", fontFamily: "monospace" }}>{item.name}</td><td style={{ padding: "0.35rem 0.4rem", color: "var(--isp-text-muted)" }}>{item.comment}</td></tr>)}</tbody></table>
+                      </div>
+                    ) : <div style={{ color: "var(--isp-text-muted)" }}>No recognized removable service objects found.</div>}
+                    {plan.skippedPaths.length > 0 && <div style={{ marginTop: 6, color: "var(--isp-text-muted)" }}>Skipped paths (preserved): {plan.skippedPaths.join(", ")}</div>}
+                    {plan.eligible && plan.items.length === 0 && <div style={{ color: "var(--isp-text-muted)", marginTop: 7 }}>Nothing is eligible for removal; no backup or reset will run.</div>}
+                    {plan.eligible && plan.items.length > 0 && !job && <>
+                      <label style={{ display: "flex", alignItems: "flex-start", gap: 7, marginTop: 10, color: "var(--isp-text)", cursor: "pointer" }}><input type="checkbox" checked={!!reviewed[router.id]} onChange={e => setReviewed(prev => ({ ...prev, [router.id]: e.target.checked }))} /> I reviewed this exact plan and confirm it removes only the listed tagged objects.</label>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}><input value={confirmNames[router.id] || ""} onChange={e => setConfirmNames(prev => ({ ...prev, [router.id]: e.target.value }))} placeholder={`Type ${router.name} to confirm`} style={{ flex: "1 1 220px", padding: "0.4rem 0.55rem", borderRadius: 6, border: "1px solid var(--isp-input-border)", background: "var(--isp-input-bg)", color: "var(--isp-text)", fontSize: "0.72rem", fontFamily: "inherit" }} /><button onClick={() => void applyPlan(router)} disabled={!canApply} style={{ padding: "0.4rem 0.7rem", borderRadius: 6, border: "1px solid rgba(248,113,113,.35)", background: canApply ? "rgba(220,38,38,.15)" : "rgba(255,255,255,.04)", color: canApply ? "#f87171" : "var(--isp-text-muted)", cursor: canApply ? "pointer" : "not-allowed", fontWeight: 700, fontSize: "0.7rem", fontFamily: "inherit" }}>Apply to {router.name}</button></div>
+                    </>}
+                    {job && <div style={{ marginTop: 10, padding: "0.55rem 0.65rem", borderRadius: 7, background: job.status === "failed" ? "rgba(248,113,113,.08)" : "rgba(20,184,166,.06)", color: job.status === "failed" ? "#f87171" : "var(--isp-text-muted)" }}><strong style={{ color: job.status === "complete" ? "#4ade80" : job.status === "failed" ? "#f87171" : "var(--isp-accent)" }}>{job.status.toUpperCase()}</strong> · {job.processed}/{job.total}{job.current ? ` · ${job.current}` : ""}{job.backupFile ? ` · Backup: ${job.backupFile}` : ""}{job.error ? ` · ${job.error}` : ""}</div>}
+                    {applyErrors[router.id] && <div style={{ marginTop: 6, color: "#f87171" }}>{applyErrors[router.id]}</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {routers.length === 0 && <div style={{ padding: "1rem", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>No routers are loaded for this ISP.</div>}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1rem" }}><button onClick={closeModal} style={{ padding: "0.4rem 0.85rem", borderRadius: 6, background: "rgba(255,255,255,.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", cursor: "pointer", fontSize: "0.75rem", fontFamily: "inherit" }}>Close</button></div>
+      </div>
+    </div>
+  );
+}
+
 const INSTALL_STEP_ORDER: Array<{ num: number; name: string; label: string }> = [
   { num: 1, name: "vpn",       label: "VPN tunnel" },
   { num: 2, name: "hotspot",   label: "Hotspot config" },
@@ -603,6 +787,7 @@ export default function Routers() {
   const [historyModal, setHistoryModal] = useState<DbRouter | null>(null);
   const [installHistoryModal, setInstallHistoryModal] = useState<DbRouter | null>(null);
   const [autoRebootModal, setAutoRebootModal] = useState<DbRouter | null>(null);
+  const [managedResetOpen, setManagedResetOpen] = useState(false);
 
   /* ── Edit router modal ── */
   const [editRouter, setEditRouter] = useState<DbRouter | null>(null);
@@ -1008,6 +1193,18 @@ export default function Routers() {
            >
              <Shield size={13} /> Manual Configuration
            </button>
+            <button
+              onClick={() => setManagedResetOpen(true)}
+              title="Review and remove only tagged Ochola-managed service resources, one router at a time"
+              style={{
+                display: "flex", alignItems: "center", gap: "0.35rem",
+                padding: "0.45rem 1rem", background: "rgba(220,38,38,.08)",
+                border: "1px solid rgba(248,113,113,.4)", borderRadius: 7, color: "#f87171",
+                fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit",
+              }}
+            >
+              <Wrench size={13} /> Managed reset
+            </button>
         </div>
 
         <NetworkTabs active="routers" />
@@ -1844,6 +2041,7 @@ export default function Routers() {
         </div>
       )}
 
+      {managedResetOpen && <ManagedResetModal routers={routers} onClose={() => setManagedResetOpen(false)} />}
     </AdminLayout>
   );
 }

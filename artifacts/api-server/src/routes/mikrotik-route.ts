@@ -32,6 +32,9 @@ import {
   deployRouterFile,
   syncHotspotPortalHostname,
   ensureRouterManagementAccess,
+  buildManagedResetPlan,
+  executeManagedReset,
+  type ManagedResetPlan,
   RouterFileExistsError,
   getEnvCredentials,
   isPrivateIp,
@@ -131,6 +134,29 @@ interface SelfInstallFilePushJob {
 }
 const selfInstallFilePushJobs = new Map<string, SelfInstallFilePushJob>();
 const SELF_INSTALL_FILE_PUSH_JOB_TTL_MS = 15 * 60 * 1000;
+type ManagedResetJobStatus = "queued" | "running" | "complete" | "failed";
+interface ManagedResetStoredPlan {
+  plan: ManagedResetPlan;
+  adminId: number;
+  expiresAt: number;
+  state: "ready" | "running" | "used";
+}
+interface ManagedResetJob {
+  id: string;
+  routerId: number;
+  adminId: number;
+  status: ManagedResetJobStatus;
+  total: number;
+  processed: number;
+  current?: string;
+  backupFile?: string;
+  removed: Array<{ path: string; name: string }>;
+  error?: string;
+  updatedAt: number;
+}
+const managedResetPlans = new Map<string, ManagedResetStoredPlan>();
+const managedResetJobs = new Map<string, ManagedResetJob>();
+const MANAGED_RESET_TTL_MS = 15 * 60 * 1000;
 const SELF_INSTALL_FILE_GROUPS = [
   ["networksetup.rsc", "vpnsetup.rsc", "servicessetup.rsc"],
   ["brownfield-network.rsc", "brownfield-vpn.rsc", "brownfield-services.rsc"],
@@ -163,6 +189,16 @@ function cleanSelfInstallFilePushJobs(): void {
   const cutoff = Date.now() - SELF_INSTALL_FILE_PUSH_JOB_TTL_MS;
   for (const [jobId, job] of selfInstallFilePushJobs) {
     if (job.updatedAt < cutoff) selfInstallFilePushJobs.delete(jobId);
+  }
+}
+
+function cleanManagedResetState(): void {
+  const cutoff = Date.now() - MANAGED_RESET_TTL_MS;
+  for (const [id, value] of managedResetPlans) {
+    if (value.expiresAt <= Date.now()) managedResetPlans.delete(id);
+  }
+  for (const [id, value] of managedResetJobs) {
+    if (value.updatedAt < cutoff) managedResetJobs.delete(id);
   }
 }
 
@@ -685,6 +721,174 @@ router.get("/router/live-by-host", requireAdmin(), async (req, res): Promise<voi
   res.status(404).json({
     error:  "Router not found",
     detail: `No credentials stored for host "${host}". Add the router in the Routers page first.`,
+  });
+});
+
+/* ─── Managed reset: tagged service resources only ───────────────────────── */
+router.post("/router/:id/managed-reset/plan", requireAdmin(), async (req, res): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store");
+  const routerId = Number.parseInt(String(req.params.id), 10);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  if (!Number.isSafeInteger(routerId) || routerId <= 0) {
+    res.status(400).json({ ok: false, error: "Invalid router id." });
+    return;
+  }
+  if (!adminId) {
+    res.status(403).json({ ok: false, error: "A valid signed-in ISP account is required." });
+    return;
+  }
+  cleanManagedResetState();
+  const found = await getRouterCreds(routerId, adminId);
+  if (!found) {
+    res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+    return;
+  }
+  try {
+    const plan = await buildManagedResetPlan(found.creds, routerId, found.row.name);
+    managedResetPlans.set(plan.id, {
+      plan,
+      adminId,
+      expiresAt: Date.now() + MANAGED_RESET_TTL_MS,
+      state: "ready",
+    });
+    res.json({
+      ok: true,
+      plan: {
+        id: plan.id,
+        routerId: plan.routerId,
+        routerName: plan.routerName,
+        identity: plan.identity,
+        version: plan.version,
+        connectedHost: plan.connectedHost,
+        apiServiceAvailable: plan.apiServiceAvailable,
+        protectedVpnClients: plan.protectedVpnClients,
+        eligible: plan.eligible,
+        ...(plan.blockedReason ? { blockedReason: plan.blockedReason } : {}),
+        items: plan.items.map(({ path, name, comment }) => ({ path, name, comment })),
+        skippedPaths: plan.skippedPaths,
+      },
+    });
+  } catch (error) {
+    routerErrorResponse(res, error);
+  }
+});
+
+router.post("/router/:id/managed-reset/apply", requireAdmin(), async (req, res): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store");
+  const routerId = Number.parseInt(String(req.params.id), 10);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const planId = String(req.body?.planId ?? "").trim();
+  const confirmRouterName = String(req.body?.confirmRouterName ?? "").trim();
+  if (!Number.isSafeInteger(routerId) || routerId <= 0 || !planId) {
+    res.status(400).json({ ok: false, error: "Router id and planId are required." });
+    return;
+  }
+  if (!adminId) {
+    res.status(403).json({ ok: false, error: "A valid signed-in ISP account is required." });
+    return;
+  }
+  cleanManagedResetState();
+  const stored = managedResetPlans.get(planId);
+  if (!stored || stored.adminId !== adminId || stored.plan.routerId !== routerId) {
+    res.status(404).json({ ok: false, error: "Managed reset plan was not found or has expired." });
+    return;
+  }
+  if (!stored.plan.eligible) {
+    res.status(409).json({ ok: false, error: stored.plan.blockedReason ?? "Managed reset plan is not eligible." });
+    return;
+  }
+  if (stored.state !== "ready") {
+    res.status(409).json({ ok: false, error: "This managed reset plan has already been used or is being applied." });
+    return;
+  }
+  if (stored.plan.items.length === 0) {
+    res.status(409).json({ ok: false, error: "This router has no recognized tagged service objects to remove." });
+    return;
+  }
+  if (confirmRouterName !== stored.plan.routerName) {
+    res.status(400).json({ ok: false, error: "Type the exact router name to confirm this reset." });
+    return;
+  }
+  const activeJob = Array.from(managedResetJobs.values()).find(job =>
+    job.adminId === adminId && (job.status === "queued" || job.status === "running"),
+  );
+  if (activeJob) {
+    res.status(409).json({ ok: false, error: "Another managed reset is still running for this ISP account." });
+    return;
+  }
+  stored.state = "running";
+  let found: Awaited<ReturnType<typeof getRouterCreds>>;
+  try {
+    found = await getRouterCreds(routerId, adminId);
+  } catch (error) {
+    stored.state = "ready";
+    routerErrorResponse(res, error);
+    return;
+  }
+  if (!found) {
+    stored.state = "ready";
+    res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+    return;
+  }
+  if (found.row.name !== stored.plan.routerName) {
+    stored.state = "ready";
+    res.status(409).json({ ok: false, error: "The router name changed after review. Refresh the plan before applying." });
+    return;
+  }
+  const id = randomBytes(18).toString("base64url");
+  const job: ManagedResetJob = {
+    id, routerId, adminId, status: "queued", total: stored.plan.items.length,
+    processed: 0, removed: [], updatedAt: Date.now(),
+  };
+  managedResetJobs.set(id, job);
+  void (async () => {
+    job.status = "running";
+    job.updatedAt = Date.now();
+    try {
+      const result = await executeManagedReset(found.creds, stored.plan, (current, processed, backupFile, removed) => {
+        job.current = current;
+        job.processed = processed;
+        if (backupFile) job.backupFile = backupFile;
+        if (removed) job.removed = removed;
+        job.updatedAt = Date.now();
+      });
+      job.status = "complete";
+      job.processed = result.removed.length;
+      job.backupFile = result.backupFile;
+      job.removed = result.removed;
+    } catch (error) {
+      job.status = "failed";
+      job.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      stored.state = "used";
+      job.updatedAt = Date.now();
+    }
+  })();
+  res.status(202).json({ ok: true, jobId: id });
+});
+
+router.get("/router/:id/managed-reset/jobs/:jobId", requireAdmin(), async (req, res): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store");
+  const routerId = Number.parseInt(String(req.params.id), 10);
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  if (!Number.isSafeInteger(routerId) || routerId <= 0 || !adminId) {
+    res.status(403).json({ ok: false, error: "A valid signed-in ISP account is required." });
+    return;
+  }
+  cleanManagedResetState();
+  const job = managedResetJobs.get(String(req.params.jobId));
+  if (!job || job.routerId !== routerId || job.adminId !== adminId) {
+    res.status(404).json({ ok: false, error: "Managed reset job was not found or has expired." });
+    return;
+  }
+  res.json({
+    ok: true,
+    job: {
+      id: job.id, routerId: job.routerId, status: job.status, total: job.total,
+      processed: job.processed, ...(job.current ? { current: job.current } : {}),
+      ...(job.backupFile ? { backupFile: job.backupFile } : {}),
+      removed: job.removed, ...(job.error ? { error: job.error } : {}),
+    },
   });
 });
 
