@@ -514,11 +514,16 @@ async function withReadConn<T>(
 
   while (remainingUsernames.length > 0) {
     let connection: Awaited<ReturnType<typeof connectWithRetry>> | undefined;
+    const username = remainingUsernames[0];
+    const usingAlternateAccount = username !== creds.username;
     try {
       connection = await connectWithRetry({
         ...creds,
-        username: remainingUsernames[0],
-        alternateUsernames: remainingUsernames.slice(1),
+        ...(usingAlternateAccount
+          ? { connectTimeoutMs: Math.max(creds.connectTimeoutMs ?? DEFAULT_CONNECT_MS, 15_000) }
+          : {}),
+        username,
+        alternateUsernames: [],
       });
       try {
         const result = await fn(connection.conn, connection.connectedHost);
@@ -549,7 +554,7 @@ async function withReadConn<T>(
       }
     } catch (error) {
       lastError = error;
-      break;
+      remainingUsernames = remainingUsernames.filter(candidate => candidate !== username);
     } finally {
       if (connection) {
         try { connection.conn.close(); } catch { /* ignore */ }
