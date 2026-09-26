@@ -1,13 +1,20 @@
 import React, { useState, useRef, useEffect } from "react";
-import { getAdminApiToken } from "@/lib/supabase";
+import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
 import {
   RefreshCw, Loader2, CheckCircle2, AlertTriangle,
-  ChevronDown, ChevronUp, Wrench, PowerOff, Copy, Check,
+  ChevronDown, ChevronUp, Wrench, PowerOff, Copy, Check, HardDrive,
 } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 import { useAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
+import { installHotspotFiles, type HotspotFileDeploymentResult } from "@/lib/router-hotspot-files";
 
 type DbRouterMin = AdminContextRouter;
+const INCOMPLETE_ROUTER_STATUSES = new Set([
+  "setup",
+  "awaiting_connection",
+  "awaiting_sync",
+  "awaiting_ports",
+]);
 
 /* ── Tiny copy button (only used in the manual-fallback) ── */
 function CopyBtn({ text }: { text: string }) {
@@ -82,17 +89,26 @@ function LogPanel({
 
 /* ── Error action bar shown after a failed sync ── */
 function SyncFailedActions({
-  error, host, bridgeIp, username, password, onRetry,
+  error, host, bridgeIp, username, password, routerId, routerName, routerStatus, onRetry,
 }: {
   error: string; host: string; bridgeIp?: string;
+  routerId?: number; routerName?: string; routerStatus?: string;
   username: string; password: string; onRetry: () => void;
 }) {
   const [fixing,  setFixing]  = useState(false);
   const [rebooting, setRebooting] = useState(false);
+  const [deployingFiles, setDeployingFiles] = useState(false);
   const [fixResult,    setFixResult]    = useState<{ ok: boolean; logs: string[]; canConnect?: boolean } | null>(null);
   const [rebootResult, setRebootResult] = useState<{ ok: boolean; message?: string } | null>(null);
+  const [fileDeployment, setFileDeployment] = useState<HotspotFileDeploymentResult | null>(null);
+  const [fileDeploymentError, setFileDeploymentError] = useState("");
 
   const body = { host, bridgeIp, username, password };
+  const canRepairFiles = Boolean(
+    routerId
+    && routerStatus
+    && !INCOMPLETE_ROUTER_STATUSES.has(routerStatus.toLowerCase()),
+  );
 
   async function handleAutoFix() {
     setFixing(true); setFixResult(null); setRebootResult(null);
@@ -114,6 +130,32 @@ function SyncFailedActions({
     } catch (e) {
       setRebootResult({ ok: false, message: String(e) });
     } finally { setRebooting(false); }
+  }
+
+  async function handleInstallHotspotFiles() {
+    if (!routerId || !canRepairFiles || deployingFiles) return;
+    if (!window.confirm(
+      `Add missing approved Hotspot files to ${routerName || "this installed router"}? Existing files will be kept; this does not replace or run files.`,
+    )) return;
+    setDeployingFiles(true);
+    setFileDeployment(null);
+    setFileDeploymentError("");
+    try {
+      const result = await installHotspotFiles(
+        routerId,
+        ADMIN_ID,
+        getAdminApiToken(),
+        progress => setFileDeployment(progress),
+      );
+      setFileDeployment(result);
+      if (result.status === "failed" || result.failed.length > 0 || result.error) {
+        setFileDeploymentError(result.error || `${result.failed.length} Hotspot file(s) could not be transferred.`);
+      }
+    } catch (cause) {
+      setFileDeploymentError(cause instanceof Error ? cause.message : "Hotspot files could not be transferred.");
+    } finally {
+      setDeployingFiles(false);
+    }
   }
 
   /* Compact one-line error label */
@@ -151,14 +193,14 @@ function SyncFailedActions({
 
         <button
           onClick={handleAutoFix}
-          disabled={fixing || rebooting}
+          disabled={fixing || rebooting || deployingFiles}
           style={{
             display: "inline-flex", alignItems: "center", gap: "0.3rem",
             padding: "0.3rem 0.875rem", borderRadius: 7,
             background: fixing ? "rgba(37,99,235,0.08)" : "var(--isp-accent-glow)",
             border: "1px solid var(--isp-accent-border)",
             color: "var(--isp-accent)", fontWeight: 700, fontSize: "0.76rem",
-            cursor: fixing || rebooting ? "not-allowed" : "pointer",
+            cursor: fixing || rebooting || deployingFiles ? "not-allowed" : "pointer",
             fontFamily: "inherit", transition: "all 0.15s",
           }}
         >
@@ -170,14 +212,14 @@ function SyncFailedActions({
 
         <button
           onClick={handleReboot}
-          disabled={fixing || rebooting}
+          disabled={fixing || rebooting || deployingFiles}
           style={{
             display: "inline-flex", alignItems: "center", gap: "0.3rem",
             padding: "0.3rem 0.875rem", borderRadius: 7,
             background: rebooting ? "rgba(249,115,22,0.08)" : "rgba(249,115,22,0.12)",
             border: "1px solid rgba(249,115,22,0.35)",
             color: "#fb923c", fontWeight: 700, fontSize: "0.76rem",
-            cursor: fixing || rebooting ? "not-allowed" : "pointer",
+            cursor: fixing || rebooting || deployingFiles ? "not-allowed" : "pointer",
             fontFamily: "inherit", transition: "all 0.15s",
           }}
         >
@@ -187,22 +229,75 @@ function SyncFailedActions({
           }
         </button>
 
+        {canRepairFiles && (
+          <button
+            onClick={() => void handleInstallHotspotFiles()}
+            disabled={fixing || rebooting || deployingFiles}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: "0.3rem",
+              padding: "0.3rem 0.75rem", borderRadius: 7,
+              background: "rgba(34,197,94,0.1)",
+              border: "1px solid rgba(74,222,128,0.3)",
+              color: "#86efac", fontWeight: 700, fontSize: "0.76rem",
+              cursor: fixing || rebooting || deployingFiles ? "not-allowed" : "pointer",
+              fontFamily: "inherit", transition: "all 0.15s",
+            }}
+          >
+            {deployingFiles
+              ? <><Loader2 size={11} style={{ animation: "spin 1s linear infinite" }} /> Pushing files…</>
+              : <><HardDrive size={11} /> Repair Hotspot files</>}
+          </button>
+        )}
+
         <button
           onClick={onRetry}
-          disabled={fixing || rebooting}
+          disabled={fixing || rebooting || deployingFiles}
           style={{
             display: "inline-flex", alignItems: "center", gap: "0.3rem",
             padding: "0.3rem 0.875rem", borderRadius: 7,
             background: "rgba(255,255,255,0.05)",
             border: "1px solid rgba(255,255,255,0.12)",
             color: "#94a3b8", fontWeight: 700, fontSize: "0.76rem",
-            cursor: fixing || rebooting ? "not-allowed" : "pointer",
+            cursor: fixing || rebooting || deployingFiles ? "not-allowed" : "pointer",
             fontFamily: "inherit", transition: "all 0.15s",
           }}
         >
           <RefreshCw size={11} /> Try Again
         </button>
       </div>
+
+      {(deployingFiles || fileDeployment || fileDeploymentError) && (
+        <div style={{ marginTop: "0.5rem", padding: "0.55rem 0.7rem", borderRadius: 7, background: fileDeploymentError ? "rgba(248,113,113,0.06)" : "rgba(34,197,94,0.06)", border: `1px solid ${fileDeploymentError ? "rgba(248,113,113,0.2)" : "rgba(74,222,128,0.18)"}` }}>
+          <div style={{ fontSize: "0.7rem", fontWeight: 750, color: fileDeploymentError ? "#fca5a5" : "#86efac" }}>
+            {deployingFiles
+              ? `Hotspot file repair ${fileDeployment?.status ?? "starting"}`
+              : fileDeploymentError
+                ? "Hotspot file repair finished with errors"
+                : "Hotspot file repair complete"}
+          </div>
+          {fileDeployment && (
+            <div style={{ marginTop: "0.25rem", color: "#94a3b8", fontSize: "0.67rem" }}>
+              {fileDeployment.deployed.length} added · {fileDeployment.skipped.length} already present · {fileDeployment.failed.length} failed · {fileDeployment.processed} of {fileDeployment.total} processed
+            </div>
+          )}
+          {fileDeploymentError && (
+            <div style={{ marginTop: "0.25rem", color: "#fca5a5", fontSize: "0.67rem" }}>{fileDeploymentError}</div>
+          )}
+          {fileDeployment && (fileDeployment.deployed.length > 0 || fileDeployment.skipped.length > 0 || fileDeployment.failed.length > 0) ? (
+            <ul style={{ margin: "0.4rem 0 0", paddingLeft: "1.05rem", color: "#cbd5e1", fontSize: "0.66rem", lineHeight: 1.45 }}>
+              {fileDeployment.deployed.map(file => (
+                <li key={`deployed:${file.destinationPath}`}>{file.destinationPath}: added</li>
+              ))}
+              {fileDeployment.skipped.map(file => (
+                <li key={`skipped:${file.destinationPath}`}>{file.destinationPath}: {file.reason || "already present"}</li>
+              ))}
+              {fileDeployment.failed.map(file => (
+                <li key={`failed:${file.destinationPath}:${file.error}`} style={{ color: "#fca5a5" }}>{file.destinationPath}: {file.error}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      )}
 
       {/* Auto-fix result log */}
       {(fixing || fixResult) && (
@@ -253,10 +348,11 @@ function SyncFailedActions({
 
 /* ─── Log panel for main sync ─── */
 function SyncLogPanel({
-  logs, ok, error, host, bridgeIp, username, password, onClose, onRetry,
+  logs, ok, error, host, bridgeIp, username, password, routerId, routerName, routerStatus, onClose, onRetry,
 }: {
   logs: string[]; ok: boolean | null; error?: string;
   host: string; bridgeIp?: string; username: string; password: string;
+  routerId?: number; routerName?: string; routerStatus?: string;
   onClose: () => void; onRetry: () => void;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -304,6 +400,9 @@ function SyncLogPanel({
             bridgeIp={bridgeIp}
             username={username}
             password={password}
+            routerId={routerId}
+            routerName={routerName}
+            routerStatus={routerStatus}
             onRetry={onRetry}
           />
         </div>
@@ -503,6 +602,9 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
           bridgeIp={selectedRouter?.vpn_ip ?? undefined}
           username={selectedRouter?.router_username || "admin"}
           password={selectedRouter?.router_secret || ""}
+          routerId={selectedRouter?.id}
+          routerName={selectedRouter?.name}
+          routerStatus={selectedRouter?.status}
           onClose={() => setResult(null)}
           onRetry={handleSync}
         />

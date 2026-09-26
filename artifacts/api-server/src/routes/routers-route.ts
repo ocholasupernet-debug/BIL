@@ -7,6 +7,7 @@ import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
+import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 
 const router: IRouter = Router();
 
@@ -29,6 +30,15 @@ function cleanRouterHost(value: string | null | undefined): string {
   return String(value ?? "")
     .trim()
     .replace(/\s+\((?:VPN tunnel|⚠ LAN IP — only reachable on local network)\)\s*$/u, "");
+}
+
+function managementApiAlternateUsernames(
+  username: string | null | undefined,
+  vpnIp: string | null | undefined,
+): string[] | undefined {
+  return isRouterManagementVpnIp(vpnIp ?? "") && username !== ROUTER_MANAGEMENT_API_USERNAME
+    ? [ROUTER_MANAGEMENT_API_USERNAME]
+    : undefined;
 }
 
 function discoverVpnIp(
@@ -145,6 +155,7 @@ async function probeInstallRouter(row: InstallRouter): Promise<{
       port: 8728,
       username: row.router_username || "admin",
       password: row.router_secret || "",
+      alternateUsernames: managementApiAlternateUsernames(row.router_username, vpnIp),
       bridgeIp: vpnIp,
       connectTimeoutMs: 8_000,
       requestTimeoutMs: 8_000,
@@ -525,6 +536,7 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
     port:     8728,
     username: row.router_username   || "admin",
     password: row.router_secret     || "",
+    alternateUsernames: managementApiAlternateUsernames(row.router_username, discoveredVpnIp),
     useSSL:   false,
     bridgeIp: discoveredVpnIp,
     connectTimeoutMs:  8000,
@@ -580,6 +592,7 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
         port:     8728,
         username: row.router_username   || "admin",
         password: row.router_secret     || "",
+        alternateUsernames: managementApiAlternateUsernames(row.router_username, discoveredVpnIp),
         useSSL:   false,
         bridgeIp: discoveredVpnIp,
         connectTimeoutMs: 8000,

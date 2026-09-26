@@ -347,7 +347,7 @@ export async function probePort(
  */
 async function connectWithRetry(
   creds: RouterCredentials
-): Promise<{ conn: RouterOSAPI; connectedHost: string; probe: PortProbeResult; closeForward?: () => Promise<void> }> {
+): Promise<{ conn: RouterOSAPI; connectedHost: string; connectedUsername: string; probe: PortProbeResult; closeForward?: () => Promise<void> }> {
   const connectMs  = creds.connectTimeoutMs ?? DEFAULT_CONNECT_MS;
   /* Port probe uses a shorter timeout — fail fast, don't burn the full budget */
   const probeMs    = Math.min(connectMs, 6000);
@@ -454,6 +454,7 @@ async function connectWithRetry(
           return {
             conn,
             connectedHost: host,
+            connectedUsername: username,
             probe,
             closeForward: forward ? () => forward!.close() : undefined,
           };
@@ -495,6 +496,51 @@ async function withConn<T>(
     try { conn.close(); } catch { /* ignore */ }
     await closeForward?.();
   }
+}
+
+/* Read-only probes may retry the alternate account if login succeeds but
+ * RouterOS denies the identity/resource commands. Never use this wrapper for
+ * mutations: retrying a partially completed write could duplicate changes. */
+async function withReadConn<T>(
+  creds: RouterCredentials,
+  fn: (conn: RouterOSAPI, connectedHost: string) => Promise<T>
+): Promise<T> {
+  const usernames = Array.from(new Set([
+    creds.username,
+    ...(creds.alternateUsernames ?? []),
+  ].map(username => username.trim()).filter(Boolean)));
+  let remainingUsernames = usernames;
+  let lastError: unknown;
+
+  while (remainingUsernames.length > 0) {
+    let connection: Awaited<ReturnType<typeof connectWithRetry>> | undefined;
+    try {
+      connection = await connectWithRetry({
+        ...creds,
+        username: remainingUsernames[0],
+        alternateUsernames: remainingUsernames.slice(1),
+      });
+      try {
+        return await fn(connection.conn, connection.connectedHost);
+      } catch (error) {
+        lastError = error;
+        remainingUsernames = remainingUsernames.filter(
+          username => username !== connection?.connectedUsername,
+        );
+      }
+    } catch (error) {
+      lastError = error;
+      break;
+    } finally {
+      if (connection) {
+        try { connection.conn.close(); } catch { /* ignore */ }
+        try { await connection.closeForward?.(); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  if (lastError instanceof Error) throw lastError;
+  throw new Error("RouterOS API commands failed for all configured accounts");
 }
 
 /** Run a caller-supplied RouterOS command through the existing connection path.
@@ -1315,7 +1361,7 @@ export interface RouterPingResult {
 }
 
 export async function pingRouter(creds: RouterCredentials): Promise<RouterPingResult> {
-  return withConn(creds, async (conn, connectedHost) => {
+  return withReadConn(creds, async (conn, connectedHost) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const caBase = `${ROUTER_HTTPS_CERTIFICATE_NAME}-bootstrap`;
     const caFileName = `${caBase}.txt`;
@@ -1327,12 +1373,15 @@ export async function pingRouter(creds: RouterCredentials): Promise<RouterPingRe
 
     const id  = identRows[0] ?? {};
     const res = resRows[0]   ?? {};
+    if (!id.name || !res.version) {
+      throw new Error("RouterOS API connected but did not return identity and version.");
+    }
 
     return {
       online:        true,
-      identity:      id.name        ?? "unknown",
+      identity:      id.name,
       uptime:        res.uptime     ?? "",
-      version:       res.version    ?? "",
+      version:       res.version,
       board:         res["board-name"] ?? res["board"] ?? "",
       cpuLoad:       parseInt(res["cpu-load"] ?? "0", 10),
       freeMemory:    parseInt(res["free-memory"] ?? "0", 10),
@@ -3607,56 +3656,65 @@ export async function testConnection(
   /* Port(s) open — now try the full RouterOS API handshake */
   const start = Date.now();
   try {
-    const { conn, connectedHost } = await connectWithRetry(creds);
+    const probeResult = await withReadConn(creds, async (conn, connectedHost) => {
+      const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+
+      /* Identity and resource are required to call this a verified API check.
+         Bridge/routerboard details are optional across RouterOS models. */
+      const [identResult, resourceResult, bridgeResult, routerboardResult] = await Promise.allSettled([
+        withTimeout(conn.write(["/system/identity/print"]), ms) as Promise<Record<string, string>[]>,
+        withTimeout(conn.write(["/system/resource/print"]), ms) as Promise<Record<string, string>[]>,
+        withTimeout(conn.write(["/interface/bridge/print"]), ms) as Promise<Record<string, string>[]>,
+        withTimeout(conn.write(["/system/routerboard/print"]), ms) as Promise<Record<string, string>[]>,
+      ]);
+      if (identResult.status === "rejected") throw identResult.reason;
+      if (resourceResult.status === "rejected") throw resourceResult.reason;
+
+      const identRows = identResult.value;
+      const resourceRows = resourceResult.value;
+      const bridgeRows = bridgeResult.status === "fulfilled" ? bridgeResult.value : [];
+      const routerboardRows = routerboardResult.status === "fulfilled" ? routerboardResult.value : [];
+      const routerIdentity = identRows[0]?.name;
+      const rosVersion = resourceRows[0]?.version;
+      if (!routerIdentity || !rosVersion) {
+        throw new Error("RouterOS API connected but did not return identity and version.");
+      }
+
+      const model = routerboardRows[0]?.model
+        || routerboardRows[0]?.["board-name"]
+        || resourceRows[0]?.["board-name"];
+      const bridgeInterfaces = bridgeRows.map(row => row.name).filter(Boolean);
+      const detectedBridgeInterface =
+        bridgeInterfaces.find(name => name === "hotspot-bridge") ??
+        bridgeInterfaces.find(name => name.toLowerCase().includes("hotspot")) ??
+        bridgeInterfaces.find(name => name.toLowerCase().includes("bridge")) ??
+        bridgeInterfaces[0];
+
+      return {
+        connectedHost,
+        routerIdentity,
+        rosVersion,
+        model,
+        bridgeInterfaces,
+        detectedBridgeInterface,
+      };
+    });
     const latencyMs = Date.now() - start;
-    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-
-    /* Fetch identity, resource info, routerboard model, and bridge interfaces
-       in parallel. Each enrichment is independent because older RouterOS
-       versions and CHR may not expose routerboard or bridge resources. */
-    let routerIdentity: string | undefined;
-    let rosVersion: string | undefined;
-    let model: string | undefined;
-    let bridgeInterfaces: string[] = [];
-    let detectedBridgeInterface: string | undefined;
-    const [identResult, resourceResult, bridgeResult, routerboardResult] = await Promise.allSettled([
-      withTimeout(conn.write(["/system/identity/print"]), ms) as Promise<Record<string, string>[]>,
-      withTimeout(conn.write(["/system/resource/print"]), ms) as Promise<Record<string, string>[]>,
-      withTimeout(conn.write(["/interface/bridge/print"]), ms) as Promise<Record<string, string>[]>,
-      withTimeout(conn.write(["/system/routerboard/print"]), ms) as Promise<Record<string, string>[]>,
-    ]);
-    const identRows = identResult.status === "fulfilled" ? identResult.value : [];
-    const resourceRows = resourceResult.status === "fulfilled" ? resourceResult.value : [];
-    const bridgeRows = bridgeResult.status === "fulfilled" ? bridgeResult.value : [];
-    const routerboardRows = routerboardResult.status === "fulfilled" ? routerboardResult.value : [];
-    routerIdentity = identRows[0]?.name;
-    rosVersion = resourceRows[0]?.version;
-    model = routerboardRows[0]?.model
-      || routerboardRows[0]?.["board-name"]
-      || resourceRows[0]?.["board-name"];
-    bridgeInterfaces = bridgeRows.map(r => r.name).filter(Boolean);
-    detectedBridgeInterface =
-      bridgeInterfaces.find(n => n === "hotspot-bridge") ??
-      bridgeInterfaces.find(n => n.toLowerCase().includes("hotspot")) ??
-      bridgeInterfaces.find(n => n.toLowerCase().includes("bridge")) ??
-      bridgeInterfaces[0];
-
-    try { conn.close(); } catch { /* ignore */ }
     const method: ConnectionTestResult["method"] =
-      connectedHost === creds.bridgeIp ? "vpn-tunnel" : "public-ip";
+      probeResult.connectedHost === creds.bridgeIp ? "vpn-tunnel" : "public-ip";
     return {
       ok: true,
-      connectedHost,
+      connectedHost: probeResult.connectedHost,
       method,
       latencyMs,
       usingSSL:   creds.useSSL ?? creds.port === 8729,
       warnings,
       portProbes,
-      routerIdentity,
-      rosVersion,
-      model,
-      bridgeInterfaces,
-      detectedBridgeInterface,
+      routerIdentity: probeResult.routerIdentity,
+      rosVersion: probeResult.rosVersion,
+      model: probeResult.model,
+      bridgeInterfaces: probeResult.bridgeInterfaces,
+      detectedBridgeInterface: probeResult.detectedBridgeInterface,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

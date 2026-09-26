@@ -21,6 +21,7 @@ import {
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
+import { pushSelfInstallFiles, type SelfInstallFilePushResult } from "@/lib/self-install-file-push";
 
 type InstallMode = "greenfield" | "brownfield" | "zero-touch";
 type BackendInstallMode = "direct" | "coexist" | "takeover";
@@ -132,6 +133,13 @@ const MODE_OPTIONS: Array<{
     tone: "#fb923c",
   },
 ];
+
+const INCOMPLETE_INSTALL_STATUSES = new Set([
+  "setup",
+  "awaiting_connection",
+  "awaiting_sync",
+  "awaiting_ports",
+]);
 
 const panel: React.CSSProperties = {
   background: "var(--isp-card)",
@@ -314,13 +322,14 @@ export default function SelfInstall() {
   const [vpnInfo, setVpnInfo] = useState<VpnInfo | null>(null);
   const [installStatus, setInstallStatus] = useState<InstallStatus | null>(null);
   const [finished, setFinished] = useState<FinishResult["router"] | null>(null);
-  const [busy, setBusy] = useState<"creating" | "loading" | "finishing" | "script" | "">("");
+  const [busy, setBusy] = useState<"creating" | "loading" | "finishing" | "script" | "uploading" | "">("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [reconfigureId, setReconfigureId] = useState<number | null>(null);
   const [scriptSteps, setScriptSteps] = useState<SelfInstallStep[]>([]);
   const [scriptWarning, setScriptWarning] = useState("");
   const [copiedStep, setCopiedStep] = useState<SelfInstallStep["id"] | null>(null);
+  const [filePushProgress, setFilePushProgress] = useState<SelfInstallFilePushResult | null>(null);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -358,6 +367,13 @@ export default function SelfInstall() {
   useEffect(() => {
     if (reconfigureId) void loadRouter(reconfigureId);
   }, [loadRouter, reconfigureId]);
+
+  useEffect(() => {
+    setScriptSteps([]);
+    setScriptWarning("");
+    setCopiedStep(null);
+    setFilePushProgress(null);
+  }, [mode, router?.id]);
 
   const refreshStatus = useCallback(async () => {
     if (!router) return;
@@ -560,6 +576,42 @@ export default function SelfInstall() {
     }
   };
 
+  const pushGeneratedInstallFiles = async () => {
+    if (!router || !live?.connected || !INCOMPLETE_INSTALL_STATUSES.has(
+      String(live.router?.status ?? router.status).toLowerCase(),
+    )) return;
+    if (!window.confirm(
+      `Push the three generated setup files to ${router.name}? Same-named setup files will be replaced. The files will not be imported or run. They contain setup configuration and VPN credentials; remove them from RouterOS after use.`,
+    )) return;
+
+    setBusy("uploading");
+    setError("");
+    setNotice("");
+    setFilePushProgress(null);
+    try {
+      const generated = await fetchSelfInstallSteps();
+      const result = await pushSelfInstallFiles(
+        router.id,
+        ADMIN_ID,
+        generated.steps.map(step => step.fileName),
+        getAdminApiToken(),
+        progress => setFilePushProgress(progress),
+      );
+      setFilePushProgress(result);
+      if (result.status === "failed" || result.failed.length > 0 || result.error) {
+        setError(result.error || `Self Install file transfer finished with ${result.failed.length} failed file(s).`);
+      } else {
+        setNotice(
+          `${result.deployed.length} setup file(s) pushed${result.skipped.length ? `; ${result.skipped.length} already existed` : ""}. The scripts were not run.`,
+        );
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not push the Self Install files.");
+    } finally {
+      setBusy("");
+    }
+  };
+
   const tunnel = vpnInfo?.managementTunnel;
   const live = installStatus;
   const connected = Boolean(live?.connected || finished);
@@ -567,6 +619,14 @@ export default function SelfInstall() {
   const selectedMode = MODE_OPTIONS.find(option => option.value === mode)!;
   const pageStep = finished ? 4 : router ? (connected ? 3 : 2) : 1;
   const endpointReady = Boolean(tunnel?.connectTo && !tunnel.connectTo.startsWith("SET_"));
+  const incompleteInstall = Boolean(
+    router
+    && !finished
+    && INCOMPLETE_INSTALL_STATUSES.has(String(live?.router?.status ?? router.status).toLowerCase()),
+  );
+  const canPushInstallFiles = Boolean(
+    incompleteInstall && live?.connected && scriptSteps.length === 3 && busy === "",
+  );
 
   const checklist = useMemo(() => [
     { label: "Tenant-owned router profile", ok: Boolean(router) },
@@ -799,6 +859,59 @@ export default function SelfInstall() {
                           />
                         </div>
                       ))}
+                    </div>
+                  )}
+                  {incompleteInstall && (
+                    <div style={{ marginTop: "0.8rem", padding: "0.8rem", borderRadius: 9, border: "1px solid rgba(59,130,246,0.22)", background: "rgba(37,99,235,0.05)" }}>
+                      <div style={{ color: "var(--isp-text)", fontSize: "0.78rem", fontWeight: 800 }}>
+                        Direct file transfer
+                      </div>
+                      <div style={{ marginTop: "0.3rem", color: "var(--isp-text-muted)", fontSize: "0.71rem", lineHeight: 1.5 }}>
+                        When RouterOS API is connected, send the three ordered setup files to the router&apos;s root directory. This does not import or run them. The action replaces same-named setup files only.
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void pushGeneratedInstallFiles()}
+                        disabled={!canPushInstallFiles}
+                        style={{ marginTop: "0.7rem", display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.56rem 0.85rem", border: 0, borderRadius: 8, background: canPushInstallFiles ? "var(--isp-accent)" : "var(--isp-section)", color: canPushInstallFiles ? "#fff" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.75rem", cursor: canPushInstallFiles ? "pointer" : "not-allowed" }}
+                      >
+                        {busy === "uploading"
+                          ? <Loader2 size={14} style={{ animation: "self-install-spin 1s linear infinite" }} />
+                          : <Server size={14} />}
+                        {busy === "uploading"
+                          ? "Pushing setup files…"
+                          : !live?.connected
+                            ? "Waiting for RouterOS API"
+                            : scriptSteps.length !== 3
+                              ? "Generate ordered steps first"
+                              : "Push all 3 setup files"}
+                      </button>
+                    </div>
+                  )}
+                  {filePushProgress && (
+                    <div style={{ marginTop: "0.7rem", padding: "0.75rem 0.85rem", borderRadius: 8, border: `1px solid ${filePushProgress.failed.length || filePushProgress.status === "failed" || filePushProgress.error ? "rgba(248,113,113,0.3)" : "rgba(74,222,128,0.25)"}`, background: filePushProgress.failed.length || filePushProgress.status === "failed" || filePushProgress.error ? "rgba(248,113,113,0.05)" : "rgba(74,222,128,0.05)" }}>
+                      <div style={{ color: filePushProgress.failed.length || filePushProgress.status === "failed" || filePushProgress.error ? "#fca5a5" : "#86efac", fontSize: "0.74rem", fontWeight: 800 }}>
+                        Self Install file transfer {["queued", "running"].includes(filePushProgress.status) ? filePushProgress.status : filePushProgress.failed.length || filePushProgress.status === "failed" || filePushProgress.error ? "finished with errors" : "complete"}
+                      </div>
+                      <div style={{ marginTop: "0.3rem", color: "var(--isp-text-muted)", fontSize: "0.69rem" }}>
+                        {filePushProgress.deployed.length} uploaded · {filePushProgress.skipped.length} skipped · {filePushProgress.failed.length} failed · {filePushProgress.processed} of {filePushProgress.total} processed
+                      </div>
+                      {filePushProgress.error && (
+                        <div style={{ marginTop: "0.35rem", color: "#fca5a5", fontSize: "0.68rem" }}>{filePushProgress.error}</div>
+                      )}
+                      {[...filePushProgress.deployed, ...filePushProgress.skipped, ...filePushProgress.failed].length > 0 && (
+                        <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.1rem", color: "var(--isp-text-muted)", fontSize: "0.68rem", lineHeight: 1.55 }}>
+                          {filePushProgress.deployed.map(file => (
+                            <li key={`deployed:${file.destinationPath}`}>{file.destinationPath}: {file.replaced ? "replaced" : "uploaded"}</li>
+                          ))}
+                          {filePushProgress.skipped.map(file => (
+                            <li key={`skipped:${file.destinationPath}`}>{file.destinationPath}: {file.reason || "skipped"}</li>
+                          ))}
+                          {filePushProgress.failed.map(file => (
+                            <li key={`failed:${file.destinationPath}`} style={{ color: "#fca5a5" }}>{file.destinationPath}: {file.error || "transfer failed"}</li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   )}
                  {!endpointReady && (

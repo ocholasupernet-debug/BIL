@@ -216,8 +216,8 @@ export default function Files() {
       const token = getAdminApiToken();
       const result = await installHotspotFiles(selectedRouterId, ADMIN_ID, token);
       setDeploymentSummary(result);
-      if (result.status === "failed" && result.failed.length) {
-        setError(`Hotspot deployment finished with ${result.failed.length} failed file(s).`);
+      if (result.status === "failed" || result.failed.length > 0 || result.error) {
+        setError(result.error || `Hotspot deployment finished with ${result.failed.length} failed file(s).`);
       }
       await loadFiles(selectedRouterId);
     } catch (cause) {
@@ -283,14 +283,17 @@ export default function Files() {
         </section>
 
         {deploymentSummary && (
-          <section style={{ ...panel, padding: "0.9rem 1rem", borderColor: deploymentSummary.failed.length ? "rgba(248,113,113,0.35)" : "rgba(74,222,128,0.3)", background: deploymentSummary.failed.length ? "rgba(248,113,113,0.06)" : "rgba(74,222,128,0.06)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: deploymentSummary.failed.length ? "#fca5a5" : "#86efac", fontWeight: 800, fontSize: "0.82rem" }}>
-              {deploymentSummary.failed.length ? <AlertCircle size={16} /> : <Check size={16} />}
+          <section style={{ ...panel, padding: "0.9rem 1rem", borderColor: deploymentSummary.failed.length || deploymentSummary.status === "failed" ? "rgba(248,113,113,0.35)" : "rgba(74,222,128,0.3)", background: deploymentSummary.failed.length || deploymentSummary.status === "failed" ? "rgba(248,113,113,0.06)" : "rgba(74,222,128,0.06)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: deploymentSummary.failed.length || deploymentSummary.status === "failed" ? "#fca5a5" : "#86efac", fontWeight: 800, fontSize: "0.82rem" }}>
+              {deploymentSummary.failed.length || deploymentSummary.status === "failed" ? <AlertCircle size={16} /> : <Check size={16} />}
               Hotspot file installation {deploymentSummary.status === "complete" && !deploymentSummary.failed.length ? "complete" : "finished with errors"}
             </div>
             <div style={{ ...mutedText, marginTop: "0.4rem" }}>
               {deploymentSummary.deployed.length} added · {deploymentSummary.skipped.length} already present · {deploymentSummary.failed.length} failed · {deploymentSummary.processed} of {deploymentSummary.total} processed
             </div>
+            {deploymentSummary.error && (
+              <div style={{ marginTop: "0.45rem", color: "#fca5a5", fontSize: "0.74rem" }}>{deploymentSummary.error}</div>
+            )}
             {deploymentSummary.failed.length > 0 && (
               <ul style={{ margin: "0.65rem 0 0", paddingLeft: "1.2rem", color: "#fca5a5", fontSize: "0.74rem", lineHeight: 1.5 }}>
                 {deploymentSummary.failed.map(file => (

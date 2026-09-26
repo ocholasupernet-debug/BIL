@@ -110,6 +110,37 @@ interface BulkDeployJob {
 const bulkDeployJobs = new Map<string, BulkDeployJob>();
 const BULK_DEPLOY_JOB_TTL_MS = 15 * 60 * 1000;
 
+type SelfInstallFilePushJobStatus = "queued" | "running" | "complete" | "failed";
+interface SelfInstallFilePushJob {
+  id: string;
+  routerId: number;
+  adminId: number;
+  status: SelfInstallFilePushJobStatus;
+  fileNames: string[];
+  overwriteExisting: boolean;
+  total: number;
+  processed: number;
+  deployed: Array<{ sourceName: string; destinationPath: string; size: number; replaced: boolean }>;
+  skipped: Array<{ sourceName: string; destinationPath: string; reason: string }>;
+  failed: Array<{ sourceName: string; destinationPath: string; error: string }>;
+  connectedHost?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+const selfInstallFilePushJobs = new Map<string, SelfInstallFilePushJob>();
+const SELF_INSTALL_FILE_PUSH_JOB_TTL_MS = 15 * 60 * 1000;
+const SELF_INSTALL_FILE_GROUPS = [
+  ["networksetup.rsc", "vpnsetup.rsc", "servicessetup.rsc"],
+  ["brownfield-network.rsc", "brownfield-vpn.rsc", "brownfield-services.rsc"],
+] as const;
+const INCOMPLETE_ROUTER_STATUSES = new Set([
+  "setup",
+  "awaiting_connection",
+  "awaiting_sync",
+  "awaiting_ports",
+]);
+
 function cleanPendingRouterFileSources(): void {
   const now = Date.now();
   for (const [token, source] of pendingRouterFileSources) {
@@ -124,6 +155,13 @@ function cleanBulkDeployJobs(): void {
   const cutoff = Date.now() - BULK_DEPLOY_JOB_TTL_MS;
   for (const [jobId, job] of bulkDeployJobs) {
     if (job.updatedAt < cutoff) bulkDeployJobs.delete(jobId);
+  }
+}
+
+function cleanSelfInstallFilePushJobs(): void {
+  const cutoff = Date.now() - SELF_INSTALL_FILE_PUSH_JOB_TTL_MS;
+  for (const [jobId, job] of selfInstallFilePushJobs) {
+    if (job.updatedAt < cutoff) selfInstallFilePushJobs.delete(jobId);
   }
 }
 
@@ -993,6 +1031,107 @@ async function runBulkFileDeployment(
   }
 }
 
+async function runSelfInstallFilePush(
+  job: SelfInstallFilePushJob,
+  creds: RouterCredentials,
+  origin: string,
+): Promise<void> {
+  job.status = "running";
+  job.updatedAt = Date.now();
+  try {
+    const currentFiles = await fetchRouterFiles(creds);
+    job.connectedHost = currentFiles.connectedHost;
+    const existingFiles = new Set(currentFiles.files.map(file => file.name
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^\/+|\/+$/g, "")
+      .toLowerCase()));
+
+    for (const fileName of job.fileNames) {
+      const destinationPath = fileName;
+      const normalizedDestination = destinationPath.toLowerCase();
+      if (existingFiles.has(normalizedDestination) && !job.overwriteExisting) {
+        job.skipped.push({
+          sourceName: fileName,
+          destinationPath,
+          reason: "already exists; left unchanged",
+        });
+        job.processed += 1;
+        job.updatedAt = Date.now();
+        continue;
+      }
+
+      const generatedSource = publicRouterFileSources.get(`${job.routerId}/${fileName}`);
+      if (!generatedSource || generatedSource.expiresAt <= Date.now()) {
+        job.failed.push({
+          sourceName: fileName,
+          destinationPath,
+          error: "Generated Self Install file expired. Generate the ordered steps again and retry.",
+        });
+        job.processed += 1;
+        job.updatedAt = Date.now();
+        continue;
+      }
+
+      const token = createPendingRouterFileSource({
+        content: generatedSource.content,
+        contentType: generatedSource.contentType,
+        fileName: generatedSource.fileName,
+        maxFetchAttempts: 3,
+      });
+      try {
+        const result = await deployRouterFile(creds, {
+          destinationPath,
+          sourceUrl: `${origin}/api/router-file-source/${token}`,
+          overwrite: job.overwriteExisting,
+          uploadId: token.slice(0, 16),
+        });
+        job.deployed.push({
+          sourceName: fileName,
+          destinationPath: result.destinationPath,
+          size: result.size,
+          replaced: result.replaced,
+        });
+        existingFiles.add(normalizedDestination);
+      } catch (error) {
+        if (error instanceof RouterFileExistsError) {
+          job.skipped.push({
+            sourceName: fileName,
+            destinationPath,
+            reason: "already exists; left unchanged",
+          });
+        } else {
+          job.failed.push({
+            sourceName: fileName,
+            destinationPath,
+            error: error instanceof Error ? error.message : "File transfer failed",
+          });
+        }
+      } finally {
+        pendingRouterFileSources.delete(token);
+        job.processed += 1;
+        job.updatedAt = Date.now();
+      }
+    }
+
+    job.status = job.failed.length > 0 ? "failed" : "complete";
+    job.updatedAt = Date.now();
+    logger.info({
+      routerId: job.routerId,
+      adminId: job.adminId,
+      total: job.total,
+      deployed: job.deployed.length,
+      skipped: job.skipped.length,
+      failed: job.failed.length,
+    }, "Self Install files pushed to router");
+  } catch (error) {
+    job.status = "failed";
+    job.error = error instanceof Error ? error.message : "Self Install file transfer failed";
+    job.updatedAt = Date.now();
+    logger.error({ routerId: job.routerId, adminId: job.adminId, error: job.error }, "Self Install file transfer failed");
+  }
+}
+
 router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
   const adminId = authenticatedAdminId(req, req.body?.adminId);
@@ -1020,6 +1159,14 @@ router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): P
   const found = await getRouterCreds(id, adminId);
   if (!found) {
     res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+  const routerStatus = String(found.row.status ?? "").trim().toLowerCase();
+  if (!routerStatus || INCOMPLETE_ROUTER_STATUSES.has(routerStatus)) {
+    res.status(409).json({
+      error: "Bulk Hotspot file repair is available only after the router installation is complete.",
+      detail: "Use the guarded Self Install file transfer for an incomplete router.",
+    });
     return;
   }
 
@@ -1975,6 +2122,142 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       detail: reason,
     });
   }
+});
+
+/* ─── POST /api/router/:id/self-install-files/deploy ─────────────────────── */
+/**
+ * Pushes the three generated Self Install scripts to an incomplete router.
+ * This endpoint only transfers files; it never imports or executes them.
+ */
+router.post("/router/:id/self-install-files/deploy", requireAdmin(), async (req, res): Promise<void> => {
+  const id = Number.parseInt(String(req.params.id), 10);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid router id" });
+    return;
+  }
+  if (!Number.isInteger(adminId) || adminId <= 0) {
+    res.status(403).json({ error: "A valid signed-in ISP account is required" });
+    return;
+  }
+
+  const fileNames: string[] = Array.isArray(req.body?.fileNames)
+    ? req.body.fileNames.map((value: unknown) => typeof value === "string" ? value.trim() : "")
+    : [];
+  const isApprovedFileGroup = SELF_INSTALL_FILE_GROUPS.some(group =>
+    group.length === fileNames.length && group.every((fileName, index) => fileName === fileNames[index]),
+  );
+  if (!isApprovedFileGroup) {
+    res.status(400).json({ error: "Only a complete, ordered set of generated Self Install files can be pushed." });
+    return;
+  }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found for this ISP account" });
+    return;
+  }
+  const status = String(found.row.status ?? "").trim().toLowerCase();
+  if (!INCOMPLETE_ROUTER_STATUSES.has(status)) {
+    res.status(409).json({
+      error: "Self Install file transfer is limited to routers that have not completed installation.",
+      detail: `Current router status: ${status || "unknown"}.`,
+    });
+    return;
+  }
+
+  const managementIp = [
+    found.row.vpn_ip,
+    found.row.bridge_ip,
+    found.creds.bridgeIp,
+  ].map(value => String(value ?? "").trim()).find(isManagementVpnIp);
+  if (!managementIp) {
+    res.status(409).json({
+      error: "A verified management VPN address is required before setup files can be pushed.",
+    });
+    return;
+  }
+
+  const sourcesReady = fileNames.every(fileName => {
+    const source = publicRouterFileSources.get(`${id}/${fileName}`);
+    return Boolean(source && source.expiresAt > Date.now());
+  });
+  if (!sourcesReady) {
+    res.status(409).json({
+      error: "The generated Self Install files have expired. Generate the ordered steps again, then retry.",
+    });
+    return;
+  }
+
+  const now = Date.now();
+  const job: SelfInstallFilePushJob = {
+    id: randomBytes(18).toString("hex"),
+    routerId: id,
+    adminId,
+    status: "queued",
+    fileNames,
+    overwriteExisting: req.body?.overwriteExisting === true,
+    total: fileNames.length,
+    processed: 0,
+    deployed: [],
+    skipped: [],
+    failed: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  selfInstallFilePushJobs.set(job.id, job);
+  res.status(202).json({
+    ok: true,
+    jobId: job.id,
+    status: job.status,
+    total: job.total,
+    processed: job.processed,
+    deployed: job.deployed,
+    skipped: job.skipped,
+    failed: job.failed,
+  });
+
+  const managementCreds: RouterCredentials = {
+    ...found.creds,
+    host: managementIp,
+    bridgeIp: managementIp,
+  };
+  void runSelfInstallFilePush(job, managementCreds, managementScriptSourceOrigin(req));
+});
+
+router.get("/router/:id/self-install-files/deploy/:jobId", requireAdmin(), (req, res): void => {
+  const id = Number.parseInt(String(req.params.id), 10);
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid router id" });
+    return;
+  }
+  if (!Number.isInteger(adminId) || adminId <= 0) {
+    res.status(403).json({ error: "A valid signed-in ISP account is required" });
+    return;
+  }
+
+  cleanSelfInstallFilePushJobs();
+  const job = selfInstallFilePushJobs.get(String(req.params.jobId));
+  if (!job || job.routerId !== id || job.adminId !== adminId) {
+    res.status(404).json({ error: "Self Install file transfer job not found" });
+    return;
+  }
+
+  res.json({
+    jobId: job.id,
+    routerId: job.routerId,
+    status: job.status,
+    total: job.total,
+    processed: job.processed,
+    deployed: job.deployed,
+    skipped: job.skipped,
+    failed: job.failed,
+    connectedHost: job.connectedHost,
+    error: job.error,
+    createdAt: new Date(job.createdAt).toISOString(),
+    updatedAt: new Date(job.updatedAt).toISOString(),
+  });
 });
 
 /* ─── GET /api/router/:id/ovpn-client ──────────────────────────────────── */
