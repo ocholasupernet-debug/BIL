@@ -1,5 +1,5 @@
 import * as net from "net";
-import { X509Certificate } from "node:crypto";
+import { randomBytes, X509Certificate } from "node:crypto";
 import { RouterOSAPI } from "node-routeros";
 import { logger } from "./logger";
 import {
@@ -565,6 +565,246 @@ async function withReadConn<T>(
 
   if (lastError instanceof Error) throw lastError;
   throw new Error("RouterOS API commands failed for all configured accounts");
+}
+
+/* ─── Managed-service reset (never touches management/network resources) ─── */
+
+export const MANAGED_RESET_PATHS = [
+  "/ip/pool",
+  "/ip/dhcp-server",
+  "/ip/dhcp-server/network",
+  "/ip/hotspot",
+  "/ip/hotspot/profile",
+  "/ip/hotspot/user",
+  "/ip/hotspot/user/profile",
+  "/ip/hotspot/walled-garden",
+  "/ip/hotspot/walled-garden/ip",
+  "/ppp/profile",
+  "/ppp/secret",
+  "/interface/pppoe-server/server",
+  "/queue/simple",
+  "/queue/tree",
+] as const;
+
+const MANAGED_RESET_ACCESS_MARKERS = [
+  "api", "vpn", "management", "mainbillingvpn", "certificate",
+  "do not delete", "failover", "vps tunnel",
+];
+
+export interface ManagedResetItem {
+  id: string;
+  path: string;
+  name: string;
+  comment: string;
+}
+
+export interface ManagedResetPlan {
+  id: string;
+  routerId: number;
+  routerName: string;
+  identity: string;
+  version: string;
+  connectedHost: string;
+  apiServiceAvailable: boolean;
+  protectedVpnClients: string[];
+  eligible: boolean;
+  blockedReason?: string;
+  items: ManagedResetItem[];
+  skippedPaths: string[];
+  createdAt: number;
+}
+
+export interface ManagedResetResult {
+  backupFile: string;
+  removed: Array<{ path: string; name: string }>;
+}
+
+export function isManagedResetPath(path: string): path is typeof MANAGED_RESET_PATHS[number] {
+  return (MANAGED_RESET_PATHS as readonly string[]).includes(path);
+}
+
+function isManagementVpnHost(host: string): boolean {
+  return /^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(host);
+}
+
+export function isManagedResetComment(
+  comment: string,
+  routerId: number,
+): boolean {
+  const value = String(comment ?? "").trim();
+  const tags = [`ochola-services-${routerId}`, `ochola-coexist-${routerId}`];
+  const hasTag = tags.some(tag => {
+    const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`^${escaped}(?:$|[ -])`, "i").test(value);
+  });
+  return hasTag && !MANAGED_RESET_ACCESS_MARKERS.some(marker => value.toLowerCase().includes(marker));
+}
+
+export function isManagedResetItem(
+  row: { name?: unknown; comment?: unknown; [key: string]: unknown },
+  path: string,
+  routerId: number,
+): boolean {
+  if (!isManagedResetPath(path) || !row[".id"]) return false;
+  const name = String(row.name ?? "").trim();
+  const comment = String(row.comment ?? "").trim();
+  if (MANAGED_RESET_ACCESS_MARKERS.some(marker =>
+    `${name} ${comment}`.toLowerCase().includes(marker),
+  )) return false;
+  return isManagedResetComment(comment, routerId);
+}
+
+function managedResetRows(
+  rows: Record<string, string>[],
+  path: typeof MANAGED_RESET_PATHS[number],
+  routerId: number,
+): ManagedResetItem[] {
+  return rows
+    .filter(row => isManagedResetItem(row, path, routerId))
+    .map(row => ({
+      id: String(row[".id"]),
+      path,
+      name: String(row.name ?? ""),
+      comment: String(row.comment ?? ""),
+    }));
+}
+
+export async function buildManagedResetPlan(
+  creds: RouterCredentials,
+  routerId: number,
+  routerName: string,
+): Promise<ManagedResetPlan> {
+  const id = randomBytes(18).toString("base64url");
+  return withReadConn(creds, async (conn, connectedHost) => {
+    const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000);
+    const read = async (command: string[]): Promise<Record<string, string>[]> =>
+      withTimeout(conn.write(command), timeoutMs) as Promise<Record<string, string>[]>;
+    const identityRows = await read(["/system/identity/print", "=.proplist=name"]);
+    const resourceRows = await read(["/system/resource/print", "=.proplist=version"]);
+    const serviceRows = await read(["/ip/service/print", "=.proplist=name,disabled"]);
+    const vpnRows = await read([
+      "/interface/ovpn-client/print",
+      "=.proplist=name,comment,disabled",
+    ]);
+    const identity = String(identityRows[0]?.name ?? "").trim();
+    const version = String(resourceRows[0]?.version ?? "").trim();
+    const apiServiceAvailable = serviceRows.some(row =>
+      (row.name === "api" || row.name === "api-ssl")
+      && String(row.disabled ?? "").toLowerCase() !== "true",
+    );
+    const protectedVpnClients = vpnRows
+      .filter(row => /mainbillingvpn|ochola.*management|vps tunnel/i.test(
+        `${row.name ?? ""} ${row.comment ?? ""}`,
+      ))
+      .map(row => `${String(row.name ?? "")}${row.comment ? ` — ${row.comment}` : ""}`);
+    if (!identity || !version) {
+      throw new Error("Router identity and version did not return rows.");
+    }
+    if (!apiServiceAvailable || protectedVpnClients.length === 0) {
+      throw new Error("Router API service or management VPN inventory returned incomplete rows.");
+    }
+    const items: ManagedResetItem[] = [];
+    const skippedPaths: string[] = [];
+    for (const path of MANAGED_RESET_PATHS) {
+      try {
+        const rows = await read([path + "/print", "=.proplist=.id,name,comment"]);
+        items.push(...managedResetRows(Array.isArray(rows) ? rows : [], path, routerId));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/not enough permissions|permission denied|not permitted|policy/i.test(message)) {
+          throw error;
+        }
+        skippedPaths.push(`${path}: unavailable`);
+      }
+    }
+    const blockedReason = !identity || !version
+      ? "Router identity or RouterOS version could not be verified."
+      : !isManagementVpnHost(connectedHost)
+        ? "The read-only check did not connect through the 10.8.5.x or 10.8.6.x management VPN."
+      : !apiServiceAvailable
+        ? "No enabled RouterOS API service (api or api-ssl) could be verified."
+        : protectedVpnClients.length === 0
+          ? "The mainbillingvpn/Ochola management VPN client could not be verified."
+          : undefined;
+    return {
+      id, routerId, routerName, identity, version, connectedHost,
+      apiServiceAvailable, protectedVpnClients, eligible: !blockedReason,
+      ...(blockedReason ? { blockedReason } : {}),
+      items, skippedPaths, createdAt: Date.now(),
+    };
+  });
+}
+
+export async function executeManagedReset(
+  creds: RouterCredentials,
+  plan: ManagedResetPlan,
+  onProgress?: (
+    current: string,
+    processed: number,
+    backupFile?: string,
+    removed?: Array<{ path: string; name: string }>,
+  ) => void,
+): Promise<ManagedResetResult> {
+  if (!plan.eligible) throw new Error(plan.blockedReason ?? "Managed reset plan is not eligible.");
+  const connection = await connectWithRetry(creds);
+  const { conn, connectedHost, closeForward } = connection;
+  try {
+    if (!isManagementVpnHost(connectedHost)) {
+      throw new Error("The reset must run through the 10.8.5.x or 10.8.6.x management VPN.");
+    }
+    const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000);
+    const write = async (command: string[]): Promise<Record<string, string>[]> =>
+      await withTimeout(conn.write(command), timeoutMs) as Record<string, string>[];
+    const services = await write(["/ip/service/print", "=.proplist=name,disabled"]);
+    if (!services.some(row =>
+      (row.name === "api" || row.name === "api-ssl")
+      && String(row.disabled ?? "").toLowerCase() !== "true",
+    )) throw new Error("Enabled RouterOS API service could not be revalidated.");
+    const vpnRows = await write(["/interface/ovpn-client/print", "=.proplist=name,comment,disabled"]);
+    const protectedVpnClients = vpnRows.filter(row =>
+      /mainbillingvpn|ochola.*management|vps tunnel/i.test(`${row.name ?? ""} ${row.comment ?? ""}`),
+    ).map(row => `${String(row.name ?? "")}${row.comment ? ` — ${row.comment}` : ""}`);
+    if (protectedVpnClients.length === 0
+      || !plan.protectedVpnClients.every(expected => protectedVpnClients.includes(expected))) {
+      throw new Error("The protected management VPN client could not be revalidated.");
+    }
+    const backupBase = `ochola-managed-reset-${plan.routerId}-${Date.now()}`;
+    onProgress?.("Creating router backup", 0);
+    await write(["/system/backup/save", `=name=${backupBase}`]);
+    const backupRows = await write(["/file/print", "=.proplist=name"]);
+    const backupFile = String(backupRows.find(row =>
+      String(row.name ?? "").split("/").pop() === `${backupBase}.backup`,
+    )?.name ?? "");
+    if (!backupFile) throw new Error("RouterOS did not verify the managed-reset backup file.");
+    onProgress?.("Backup verified", 0, backupFile, []);
+    const removed: Array<{ path: string; name: string }> = [];
+    for (const item of plan.items) {
+      onProgress?.(`${item.path}/${item.name}`, removed.length, backupFile, [...removed]);
+      const rows = await write([item.path + "/print", "=.proplist=.id,name,comment"]);
+      const row = rows.find(candidate => candidate[".id"] === item.id);
+      if (!row || !isManagedResetItem(row, item.path, plan.routerId)
+        || String(row.comment ?? "") !== item.comment
+        || String(row.name ?? "") !== item.name) {
+        throw new Error(`Managed reset stopped: resource ${item.path}/${item.name} changed or is no longer owned.`);
+      }
+      await write([item.path + "/remove", `=.id=${item.id}`]);
+      removed.push({ path: item.path, name: item.name });
+      onProgress?.(`${item.path}/${item.name}`, removed.length, backupFile, [...removed]);
+    }
+    const finalServices = await write(["/ip/service/print", "=.proplist=name,disabled"]);
+    const finalVpnRows = await write(["/interface/ovpn-client/print", "=.proplist=name,comment,disabled"]);
+    if (!finalServices.some(row =>
+      (row.name === "api" || row.name === "api-ssl")
+      && String(row.disabled ?? "").toLowerCase() !== "true",
+    ) || !plan.protectedVpnClients.every(protectedClient => finalVpnRows.some(row =>
+      `${String(row.name ?? "")}${row.comment ? ` — ${row.comment}` : ""}` === protectedClient,
+    ))) throw new Error("Managed reset completed with an access verification failure.");
+    onProgress?.("Access verification complete", removed.length, backupFile, [...removed]);
+    return { backupFile, removed };
+  } finally {
+    try { conn.close(); } catch { /* ignore */ }
+    await closeForward?.();
+  }
 }
 
 /** Run a caller-supplied RouterOS command through the existing connection path.

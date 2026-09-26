@@ -3,6 +3,7 @@ import { createServer } from "node:net";
 import test from "node:test";
 import { RouterOSAPI } from "node-routeros";
 import {
+  buildManagedResetPlan,
   ensureHotspotServerAddressPool,
   ensureRouterFileDirectory,
   fetchBridgePortLayout,
@@ -181,6 +182,42 @@ test("RouterOS read-only checks fall back after a permission-denied probe", asyn
       assert.match(result.error ?? "", /not enough permissions/);
       assert.deepEqual(connectedUsers, [savedAccount]);
     });
+  });
+});
+
+test("managed reset planning retries empty access inventory with the management account and stays read-only", async () => {
+  await withMockRouterApi((username, command) => {
+    if (username === savedAccount) return [];
+    if (command[0] === "/system/identity/print") return [{ name: "edge-router-7" }];
+    if (command[0] === "/system/resource/print") return [{ version: "7.16.2" }];
+    if (command[0] === "/ip/service/print") return [{ name: "api", disabled: "false" }];
+    if (command[0] === "/interface/ovpn-client/print") {
+      return [{
+        name: "ocholasupernet",
+        comment: "DO NOT DELETE - OcholaSupernet management VPN",
+        disabled: "false",
+      }];
+    }
+    if (command[0] === "/ip/pool/print") {
+      return [{ ".id": "*1", name: "managed-pool", comment: "ochola-services-7 owned pool" }];
+    }
+    return [];
+  }, async ({ port, connectedUsers, commands }) => {
+    const plan = await buildManagedResetPlan(
+      routerCredentials(port, [managementAccount]),
+      7,
+      "edge-router-7",
+    );
+
+    assert.equal(plan.identity, "edge-router-7");
+    assert.equal(plan.version, "7.16.2");
+    assert.equal(plan.apiServiceAvailable, true);
+    assert.equal(plan.protectedVpnClients.length, 1);
+    assert.equal(plan.items.length, 1);
+    assert.equal(plan.items[0]?.name, "managed-pool");
+    assert.equal(plan.eligible, false, "a non-management-VPN connection must not be eligible");
+    assert.deepEqual(connectedUsers, [savedAccount, managementAccount]);
+    assert.ok(commands.every(({ command }) => command[0].endsWith("/print")));
   });
 });
 
