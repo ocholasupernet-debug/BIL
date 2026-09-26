@@ -30,33 +30,82 @@ export async function installHotspotFiles(
   const headers = new Headers({ "Content-Type": "application/json" });
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const response = await fetch(`/api/router/${routerId}/files/deploy-bulk`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      adminId,
-      scope: "hotspot",
-      destinationDirectory: "flash/hotspot",
-    }),
-  });
-  const queued = await response.json().catch(() => ({})) as DeploymentResponse;
-  if (!response.ok || !queued.jobId) {
-    throw new Error(queued.error || `Hotspot file deployment could not start (HTTP ${response.status})`);
-  }
+  const startDeployment = async (): Promise<DeploymentResponse> => {
+    const response = await fetch(`/api/router/${routerId}/files/deploy-bulk`, {
+      method: "POST",
+      headers,
+      cache: "no-store",
+      body: JSON.stringify({
+        adminId,
+        scope: "hotspot",
+        destinationDirectory: "flash/hotspot",
+      }),
+    });
+    const queued = await response.json().catch(() => ({})) as DeploymentResponse;
+    if (!response.ok || !queued.jobId) {
+      throw new Error(queued.error || `Hotspot file deployment could not start (HTTP ${response.status})`);
+    }
+    return queued;
+  };
 
+  let queued = await startDeployment();
   let result = queued;
   onProgress?.(result);
-  for (let attempt = 0; attempt < 360; attempt += 1) {
+  let successfulPolls = 0;
+  let consecutiveReadFailures = 0;
+  let sawTemporaryUnavailable = false;
+  let recoveredLostJob = false;
+  while (successfulPolls < 360) {
     if (result.status === "complete" || result.status === "failed") break;
     await new Promise(resolve => window.setTimeout(resolve, 1000));
-    const statusResponse = await fetch(
-      `/api/router/${routerId}/files/deploy-bulk/${queued.jobId}?adminId=${adminId}`,
-      { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-    );
+    let statusResponse: Response;
+    try {
+      statusResponse = await fetch(
+        `/api/router/${routerId}/files/deploy-bulk/${queued.jobId}?adminId=${adminId}`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}`, "Cache-Control": "no-cache" } : { "Cache-Control": "no-cache" },
+          cache: "no-store",
+        },
+      );
+    } catch {
+      sawTemporaryUnavailable = true;
+      consecutiveReadFailures += 1;
+      if (consecutiveReadFailures > 6) {
+        throw new Error("Could not read deployment progress after repeated network errors. The deployment may still be running; refresh the router files to check.");
+      }
+      await new Promise(resolve => window.setTimeout(resolve, Math.min(5000, 250 * 2 ** (consecutiveReadFailures - 1))));
+      continue;
+    }
+
+    if (statusResponse.status >= 500 || statusResponse.status === 304) {
+      sawTemporaryUnavailable = true;
+      consecutiveReadFailures += 1;
+      if (consecutiveReadFailures > 6) {
+        throw new Error(`Could not read deployment progress after repeated HTTP ${statusResponse.status} responses. The deployment may still be running; refresh the router files to check.`);
+      }
+      await new Promise(resolve => window.setTimeout(resolve, Math.min(5000, 250 * 2 ** (consecutiveReadFailures - 1))));
+      continue;
+    }
+
+    if (statusResponse.status === 404 && sawTemporaryUnavailable && !recoveredLostJob) {
+      /* API restarts clear the in-memory job. Requeue once; bulk deployment
+         never overwrites files, so already-transferred assets are skipped. */
+      queued = await startDeployment();
+      result = queued;
+      onProgress?.(result);
+      recoveredLostJob = true;
+      consecutiveReadFailures = 0;
+      sawTemporaryUnavailable = false;
+      continue;
+    }
+
     result = await statusResponse.json().catch(() => ({})) as DeploymentResponse;
     if (!statusResponse.ok) {
       throw new Error(result.error || `Could not read deployment progress (HTTP ${statusResponse.status})`);
     }
+    successfulPolls += 1;
+    consecutiveReadFailures = 0;
+    sawTemporaryUnavailable = false;
     onProgress?.(result);
   }
 

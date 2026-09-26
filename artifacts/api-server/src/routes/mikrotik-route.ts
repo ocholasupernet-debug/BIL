@@ -1228,12 +1228,10 @@ router.get("/router/:id/files/deploy-bulk/:jobId", requireAdmin(), async (req, r
     res.status(404).json({ error: "Bulk deployment job not found" });
     return;
   }
-  const found = await getRouterCreds(id, adminId);
-  if (!found) {
-    res.status(404).json({ error: "Router not found or not assigned to this administrator" });
-    return;
-  }
 
+  /* Progress polling is frequent and the job was already authorized against
+     this router when it was created. Avoid a Supabase round trip per poll. */
+  res.setHeader("Cache-Control", "no-store, private");
   res.json({
     ok: job.status === "complete" && job.failed.length === 0,
     jobId: job.id,
