@@ -6251,7 +6251,7 @@ export async function fetchRouterSecurityState(
 export async function fetchBridgePortLayout(
   creds: RouterCredentials
 ): Promise<BridgePortLayout> {
-  return withConn(creds, async (conn, connectedHost) => {
+  return withReadConn(creds, async (conn, connectedHost) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
 
     const [ifaceRows, bridgeRows, bpRows] = await Promise.all([

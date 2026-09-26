@@ -4,6 +4,7 @@ import test from "node:test";
 import { RouterOSAPI } from "node-routeros";
 import {
   ensureHotspotServerAddressPool,
+  fetchBridgePortLayout,
   pingRouter,
   testConnection,
 } from "./mikrotik.js";
@@ -137,6 +138,35 @@ test("RouterOS read-only checks fall back after a permission-denied probe", asyn
       assert.equal(result.routerIdentity, "edge-router-7");
       assert.equal(result.rosVersion, "7.16.2");
       assert.deepEqual(connectedUsers, [savedAccount, managementAccount]);
+    });
+  });
+
+  await t.test("read-only bridge verification falls back to the management account", async () => {
+    await withMockRouterApi((username, command) => {
+      if (username === savedAccount) {
+        throw new Error("not enough permissions (RouterOS 7 policy)");
+      }
+      if (command[0] === "/interface/print") {
+        return [{ ".id": "*1", name: "wlan2", type: "wlan", running: "true" }];
+      }
+      if (command[0] === "/interface/bridge/print") {
+        return [{ name: "hotspot-bridge", running: "true" }];
+      }
+      if (command[0] === "/interface/bridge/port/print") {
+        return [{ ".id": "*2", bridge: "hotspot-bridge", interface: "wlan2" }];
+      }
+      return [];
+    }, async ({ port, connectedUsers, commands }) => {
+      const result = await fetchBridgePortLayout(routerCredentials(port, [managementAccount]));
+
+      assert.deepEqual(connectedUsers, [savedAccount, managementAccount]);
+      assert.deepEqual(result.interfaces.map(item => item.name), ["wlan2"]);
+      assert.deepEqual(result.bridges.map(item => item.name), ["hotspot-bridge"]);
+      assert.deepEqual(
+        result.bridgePorts.map(item => [item.bridge, item.interface]),
+        [["hotspot-bridge", "wlan2"]],
+      );
+      assert.ok(commands.some(({ username }) => username === managementAccount));
     });
   });
 

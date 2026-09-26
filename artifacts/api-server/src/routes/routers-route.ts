@@ -279,6 +279,7 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
         port: 8728,
         username: row.router_username || "admin",
         password: row.router_secret || "",
+        alternateUsernames: managementApiAlternateUsernames(row.router_username, result.vpnIp),
         bridgeIp: result.vpnIp!,
         connectTimeoutMs: 8_000,
         requestTimeoutMs: 8_000,
