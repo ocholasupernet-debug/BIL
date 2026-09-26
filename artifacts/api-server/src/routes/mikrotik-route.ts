@@ -1217,6 +1217,7 @@ router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): P
 });
 
 router.get("/router/:id/files/deploy-bulk/:jobId", requireAdmin(), async (req, res): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store, private");
   const id = parseInt(String(req.params.id), 10);
   const adminId = authenticatedAdminId(req, req.query.adminId);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
@@ -1231,7 +1232,6 @@ router.get("/router/:id/files/deploy-bulk/:jobId", requireAdmin(), async (req, r
 
   /* Progress polling is frequent and the job was already authorized against
      this router when it was created. Avoid a Supabase round trip per poll. */
-  res.setHeader("Cache-Control", "no-store, private");
   res.json({
     ok: job.status === "complete" && job.failed.length === 0,
     jobId: job.id,

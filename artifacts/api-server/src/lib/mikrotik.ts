@@ -521,9 +521,28 @@ async function withReadConn<T>(
         alternateUsernames: remainingUsernames.slice(1),
       });
       try {
-        return await fn(connection.conn, connection.connectedHost);
+        const result = await fn(connection.conn, connection.connectedHost);
+        if (connection.connectedUsername !== creds.username) {
+          logger.info(
+            { host: connection.connectedHost, accountUsed: "configured-alternate" },
+            "RouterOS read-only check succeeded with the management-account fallback",
+          );
+        }
+        return result;
       } catch (error) {
         lastError = error;
+        if (connection.connectedUsername === creds.username && remainingUsernames.length > 1) {
+          const message = error instanceof Error ? error.message : String(error);
+          const reason = /not enough permissions|permission denied|not permitted|policy/i.test(message)
+            ? "permission-denied"
+            : /identity and version|did not return|empty|no rows/i.test(message)
+              ? "empty-or-incomplete-reply"
+              : "read-check-failed";
+          logger.info(
+            { host: connection.connectedHost, reason },
+            "RouterOS saved-account read check failed; retrying with the management account",
+          );
+        }
         remainingUsernames = remainingUsernames.filter(
           username => username !== connection?.connectedUsername,
         );
