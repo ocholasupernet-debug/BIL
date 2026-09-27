@@ -1,59 +1,52 @@
-const CACHE_NAME = "ocholasupernet-shell-v2-full-logo";
-const APP_SHELL = [
-  "/",
-  "/manifest.webmanifest",
-  "/ocholasupernet-app-icon-full-192.png",
-  "/ocholasupernet-app-icon-full-512.png",
-  "/ocholasupernet-app-icon-full-maskable-512.png",
-];
+const CACHE_PREFIX = "ocholasupernet-shell-";
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL))
-      .then(() => self.skipWaiting()),
-  );
+  event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(
-        keys
-          .filter((key) => key !== CACHE_NAME)
-          .map((key) => caches.delete(key)),
-      ))
-      .then(() => self.clients.claim()),
-  );
+  event.waitUntil((async () => {
+    let cachedHtmlAsAsset = false;
+    try {
+      for (const name of await caches.keys()) {
+        if (!name.startsWith(CACHE_PREFIX)) continue;
+        const cache = await caches.open(name);
+        for (const request of await cache.keys()) {
+          if (!new URL(request.url).pathname.startsWith("/assets/")) continue;
+          const response = await cache.match(request);
+          if (response && (!response.ok || /text\/html/i.test(response.headers.get("content-type") || ""))) {
+            cachedHtmlAsAsset = true;
+            break;
+          }
+        }
+        await caches.delete(name);
+      }
+    } catch {
+      // A denied cache operation must not prevent the network-only worker from taking over.
+    }
+    await self.clients.claim();
+
+    // A prior worker could permanently cache HTML under a missing JS asset URL.
+    // Reload only affected browsers after removing that poisoned cache.
+    if (cachedHtmlAsAsset) {
+      const windows = await self.clients.matchAll({ type: "window" });
+      await Promise.all(windows.map(async (client) => {
+        try { await client.navigate(client.url); } catch { /* The tab may have closed. */ }
+      }));
+    }
+  })());
 });
 
 self.addEventListener("fetch", (event) => {
   const request = event.request;
-  if (request.method !== "GET") return;
+  if (request.method !== "GET" || request.mode !== "navigate"
+      || new URL(request.url).origin !== self.location.origin) return;
 
-  const url = new URL(request.url);
-  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
-
-  if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          void caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
-          return response;
-        })
-        .catch(() => caches.match("/")),
-    );
-    return;
-  }
-
-  if (url.pathname.startsWith("/assets/") || APP_SHELL.includes(url.pathname)) {
-    event.respondWith(
-      caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-        const copy = response.clone();
-        void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-        return response;
-      })),
-    );
-  }
+  // Documents and hashed JS/CSS must never be served from an obsolete app shell.
+  event.respondWith(fetch(request).catch(() => new Response(
+    '<!doctype html><html><meta name="viewport" content="width=device-width,initial-scale=1">'
+      + '<title>Offline | OcholaSupernet</title><body style="font:16px system-ui;padding:2rem">'
+      + '<h1>You are offline</h1><p>Reconnect to the internet and reload this page.</p></body></html>',
+    { status: 503, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
+  )));
 });

@@ -99,12 +99,18 @@ if (shouldServeStatic) {
             /<meta name="description" content="[^"]*"\s*\/?>/i,
             '<meta name="description" content="Register New company with OcholaSupernet." />',
           );
-        res.type("html").send(html);
+        res.set("Cache-Control", "no-store").type("html").send(html);
       } catch {
         next();
       }
     });
-    app.use(express.static(staticDir));
+    app.use(express.static(staticDir, {
+      setHeaders(res, filePath) {
+        if (path.basename(filePath) === "index.html" || path.basename(filePath) === "sw.js") {
+          res.setHeader("Cache-Control", "no-store");
+        }
+      },
+    }));
 
     // Never let an unknown API route fall through to the SPA document.
     // A JSON 404 keeps health checks and API clients from treating HTML as
@@ -113,9 +119,13 @@ if (shouldServeStatic) {
       res.status(404).json({ error: "API route not found" });
     });
 
-    // SPA fallback — send index.html for all non-API routes
-    app.get("/{*path}", (_req, res) => {
-      res.sendFile(path.join(staticDir, "index.html"));
+    // Missing assets must not return HTML as a successful script response.
+    app.get("/{*path}", (req, res) => {
+      if (req.path.startsWith("/assets/") || path.posix.extname(req.path)) {
+        res.set("Cache-Control", "no-store").status(404).end();
+        return;
+      }
+      res.set("Cache-Control", "no-store").sendFile(path.join(staticDir, "index.html"));
     });
 
     logger.info({ staticDir }, "Serving frontend static files");
