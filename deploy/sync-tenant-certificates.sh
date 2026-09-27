@@ -109,6 +109,9 @@ import sys
 
 reserved = {"www", "api", "vpn", "bil", "register", "latex", "proxyvpn", "mail", "admin"}
 pattern = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+# Reserved API hostname still needs an exact certificate when wildcard TLS is
+# unavailable; its API vhost will be generated below like other service hosts.
+print("api")
 print("register")
 print("latex")
 print("vpn")
