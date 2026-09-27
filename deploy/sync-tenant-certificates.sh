@@ -183,6 +183,12 @@ server {
     ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
     add_header          Strict-Transport-Security "max-age=31536000" always;
 
+    gzip on;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/css text/javascript application/javascript;
+
     location / {
         proxy_pass         http://127.0.0.1:8080;
         proxy_http_version 1.1;
