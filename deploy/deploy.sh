@@ -268,8 +268,12 @@ install -m 0644 \
   /etc/systemd/system/ochola-tenant-certificates.timer
 systemctl daemon-reload
 systemctl enable --now ochola-tenant-certificates.timer
+systemctl restart ochola-tenant-certificates.timer
 echo "      Running an immediate tenant HTTPS reconciliation..."
-bash "$PROJECT_DIR/deploy/sync-tenant-certificates.sh"
+if ! bash "$PROJECT_DIR/deploy/sync-tenant-certificates.sh"; then
+  echo "WARNING: Tenant HTTPS reconciliation did not complete."
+  echo "         The app release will continue; the enabled timer will retry."
+fi
 
 disable_bil_host() {
   local vhost_dir="/etc/nginx/tenant-sites.d"

@@ -49,6 +49,9 @@ export SUPABASE_URL SERVICE_KEY ADMIN_JSON="$admin_json"
 python3 - <<'PY'
 import json
 import os
+import sys
+import time
+import urllib.error
 import urllib.request
 
 url = (
@@ -61,9 +64,41 @@ request = urllib.request.Request(
     url,
     headers={"apikey": key, "Authorization": "Bearer " + key},
 )
-with urllib.request.urlopen(request, timeout=30) as response:
-    with open(os.environ["ADMIN_JSON"], "wb") as output:
-        output.write(response.read())
+
+admin_data = None
+last_error = "unknown error"
+max_attempts = 4
+for attempt in range(1, max_attempts + 1):
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            admin_data = response.read()
+        break
+    except urllib.error.HTTPError as error:
+        if error.code not in (408, 429) and error.code < 500:
+            raise SystemExit(
+                f"Supabase admin lookup returned HTTP {error.code}."
+            ) from None
+        last_error = f"HTTP {error.code}"
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        last_error = type(error).__name__
+
+    if attempt < max_attempts:
+        delay = 2 ** (attempt - 1)
+        print(
+            f"Supabase admin lookup failed ({last_error}); "
+            f"retrying in {delay}s ({attempt}/{max_attempts}).",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+
+if admin_data is None:
+    raise SystemExit(
+        f"Supabase admin lookup failed after {max_attempts} attempts "
+        f"({last_error})."
+    )
+
+with open(os.environ["ADMIN_JSON"], "wb") as output:
+    output.write(admin_data)
 PY
 
 mapfile -t subdomains < <(
@@ -77,7 +112,6 @@ pattern = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 print("register")
 print("latex")
 print("vpn")
-print("bil")
 with open(sys.argv[1], encoding="utf-8") as source:
     rows = json.load(source)
 for row in rows:
