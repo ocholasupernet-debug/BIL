@@ -441,6 +441,244 @@ function AdminPaymentTestCard({ currency }: { currency: string }) {
   );
 }
 
+function ResellerPaymentTestCard({ currency }: { currency: string }) {
+  type Route = {
+    id: number;
+    gatewayType: string;
+    scopeLabel: string;
+    destinationConfigured: boolean;
+    isActive: boolean;
+  };
+  const [routes, setRoutes] = useState<Route[]>([]);
+  const [routeId, setRouteId] = useState("");
+  const [phone, setPhone] = useState("");
+  const [amount, setAmount] = useState("");
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [environment, setEnvironment] = useState<"sandbox" | "production">("sandbox");
+  const [shortcode, setShortcode] = useState("");
+  const [status, setStatus] = useState<PaymentTestStatus>("idle");
+  const [checkoutId, setCheckoutId] = useState("");
+  const [error, setError] = useState("");
+  const [needsManualCheck, setNeedsManualCheck] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const [routesResponse, settingsResponse] = await Promise.all([
+          fetch("/api/reseller/payment-gateways", { headers: adminApiHeaders(), cache: "no-store" }),
+          fetch("/api/settings/mpesa?adminTest=true", { headers: adminApiHeaders(), cache: "no-store" }),
+        ]);
+        const routeData = await routesResponse.json() as { ok?: boolean; routes?: Route[]; error?: string };
+        const settingsData = await settingsResponse.json() as {
+          configured?: boolean;
+          settings?: { env?: "sandbox" | "production"; shortcode?: string };
+        };
+        if (!active) return;
+        if (!routesResponse.ok || !routeData.ok) {
+          throw new Error(routeData.error || "Could not load reseller payment routes.");
+        }
+        const nextRoutes = (routeData.routes || []).filter(route =>
+          route.gatewayType === "mpesa_paybill" || route.gatewayType === "mpesa_till_push",
+        );
+        setRoutes(nextRoutes);
+        setRouteId(current => {
+          if (current && nextRoutes.some(route => String(route.id) === current)) return current;
+          const preferred = nextRoutes.find(route => route.scopeLabel === "Reseller default")
+            ?? nextRoutes[0];
+          return preferred ? String(preferred.id) : "";
+        });
+        setConfigured(settingsData.configured === true);
+        setEnvironment(settingsData.settings?.env === "production" ? "production" : "sandbox");
+        setShortcode(settingsData.settings?.shortcode?.trim() || "");
+        setError("");
+      } catch (loadError) {
+        if (active) setError(loadError instanceof Error ? loadError.message : "Could not load reseller payment testing.");
+      }
+    };
+    void load();
+    window.addEventListener("ochola-payment-gateway-change", load);
+    return () => {
+      active = false;
+      window.removeEventListener("ochola-payment-gateway-change", load);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!checkoutId || status !== "pending") return;
+    const startedAt = Date.now();
+    let active = true;
+    const poll = async () => {
+      if (Date.now() - startedAt >= 3 * 60 * 1000) {
+        if (active) setStatus("expired");
+        return;
+      }
+      try {
+        const response = await fetch(`/api/mpesa/status?checkout_id=${encodeURIComponent(checkoutId)}`, {
+          headers: adminApiHeaders(),
+          cache: "no-store",
+        });
+        const data = await response.json() as { paid?: boolean; status?: string; failureReason?: string; error?: string };
+        if (!active) return;
+        if (!response.ok) {
+          setError(data.error || "Could not check the test payment status.");
+          setStatus("failed");
+        } else if (data.paid) {
+          setError("");
+          setNeedsManualCheck(false);
+          setStatus("paid");
+        } else if (data.status === "failed") {
+          setError(data.failureReason || "M-Pesa cancelled or declined the test prompt.");
+          setNeedsManualCheck(false);
+          setStatus("failed");
+        }
+      } catch {
+        /* Keep polling while the payment provider finishes the callback. */
+      }
+    };
+    void poll();
+    const interval = window.setInterval(poll, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [checkoutId, status]);
+
+  const selectedRoute = routes.find(route => String(route.id) === routeId);
+  const sendPrompt = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const numericAmount = Number(amount);
+    if (!selectedRoute || !selectedRoute.isActive || !selectedRoute.destinationConfigured) {
+      setError("Choose an active reseller PayBill or Till route with complete collection details.");
+      return;
+    }
+    if (!phone.trim() || !Number.isSafeInteger(numericAmount) || numericAmount < 1 || numericAmount > 1000) {
+      setError("Enter a valid phone number and a test amount from 1 to 1,000.");
+      return;
+    }
+    setError("");
+    setStatus("sending");
+    setCheckoutId("");
+    setNeedsManualCheck(false);
+    try {
+      const response = await fetch("/api/mpesa/reseller-test", {
+        method: "POST",
+        headers: adminApiHeaders(),
+        body: JSON.stringify({ routeId: selectedRoute.id, phone: phone.trim(), amount: numericAmount }),
+      });
+      const data = await response.json() as {
+        ok?: boolean;
+        error?: string;
+        CheckoutRequestID?: string;
+        environment?: "sandbox" | "production";
+        shortcode?: string;
+      };
+      if (!response.ok || !data.ok) {
+        setError(data.error || "M-Pesa could not send the test prompt.");
+        if (data.CheckoutRequestID) {
+          setEnvironment(data.environment === "production" ? "production" : "sandbox");
+          setShortcode(data.shortcode || "");
+          setNeedsManualCheck(true);
+          setCheckoutId(data.CheckoutRequestID);
+          setStatus("pending");
+        } else {
+          setStatus("idle");
+        }
+        return;
+      }
+      setNeedsManualCheck(false);
+      setEnvironment(data.environment === "production" ? "production" : "sandbox");
+      setShortcode(data.shortcode || "");
+      setCheckoutId(data.CheckoutRequestID || "");
+      setStatus(data.CheckoutRequestID ? "pending" : "expired");
+    } catch {
+      setStatus("idle");
+      setError("Could not reach the payment server.");
+    }
+  };
+
+  const selectedGatewayLabel = selectedRoute?.gatewayType === "mpesa_till_push"
+    ? "M-Pesa Till"
+    : "M-Pesa PayBill";
+  const statusMessage = {
+    idle: "",
+    sending: "Contacting M-Pesa…",
+    pending: needsManualCheck
+      ? "The prompt was sent, but confirmation tracking is incomplete. Do not send another test until you check M-Pesa."
+      : "Prompt sent. Approve it on the selected phone to confirm the route.",
+    paid: "Payment confirmed. No customer account or reseller earnings balance was changed.",
+    failed: "The test prompt was cancelled or declined. No payment was confirmed.",
+    expired: "No confirmation arrived within three minutes. Check M-Pesa before retrying.",
+  }[status];
+  const submitDisabled = configured !== true
+    || !selectedRoute?.isActive
+    || !selectedRoute.destinationConfigured
+    || status === "sending"
+    || status === "pending"
+    || needsManualCheck;
+
+  return (
+    <Card title="Test Reseller Payment Prompt" desc="Send a one-time STK prompt to verify the selected reseller PayBill or Till">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "9px 11px", borderRadius: 8, background: environment === "production" ? "rgba(245,158,11,0.08)" : "rgba(37,99,235,0.06)", border: `1px solid ${environment === "production" ? "rgba(245,158,11,0.25)" : "var(--isp-border)"}`, color: environment === "production" ? "#fbbf24" : C.muted, fontSize: "0.72rem", lineHeight: 1.45 }}>
+        {environment === "production"
+          ? `Live mode: approving this prompt charges the phone and sends ${currency} through the selected reseller destination${shortcode ? ` using platform Daraja shortcode ${shortcode}` : ""}. Test payments do not activate service or count toward revenue.`
+          : `Sandbox mode: the test uses platform Daraja${shortcode ? ` shortcode ${shortcode}` : ""} and the selected reseller’s own collection destination. Test payments do not activate service or count toward revenue.`}
+      </div>
+      <form onSubmit={sendPrompt}>
+        <Grid2>
+          <Field label="Reseller payment route">
+            <Select value={routeId} onChange={event => setRouteId(event.target.value)}>
+              <option value="">Choose an active reseller route</option>
+              {routes.map(route => (
+                <option key={route.id} value={route.id}>
+                  {route.gatewayType === "mpesa_till_push" ? "M-Pesa Till" : "M-Pesa PayBill"} · {route.scopeLabel}
+                  {!route.destinationConfigured ? " · incomplete" : ""}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Subscriber phone number" hint="Use 07…, 01…, or +254…">
+            <Input value={phone} onChange={event => setPhone(event.target.value)} placeholder="0712 345 678" inputMode="tel" />
+          </Field>
+          <Field label={`Test amount (${currency})`} hint="Maximum 1,000">
+            <Input value={amount} onChange={event => setAmount(event.target.value)} placeholder="e.g. 50" type="number" min="1" max="1000" step="1" inputMode="numeric" />
+          </Field>
+        </Grid2>
+        {configured === false && (
+          <p style={{ color: "#fbbf24", fontSize: "0.74rem", margin: "0 0 10px" }}>
+            The platform Daraja connection is not configured yet.
+          </p>
+        )}
+        {routes.length === 0 && (
+          <p style={{ color: "#fbbf24", fontSize: "0.74rem", margin: "0 0 10px" }}>
+            Save an active M-Pesa PayBill or Till route in Payment Gateways before testing.
+          </p>
+        )}
+        {selectedRoute && !selectedRoute.destinationConfigured && (
+          <p style={{ color: "#fbbf24", fontSize: "0.74rem", margin: "0 0 10px" }}>
+            Complete and save this reseller’s {selectedGatewayLabel} collection details before testing.
+          </p>
+        )}
+        {error && <p style={{ display: "flex", alignItems: "center", gap: 5, color: "#f87171", fontSize: "0.74rem", margin: "0 0 10px" }}><AlertTriangle size={13} aria-hidden="true" /> {error}</p>}
+        {statusMessage && (
+          <p style={{ color: status === "paid" ? "#34d399" : status === "failed" || status === "expired" ? "#fbbf24" : C.muted, fontSize: "0.74rem", lineHeight: 1.45, margin: "0 0 10px" }}>
+            {status === "paid" && <Check size={13} aria-hidden="true" />}{statusMessage}
+          </p>
+        )}
+        <Row>
+          <button
+            type="submit"
+            disabled={submitDisabled}
+            style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: submitDisabled ? "not-allowed" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: submitDisabled ? 0.55 : 1 }}
+          >
+            {status === "sending" ? "Sending…" : status === "pending" ? "Waiting for approval…" : "Send STK Prompt"}
+          </button>
+        </Row>
+      </form>
+    </Card>
+  );
+}
+
 function AdminPaymentGatewayCard() {
   const [paymentGateway, setPaymentGateway] = useState("mpesa_paybill");
   const [saving, setSaving] = useState(false);
@@ -514,6 +752,7 @@ function ResellerPaymentGatewayCard() {
     scopeType: "default" | "router" | "port";
     scopeLabel: string;
     config: Record<string, string>;
+    destinationConfigured: boolean;
     hasStoredSecrets: boolean;
     isActive: boolean;
   };
@@ -631,6 +870,7 @@ function ResellerPaymentGatewayCard() {
       if (!response.ok || !data.ok) throw new Error(data.error || "Could not remove the reseller payment gateway.");
       newRoute();
       await load();
+      window.dispatchEvent(new Event("ochola-payment-gateway-change"));
     } catch (removeError) {
       setError(removeError instanceof Error ? removeError.message : "Could not remove the reseller payment gateway.");
     } finally {
@@ -650,7 +890,7 @@ function ResellerPaymentGatewayCard() {
         display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8,
         marginBottom: 20,
       }}>
-        {GATEWAYS.map(gateway => {
+        {RESELLER_GATEWAYS.map(gateway => {
           const isSelected = form.gatewayType === gateway.id;
           return (
             <button
@@ -868,13 +1108,7 @@ function BillingTab() {
         </p>
       </Card>
       {getAdminRole() !== "reseller" && <AdminPaymentTestCard currency={currency} />}
-      {getAdminRole() === "reseller" && (
-        <Card title="Reseller payment testing" desc="Your reseller gateway routes are managed independently in the Payment Gateways tab.">
-          <p style={{ color: C.muted, fontSize: "0.8rem", lineHeight: 1.55, margin: 0 }}>
-            The ISP payment test is hidden for reseller accounts so it cannot use or test the connected ISP’s collection account.
-          </p>
-        </Card>
-      )}
+      {getAdminRole() === "reseller" && <ResellerPaymentTestCard currency={currency} />}
 
       <Card title="Billing Preferences" desc="Currency, VAT, grace periods, and invoice configuration">
         <Grid2>
@@ -2117,6 +2351,10 @@ const GATEWAYS: GatewayDef[] = [
     ],
   },
 ];
+
+const RESELLER_GATEWAYS = GATEWAYS.filter(gateway =>
+  gateway.id === "mpesa_paybill" || gateway.id === "mpesa_till_push",
+);
 
 function PaymentGatewaysTab() {
   const isReseller = getAdminRole() === "reseller";

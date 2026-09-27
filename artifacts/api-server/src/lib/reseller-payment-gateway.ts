@@ -62,6 +62,13 @@ export function gatewayConfigPreview(gatewayType: string, config: Record<string,
   return Object.fromEntries(Object.entries(config).filter(([key]) => !secrets.has(key)));
 }
 
+export function isResellerGatewayTestMetadata(value: unknown): boolean {
+  return !!value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>).source === "reseller_gateway_test";
+}
+
 export function encryptGatewayConfig(config: Record<string, string>): string {
   return JSON.stringify(encryptVpnSecret(JSON.stringify(config)));
 }

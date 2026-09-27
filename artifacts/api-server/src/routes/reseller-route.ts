@@ -38,6 +38,7 @@ import {
   gatewayConfigPreview,
   bankBusinessNumberFor,
   isResellerGatewayId,
+  resellerDestinationConfigured,
   resolveResellerGatewayRoute,
   resellerGatewayScope,
   type ResellerGatewayRouteRow,
@@ -3615,6 +3616,10 @@ router.get("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
             ? `Router · ${routerNames.get(Number(route.router_id)) ?? "Assigned router"}`
             : "Reseller default",
         config: route.config_preview ?? {},
+        destinationConfigured: resellerDestinationConfigured(
+          route.gateway_type,
+          route.config_preview ?? {},
+        ),
         hasStoredSecrets: Boolean(route.config_ciphertext),
         isActive: route.is_active,
       })),
@@ -3634,6 +3639,10 @@ router.put("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
     const gatewayType = typeof req.body?.gatewayType === "string" ? req.body.gatewayType.trim().toLowerCase() : "";
     if (!isResellerGatewayId(gatewayType)) {
       res.status(400).json({ ok: false, error: "Choose a supported payment gateway." });
+      return;
+    }
+    if (gatewayType !== "mpesa_paybill" && gatewayType !== "mpesa_till_push") {
+      res.status(400).json({ ok: false, error: "Reseller checkout currently supports M-Pesa PayBill and Till only." });
       return;
     }
     const scopeType = req.body?.scopeType === "port" || req.body?.scopeType === "router"
@@ -3673,6 +3682,16 @@ router.put("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
     let previous: Record<string, string> = {};
     if (existing) previous = decryptGatewayConfig(existing.config_ciphertext);
     const config = { ...previous, ...submitted };
+    const isActive = req.body?.isActive !== false;
+    if (isActive && !resellerDestinationConfigured(gatewayType, config)) {
+      res.status(400).json({
+        ok: false,
+        error: gatewayType === "mpesa_till_push"
+          ? "Enter the reseller’s M-Pesa Till Number before activating this route."
+          : "Enter the reseller’s M-Pesa PayBill Number and Account / Business Number before activating this route.",
+      });
+      return;
+    }
     if (req.body?.isActive !== false && Object.keys(config).length === 0) {
       res.status(400).json({ ok: false, error: "Add at least one collection account or gateway credential before activating this route." });
       return;
@@ -3685,7 +3704,7 @@ router.put("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
       gateway_type: gatewayType,
       config_ciphertext: encryptGatewayConfig(config),
       config_preview: gatewayConfigPreview(gatewayType, config),
-      is_active: req.body?.isActive !== false,
+      is_active: isActive,
       updated_at: new Date().toISOString(),
     };
     const saved = existing
