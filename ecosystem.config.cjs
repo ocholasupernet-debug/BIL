@@ -66,6 +66,7 @@ module.exports = {
         VITE_SUPABASE_URL:    process.env.VITE_SUPABASE_URL || "",
         VITE_SUPABASE_KEY:    process.env.VITE_SUPABASE_KEY || "",
         SUPABASE_URL:         process.env.SUPABASE_URL || "",
+        SUPABASE_DB_URL: process.env.SUPABASE_DB_URL || process.env.SUPABASE_DATABASE_URL || "",
          SESSION_SECRET:       process.env.SESSION_SECRET || "",
          ROUTER_OPENVPN_ENDPOINT: process.env.ROUTER_OPENVPN_ENDPOINT || "vpn.isplatty.org",
          VPS_HOST:             process.env.VPS_HOST || "vpn.isplatty.org",
