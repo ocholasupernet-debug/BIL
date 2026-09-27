@@ -5553,6 +5553,34 @@ const DEFAULT_ROUTER_API_NETWORKS = [
   "10.8.6.0/24",
 ];
 
+function routerOsCompatibilityPreflight(tag: string): string {
+  return `# Check RouterOS support before this setup step makes any changes.
+:local ocholaPreflightRouterOsVersion ""
+:local ocholaPreflightRouterOsMajor ""
+:local ocholaPreflightBoardName ""
+:local ocholaPreflightTotalMemory 0
+:local ocholaPreflightFreeStorage 0
+:do {
+    :set ocholaPreflightRouterOsVersion [/system resource get version]
+    :set ocholaPreflightRouterOsMajor [:pick $ocholaPreflightRouterOsVersion 0 1]
+} on-error={
+    :error "${tag}: could not read the installed RouterOS version; no setup changes were made."
+}
+:if (($ocholaPreflightRouterOsMajor != "6") && ($ocholaPreflightRouterOsMajor != "7")) do={
+    :error ("${tag}: unsupported RouterOS version " . $ocholaPreflightRouterOsVersion . "; this installer supports RouterOS 6.x and 7.x.")
+}
+:do { :set ocholaPreflightBoardName [/system resource get board-name] } on-error={}
+:do { :set ocholaPreflightTotalMemory [:tonum [/system resource get total-memory]] } on-error={}
+:do { :set ocholaPreflightFreeStorage [:tonum [/system resource get free-hdd-space]] } on-error={}
+:put ("${tag}: compatibility preflight passed; RouterOS " . $ocholaPreflightRouterOsVersion . ", board " . $ocholaPreflightBoardName . ".")
+:if ($ocholaPreflightFreeStorage > 0) do={
+    :put ("${tag}: free storage " . $ocholaPreflightFreeStorage . " bytes.")
+}
+:if (($ocholaPreflightRouterOsMajor = "7") && ($ocholaPreflightTotalMemory > 0) && ($ocholaPreflightTotalMemory < 64000000)) do={
+    :put ("${tag}: WARNING: RouterOS 7 has " . $ocholaPreflightTotalMemory . " bytes RAM; MikroTik recommends 64 MB for advanced configurations.")
+}`;
+}
+
 /**
  * Generates the separate core network engine used by Self Install.
  *
@@ -5594,6 +5622,8 @@ export function generateNetworkSetupScript(
 # It only replaces rules carrying the ${tag} comments.
 # API source networks: ${safeNetworks.join(", ")}
 # ===============================================================
+
+${routerOsCompatibilityPreflight(tag)}
 
 :put "${tag}: starting core firewall and NAT setup."
 /ip firewall filter
@@ -6021,6 +6051,8 @@ ${ownedOrConflict(
 # Bridge     : ${bridgeName}
 # ===============================================================
 
+${routerOsCompatibilityPreflight(tag)}
+
 :global coexistError
 :set coexistError ""
 ${renderedBlocks}
@@ -6149,6 +6181,8 @@ export function generateServiceSetupScript(
 #   - customer NAT rules for both service networks
 # Existing foreign bridge memberships and unowned resources are preserved.
 # ===============================================================
+
+${routerOsCompatibilityPreflight(tag)}
 
 :global serviceError
 :set serviceError ""

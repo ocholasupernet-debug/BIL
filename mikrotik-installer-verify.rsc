@@ -12,7 +12,9 @@
 :put " OcholaSuperNet installer verification"
 :put " READ-ONLY — no router configuration will be changed"
 :put "======================================================"
-:put ("RouterOS version: " . [/system resource get version])
+:local routerOsVersion [/system resource get version]
+:local routerOsMajor [:pick $routerOsVersion 0 1]
+:put ("RouterOS version: " . $routerOsVersion)
 :put ""
 
 :local filePassed 0
@@ -143,7 +145,21 @@
 :put ""
 :put "--- Management VPN resources ---"
 :local openVpnFound ([:len [/interface ovpn-client find where name~"ochola" && running=yes]] > 0)
-:local wireGuardFound ([:len [/interface wireguard find where name~"ochola"]] > 0)
+:local wireGuardFound false
+:if ($routerOsMajor = "7") do={
+    :do {
+        :local wireGuardProbe [:parse "/interface wireguard find where name~\"ochola\""]
+        :set wireGuardFound ([:len [$wireGuardProbe]] > 0)
+    } on-error={
+        :put "INFO VPN WireGuard check could not run; continuing with OpenVPN and IPsec checks."
+    }
+} else={
+    :if ($routerOsMajor = "6") do={
+        :put "INFO VPN WireGuard check skipped; WireGuard is not available in RouterOS 6."
+    } else={
+        :put ("WARN VPN WireGuard check skipped for unsupported RouterOS major " . $routerOsMajor . ".")
+    }
+}
 :local ipsecFound ([:len [/ip ipsec policy find where comment~"IPsec management policy"]] > 0)
 :if ($openVpnFound) do={
     :put "PASS VPN      running Ochola OpenVPN client found"

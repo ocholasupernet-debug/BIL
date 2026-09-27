@@ -1,6 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { generateServiceSetupScript } from "./mikrotik.js";
+import { generateNetworkSetupScript, generateServiceSetupScript } from "./mikrotik.js";
+
+test("network setup preflights RouterOS before changing firewall rules", () => {
+  const script = generateNetworkSetupScript({ routerId: 104 });
+  const versionCheck = script.indexOf("/system resource get version");
+  const firstMutation = script.indexOf("/ip firewall filter");
+
+  assert.ok(versionCheck >= 0, "network script should read the installed RouterOS version");
+  assert.ok(firstMutation > versionCheck, "network script should preflight before firewall changes");
+  assert.match(script, /unsupported RouterOS version/);
+  assert.match(script, /RouterOS 6\.x and 7\.x/);
+});
 
 test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   const script = generateServiceSetupScript({
@@ -57,6 +68,26 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /servicessetup\.rsc finished with failed service steps/);
   assert.match(script, /Fix the listed failures and rerun servicessetup\.rsc/);
   assert.doesNotMatch(script, /pppoe-server server (?:add|set)[^\n]*comment=/);
+});
+
+test("service setup checks RouterOS compatibility before file or service changes", () => {
+  const scripts = [
+    generateServiceSetupScript({ routerId: 104 }),
+    generateServiceSetupScript({
+      installationMode: "coexist",
+      routerId: 104,
+      bridgePorts: ["ether2"],
+    }),
+  ];
+
+  for (const script of scripts) {
+    const versionCheck = script.indexOf("/system resource get version");
+    const firstMutation = script.indexOf("/file make-dir");
+    assert.ok(versionCheck >= 0, "service script should read the installed RouterOS version");
+    assert.ok(firstMutation > versionCheck, "service script should preflight before setup changes");
+    assert.match(script, /unsupported RouterOS version/);
+    assert.match(script, /RouterOS 6\.x and 7\.x/);
+  }
 });
 
 test("service setup rejects unsafe bridge names and preserves foreign bridge ports", () => {
