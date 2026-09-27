@@ -4299,7 +4299,7 @@ table:not([role="grid"]) td [data-technical="true"] {
   border: 1px solid var(--isp-border);
   border-left: 4px solid var(--metric-tone, var(--isp-accent));
   border-radius: 8px;
-  background: var(--isp-card);
+  background: color-mix(in srgb, var(--metric-tone, var(--isp-accent)) 9%, var(--isp-card));
   box-shadow: none;
 }
 .dashboard-kpi { min-height: 78px; padding: 11px 12px; }
@@ -4315,6 +4315,13 @@ table:not([role="grid"]) td [data-technical="true"] {
 .dashboard-kpi--plum { --metric-tone: #8275a9; }
 .dashboard-stat--teal,
 .dashboard-telemetry-total--teal { --metric-tone: #06b6d4; }
+.dashboard-kpi--blue,
+.dashboard-stat--blue { --metric-tone: #3577c5; }
+.dashboard-stat--violet { --metric-tone: #8b5cf6; }
+.dashboard-stat--rose { --metric-tone: #d65f78; }
+.dashboard-stat--indigo { --metric-tone: #6565bd; }
+.dashboard-stat--orange { --metric-tone: #d47736; }
+.dashboard-stat--plum { --metric-tone: #a064a8; }
 .dashboard-kpi-icon,
 .dashboard-stat-icon {
   color: var(--metric-tone);
