@@ -304,8 +304,8 @@ function runPgDump(filePath: string): Promise<{ ok: boolean; reason?: string }> 
       const { writeFile } = await import("node:fs/promises");
       await writeFile(serviceFile, config, { mode: 0o600 });
       return new Promise<{ ok: boolean; reason?: string }>(resolve => {
-        const child = spawn("pg_dump", ["--service=ochola_backup", "--format=custom", "--no-owner", "--no-privileges", "--file", filePath], {
-          env: { ...process.env, PGSERVICEFILE: serviceFile },
+        const child = spawn("pg_dump", ["--format=custom", "--no-owner", "--no-privileges", "--file", filePath], {
+          env: { ...process.env, PGSERVICEFILE: serviceFile, PGSERVICE: "ochola_backup" },
           stdio: ["ignore", "ignore", "pipe"],
         });
         let stderr = "";
@@ -427,19 +427,36 @@ async function createAutomaticBackup(): Promise<void> {
     "platform_backup_jobs",
     `backup_type=eq.auto&created_at=gte.${today.toISOString()}&select=*&order=created_at.desc&limit=1`,
   );
-  if (existing[0]) return;
+  if (existing[0] && existing[0].status !== "failed" && existing[0].status !== "unavailable") return;
   const date = today.toISOString().slice(0, 10);
   let created: BackupRow[];
-  try {
-    created = await sbInsertStrict<BackupRow>("platform_backup_jobs", {
-      name: `automatic-backup-${date}`,
-      backup_type: "auto",
-      status: "running",
-      scheduled_for: date,
-    });
-  } catch (error) {
-    if (String(error).toLowerCase().includes("duplicate") || String(error).toLowerCase().includes("unique")) return;
-    throw error;
+  if (existing[0]) {
+    created = await sbUpdateStrict<BackupRow>(
+      "platform_backup_jobs",
+      `id=eq.${existing[0].id}&status=in.(failed,unavailable)`,
+      {
+        status: "running",
+        artifact_name: null,
+        artifact_size: null,
+        artifact_sha256: null,
+        failure_reason: null,
+        started_at: new Date().toISOString(),
+        completed_at: null,
+      },
+    );
+    if (!created[0]) return;
+  } else {
+    try {
+      created = await sbInsertStrict<BackupRow>("platform_backup_jobs", {
+        name: `automatic-backup-${date}`,
+        backup_type: "auto",
+        status: "running",
+        scheduled_for: date,
+      });
+    } catch (error) {
+      if (String(error).toLowerCase().includes("duplicate") || String(error).toLowerCase().includes("unique")) return;
+      throw error;
+    }
   }
   if (!created[0]) throw new Error("Automatic backup job was not created.");
   const result = await executeBackup(created[0]);
@@ -493,7 +510,8 @@ async function startBackupScheduler(): Promise<void> {
     schedulerState.lastError = latest?.failure_reason ?? null;
     schedulerState.status = latest?.status === "failed" || latest?.status === "unavailable" ? "degraded" : "healthy";
     const lastCreated = latest?.created_at ? Date.parse(latest.created_at) : 0;
-    if (!lastCreated || Date.now() - lastCreated >= 24 * 60 * 60 * 1000) {
+    const retryFailedJob = latest?.status === "failed" || latest?.status === "unavailable";
+    if (retryFailedJob || !lastCreated || Date.now() - lastCreated >= 24 * 60 * 60 * 1000) {
       await createAutomaticBackup();
     }
     scheduleNextAutomaticBackup();
