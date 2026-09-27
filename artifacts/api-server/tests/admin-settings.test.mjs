@@ -39,6 +39,19 @@ test("settings API keeps tenant templates and platform controls separate", () =>
   assert.match(route, /integrity verification/);
 });
 
+test("database backups select their libpq service through environment variables", () => {
+  assert.match(route, /PGSERVICEFILE:\s*serviceFile/);
+  assert.match(route, /PGSERVICE:\s*"ochola_backup"/);
+  assert.doesNotMatch(route, /--service=ochola_backup/);
+});
+
+test("the scheduler retries failed automatic backups without creating a duplicate job", () => {
+  assert.match(route, /existing\[0\]\.status !== "failed" && existing\[0\]\.status !== "unavailable"/);
+  assert.match(route, /status=in\.\(failed,unavailable\)/);
+  assert.match(route, /const retryFailedJob = latest\?\.status === "failed" \|\| latest\?\.status === "unavailable"/);
+  assert.match(route, /if \(retryFailedJob \|\| !lastCreated/);
+});
+
 test("backup UI reports server scheduler health instead of claiming a static configuration", () => {
   assert.match(backupsUi, /super-admin\/backups\/status/);
   assert.match(backupsUi, /Automatic Schedule: Checking/);
