@@ -17,18 +17,43 @@ else
   SUDO="sudo -n"
 fi
 
+VPN_BOOTSTRAP_ROOT="${VPN_BOOTSTRAP_ROOT:-}"
+if [ -n "$VPN_BOOTSTRAP_ROOT" ]; then
+  case "$VPN_BOOTSTRAP_ROOT" in
+    /*) ;;
+    *)
+      echo "ERROR: VPN_BOOTSTRAP_ROOT must be an absolute path." >&2
+      exit 2
+      ;;
+  esac
+  if [ "$VPN_BOOTSTRAP_ROOT" = "/" ]; then
+    echo "ERROR: VPN_BOOTSTRAP_ROOT cannot be /." >&2
+    exit 2
+  fi
+fi
+
+rooted_path() {
+  local path="$1"
+  if [ -n "$VPN_BOOTSTRAP_ROOT" ]; then
+    printf '%s%s\n' "${VPN_BOOTSTRAP_ROOT%/}" "$path"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
 if ! command -v apt-get >/dev/null 2>&1; then
   echo "ERROR: OpenVPN bootstrap currently requires an apt-based VPS." >&2
   exit 1
 fi
+
+OVPN_DIR="$(rooted_path /etc/openvpn)"
+SERVER_DIR="${OVPN_DIR}/server"
 
 echo "[vpn-bootstrap] Installing OpenVPN and Easy-RSA..."
 $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq
 $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   openvpn easy-rsa iptables-persistent
 
-OVPN_DIR="/etc/openvpn"
-SERVER_DIR="${OVPN_DIR}/server"
 CERT_DIR=""
 CERT_FILE=""
 KEY_FILE=""
@@ -38,8 +63,8 @@ CA_FILE=""
 # currently not Cloudflare-managed, so configure-nginx.sh may instead issue
 # the exact-name HTTP-01 certificate that covers vpn.isplatty.org.
 for candidate in \
-  "/etc/letsencrypt/live/isplatty.org-wildcard" \
-  "/etc/letsencrypt/live/isplatty.org-required-hosts"
+  "$(rooted_path /etc/letsencrypt/live/isplatty.org-wildcard)" \
+  "$(rooted_path /etc/letsencrypt/live/isplatty.org-required-hosts)"
 do
   if [ -s "${candidate}/fullchain.pem" ] &&
      [ -s "${candidate}/privkey.pem" ] &&
@@ -73,15 +98,17 @@ fi
 echo "[vpn-bootstrap] Using public certificate from ${CERT_DIR}"
 
 $SUDO install -d -m 700 "$SERVER_DIR"
-$SUDO install -d -m 755 /var/log/openvpn
+$SUDO install -d -m 755 "$(rooted_path /var/log/openvpn)"
 $SUDO install -d -m 700 "${SERVER_DIR}/ochola-router-ccd"
 $SUDO install -d -m 700 "${SERVER_DIR}/ochola-router-backup-ccd"
 
 # The API readiness check uses this path for Easy-RSA. Debian packages it
 # under /usr/share/easy-rsa, so expose the expected stable path without
 # copying or changing the package-managed files.
-if [ ! -e "${OVPN_DIR}/easy-rsa" ] && [ -d "/usr/share/easy-rsa" ]; then
-  $SUDO ln -s "/usr/share/easy-rsa" "${OVPN_DIR}/easy-rsa"
+if [ ! -e "${OVPN_DIR}/easy-rsa" ] &&
+   [ -d "$(rooted_path /usr/share/easy-rsa)" ]
+then
+  $SUDO ln -s "$(rooted_path /usr/share/easy-rsa)" "${OVPN_DIR}/easy-rsa"
 fi
 
 AUTH_SCRIPT="${OVPN_DIR}/verify-router-pass.sh"
@@ -230,7 +257,7 @@ show_management_diagnostics() {
     "$modern" "$legacy" 2>&1 || true
   $SUDO ip -d -4 addr show dev "$device" 2>&1 || true
   $SUDO ss -H -lnt 2>&1 || true
-  $SUDO fuser -v /dev/net/tun 2>&1 || true
+  $SUDO fuser -v "$(rooted_path /dev/net/tun)" 2>&1 || true
   $SUDO journalctl -u "$modern" -u "$legacy" -n 30 --no-pager 2>&1 || true
 }
 
@@ -242,11 +269,30 @@ ensure_management_service() {
   local port="$5"
   local modern="openvpn-server@${stem}"
   local legacy="openvpn@${stem}"
-  local legacy_config="/etc/openvpn/${stem}.conf"
+  local legacy_config="${OVPN_DIR}/${stem}.conf"
   local modern_state legacy_state
 
   modern_state="$(unit_state "$modern")"
   legacy_state="$(unit_state "$legacy")"
+
+  if [ "$legacy_state" = "active" ]; then
+    if ! grep -Fxq "port ${port}" "$legacy_config" 2>/dev/null ||
+       ! grep -Fxq "dev ${device}" "$legacy_config" 2>/dev/null ||
+       ! grep -Fxq "server ${network} 255.255.255.0" "$legacy_config" 2>/dev/null ||
+       ! wait_for_management_tunnel "$device" "$address" "$port"
+    then
+      echo "ERROR: ${legacy} is active, but its config or live tunnel does not match the isolated management network; refusing to start a duplicate." >&2
+      show_management_diagnostics "$stem" "$device"
+      return 1
+    fi
+
+    # A healthy compatibility unit already owns the TUN device. Stop and
+    # disable the failing duplicate, but leave the live legacy tunnel alone.
+    $SUDO systemctl stop "$modern" 2>/dev/null || true
+    $SUDO systemctl disable "$modern" 2>/dev/null || true
+    echo "[vpn-bootstrap] Preserving active ${legacy}; it already owns the verified ${device} management tunnel."
+    return 0
+  fi
 
   if [ "$modern_state" = "active" ]; then
     $SUDO systemctl enable "$modern"
@@ -263,30 +309,9 @@ ensure_management_service() {
     return 0
   fi
 
-  if [ "$legacy_state" = "active" ]; then
-    if ! grep -Fxq "port ${port}" "$legacy_config" 2>/dev/null ||
-       ! grep -Fxq "dev ${device}" "$legacy_config" 2>/dev/null ||
-       ! grep -Fxq "server ${network} 255.255.255.0" "$legacy_config" 2>/dev/null ||
-       ! wait_for_management_tunnel "$device" "$address" "$port"
-    then
-      echo "ERROR: ${legacy} is active, but its config or live tunnel does not match the isolated management network; refusing to start a duplicate." >&2
-      $SUDO systemctl stop "$modern" 2>/dev/null || true
-      show_management_diagnostics "$stem" "$device"
-      return 1
-    fi
-
-    # A healthy compatibility unit already owns the TUN device. Stop and
-    # disable the failing duplicate, but leave the live legacy tunnel alone.
-    $SUDO systemctl stop "$modern" 2>/dev/null || true
-    $SUDO systemctl disable "$modern" 2>/dev/null || true
-    echo "[vpn-bootstrap] Preserving active ${legacy}; it already owns the verified ${device} management tunnel."
-    return 0
-  fi
-
   if $SUDO ip link show dev "$device" >/dev/null 2>&1; then
     # The interface exists but neither supported unit is active. Do not try
     # to claim or delete it: an unmanaged process may still own /dev/net/tun.
-    $SUDO systemctl stop "$modern" 2>/dev/null || true
     echo "ERROR: ${device} exists without an active ${modern} or ${legacy}; refusing to disturb its owner." >&2
     show_management_diagnostics "$stem" "$device"
     return 1
@@ -326,8 +351,10 @@ $SUDO iptables -C FORWARD -i tun-router-bkp -j ACCEPT 2>/dev/null || \
 $SUDO iptables -C FORWARD -o tun-router-bkp -j ACCEPT 2>/dev/null || \
   $SUDO iptables -I FORWARD -o tun-router-bkp -j ACCEPT
 
-if command -v iptables-save >/dev/null 2>&1 && [ -d /etc/iptables ]; then
-  $SUDO iptables-save | $SUDO tee /etc/iptables/rules.v4 >/dev/null
+if command -v iptables-save >/dev/null 2>&1 &&
+   [ -d "$(rooted_path /etc/iptables)" ]
+then
+  $SUDO iptables-save | $SUDO tee "$(rooted_path /etc/iptables/rules.v4)" >/dev/null
 fi
 
 for entry in \
