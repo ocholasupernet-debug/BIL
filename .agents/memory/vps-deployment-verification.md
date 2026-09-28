@@ -1,0 +1,14 @@
+---
+name: VPS deployment verification
+description: Distinguish a completed VPS release from a partial GitHub Actions deployment.
+---
+
+A successful runner build, archive copy, healthy API endpoint, or updated frontend asset does not by itself prove that a VPS deployment completed. The deploy script can publish static files before later control-plane checks and the API restart, leaving frontend and backend versions mismatched when the SSH step fails.
+
+Before deploying, identify the latest successful VPS workflow run's `head_branch` and `head_sha`, then compare that complete tree with the workspace. A manual deployment can run from a feature branch while `main` remains behind. Merge the deployed release into the workspace before updating `main`; otherwise a normal push can roll production back.
+
+If the management VPN bootstrap reports `TUNSETIFF` with “Device or resource busy,” treat it as an interface ownership conflict. A healthy compatibility `openvpn@` unit may already own the management TUN while a duplicate `openvpn-server@` instance fails; verify its config, address, and listener before changing units.
+
+**Why:** A partial release can make the site look updated while new API routes are still absent. The GitHub connector may expose run status and generic check annotations but deny access to action log archives, so the actual remote failure can remain unknown. Stopping the interface owner can disconnect all routers using the management VPN.
+
+**How to apply:** Before a VPS release, compare the latest successful run's branch and SHA against the workspace and merge any production-only changes. After one push-triggered run, confirm its conclusion and inspect the exact live feature behavior in addition to `/`, a direct SPA route, and API health. If the SSH step fails and its log is inaccessible, ask for the redacted final error lines; do not bypass control-plane checks or claim the release is complete. For a busy tunnel, preserve a verified 10.8.5.x/10.8.6.x service and prevent a duplicate unit from claiming its TUN.
