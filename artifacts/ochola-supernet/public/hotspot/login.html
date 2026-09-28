@@ -243,7 +243,7 @@
             Troubleshoot connection
           </button>
           <p style="margin:.35rem 0 0;color:rgba(255,255,255,.34);font-size:.72rem;line-height:1.45;text-align:center">
-            This checks the active package for this device using its hotspot MAC address. No username or password is needed.
+            This checks the latest successful hotspot purchase linked to this device MAC. If it is active, you can log in without entering a password.
           </p>
           <div id="portalSessionStatus" role="status" style="display:none;margin-top:.9rem;padding:.85rem 1rem;border-radius:.75rem;font-size:.8rem;line-height:1.5"></div>
         </div>
@@ -443,7 +443,7 @@ var COLORS=[
  var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=true;
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false;
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
-  var portalTroubleshootBusy=false, portalTroubleshootAttempts=0;
+  var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var EMBEDDED_PLANS=[];
  var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
@@ -1065,16 +1065,28 @@ function formatPortalExpiry(value){
   try{return new Intl.DateTimeFormat(undefined,{dateStyle:"medium",timeStyle:"short"}).format(timestamp);}
   catch(e){return new Date(timestamp).toLocaleString();}
 }
-function setPortalSessionStatus(status,expiresAt,message){
+ function setPortalSessionStatus(status,expiresAt,message,planName,username,found){
   var element=document.getElementById("portalSessionStatus");
   if(!element)return;
-  var expired=status==="expired";
+   var active=status==="active", expired=status==="expired";
+   var title=active?"Plan active":expired?"Plan expired":status==="not_found"?"No purchased plan found":"Purchase needs help";
+   var details="";
+   if(found&&planName)details+='<div style="margin-top:.35rem;color:rgba(255,255,255,.78)">Plan: <strong>'+escapePortalText(planName)+'</strong></div>';
+   if(found&&username)details+='<div style="margin-top:.2rem;color:rgba(255,255,255,.68)">Username: <strong>'+escapePortalText(username)+'</strong></div>';
+   var explanation=active
+     ? (expiresAt?"Your plan is active and expires "+formatPortalExpiry(expiresAt)+".":"Your plan is active. No expiry time is recorded.")
+     : expired
+       ? ("Your plan expired"+(expiresAt?" on "+formatPortalExpiry(expiresAt):"")+"." )
+       : status==="not_found"
+         ? "No successfully purchased hotspot package matches this device MAC address."
+         : "A purchase was found, but its hotspot account could not be confirmed.";
   element.style.display="block";
-  element.style.background=expired?"rgba(245,158,11,.08)":"rgba(34,197,94,.08)";
-  element.style.border="1px solid "+(expired?"rgba(245,158,11,.22)":"rgba(34,197,94,.22)");
-  element.style.color=expired?"#fbbf24":"#86efac";
-  element.innerHTML="<strong>"+(expired?"Session expired":"Plan active")+"</strong><br>"+
-    "<span style=\"color:rgba(255,255,255,.62)\">"+(expired?"Your hotspot session expired ":"Your plan expires ")+formatPortalExpiry(expiresAt)+"."+((message||"")?" "+escapePortalText(message):"")+"</span>";
+   element.style.background=active?"rgba(34,197,94,.08)":expired?"rgba(245,158,11,.08)":"rgba(239,68,68,.08)";
+   element.style.border="1px solid "+(active?"rgba(34,197,94,.22)":expired?"rgba(245,158,11,.22)":"rgba(239,68,68,.22)");
+   element.style.color=active?"#86efac":expired?"#fbbf24":"#fca5a5";
+   element.innerHTML="<strong>"+title+"</strong>"+details+
+     '<div style="margin-top:.3rem;color:rgba(255,255,255,.62)">'+escapePortalText(explanation)+
+     ((message||"")?" "+escapePortalText(message):"")+"</div>";
 }
 function setPortalTroubleshootButton(label,disabled,green){
   var button=document.getElementById("troubleshootBtn");
@@ -1086,73 +1098,67 @@ function setPortalTroubleshootButton(label,disabled,green){
   button.style.color="#fff";
   button.style.opacity=disabled?".7":"1";
 }
-function submitRouterLogin(){
-  var form=document.getElementById("mikrotikForm");
-  if(!form)return;
-  if(doLogin(form))form.submit();
-}
 function troubleshootConnection(){
   if(portalTroubleshootBusy)return;
-  var status=document.getElementById("portalSessionStatus");
+   var action=portalTroubleshootStatus==="active"?"login":"check";
   if(!DEVICE_MAC){
-    if(status){status.style.display="block";status.style.background="rgba(239,68,68,.08)";status.style.border="1px solid rgba(239,68,68,.22)";status.style.color="#fca5a5";status.textContent="This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.";}
+     setPortalSessionStatus("unavailable",null,"This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.",null,null,false);
     return;
   }
   if(PORTAL_ADMIN_ID<1){
-    if(status){status.style.display="block";status.style.background="rgba(239,68,68,.08)";status.style.border="1px solid rgba(239,68,68,.22)";status.style.color="#fca5a5";status.textContent="This hotspot is missing its ISP context. Reopen the sign-in page and try again.";}
+     setPortalSessionStatus("unavailable",null,"This hotspot is missing its ISP context. Reopen the sign-in page and try again.",null,null,false);
     return;
   }
-  portalTroubleshootBusy=true; portalTroubleshootAttempts=0;
-  setPortalTroubleshootButton("Checking connection…",true,false);
-  function attempt(){
-    portalTroubleshootAttempts++;
-    setPortalTroubleshootButton("Troubleshooting connection ("+portalTroubleshootAttempts+"/6)…",true,false);
-    fetch(apiUrl("/api/customers/hotspot-troubleshoot"),{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({
-        adminId:PORTAL_ADMIN_ID,
-        mac_address:DEVICE_MAC,
-        ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
-      })
-    }).then(function(response){
-      return response.json().then(function(data){return{ok:response.ok,data:data||{}};});
-    }).then(function(result){
-      var data=result.data||{};
-      if(data.status==="expired"){
-        setPortalSessionStatus("expired",data.expiresAt,"Renew a package to reconnect.");
-        portalTroubleshootBusy=false;
-        setPortalTroubleshootButton("Troubleshoot connection",false,false);
-        return;
-      }
-      if(!result.ok&&!data.retryable){
-        setPortalSessionStatus("active",data.expiresAt,data.error||"The account could not be checked.");
-        portalTroubleshootBusy=false;
-        setPortalTroubleshootButton("Troubleshoot connection",false,false);
-        return;
-      }
-      setPortalSessionStatus("active",data.expiresAt,data.connected?"":"Your plan is active. We are trying the hotspot router again.");
-      if(data.connected){
-        portalTroubleshootBusy=false;
-        setPortalTroubleshootButton("Login now",false,true);
-        window.setTimeout(submitRouterLogin,120);
-        return;
-      }
-      if(data.retryable&&portalTroubleshootAttempts<6){
-        window.setTimeout(attempt,1500);
-        return;
-      }
-      portalTroubleshootBusy=false;
-      setPortalTroubleshootButton("Login now",false,true);
-      if(data.error)setPortalSessionStatus("active",data.expiresAt,data.error);
-    }).catch(function(){
-      if(portalTroubleshootAttempts<6){window.setTimeout(attempt,1500);return;}
-      portalTroubleshootBusy=false;
-      setPortalTroubleshootButton("Troubleshoot connection",false,false);
-      if(status){status.style.display="block";status.style.background="rgba(239,68,68,.08)";status.style.border="1px solid rgba(239,68,68,.22)";status.style.color="#fca5a5";status.textContent="Could not reach the connection service. Try again shortly.";}
-    });
-  }
-  attempt();
+   portalTroubleshootBusy=true;
+   setPortalTroubleshootButton(action==="check"?"Checking latest purchase…":"Logging in…",true,false);
+   fetch(apiUrl("/api/customers/hotspot-troubleshoot"),{
+     method:"POST",
+     headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({
+       adminId:PORTAL_ADMIN_ID,
+       action:action,
+       mac_address:DEVICE_MAC,
+       ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+     })
+   }).then(function(response){
+     return response.json().then(function(data){return{ok:response.ok,data:data||{}};});
+   }).then(function(result){
+     var data=result.data||{};
+     var status=["active","expired","not_found","unavailable"].indexOf(data.status)>=0?data.status:"unavailable";
+     portalTroubleshootStatus=status;
+     portalTroubleshootDetails={
+       expiresAt:typeof data.expiresAt==="string"?data.expiresAt:null,
+       planName:typeof data.planName==="string"?data.planName:null,
+       username:typeof data.username==="string"?data.username:null,
+       found:data.found===true
+     };
+     var message=(status==="active"||status==="unavailable")?(data.error||""):"";
+     if(action==="login"&&data.connected)message="Connected successfully. You can close this sign-in page and browse.";
+     else if(!result.ok&&!message)message="Could not verify or connect this package. Try again shortly.";
+     setPortalSessionStatus(status,data.expiresAt,message,data.planName,data.username,data.found===true);
+     portalTroubleshootBusy=false;
+     if(status==="active"){
+       if(action==="login"&&data.connected)setPortalTroubleshootButton("Connected",true,true);
+       else setPortalTroubleshootButton("Login now",false,true);
+     }else{
+       setPortalTroubleshootButton("Troubleshoot connection",false,false);
+     }
+   }).catch(function(){
+     portalTroubleshootBusy=false;
+     if(portalTroubleshootStatus!=="active"){
+       portalTroubleshootStatus="idle";
+       portalTroubleshootDetails={};
+     }
+     setPortalTroubleshootButton(portalTroubleshootStatus==="active"?"Login now":"Troubleshoot connection",false,portalTroubleshootStatus==="active");
+     setPortalSessionStatus(
+       portalTroubleshootStatus==="active"?"active":"unavailable",
+       portalTroubleshootDetails.expiresAt,
+       "Could not reach the connection service. Try again shortly.",
+       portalTroubleshootDetails.planName,
+       portalTroubleshootDetails.username,
+       portalTroubleshootDetails.found
+     );
+   });
 }
 function applyCredentialsFromHash(){
   var hash=(window.location.hash||"").replace(/^#/,"");
