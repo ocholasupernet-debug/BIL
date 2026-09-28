@@ -126,7 +126,7 @@ write_config() {
   local authfile="$8"
 
   if [ -s "$config" ]; then
-    echo "[vpn-bootstrap] Rewriting existing dedicated config ${config}"
+    echo "[vpn-bootstrap] Checking existing dedicated config ${config}"
   else
     echo "[vpn-bootstrap] Creating dedicated config ${config}"
   fi
@@ -161,11 +161,19 @@ auth SHA1
 status ${status}
 verb 3
 EOF
-  $SUDO install -m 600 "$tmp" "$config"
+  CONFIG_CHANGED=0
+  if $SUDO cmp -s "$tmp" "$config"; then
+    echo "[vpn-bootstrap] Configuration is unchanged."
+  else
+    $SUDO install -m 600 "$tmp" "$config"
+    CONFIG_CHANGED=1
+    echo "[vpn-bootstrap] Updated configuration."
+  fi
   rm -f "$tmp"
   trap - RETURN
 }
 
+CONFIG_CHANGED=0
 write_config \
   "${SERVER_DIR}/ochola-router.conf" \
   "1196" \
@@ -175,6 +183,7 @@ write_config \
   "${OVPN_DIR}/router-ipp.txt" \
   "/var/log/openvpn/ochola-router-status.log" \
   "${OVPN_DIR}/router-passwd"
+PRIMARY_CONFIG_CHANGED="$CONFIG_CHANGED"
 
 write_config \
   "${SERVER_DIR}/ochola-router-backup.conf" \
@@ -185,12 +194,97 @@ write_config \
   "${OVPN_DIR}/router-backup-ipp.txt" \
   "/var/log/openvpn/ochola-router-backup-status.log" \
   "${OVPN_DIR}/router-backup-passwd"
+BACKUP_CONFIG_CHANGED="$CONFIG_CHANGED"
 
-# Keep the dedicated services separate from any legacy OpenVPN instance.
 $SUDO systemctl daemon-reload
-$SUDO systemctl enable "openvpn-server@ochola-router" "openvpn-server@ochola-router-backup"
-$SUDO systemctl restart "openvpn-server@ochola-router"
-$SUDO systemctl restart "openvpn-server@ochola-router-backup"
+
+# Debian exposes both openvpn@ and openvpn-server@ unit families. Older
+# installations may still have a runtime openvpn@ instance holding the same
+# tun device. Keep the already-running service for that device, stop only its
+# failed duplicate, and let the persistent openvpn-server@ unit take over on
+# the next boot. Never launch both unit families against one TUN interface.
+reconcile_management_service() {
+  local stem="$1"
+  local interface="$2"
+  local config_changed="$3"
+  local preferred="openvpn-server@${stem}"
+  local compatibility="openvpn@${stem}"
+  local preferred_state=""
+  local compatibility_state=""
+  local selected=""
+  local already_active=0
+  local attempt
+
+  $SUDO systemctl enable "$preferred" >/dev/null
+  preferred_state="$($SUDO systemctl show "$preferred" -p ActiveState --value 2>/dev/null || true)"
+  compatibility_state="$($SUDO systemctl show "$compatibility" -p ActiveState --value 2>/dev/null || true)"
+
+  if [ "$preferred_state" = "active" ] && [ "$compatibility_state" = "active" ]; then
+    echo "ERROR: Both ${preferred} and ${compatibility} are active for ${interface}." >&2
+    echo "       Refusing to restart either service while they may share the TUN device." >&2
+    return 1
+  elif [ "$preferred_state" = "active" ]; then
+    selected="$preferred"
+    already_active=1
+    $SUDO systemctl stop "$compatibility" >/dev/null 2>&1 || true
+    $SUDO systemctl reset-failed "$compatibility" >/dev/null 2>&1 || true
+  elif [ "$compatibility_state" = "active" ]; then
+    selected="$compatibility"
+    already_active=1
+    $SUDO systemctl stop "$preferred" >/dev/null 2>&1 || true
+    $SUDO systemctl reset-failed "$preferred" >/dev/null 2>&1 || true
+    echo "[vpn-bootstrap] Keeping the already-running compatibility unit ${compatibility}."
+  else
+    if $SUDO ip link show dev "$interface" >/dev/null 2>&1; then
+      echo "ERROR: ${interface} exists, but neither ${preferred} nor ${compatibility} is active." >&2
+      echo "       Refusing to attach another process to an unverified TUN device." >&2
+      return 1
+    fi
+    selected="$preferred"
+    $SUDO systemctl stop "$compatibility" >/dev/null 2>&1 || true
+    $SUDO systemctl stop "$preferred" >/dev/null 2>&1 || true
+    $SUDO systemctl reset-failed "$compatibility" >/dev/null 2>&1 || true
+    $SUDO systemctl reset-failed "$preferred" >/dev/null 2>&1 || true
+  fi
+
+  # Keep the compatibility process alive if it owns the active tunnel, but
+  # remove both runtime and persistent enablement. The canonical server unit
+  # is enabled above and will own the interface after a reboot.
+  $SUDO systemctl disable --runtime "$compatibility" >/dev/null 2>&1 || true
+  $SUDO systemctl disable "$compatibility" >/dev/null 2>&1 || true
+
+  if [ "$already_active" = "1" ]; then
+    if [ "$config_changed" = "1" ]; then
+      echo "[vpn-bootstrap] Applying the changed config by restarting ${selected}..."
+      $SUDO systemctl restart "$selected"
+    fi
+  else
+    echo "[vpn-bootstrap] Starting ${selected}..."
+    $SUDO systemctl start "$selected"
+  fi
+
+  if ! $SUDO ip link show dev "$interface" >/dev/null 2>&1; then
+    echo "[vpn-bootstrap] ${interface} is absent; restarting ${selected} once..."
+    $SUDO systemctl restart "$selected"
+  fi
+
+  for attempt in $(seq 1 15); do
+    if [ "$($SUDO systemctl show "$selected" -p ActiveState --value 2>/dev/null || true)" = "active" ] &&
+       $SUDO ip link show dev "$interface" >/dev/null 2>&1; then
+      echo "[vpn-bootstrap] ${selected} is active on ${interface}."
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "ERROR: ${selected} did not become active on ${interface}." >&2
+  $SUDO systemctl status "$selected" --no-pager >&2 || true
+  $SUDO journalctl -u "$selected" -n 60 --no-pager >&2 || true
+  return 1
+}
+
+reconcile_management_service "ochola-router" "tun-router" "$PRIMARY_CONFIG_CHANGED"
+reconcile_management_service "ochola-router-backup" "tun-router-bkp" "$BACKUP_CONFIG_CHANGED"
 
 # Permit the two shared listeners and the stable per-router public range.
 $SUDO iptables -C INPUT -p tcp --dport 1196 -j ACCEPT 2>/dev/null || \
@@ -210,14 +304,6 @@ if command -v iptables-save >/dev/null 2>&1 && [ -d /etc/iptables ]; then
   $SUDO iptables-save | $SUDO tee /etc/iptables/rules.v4 >/dev/null
 fi
 
-for unit in openvpn-server@ochola-router openvpn-server@ochola-router-backup; do
-  if ! $SUDO systemctl is-active --quiet "$unit"; then
-    echo "ERROR: ${unit} is not active." >&2
-    $SUDO journalctl -u "$unit" -n 80 --no-pager >&2 || true
-    exit 1
-  fi
-done
-
 echo "[vpn-bootstrap] Primary OpenVPN: TCP 1196 on 10.8.5.0/24"
 echo "[vpn-bootstrap] Backup OpenVPN:  TCP 1197 on 10.8.6.0/24"
-echo "[vpn-bootstrap] Legacy OpenVPN services were not modified."
+echo "[vpn-bootstrap] Legacy customer/proxy OpenVPN services were not modified."
