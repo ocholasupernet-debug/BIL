@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
-import { AlertTriangle, Banknote, CheckCircle2, Copy, Gauge, LockKeyhole, PauseCircle, PlayCircle, Plus, ReceiptText, RefreshCw, Router as RouterIcon, ShieldCheck, Users, WalletCards } from "lucide-react";
+import { Activity, AlertTriangle, Banknote, CheckCircle2, Clock3, Copy, Gauge, LockKeyhole, PauseCircle, PlayCircle, Plus, ReceiptText, RefreshCw, Router as RouterIcon, ShieldCheck, Users, WalletCards, Wifi, WifiOff } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID, getAdminApiToken, getAdminRole } from "@/lib/supabase";
 import { NetworkTabs } from "./network/NetworkTabs";
@@ -40,7 +40,16 @@ type ResellerResponse = {
   error?: string;
 };
 type ResellerTelemetry = {
+  fetchedAt?: string;
   totals: { hotspotActive: number; pppoeActive: number; onlineUsers: number };
+  rows?: Array<{
+    portId: number;
+    routerId: number;
+    interfaceName: string;
+    onlineUsers: number;
+    routerAvailable: boolean;
+    routerError?: string | null;
+  }>;
 };
 type ResellerPaymentSettings = {
   paymentGateway: string;
@@ -71,6 +80,20 @@ function money(value: unknown): string {
   return `KES ${Number(value ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function formatLocalCheckTime(value?: string): string {
+  if (!value) return "Waiting for live check";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "Time unavailable";
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
+}
+
 const cardStyle: React.CSSProperties = {
   background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 10, padding: 16,
   boxShadow: "var(--shadow-sm)",
@@ -97,15 +120,25 @@ function Notice({ error, success }: { error?: string; success?: string }) {
 }
 
 function statusClass(status?: string): string {
-  if (status === "active" || status === "completed" || status === "running") return "isp-badge-green";
+  if (status === "active" || status === "completed" || status === "running" || status === "online" || status === "connected") return "isp-badge-green";
   if (status === "failed" || status === "error" || status === "suspended") return "isp-badge-red";
-  if (status === "pending" || status === "provisioning") return "isp-badge-amber";
+  if (status === "pending" || status === "provisioning" || status === "checking") return "isp-badge-amber";
   return "isp-badge-gray";
 }
 
 function StatusBadge({ status }: { status?: string }) {
   const normalized = status || "pending";
   return <span className={`isp-badge ${statusClass(normalized)}`}>{normalized}</span>;
+}
+
+function LiveRouterBadge({ available }: { available?: boolean }) {
+  if (available === true) {
+    return <span className="isp-badge isp-badge-green reseller-live-badge"><Wifi size={13} aria-hidden="true" /> Online</span>;
+  }
+  if (available === false) {
+    return <span className="isp-badge isp-badge-red reseller-live-badge"><WifiOff size={13} aria-hidden="true" /> Offline</span>;
+  }
+  return <span className="isp-badge isp-badge-amber reseller-live-badge"><Activity size={13} aria-hidden="true" /> Checking</span>;
 }
 
 function AdminResellerManagement() {
@@ -808,12 +841,12 @@ function MetricBarChart({ items, valueKey, suffix = "" }: {
   );
 }
 
-function HorizontalMetricBars({ items, suffix = "" }: { items: Array<{ label: string; value: number }>; suffix?: string }) {
-  const max = Math.max(...items.map((item) => item.value), 1);
+function HorizontalMetricBars({ items, suffix = "" }: { items: Array<{ label: string; value?: number }>; suffix?: string }) {
+  const max = Math.max(...items.map((item) => Number(item.value ?? 0)), 1);
   return <div style={{ display: "grid", gap: 12 }}>
     {items.length ? items.map((item) => <div key={item.label}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, color: "var(--isp-text)", fontSize: 12, fontWeight: 750 }}><span>{item.label}</span><span>{item.value.toLocaleString("en-KE", { maximumFractionDigits: 1 })}{suffix}</span></div>
-      <div style={{ height: 7, marginTop: 6, borderRadius: 999, background: "var(--isp-input-bg)", overflow: "hidden" }}><div style={{ width: `${Math.max(3, (item.value / max) * 100)}%`, height: "100%", borderRadius: 999, background: "var(--isp-accent)" }} /></div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, color: "var(--isp-text)", fontSize: 12, fontWeight: 750 }}><span>{item.label}</span><span>{item.value === undefined ? "—" : `${item.value.toLocaleString("en-KE", { maximumFractionDigits: 1 })}${suffix}`}</span></div>
+      <div style={{ height: 7, marginTop: 6, borderRadius: 999, background: "var(--isp-input-bg)", overflow: "hidden" }}><div style={{ width: item.value === undefined ? "0%" : `${Math.max(3, (item.value / max) * 100)}%`, height: "100%", borderRadius: 999, background: "var(--isp-accent)" }} /></div>
     </div>) : <div style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>No data available yet.</div>}
   </div>;
 }
@@ -835,24 +868,41 @@ function ResellerDashboard() {
   const [pppoeSaving, setPppoeSaving] = useState(false);
   const [staticSaving, setStaticSaving] = useState(false);
 
+  const refreshTelemetry = async () => {
+    try {
+      const liveTelemetry = await apiJson<ResellerTelemetry>("/api/admin/dashboard/telemetry");
+      setTelemetry(liveTelemetry);
+    } catch {
+      // Live status is deliberately non-blocking. The last good check remains visible
+      // while the next interval retries instead of replacing the dashboard with an error.
+    }
+  };
+
   const load = async () => {
     try {
-      const [dashboard, liveTelemetry, paymentSettings, planContext] = await Promise.all([
-        apiJson<ResellerResponse>("/api/reseller/me"),
-        apiJson<ResellerTelemetry>("/api/admin/dashboard/telemetry").catch(() => null),
-        apiJson<{ ok: boolean; routes: ResellerGatewayRoute[] }>("/api/reseller/payment-gateways").catch(() => ({ routes: [] })),
-        apiJson<{ plans?: ResellerPlan[] }>("/api/plans/admin-context").catch(() => ({ plans: [] })),
-      ]);
+      // Paint the account and its assigned services as soon as the primary request
+      // returns. Telemetry and secondary configuration must never hold up first paint.
+      const dashboard = await apiJson<ResellerResponse>("/api/reseller/me");
       setData(dashboard);
-      setTelemetry(liveTelemetry);
-      setGatewayRoutes(paymentSettings?.routes || []);
-      setPlans(planContext.plans ?? []);
       setSelectedPortId((current) => current || String(dashboard.ports?.[0]?.id ?? ""));
       setCheckout((current) => ({ ...current, portId: current.portId || String(dashboard.ports?.[0]?.id ?? "") }));
+
+      void refreshTelemetry();
+      void Promise.all([
+        apiJson<{ ok: boolean; routes: ResellerGatewayRoute[] }>("/api/reseller/payment-gateways").catch(() => ({ routes: [] })),
+        apiJson<{ plans?: ResellerPlan[] }>("/api/plans/admin-context").catch(() => ({ plans: [] })),
+      ]).then(([paymentSettings, planContext]) => {
+        setGatewayRoutes(paymentSettings.routes || []);
+        setPlans(planContext.plans ?? []);
+      });
     }
     catch (e) { setError(e instanceof Error ? e.message : "Unable to load your reseller dashboard."); }
   };
   useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    const interval = window.setInterval(() => { void refreshTelemetry(); }, 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
   useEffect(() => {
     const portId = Number(selectedPortId);
     const port = data?.ports.find(item => Number(item.id) === portId);
@@ -918,11 +968,14 @@ function ResellerDashboard() {
   const users = data?.metrics?.users;
   const analytics = data?.metrics?.analytics;
   const accessTypes = [
-    { label: "Hotspot", value: users?.hotspot ?? 0 },
-    { label: "PPPoE", value: users?.pppoe ?? 0 },
-    { label: "Static", value: users?.static ?? 0 },
+    { label: "Hotspot", value: users?.hotspot },
+    { label: "PPPoE", value: users?.pppoe },
+    { label: "Static", value: users?.static },
   ];
-  const moneyOrZero = (value: number | undefined) => money(value ?? 0);
+  const moneyOrPending = (value: number | undefined) => value === undefined ? "—" : money(value);
+  const countOrPending = (value: number | undefined) => value === undefined ? "—" : String(value);
+  const selectedTelemetry = telemetry?.rows?.find((row) => Number(row.portId) === Number(port?.id));
+  const telemetryCheckedAt = formatLocalCheckTime(telemetry?.fetchedAt);
 
   return (
     <AdminLayout>
@@ -936,18 +989,19 @@ function ResellerDashboard() {
         <Notice error={error} success={success} />
          <div className="reseller-stat-grid">
              {[
-             { label: "Income today", value: moneyOrZero(revenue?.incomeToday), icon: Gauge, tone: "green" },
-             { label: "Income this month", value: moneyOrZero(revenue?.incomeMonth), icon: WalletCards, tone: "green" },
-             { label: "Total transactions", value: String(revenue?.totalTransactions ?? 0), icon: ReceiptText, tone: "amber" },
-             { label: "Total revenue", value: moneyOrZero(revenue?.totalRevenue), icon: Banknote, tone: "green" },
+             { label: "Income today", value: moneyOrPending(revenue?.incomeToday), icon: Gauge, tone: "green" },
+             { label: "Income this month", value: moneyOrPending(revenue?.incomeMonth), icon: WalletCards, tone: "blue" },
+             { label: "Total transactions", value: countOrPending(revenue?.totalTransactions), icon: ReceiptText, tone: "amber" },
+             { label: "Total revenue", value: moneyOrPending(revenue?.totalRevenue), icon: Banknote, tone: "violet" },
           ].map(({ label, value, icon: Icon, tone }) => <div key={label} className={`reseller-stat-card reseller-stat-card--${tone}`}><Icon size={18} aria-hidden="true" /><div className="reseller-metric-label">{label}</div><div className="reseller-metric-value">{value}</div></div>)}
         </div>
-         <div className="reseller-stat-grid">
+          <div className="reseller-stat-grid reseller-stat-grid--activity">
            {[
-             { label: "Total users", value: String(users?.total ?? 0), icon: Users, tone: "accent" },
-             { label: "Active users", value: String(users?.active ?? 0), icon: PlayCircle, tone: "green" },
-             { label: "Expired users", value: String(users?.expired ?? 0), icon: PauseCircle, tone: "amber" },
-             { label: "Online on assigned router", value: String(telemetry?.totals.onlineUsers ?? 0), icon: RouterIcon, tone: "teal" },
+             { label: "Total users", value: countOrPending(users?.total), icon: Users, tone: "accent" },
+             { label: "Active users", value: countOrPending(users?.active), icon: PlayCircle, tone: "teal" },
+             { label: "Expired users", value: countOrPending(users?.expired), icon: PauseCircle, tone: "amber" },
+              { label: "Online Hotspot users", value: telemetry?.totals ? String(telemetry.totals.hotspotActive) : "—", icon: Wifi, tone: "cyan" },
+              { label: "Total online users", value: telemetry?.totals ? String(telemetry.totals.onlineUsers) : "—", icon: RouterIcon, tone: "blue" },
            ].map(({ label, value, icon: Icon, tone }) => <div key={label} className={`reseller-stat-card reseller-stat-card--${tone}`}><Icon size={18} aria-hidden="true" /><div className="reseller-metric-label">{label}</div><div className="reseller-metric-value">{value}</div></div>)}
          </div>
         <div style={{ ...cardStyle, borderColor: "rgba(217,104,53,.35)" }}>
@@ -956,21 +1010,31 @@ function ResellerDashboard() {
                 {data && data.ports.length > 1 && <Field label="Assigned router / service"><select style={inputStyle} value={selectedPortId} onChange={(event) => { setSelectedPortId(event.target.value); setCheckout((current) => ({ ...current, portId: event.target.value })); }}><option value="">Choose an assigned service</option>{data.ports.map((item) => <option key={item.id} value={item.id}>{item.router?.name || "Router"} · {item.interface_name} · {item.handoff_mode === "vlan_services" ? `VLAN ${item.vlan_tag}` : "XPON handoff"}</option>)}</select></Field>}
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>{[port.router?.name ? `Router: ${port.router.name}` : "Router unavailable", `${port.interface_name} · ${port.status}`, `Wholesale link: ${linkStatus}`, `${port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps} Mbps cap`, port.handoff_mode === "vlan_services" ? `VLAN ${port.vlan_tag}` : port.handoff_mode === "isp_router" ? (port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "Physical ISP handoff") : port.hotspot_enabled ? "Hotspot enabled" : "Hotspot off", port.handoff_mode === "isp_router" ? (port.link_detected ? "XPON link detected" : "Waiting for XPON link") : port.pppoe_enabled ? "PPPoE enabled" : "PPPoE off"].map((text) => <span key={text} className="reseller-technical-chip" style={{ padding: "6px 9px", borderRadius: 999, background: "var(--isp-input-bg)", color: "var(--isp-text)", fontSize: 12, fontWeight: 700 }}>{text}</span>)}</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 18, color: "var(--isp-text-muted)", fontSize: 12, fontWeight: 750 }}>
-                  <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: port.link_detected ? "#16a34a" : "#f59e0b", marginRight: 6 }} />XPON router {port.link_detected ? "active" : "waiting"}</span>
-                  <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: ["active", "online", "connected", "running"].includes(String(port.router?.status || "").toLowerCase()) ? "#16a34a" : "#f59e0b", marginRight: 6 }} />ISP router {["active", "online", "connected", "running"].includes(String(port.router?.status || "").toLowerCase()) ? "active" : "checking"}</span>
+                  {port.handoff_mode === "isp_router" && <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: port.link_detected ? "#16a34a" : "#f59e0b", marginRight: 6 }} />XPON router {port.link_detected ? "active" : "waiting"}</span>}
+                  <span><i style={{ display: "inline-block", width: 9, height: 9, borderRadius: "50%", background: selectedTelemetry?.routerAvailable === true ? "#16a34a" : selectedTelemetry?.routerAvailable === false ? "#dc2626" : "#f59e0b", marginRight: 6 }} />MikroTik {selectedTelemetry?.routerAvailable === true ? "online" : selectedTelemetry?.routerAvailable === false ? "offline" : "checking"}</span>
                 </div>
               </div> : <div style={{ marginTop: 18, color: "#b45309" }}>No active port assignment is available.</div>}
         </div>
-         <section style={cardStyle}>
-           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 13 }}>
-             <div><div style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--isp-text)", fontWeight: 850 }}><RouterIcon size={18} color="var(--isp-accent)" /> Routers status</div><div style={{ color: "var(--isp-text-muted)", fontSize: 12, marginTop: 4 }}>Only routers connected through your assigned reseller port are shown.</div></div>
-             <button type="button" onClick={() => void load()} style={{ border: "1px solid var(--isp-border)", background: "transparent", color: "var(--isp-text)", borderRadius: 8, padding: 7, cursor: "pointer" }}><RefreshCw size={15} /></button>
+           <section className="reseller-live-panel" style={cardStyle}>
+             <div className="reseller-live-panel__head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 13 }}>
+             <div><div style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--isp-text)", fontWeight: 850 }}><RouterIcon size={18} color="var(--isp-accent)" /> Live router status</div><div style={{ color: "var(--isp-text-muted)", fontSize: 12, marginTop: 4 }}>Availability comes from the latest MikroTik telemetry check, not the saved router record.</div></div>
+             <button type="button" aria-label="Refresh live router status" onClick={() => void refreshTelemetry()} style={{ border: "1px solid var(--isp-border)", background: "transparent", color: "var(--isp-text)", borderRadius: 8, padding: 7, cursor: "pointer" }}><RefreshCw size={15} /></button>
+           </div>
+           <div className="reseller-live-panel__meta">
+              <span><Clock3 size={13} aria-hidden="true" /> Last check (local time): {telemetryCheckedAt}</span>
+             <span>Refreshes every 30 seconds</span>
            </div>
            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 10 }}>
-             {data?.ports?.length ? data.ports.map((item) => <div key={item.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 9 }}>
-               <div><div style={{ color: "var(--isp-text)", fontWeight: 800 }}>{item.router?.name || "Assigned router"}</div><div style={{ color: "var(--isp-text-muted)", fontSize: 11, marginTop: 4 }}>{item.interface_name} · {item.handoff_mode === "isp_router" ? "ISP router handoff" : "Reseller services"}</div></div>
-               <StatusBadge status={item.router?.status || item.status} />
-             </div>) : <div style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>No router assignment available.</div>}
+             {data?.ports?.length ? data.ports.map((item) => {
+               const liveRow = telemetry?.rows?.find((row) => Number(row.portId) === Number(item.id));
+               return <div key={item.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 9 }}>
+                <div><div style={{ color: "var(--isp-text)", fontWeight: 800 }}>{item.router?.name || "Assigned router"}</div><div style={{ color: "var(--isp-text-muted)", fontSize: 11, marginTop: 4 }}>{item.interface_name} · {item.handoff_mode === "vlan_services" ? `VLAN ${item.vlan_tag}` : "ISP router handoff"}</div></div>
+               <div style={{ display: "grid", justifyItems: "end", gap: 4 }}>
+                 <LiveRouterBadge available={liveRow?.routerAvailable} />
+                 {liveRow?.routerError && <span className="reseller-live-error">{liveRow.routerError}</span>}
+               </div>
+             </div>;
+             }) : <div style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>No router assignment available.</div>}
            </div>
          </section>
           {port?.handoff_mode === "vlan_services" && port.vlan_tag ? (
