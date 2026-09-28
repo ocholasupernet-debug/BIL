@@ -49,6 +49,30 @@ test("separate routing keeps service destinations isolated", () => {
   assert.equal(routing.isGatewayConfigComplete("mpesa_till_push", { tillNumber: "" }), false);
 });
 
+test("separate routing keeps bank-transfer details service-specific but not checkout-ready", () => {
+  const status = routing.publicServiceStatus(
+    "separate",
+    "mpesa_paybill",
+    {},
+    {
+      hotspot: { gatewayId: "mpesa_till_push", config: { tillNumber: "998877" } },
+      pppoe: {
+        gatewayId: "bank_transfer",
+        config: {
+          bankName: "KCB",
+          accountName: "Ochola Supernet",
+          accountNumber: "1234567890",
+          branchCode: "001",
+        },
+      },
+    },
+  );
+  assert.equal(status.hotspot.gatewayId, "mpesa_till_push");
+  assert.equal(status.hotspot.configured, true);
+  assert.equal(status.pppoe.gatewayId, "bank_transfer");
+  assert.equal(status.pppoe.configured, false);
+});
+
 test("payment intents bind PPPoE customer and service and reject tampering", () => {
   const intent = auth.generatePaymentIntent({
     adminId: 7,
@@ -83,7 +107,55 @@ test("payment intents bind PPPoE customer and service and reject tampering", () 
 test("incomplete or unsupported service configurations are not checkout-ready", () => {
   assert.equal(routing.isGatewayConfigComplete("mpesa_paybill", { paybillNumber: "123456" }), false);
   assert.equal(routing.isGatewayConfigComplete("bank_stk_push", { bankName: "KCB", paybillNumber: "123456" }), false);
+  assert.equal(routing.isGatewayConfigComplete("bank_transfer", {
+    bankName: "KCB",
+    accountName: "Ochola Supernet",
+    accountNumber: "1234567890",
+  }), true);
+  assert.equal(routing.isGatewayCheckoutReady("bank_transfer", {
+    bankName: "KCB",
+    accountName: "Ochola Supernet",
+    accountNumber: "1234567890",
+  }), false);
   assert.equal(routing.isGatewayConfigComplete("stripe", { secretKey: "present" }), false);
+  assert.equal(routing.isGatewayCheckoutReady("stripe", { secretKey: "present" }), false);
+  assert.equal(routing.isDarajaGateway("bank_stk_push"), true);
+  assert.equal(routing.isDarajaGateway("bank_transfer"), false);
+});
+
+test("setup-only gateways can be selected per service without becoming checkout-ready", () => {
+  const services = routing.servicePaymentConfigMap({
+    hotspot: { gatewayId: "airtel", config: { clientSecret: "must-not-leak" } },
+    pppoe: { gatewayId: "bank_transfer", config: { bankName: "KCB", accountName: "ISP", accountNumber: "123456" } },
+  });
+  assert.equal(services.hotspot.gatewayId, "airtel");
+  assert.deepEqual(services.hotspot.config, {});
+
+  const status = routing.publicServiceStatus("separate", "mpesa_paybill", {}, services);
+  assert.equal(status.hotspot.gatewayId, "airtel");
+  assert.equal(status.hotspot.configured, false);
+  assert.equal(status.pppoe.gatewayId, "bank_transfer");
+  assert.equal(status.pppoe.configured, false);
+});
+
+test("bank transfer account routing keeps only safe collection details", () => {
+  assert.deepEqual(
+    routing.collectionConfig("bank_transfer", {
+      bankName: "KCB",
+      accountName: "Ochola Supernet",
+      accountNumber: "1234567890",
+      branchCode: "001",
+      paymentInstructions: "Use your PPPoE username as reference",
+      apiSecret: "must-not-leak",
+    }),
+    {
+      bankName: "KCB",
+      accountName: "Ochola Supernet",
+      accountNumber: "1234567890",
+      branchCode: "001",
+      paymentInstructions: "Use your PPPoE username as reference",
+    },
+  );
 });
 
 test("service routing strips fields that are not collection destinations", () => {

@@ -344,6 +344,13 @@ ensure_management_service() {
   modern_state="$(unit_state "$modern")"
   legacy_state="$(unit_state "$legacy")"
 
+  if [ "$modern_state" = "active" ] && [ "$legacy_state" = "active" ]; then
+    echo "ERROR: Both ${modern} and ${legacy} are active for ${device}." >&2
+    echo "       Refusing to restart either service while they may share the TUN device." >&2
+    show_management_diagnostics "$stem" "$device"
+    return 1
+  fi
+
   if [ "$legacy_state" = "active" ]; then
     if ! grep -Fxq "port ${port}" "$legacy_config" 2>/dev/null ||
        ! grep -Fxq "dev ${device}" "$legacy_config" 2>/dev/null ||
@@ -355,10 +362,13 @@ ensure_management_service() {
       return 1
     fi
 
-    # A healthy compatibility unit already owns the TUN device. Stop and
-    # disable the failing duplicate, but leave the live legacy tunnel alone.
+    # Keep the verified compatibility process alive for this deployment,
+    # but make the canonical unit own the tunnel after the next reboot.
+    $SUDO systemctl enable "$modern"
     $SUDO systemctl stop "$modern" 2>/dev/null || true
-    $SUDO systemctl disable "$modern" 2>/dev/null || true
+    $SUDO systemctl reset-failed "$modern" 2>/dev/null || true
+    $SUDO systemctl disable --runtime "$legacy" 2>/dev/null || true
+    $SUDO systemctl disable "$legacy" 2>/dev/null || true
     echo "[vpn-bootstrap] Preserving active ${legacy}; it already owns the verified ${device} management tunnel."
     return 0
   fi
@@ -419,6 +429,10 @@ ensure_management_service() {
 
   # No existing service or interface owns this tunnel, so start the current
   # dedicated unit. Reset a prior failed state to avoid a stale restart loop.
+  $SUDO systemctl stop "$legacy" 2>/dev/null || true
+  $SUDO systemctl reset-failed "$legacy" 2>/dev/null || true
+  $SUDO systemctl disable --runtime "$legacy" 2>/dev/null || true
+  $SUDO systemctl disable "$legacy" 2>/dev/null || true
   $SUDO systemctl stop "$modern" 2>/dev/null || true
   $SUDO systemctl reset-failed "$modern" 2>/dev/null || true
   $SUDO systemctl enable "$modern"

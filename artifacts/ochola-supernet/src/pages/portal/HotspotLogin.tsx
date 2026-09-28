@@ -193,26 +193,30 @@ const PLAN_GRADIENTS = [
   { bg: "linear-gradient(135deg, #0acffe 0%, #495aff 100%)", light: "#0acffe" },
 ];
 
-const PAYMENT_GATEWAY_LABELS: Record<string, string> = {
-  mpesa_paybill: "M-Pesa PayBill",
-  mpesa_till_push: "M-Pesa Till Push",
-  bank_stk_push: "BankStkPush",
-  airtel: "AirtelMoney",
-  azampay: "AzamPay",
-  custom_paybill: "CustomPaybill",
-  dpo_payments: "DpoPayments",
-  flutterwave: "Flutterwave",
-  intasend: "Intasend",
-  pesapal: "PesaPal",
-  stripe: "Stripe",
-  paypal: "PayPal",
-  tigopesa: "TigoPesa",
-  xendit: "XenditEwallet",
-  manual: "Cash / Manual",
+function isDarajaGateway(paymentGateway: string): boolean {
+  return paymentGateway === "mpesa_paybill"
+    || paymentGateway === "mpesa_till_push"
+    || paymentGateway === "bank_stk_push";
+}
+
+type CheckoutPaymentStatus = {
+  configured: boolean;
+  destinationConfigured: boolean;
+  paymentGateway: string;
 };
 
-function isDarajaGateway(paymentGateway: string): boolean {
-  return paymentGateway === "mpesa_paybill" || paymentGateway === "mpesa_till_push";
+function isPaymentMethodReady(status: CheckoutPaymentStatus | null): boolean {
+  return Boolean(
+    status?.configured
+    && status.destinationConfigured
+    && isDarajaGateway(status.paymentGateway),
+  );
+}
+
+function checkoutPaymentLabel(paymentGateway: string): string {
+  if (paymentGateway === "bank_stk_push") return "Bank STK Push";
+  if (paymentGateway === "mpesa_till_push") return "M-Pesa Till";
+  return "M-Pesa PayBill";
 }
 
 export default function HotspotLogin() {
@@ -329,6 +333,7 @@ export default function HotspotLogin() {
     destinationConfigured: boolean;
     paymentGateway: string;
   } | null>(null);
+  const [paymentStatusLoaded, setPaymentStatusLoaded] = useState(false);
   const loginCredentialsStorageKey = hotspotLoginStorageKey(adminId);
   const storedLoginCredentials = readStoredHotspotCredentials(loginCredentialsStorageKey);
   const [loginUsername, setLoginUsername] = useState(storedLoginCredentials?.username ?? "");
@@ -350,8 +355,10 @@ export default function HotspotLogin() {
   useEffect(() => {
     if (HOTSPOT_RUNTIME_CONFIG.previewOnly) {
       setPlansLoading(false);
+      setPaymentStatusLoaded(true);
       return;
     }
+    setPaymentStatusLoaded(false);
     (async () => {
       try {
         const [plansRes, mpesaRes] = await Promise.all([
@@ -384,7 +391,10 @@ export default function HotspotLogin() {
         // Keep the package list embedded during deployment if the live API is
         // temporarily unreachable from the RouterOS client network.
       }
-      finally { setPlansLoading(false); }
+      finally {
+        setPlansLoading(false);
+        setPaymentStatusLoaded(true);
+      }
     })();
   }, [adminId, planScopeQuery]);
 
@@ -1562,35 +1572,45 @@ export default function HotspotLogin() {
                                 <div className="hp-plan-pay">
                                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                      <Phone size={14} color="#22c55e" />
+                                      {isPaymentMethodReady(mpesaStatus)
+                                        ? <Phone size={14} color="#22c55e" />
+                                        : <AlertCircle size={14} color="#f59e0b" />}
                                       <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>
-                                        {isTvMode ? "Pay for TV with M-Pesa" : "Pay with M-Pesa"}
+                                        {isPaymentMethodReady(mpesaStatus)
+                                          ? `${isTvMode ? "Pay for TV with" : "Pay with"} ${checkoutPaymentLabel(mpesaStatus?.paymentGateway ?? "")}`
+                                          : paymentStatusLoaded ? "Online payment unavailable" : "Checking payment options…"}
                                       </span>
                                     </div>
-                                     {mpesaStatus && (
+                                    {mpesaStatus && isPaymentMethodReady(mpesaStatus) && (
                                       <span style={{
                                         fontSize: 10, fontWeight: 700,
                                         padding: "3px 8px", borderRadius: 6,
-                                         background: mpesaStatus.configured ? "rgba(52,211,153,0.1)" : "rgba(239,68,68,0.1)",
-                                         color: mpesaStatus.configured ? "#34d399" : "#fca5a5",
-                                         border: `1px solid ${mpesaStatus.configured ? "rgba(52,211,153,0.2)" : "rgba(239,68,68,0.2)"}`,
+                                          background: "rgba(52,211,153,0.1)",
+                                          color: "#34d399",
+                                          border: "1px solid rgba(52,211,153,0.2)",
                                       }}>
-                                         {mpesaStatus.configured
-                                           ? mpesaStatus.env === "sandbox" ? "SANDBOX" : "LIVE"
-                                          : "NOT CONFIGURED"}
+                                         {mpesaStatus.env === "sandbox" ? "SANDBOX" : "LIVE"}
                                       </span>
                                     )}
                                   </div>
 
-                                    {mpesaStatus && (!mpesaStatus.configured || !isDarajaGateway(mpesaStatus.paymentGateway) || !mpesaStatus.destinationConfigured) ? (
+                                  {!paymentStatusLoaded ? (
+                                    <div style={{
+                                      padding: 14, borderRadius: 10, textAlign: "center",
+                                      background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)",
+                                      fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.5,
+                                    }}>
+                                      Checking available payment methods…
+                                    </div>
+                                  ) : !isPaymentMethodReady(mpesaStatus) ? (
                                     <div style={{
                                       padding: 14, borderRadius: 10, textAlign: "center",
                                       background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)",
                                       fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.5,
                                     }}>
                                       <AlertCircle size={16} color="#f59e0b" style={{ marginBottom: 6 }} />
-                                        <p style={{ margin: 0 }}>{!isDarajaGateway(mpesaStatus.paymentGateway) ? `${PAYMENT_GATEWAY_LABELS[mpesaStatus.paymentGateway] || "Selected payment gateway"} is not connected for automated payments yet.` : !mpesaStatus.destinationConfigured ? "The M-Pesa collection destination is not configured yet." : "M-Pesa Daraja API is not configured yet."}</p>
-                                         <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>{!isDarajaGateway(mpesaStatus.paymentGateway) ? "Choose a connected payment gateway to continue." : !mpesaStatus.destinationConfigured ? "Ask the Super Admin to assign an active Till or PayBill destination to this reseller service." : "Complete the required M-Pesa connection settings to continue."}</p>
+                                       <p style={{ margin: 0 }}>No connected online payment method is currently available for this service.</p>
+                                       <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>Please contact the network administrator for payment options.</p>
                                     </div>
                                   ) : (
                                     <form onSubmit={handlePay}>
@@ -1623,14 +1643,17 @@ export default function HotspotLogin() {
                                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
                                     <div className="hp-secured" style={{ margin: 0 }}>
                                       <Shield size={11} />
-                                        {!isDarajaGateway(mpesaStatus?.paymentGateway || "")
-                                          ? <>{PAYMENT_GATEWAY_LABELS[mpesaStatus?.paymentGateway || ""] || "Payment gateway"} selected</>
+                                      {isPaymentMethodReady(mpesaStatus)
+                                        ? mpesaStatus?.paymentGateway === "bank_stk_push"
+                                          ? <>Bank STK Push &middot; Safaricom Daraja</>
                                           : mpesaStatus?.paymentGateway === "mpesa_till_push" && mpesaStatus.hasTillNumber
-                                         ? <>Buy Goods &amp; Services Till &middot; Safaricom Daraja</>
-                                         : mpesaStatus?.shortcode
-                                          ? <>Daraja shortcode {mpesaStatus.shortcode} &middot; Safaricom Daraja</>
-                                        : <>Secured by Safaricom M-Pesa</>
-                                      }
+                                            ? <>Buy Goods &amp; Services Till &middot; Safaricom Daraja</>
+                                            : mpesaStatus?.shortcode
+                                              ? <>Daraja shortcode {mpesaStatus.shortcode} &middot; Safaricom Daraja</>
+                                              : <>Secured by Safaricom M-Pesa</>
+                                        : paymentStatusLoaded
+                                          ? <>No connected payment method</>
+                                          : <>Checking payment methods</>}
                                     </div>
                                       <button className="hp-plan-change" onClick={() => { setSelectedPlan(null); setPhone(""); setPayError(null); }}>
                                       <ArrowRight size={12} style={{ transform: "rotate(180deg)" }} /> Change plan

@@ -27,10 +27,17 @@ export const PAYMENT_GATEWAY_IDS = new Set([
   "paypal",
   "tigopesa",
   "xendit",
+  "bank_transfer",
   "manual",
 ]);
 
 export const DARAJA_GATEWAY_IDS = new Set([
+  "mpesa_paybill",
+  "mpesa_till_push",
+  "bank_stk_push",
+]);
+
+export const CHECKOUT_READY_GATEWAY_IDS = new Set([
   "mpesa_paybill",
   "mpesa_till_push",
   "bank_stk_push",
@@ -66,7 +73,9 @@ export function collectionConfig(gatewayId: string, value: unknown): Record<stri
   const raw = value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
-  const allowed = gatewayId === "mpesa_paybill" || gatewayId === "bank_stk_push"
+  const allowed = gatewayId === "bank_transfer"
+    ? ["bankName", "accountName", "accountNumber", "branchCode", "paymentInstructions"]
+    : gatewayId === "mpesa_paybill" || gatewayId === "bank_stk_push"
     ? ["paybillNumber", "accountNumber", ...(gatewayId === "bank_stk_push" ? ["bankName"] : [])]
     : gatewayId === "mpesa_till_push"
     ? ["tillNumber"]
@@ -76,6 +85,9 @@ export function collectionConfig(gatewayId: string, value: unknown): Record<stri
     accountNumber: ["accountNumber", "accountReference", "account_reference"],
     tillNumber: ["tillNumber", "merchantIdentifier", "merchant_identifier"],
     bankName: ["bankName"],
+    accountName: ["accountName"],
+    branchCode: ["branchCode"],
+    paymentInstructions: ["paymentInstructions"],
   };
   return Object.fromEntries(
     allowed
@@ -112,7 +124,12 @@ export function isGatewayConfigComplete(gatewayId: string, config: Record<string
   if (gatewayId === "mpesa_paybill") return !!(config.paybillNumber && config.accountNumber);
   if (gatewayId === "mpesa_till_push") return !!config.tillNumber;
   if (gatewayId === "bank_stk_push") return !!(config.bankName && config.paybillNumber && config.accountNumber);
+  if (gatewayId === "bank_transfer") return !!(config.bankName && config.accountName && config.accountNumber);
   return false;
+}
+
+export function isGatewayCheckoutReady(gatewayId: string, config: Record<string, string>): boolean {
+  return CHECKOUT_READY_GATEWAY_IDS.has(gatewayId) && isGatewayConfigComplete(gatewayId, config);
 }
 
 export function publicServiceStatus(
@@ -132,7 +149,7 @@ export function publicServiceStatus(
         : sharedConfig;
       return [service, {
         gatewayId,
-        configured: isGatewayConfigComplete(gatewayId, config),
+        configured: isGatewayCheckoutReady(gatewayId, config),
         config,
       }];
     }),

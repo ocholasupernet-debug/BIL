@@ -44,7 +44,7 @@ case "$name" in
           echo active
         else
           case "${VPN_TEST_SCENARIO}:${unit}" in
-          compatibility:openvpn-server@ochola-router|compatibility:openvpn@ochola-router)
+          compatibility:openvpn@ochola-router|both-active:openvpn-server@ochola-router|both-active:openvpn@ochola-router)
             echo active
             ;;
           legacy-mismatch:openvpn@ochola-router)
@@ -194,11 +194,27 @@ if [ "$SCENARIO_STATUS" -ne 0 ]; then
   exit 1
 fi
 assert_contains "$SCENARIO_OUTPUT" "Preserving active openvpn@ochola-router"
+assert_contains "$SCENARIO_LOG" "systemctl <enable> <openvpn-server@ochola-router>"
 assert_contains "$SCENARIO_LOG" "systemctl <stop> <openvpn-server@ochola-router>"
-assert_contains "$SCENARIO_LOG" "systemctl <disable> <openvpn-server@ochola-router>"
+assert_contains "$SCENARIO_LOG" "systemctl <disable> <--runtime> <openvpn@ochola-router>"
+assert_contains "$SCENARIO_LOG" "systemctl <disable> <openvpn@ochola-router>"
 assert_not_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn-server@ochola-router>"
 assert_not_contains "$SCENARIO_LOG" "systemctl <stop> <openvpn@ochola-router>"
 echo "PASS: healthy compatibility unit is preserved and duplicate modern unit is disabled"
+
+both_active_root="$(prepare_root both-active)"
+run_scenario both-active "$both_active_root"
+if [ "$SCENARIO_STATUS" -eq 0 ]; then
+  echo "FAIL: simultaneously active unit families unexpectedly succeeded" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+assert_contains "$SCENARIO_OUTPUT" "Both openvpn-server@ochola-router and openvpn@ochola-router are active"
+assert_not_contains "$SCENARIO_LOG" "systemctl <stop> <openvpn-server@ochola-router>"
+assert_not_contains "$SCENARIO_LOG" "systemctl <stop> <openvpn@ochola-router>"
+assert_not_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn-server@ochola-router>"
+assert_not_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn@ochola-router>"
+echo "PASS: simultaneous unit-family conflict fails without stopping either tunnel owner"
 
 mismatch_root="$(prepare_root legacy-mismatch)"
 run_scenario legacy-mismatch "$mismatch_root"

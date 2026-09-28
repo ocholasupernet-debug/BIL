@@ -24,12 +24,15 @@ import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { authenticatedAccount, extractToken, validateToken } from "../lib/api-auth.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import {
+  CHECKOUT_READY_GATEWAY_IDS,
+  PAYMENT_GATEWAY_IDS,
   gatewayConfigMap as routingGatewayConfigMap,
   paymentCollectionMode,
   paymentGateway as routingPaymentGateway,
   publicServiceStatus,
   servicePaymentConfigMap,
   isGatewayConfigComplete,
+  isGatewayCheckoutReady,
   collectionConfig,
   type PaymentService,
   type ServicePaymentConfig,
@@ -114,24 +117,6 @@ function isValidCollectionNumber(type: PaymentDestinationType, value: string): b
   return /^\d{5,10}$/.test(value);
 }
 
-const PAYMENT_GATEWAY_IDS = new Set([
-  "mpesa_paybill",
-  "mpesa_till_push",
-  "bank_stk_push",
-  "airtel",
-  "azampay",
-  "custom_paybill",
-  "dpo_payments",
-  "flutterwave",
-  "intasend",
-  "pesapal",
-  "stripe",
-  "paypal",
-  "tigopesa",
-  "xendit",
-  "manual",
-]);
-
 function getPaymentGateway(value: unknown): string {
   return typeof value === "string" && PAYMENT_GATEWAY_IDS.has(value) ? value : "mpesa_paybill";
 }
@@ -149,6 +134,14 @@ interface MpesaTillPushConfig {
 interface MpesaPaybillConfig {
   paybillNumber: string;
   accountNumber: string;
+}
+
+interface BankTransferConfig {
+  bankName: string;
+  accountName: string;
+  accountNumber: string;
+  branchCode: string;
+  paymentInstructions: string;
 }
 
 type GatewayConfigMap = Record<string, Record<string, string>>;
@@ -190,6 +183,17 @@ function mpesaPaybillConfig(value: unknown): MpesaPaybillConfig {
   return {
     paybillNumber: config.paybillNumber || config.merchantIdentifier || config.merchant_identifier || "",
     accountNumber: config.accountNumber || config.accountReference || config.account_reference || "",
+  };
+}
+
+function bankTransferConfig(value: unknown): BankTransferConfig {
+  const config = gatewayConfigMap(value).bank_transfer ?? {};
+  return {
+    bankName: config.bankName ?? "",
+    accountName: config.accountName ?? "",
+    accountNumber: config.accountNumber ?? "",
+    branchCode: config.branchCode ?? "",
+    paymentInstructions: config.paymentInstructions ?? "",
   };
 }
 
@@ -290,6 +294,7 @@ async function getAdminPaymentSettings(adminId: number | null, options: { useSha
   bankStkPush: BankStkPushConfig;
   mpesaTillPush: MpesaTillPushConfig;
   mpesaPaybill: MpesaPaybillConfig;
+  bankTransfer: BankTransferConfig;
   paymentCollectionMode: "shared" | "separate";
   serviceConfigs: Partial<Record<PaymentService, ServicePaymentConfig>>;
 }> {
@@ -299,6 +304,7 @@ async function getAdminPaymentSettings(adminId: number | null, options: { useSha
       bankStkPush: { bankName: "", paybillNumber: "", accountNumber: "" },
       mpesaTillPush: { tillNumber: "" },
       mpesaPaybill: { paybillNumber: "", accountNumber: "" },
+      bankTransfer: { bankName: "", accountName: "", accountNumber: "", branchCode: "", paymentInstructions: "" },
       paymentCollectionMode: "shared",
       serviceConfigs: {},
     };
@@ -326,6 +332,7 @@ async function getAdminPaymentSettings(adminId: number | null, options: { useSha
       : { bankName: "", paybillNumber: "", accountNumber: "" },
     mpesaTillPush: selected ? mpesaTillPushConfig(selected) : { tillNumber: serviceConfigs.hotspot?.config.tillNumber ?? "" },
     mpesaPaybill: selected ? mpesaPaybillConfig(selected) : { paybillNumber: serviceConfigs.hotspot?.config.paybillNumber ?? "", accountNumber: serviceConfigs.hotspot?.config.accountNumber ?? "" },
+    bankTransfer: bankTransferConfig(sharedConfigs),
     paymentCollectionMode: mode,
     serviceConfigs,
   };
@@ -406,6 +413,8 @@ router.get("/admin/payment-routing", async (req: Request, res: Response): Promis
     ? settings.mpesaTillPush
     : settings.paymentGateway === "bank_stk_push"
     ? settings.bankStkPush
+    : settings.paymentGateway === "bank_transfer"
+    ? settings.bankTransfer
     : settings.mpesaPaybill;
   const status = publicServiceStatus(
     settings.paymentCollectionMode,
@@ -442,12 +451,12 @@ router.post("/admin/payment-routing", async (req: Request, res: Response): Promi
     for (const service of ["hotspot", "pppoe"] as PaymentService[]) {
       const raw = rawServices?.[service];
       const gatewayId = routingPaymentGateway(raw?.gatewayId);
-      if (!raw || raw.gatewayId !== gatewayId || !["mpesa_paybill", "mpesa_till_push", "bank_stk_push"].includes(gatewayId)) {
-        res.status(400).json({ ok: false, error: `Choose a supported M-Pesa collection account for ${service.toUpperCase()}.` });
+      if (!raw || raw.gatewayId !== gatewayId || !PAYMENT_GATEWAY_IDS.has(gatewayId)) {
+        res.status(400).json({ ok: false, error: `Choose a gateway from the available list for ${service.toUpperCase()}.` });
         return;
       }
       const config = collectionConfig(gatewayId, raw.config);
-      if (!isGatewayConfigComplete(gatewayId, config)) {
+      if (CHECKOUT_READY_GATEWAY_IDS.has(gatewayId) && !isGatewayConfigComplete(gatewayId, config)) {
         res.status(400).json({ ok: false, error: `Complete the ${gatewayId.replaceAll("_", " ")} destination for ${service.toUpperCase()}.` });
         return;
       }
@@ -476,7 +485,9 @@ router.post("/admin/payment-routing", async (req: Request, res: Response): Promi
         const selected = mode === "separate" ? serviceConfigs[service] : null;
         return [service, {
           gatewayId: selected?.gatewayId ?? getPaymentGateway(req.body?.sharedGatewayId),
-          configured: selected ? isGatewayConfigComplete(selected.gatewayId, selected.config) : true,
+          configured: selected
+            ? isGatewayCheckoutReady(selected.gatewayId, selected.config)
+            : true,
         }];
       }),
     ),
@@ -544,13 +555,14 @@ router.get("/admin/mpesa-gateway-config", async (req: Request, res: Response): P
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
   }
-  const { bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(adminId);
+  const { bankStkPush, mpesaTillPush, mpesaPaybill, bankTransfer } = await getAdminPaymentSettings(adminId);
   res.json({
     ok: true,
     configs: {
       bank_stk_push: bankStkPush,
       mpesa_till_push: mpesaTillPush,
       mpesa_paybill: mpesaPaybill,
+      bank_transfer: bankTransfer,
     },
   });
 });
@@ -559,7 +571,7 @@ router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): 
   const adminId = await paymentChangeAdminId(req, req.body?.adminId);
   const gatewayId = req.body?.gatewayId;
   const rawConfig = req.body?.config;
-  const allowedGatewayIds = new Set(["bank_stk_push", "mpesa_till_push", "mpesa_paybill"]);
+  const allowedGatewayIds = new Set(["bank_stk_push", "mpesa_till_push", "mpesa_paybill", "bank_transfer"]);
 
   if (!adminId) {
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
@@ -567,20 +579,24 @@ router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): 
   }
   if (!(await requireAdminPaymentChange(req, res, adminId))) return;
   if (typeof gatewayId !== "string" || !allowedGatewayIds.has(gatewayId)) {
-    res.status(400).json({ ok: false, error: "Unsupported M-Pesa gateway configuration." });
+    res.status(400).json({ ok: false, error: "Unsupported payment gateway configuration." });
     return;
   }
 
   const input = rawConfig && typeof rawConfig === "object" && !Array.isArray(rawConfig)
     ? rawConfig as Record<string, unknown>
     : {};
-  const config: Record<string, string> = Object.fromEntries(
-    Object.entries(input)
-      .filter(([, value]) => typeof value === "string")
-      .map(([key, value]) => [key, (value as string).trim()]),
-  );
+  const config: Record<string, string> = gatewayId === "bank_transfer"
+    ? collectionConfig(gatewayId, input)
+    : Object.fromEntries(
+      Object.entries(input)
+        .filter(([, value]) => typeof value === "string")
+        .map(([key, value]) => [key, (value as string).trim()]),
+    );
 
-  const isValid = gatewayId === "bank_stk_push"
+  const isValid = gatewayId === "bank_transfer"
+    ? isGatewayConfigComplete(gatewayId, config)
+    : gatewayId === "bank_stk_push"
     ? !!(config.bankName && config.paybillNumber && config.accountNumber)
     : gatewayId === "mpesa_till_push"
     ? !!config.tillNumber
@@ -588,7 +604,9 @@ router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): 
   if (!isValid) {
     res.status(400).json({
       ok: false,
-      error: gatewayId === "mpesa_till_push"
+      error: gatewayId === "bank_transfer"
+        ? "Enter Bank Name, Account Name, and Account Number before saving."
+        : gatewayId === "mpesa_till_push"
         ? "Enter the ISP’s Till Number before saving."
         : "Enter the PayBill Number and Account / Business Number before saving.",
     });
