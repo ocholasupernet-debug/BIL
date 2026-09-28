@@ -1021,12 +1021,12 @@ export default function Plans() {
         {isServicePlan && !showingForm && (
           <RouterSyncBar
             label={`Sync ${TAB_LABELS[activeTab] ?? "Plans"} to Router`}
-            description="Push all visible plans as MikroTik hotspot user profiles or PPPoE profiles with rate-limits — no terminal copy-paste needed."
+            description="Push the visible plans assigned to the selected router as MikroTik hotspot or PPPoE profiles."
             icon={<UploadCloud size={18} />}
             endpoint="/api/admin/sync/plans"
             color={activeTab === "pppoe" ? "#8b5cf6" : "var(--isp-accent)"}
-            buildPayload={() => ({
-              plans: plans.map(p => ({
+            buildPayload={(router) => ({
+              plans: visiblePlans.filter(p => Number(p.router_id) === router.id).map(p => ({
                 id:            p.id,
                 name:          p.name,
                 type:          p.type,

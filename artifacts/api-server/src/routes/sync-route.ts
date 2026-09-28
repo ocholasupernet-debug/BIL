@@ -455,7 +455,7 @@ router.post("/admin/sync", async (req, res): Promise<void> => {
    }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void> => {
-  const { host, bridgeIp, username, password, routerId, plans } = req.body as {
+  let { host, bridgeIp, username, password, routerId, plans } = req.body as {
     host: string; bridgeIp?: string; username: string; password: string;
     routerId?: number;
     plans: Array<{
@@ -469,7 +469,7 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
     }>;
   };
 
-  if ((!host && !bridgeIp) || !plans?.length) { res.status(400).json({ ok: false, error: "host/bridgeIp and plans are required" }); return; }
+  if (!plans?.length) { res.status(400).json({ ok: false, error: "plans are required" }); return; }
 
   const account = await authenticatedAccount(req);
   if (!account) {
@@ -482,12 +482,28 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
     res.status(400).json({ ok: false, error: "A router assigned to these plans is required." });
     return;
   }
-  const routerRows = await sbSelect<{ id: number }>(
+  const routerRows = await sbSelect<{
+    id: number; host: string | null; bridge_ip: string | null; vpn_ip: string | null;
+    router_username: string | null; router_secret: string | null;
+  }>(
     "isp_routers",
-    `id=eq.${requestedRouterId}&admin_id=eq.${tenantId}&select=id&limit=1`,
+    `id=eq.${requestedRouterId}&admin_id=eq.${tenantId}&select=id,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
   );
   if (!routerRows[0]) {
     res.status(403).json({ ok: false, error: "This router does not belong to your connected ISP account." });
+    return;
+  }
+  /* Connection details are security-sensitive tenant data. Never allow the
+     browser to redirect this operation to an arbitrary router or credential. */
+  host = String(routerRows[0].host ?? "").trim();
+  bridgeIp = [
+    routerRows[0].vpn_ip,
+    routerRows[0].bridge_ip,
+  ].map(value => String(value ?? "").trim()).find(isRouterManagementVpnIp);
+  username = routerRows[0].router_username || "admin";
+  password = routerRows[0].router_secret || "";
+  if (!host && !bridgeIp) {
+    res.status(404).json({ ok: false, error: "The selected router has no stored host or management VPN address." });
     return;
   }
   const planIds = [...new Set(plans

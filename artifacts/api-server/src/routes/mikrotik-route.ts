@@ -13,8 +13,9 @@ import {
   fetchTraffic,
   fetchRouterLiveData,
   fetchWireless,
-  setWirelessInterface,
-  setWirelessSecurityProfile,
+  createWirelessVirtualAp,
+  patchWirelessInterface,
+  deleteWirelessVirtualAp,
   testConnection,
   probeAllHosts,
   probePort,
@@ -2781,48 +2782,100 @@ router.get("/router/:id/live", requireAdmin(), async (req, res): Promise<void> =
 });
 
 /* ─── GET /api/router/:id/wireless ─────────────────────────────────────── */
-router.get("/router/:id/wireless", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  const found = await getRouterCreds(id);
+const validRouterId = (value: unknown): number | null => {
+  if (!/^\d+$/.test(String(value))) return null;
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+};
+const validInterfaceId = (value: unknown): boolean => /^\*[0-9A-Fa-f]+$/.test(String(value ?? ""));
+const validInterfaceName = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
+const validSsid = (value: unknown): value is string => typeof value === "string" && Buffer.byteLength(value, "utf8") >= 1 && Buffer.byteLength(value, "utf8") <= 32 && !/[\u0000-\u001f\u007f]/u.test(value);
+const validWpaPassword = (value: unknown): value is string => typeof value === "string" && Buffer.byteLength(value, "utf8") >= 8 && Buffer.byteLength(value, "utf8") <= 63;
+
+async function wirelessTenant(req: import("express").Request, res: import("express").Response): Promise<{ id: number; tenantId: number; account: Awaited<ReturnType<typeof authenticatedAccount>> } | null> {
+  const id = validRouterId(req.params.id);
+  const account = await authenticatedAccount(req);
+  const tenantId = await authenticatedTenantAdminId(req);
+  if (!id) { res.status(400).json({ error: "Invalid router id" }); return null; }
+  if (!account || !tenantId) { res.status(403).json({ error: "A valid signed-in ISP account is required." }); return null; }
+  if (account.role === "reseller") { res.status(403).json({ error: "Reseller accounts cannot manage router-wide wireless networks." }); return null; }
+  const owned = await sbSelect<{ id: number }>("isp_routers", `id=eq.${id}&admin_id=eq.${tenantId}&select=id&limit=1`);
+  if (!owned[0]) { res.status(404).json({ error: "Router not found for this ISP account" }); return null; }
+  return { id, tenantId, account };
+}
+
+router.get("/router/:id/wireless", requireAdmin(), async (req, res): Promise<void> => {
+  const scope = await wirelessTenant(req, res);
+  if (!scope) return;
+  const found = await getRouterCreds(scope.id, scope.tenantId);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {
-    const data = await fetchWireless(found.creds);
-    res.json({ routerId: id, ...data });
+    const data = await fetchWireless(found.creds, scope.id);
+    res.json({ routerId: scope.id, ...data });
   } catch (err) {
     routerErrorResponse(res, err);
   }
 });
 
-/* ─── PATCH /api/router/:id/wireless ───────────────────────────────────── */
-/* Body: { interfaceId, ssid?, profileId?, password? } */
-router.patch("/router/:id/wireless", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+/* POST body: { name, ssid, masterInterfaceId (RouterOS .id), password, disabled? } */
+router.post("/router/:id/wireless", requireAdmin(), async (req, res): Promise<void> => {
+  const scope = await wirelessTenant(req, res);
+  if (!scope) return;
+  const { name, ssid, masterInterfaceId, password, disabled } = req.body as {
+    name?: string; ssid?: string; masterInterfaceId?: string; password?: string; disabled?: boolean;
+  };
+  if (!validInterfaceName(name) || !validSsid(ssid) || !validInterfaceId(masterInterfaceId) ||
+      !validWpaPassword(password) || (disabled !== undefined && typeof disabled !== "boolean")) {
+    res.status(400).json({ error: "name, SSID, masterInterfaceId and an 8-63 character WPA2 password are required and must be valid." }); return;
+  }
+  const found = await getRouterCreds(scope.id, scope.tenantId);
+  if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
+  try {
+    await createWirelessVirtualAp(found.creds, { routerId: scope.id, name: name as string, ssid: ssid as string, masterInterfaceId: masterInterfaceId as string, password: password as string, disabled });
+    res.status(201).json({ ok: true });
+  } catch (err) { routerErrorResponse(res, err); }
+});
 
-  const { interfaceId, ssid, profileId, password } = req.body as {
+/* ─── PATCH /api/router/:id/wireless ───────────────────────────────────── */
+/* Body: { interfaceId, ssid?, password?, disabled? }; at least one update required. */
+router.patch("/router/:id/wireless", requireAdmin(), async (req, res): Promise<void> => {
+  const scope = await wirelessTenant(req, res);
+  if (!scope) return;
+  const { interfaceId, ssid, password, disabled } = req.body as {
     interfaceId?: string;
     ssid?: string;
-    profileId?: string;
     password?: string;
+    disabled?: boolean;
   };
-
-  if (!interfaceId) { res.status(400).json({ error: "interfaceId is required" }); return; }
-
-  const found = await getRouterCreds(id);
+  if (!validInterfaceId(interfaceId) || (ssid !== undefined && !validSsid(ssid)) ||
+      (password !== undefined && !validWpaPassword(password)) || (disabled !== undefined && typeof disabled !== "boolean")) {
+    res.status(400).json({ error: "Invalid interfaceId, SSID, password, or disabled value." }); return;
+  }
+  if (ssid === undefined && password === undefined && disabled === undefined) {
+    res.status(400).json({ error: "At least one wireless setting must be supplied." }); return;
+  }
+  const found = await getRouterCreds(scope.id, scope.tenantId);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
 
   try {
-    if (ssid !== undefined) {
-      await setWirelessInterface(found.creds, interfaceId, { ssid });
-    }
-    if (profileId !== undefined && password !== undefined) {
-      await setWirelessSecurityProfile(found.creds, profileId, { password });
-    }
+    await patchWirelessInterface(found.creds, scope.id, { interfaceId: interfaceId as string, ssid, password, disabled });
     res.json({ ok: true, message: "Wireless settings updated" });
   } catch (err) {
     routerErrorResponse(res, err);
   }
+});
+
+router.delete("/router/:id/wireless", requireAdmin(), async (req, res): Promise<void> => {
+  const scope = await wirelessTenant(req, res);
+  if (!scope) return;
+  const interfaceId = req.body?.interfaceId;
+  if (!validInterfaceId(interfaceId)) { res.status(400).json({ error: "A valid interfaceId is required" }); return; }
+  const found = await getRouterCreds(scope.id, scope.tenantId);
+  if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
+  try {
+    await deleteWirelessVirtualAp(found.creds, scope.id, interfaceId);
+    res.json({ ok: true });
+  } catch (err) { routerErrorResponse(res, err); }
 });
 
 /* ─── POST /api/router/test-raw — test raw credentials before saving ───── */

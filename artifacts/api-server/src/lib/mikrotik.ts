@@ -3237,6 +3237,8 @@ export interface WirelessInterface {
   macAddress: string;
   securityProfile: string;
   mode: string;
+  masterInterface: string;
+  managedByApp: boolean;
 }
 
 export interface WirelessSecurityProfile {
@@ -3247,17 +3249,29 @@ export interface WirelessSecurityProfile {
 }
 
 export async function fetchWireless(
-  creds: RouterCredentials
+  creds: RouterCredentials,
+  routerId?: number,
 ): Promise<{ interfaces: WirelessInterface[]; profiles: WirelessSecurityProfile[] }> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
 
-    const [ifaceRows, profileRows] = await Promise.all([
-      withTimeout(conn.write(["/interface/wireless/print"]), ms) as Promise<Record<string, string>[]>,
-      withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Promise<Record<string, string>[]>,
-    ]);
+    let ifaceRows: Record<string, string>[], profileRows: Record<string, string>[];
+    try {
+      [ifaceRows, profileRows] = await Promise.all([
+        withTimeout(conn.write(["/interface/wireless/print"]), ms) as Promise<Record<string, string>[]>,
+        withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Promise<Record<string, string>[]>,
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/no such command|unknown command|bad command|not found|invalid item/i.test(message)) {
+        throw new Error(`RouterOS wireless package is unsupported: ${message}`);
+      }
+      throw error;
+    }
 
-    const interfaces: WirelessInterface[] = (Array.isArray(ifaceRows) ? ifaceRows : []).map(r => ({
+    const rawInterfaces = Array.isArray(ifaceRows) ? ifaceRows : [];
+    const namesById = new Map(rawInterfaces.map(row => [String(row[".id"] ?? ""), String(row.name ?? "")]));
+    const interfaces: WirelessInterface[] = rawInterfaces.map(r => ({
       id:              r[".id"]              ?? "",
       name:            r.name               ?? "",
       ssid:            r.ssid               ?? "",
@@ -3267,6 +3281,10 @@ export async function fetchWireless(
       macAddress:      r["mac-address"]     ?? "",
       securityProfile: r["security-profile"] ?? "default",
       mode:            r.mode               ?? "",
+      masterInterface: namesById.get(String(r["master-interface"] ?? "")) ?? String(r["master-interface"] ?? ""),
+      managedByApp:    routerId !== undefined
+        ? new RegExp(`^ochola-wireless-app:${routerId}:`, "i").test(String(r.comment ?? "").trim())
+        : false,
     }));
 
     const profiles: WirelessSecurityProfile[] = (Array.isArray(profileRows) ? profileRows : []).map(r => ({
@@ -3278,6 +3296,168 @@ export async function fetchWireless(
 
     return { interfaces, profiles };
   });
+}
+
+export interface WirelessCreateParams {
+  routerId: number;
+  name: string;
+  ssid: string;
+  masterInterfaceId: string;
+  password: string;
+  disabled?: boolean;
+}
+
+const wirelessAppComment = (routerId: number) =>
+  `ochola-wireless-app:${routerId}:${randomBytes(8).toString("hex")}`;
+const isWirelessAppComment = (comment: unknown, routerId: number) =>
+  new RegExp(`^ochola-wireless-app:${routerId}:[A-Za-z0-9]+$`, "i").test(String(comment ?? "").trim());
+
+function unsupportedWirelessError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no such command|unknown command|bad command|input does not match any value|unknown parameter/i.test(message)
+    ? new Error(`RouterOS legacy wireless package is unsupported: ${message}`)
+    : (error instanceof Error ? error : new Error(message));
+}
+
+export async function createWirelessVirtualAp(
+  creds: RouterCredentials,
+  params: WirelessCreateParams,
+): Promise<void> {
+  if (!Number.isSafeInteger(params.routerId) || params.routerId <= 0) throw new Error("Invalid router id.");
+  try {
+    await withConn(creds, async (conn) => {
+      const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+      const interfaces = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+      const master = interfaces.find(row => row[".id"] === params.masterInterfaceId);
+      if (!master || String(master["master-interface"] ?? "").trim()) {
+        throw new Error("masterInterfaceId must identify a physical wireless radio.");
+      }
+      const profileName = `ochola-wlan-${params.routerId}-${randomBytes(4).toString("hex")}`;
+      const masterName = String(master.name ?? "").trim();
+      if (!masterName) throw new Error("Selected wireless radio has no name.");
+      if (interfaces.some(row => String(row.name ?? "") === params.name)) {
+        throw new Error("A wireless interface with that name already exists.");
+      }
+      const comment = wirelessAppComment(params.routerId);
+      await withTimeout(conn.write([
+        "/interface/wireless/security-profiles/add",
+        `=name=${profileName}`, "=mode=dynamic-keys", "=authentication-types=wpa2-psk",
+        `=wpa2-pre-shared-key=${params.password}`, `=comment=${comment}`,
+      ]), ms);
+      try {
+        await withTimeout(conn.write([
+          "/interface/wireless/add", `=name=${params.name}`, `=master-interface=${masterName}`,
+          "=mode=ap-bridge", `=ssid=${params.ssid}`, `=security-profile=${profileName}`,
+          `=disabled=${params.disabled ? "yes" : "no"}`, `=comment=${comment}`,
+        ]), ms);
+        const rows = await withTimeout(conn.write(["/interface/wireless/print", `?name=${params.name}`]), ms) as Record<string, string>[];
+        if (!rows.some(row => row[".id"] && row["master-interface"] === masterName &&
+            row.ssid === params.ssid && isWirelessAppComment(row.comment, params.routerId) &&
+            (params.disabled === undefined || parseBool(row.disabled) === params.disabled) &&
+            row["security-profile"] === profileName)) {
+          throw new Error("Post-write verification failed: virtual wireless interface was not created.");
+        }
+      } catch (error) {
+        const profiles = await withTimeout(conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]), ms) as Record<string, string>[];
+        if (profiles[0]?.[".id"]) await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${profiles[0][".id"]}`]), ms);
+        throw error;
+      }
+    });
+  } catch (error) { throw unsupportedWirelessError(error); }
+}
+
+export async function patchWirelessInterface(
+  creds: RouterCredentials,
+  routerId: number,
+  params: { interfaceId: string; ssid?: string; password?: string; disabled?: boolean },
+): Promise<void> {
+  if (!Number.isSafeInteger(routerId) || routerId <= 0) throw new Error("Invalid router id.");
+  try {
+    await withConn(creds, async (conn) => {
+      const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+      const rows = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+      const current = rows.find(row => row[".id"] === params.interfaceId);
+      if (!current) throw new Error("Wireless interface was not found.");
+      const oldProfile = String(current["security-profile"] ?? "");
+      const command = ["/interface/wireless/set", `=.id=${params.interfaceId}`];
+      if (params.ssid !== undefined) command.push(`=ssid=${params.ssid}`);
+      if (params.disabled !== undefined) command.push(`=disabled=${params.disabled ? "yes" : "no"}`);
+      if (command.length > 2) await withTimeout(conn.write(command), ms);
+      if (params.password !== undefined) {
+        const profileName = `ochola-wlan-${routerId}-${randomBytes(4).toString("hex")}`;
+        const comment = wirelessAppComment(routerId);
+        await withTimeout(conn.write([
+          "/interface/wireless/security-profiles/add", `=name=${profileName}`,
+          "=mode=dynamic-keys", "=authentication-types=wpa2-psk",
+          `=wpa2-pre-shared-key=${params.password}`, `=comment=${comment}`,
+        ]), ms);
+        try {
+          await withTimeout(conn.write(["/interface/wireless/set", `=.id=${params.interfaceId}`, `=security-profile=${profileName}`]), ms);
+        } catch (error) {
+          const created = await withTimeout(conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]), ms) as Record<string, string>[];
+          if (created[0]?.[".id"]) {
+            await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${created[0][".id"]}`]), ms);
+          }
+          throw error;
+        }
+      }
+      const verify = await withTimeout(conn.write(["/interface/wireless/print", `?.id=${params.interfaceId}`]), ms) as Record<string, string>[];
+      const updated = verify.find(row => row[".id"] === params.interfaceId);
+      if (!updated ||
+          (params.ssid !== undefined && updated.ssid !== params.ssid) ||
+          (params.disabled !== undefined && parseBool(updated.disabled) !== params.disabled) ||
+          (params.password !== undefined && !String(updated["security-profile"] ?? "").startsWith(`ochola-wlan-${routerId}-`))) {
+        throw new Error("Post-write verification failed: wireless settings did not persist.");
+      }
+      if (params.password !== undefined) {
+        const profileRows = await withTimeout(conn.write([
+          "/interface/wireless/security-profiles/print", `?name=${updated["security-profile"]}`,
+        ]), ms) as Record<string, string>[];
+        if (profileRows[0]?.["wpa2-pre-shared-key"] !== params.password) {
+          throw new Error("Post-write verification failed: WPA2 profile did not persist.");
+        }
+      }
+      if (params.password !== undefined && oldProfile) {
+        const profiles = await withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Record<string, string>[];
+        const interfaces = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+        const old = profiles.find(profile => profile.name === oldProfile);
+        if (old?.[".id"] && isWirelessAppComment(old.comment, routerId) &&
+            !interfaces.some(row => row["security-profile"] === oldProfile)) {
+          await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${old[".id"]}`]), ms);
+        }
+      }
+    });
+  } catch (error) { throw unsupportedWirelessError(error); }
+}
+
+export async function deleteWirelessVirtualAp(
+  creds: RouterCredentials,
+  routerId: number,
+  interfaceId: string,
+): Promise<void> {
+  if (!Number.isSafeInteger(routerId) || routerId <= 0) throw new Error("Invalid router id.");
+  try {
+    await withConn(creds, async (conn) => {
+      const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+      const rows = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+      const current = rows.find(row => row[".id"] === interfaceId);
+      const masterId = String(current?.["master-interface"] ?? "");
+      if (!current || !masterId || !isWirelessAppComment(current.comment, routerId)) {
+        throw new Error("Only app-owned virtual wireless interfaces may be deleted.");
+      }
+      await withTimeout(conn.write(["/interface/wireless/remove", `=.id=${interfaceId}`]), ms);
+      const remaining = await withTimeout(conn.write(["/interface/wireless/print", `?.id=${interfaceId}`]), ms) as Record<string, string>[];
+      if (remaining.some(row => row[".id"] === interfaceId)) throw new Error("Post-delete verification failed.");
+      const profileRows = await withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Record<string, string>[];
+      const used = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+      for (const profile of profileRows) {
+        if (isWirelessAppComment(profile.comment, routerId) && profile[".id"] &&
+            !used.some(row => row["security-profile"] === profile.name)) {
+          await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${profile[".id"]}`]), ms);
+        }
+      }
+    });
+  } catch (error) { throw unsupportedWirelessError(error); }
 }
 
 export async function setWirelessInterface(

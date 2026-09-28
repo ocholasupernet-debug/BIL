@@ -9,6 +9,10 @@ import {
   fetchBridgePortLayout,
   pingRouter,
   testConnection,
+  fetchWireless,
+  createWirelessVirtualAp,
+  patchWirelessInterface,
+  deleteWirelessVirtualAp,
 } from "./mikrotik.js";
 
 type MockRows = Record<string, string>[];
@@ -183,6 +187,118 @@ test("RouterOS read-only checks fall back after a permission-denied probe", asyn
       assert.deepEqual(connectedUsers, [savedAccount]);
     });
   });
+});
+
+test("wireless inventory maps RouterOS master IDs to names and scopes ownership", async () => {
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/interface/wireless/print") return [
+      { ".id": "*1", name: "wlan1", type: "qca", "master-interface": "", comment: "" },
+      { ".id": "*2", name: "wlan1-vap", type: "qca", "master-interface": "*1", comment: "ochola-wireless-app:7:abc123" },
+    ];
+    if (command[0] === "/interface/wireless/security-profiles/print") return [];
+    return [];
+  }, async ({ port }) => {
+    const result = await fetchWireless(routerCredentials(port), 7);
+    assert.equal(result.interfaces[0]?.masterInterface, "");
+    assert.equal(result.interfaces[1]?.masterInterface, "wlan1");
+    assert.equal(result.interfaces[1]?.managedByApp, true);
+  });
+});
+
+test("wireless virtual AP creation uses the selected master name, not its RouterOS id", async () => {
+  let added: string[] = [];
+  let profileName = "";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/interface/wireless/print") {
+      if (command.some(item => item === "?name=vap-test")) {
+        return [{ ".id": "*9", name: "vap-test", ssid: "Guest", "master-interface": "wlan1",
+          "security-profile": profileName, disabled: "false", comment: "ochola-wireless-app:7:nonce" }];
+      }
+      return [{ ".id": "*1", name: "wlan1", type: "chipset", "master-interface": "" }];
+    }
+    if (command[0] === "/interface/wireless/security-profiles/print") return [];
+    if (command[0] === "/interface/wireless/security-profiles/add") {
+      profileName = command.find(item => item.startsWith("=name="))?.slice("=name=".length) ?? "";
+      return [];
+    }
+    if (command[0] === "/interface/wireless/add") { added = command; return []; }
+    return [];
+  }, async ({ port }) => {
+    await createWirelessVirtualAp(routerCredentials(port), {
+      routerId: 7, name: "vap-test", ssid: "Guest", masterInterfaceId: "*1", password: "password1",
+    });
+    assert.ok(added.includes("=master-interface=wlan1"));
+    assert.ok(!added.includes("=master-interface=*1"));
+  });
+});
+
+test("wireless patch isolates password, sets disabled, and never edits default profile", async () => {
+  const commands: string[][] = [];
+  const current: Record<string, string> = {
+    ".id": "*2", name: "wlan-vap", ssid: "Guest", "master-interface": "wlan1",
+    "security-profile": "default", disabled: "false",
+  };
+  const profiles: Record<string, string>[] = [{
+    ".id": "*3", name: "default", "wpa2-pre-shared-key": "unchanged",
+    comment: "RouterOS default profile",
+  }];
+  await withMockRouterApi((_username, command) => {
+    commands.push(command);
+    if (command[0] === "/interface/wireless/print") return [current];
+    if (command[0] === "/interface/wireless/set") {
+      for (const item of command.slice(2)) {
+        const separator = item.indexOf("=", 1);
+        const key = item.slice(1, separator);
+        const value = item.slice(separator + 1);
+        if (key === "ssid") current.ssid = value;
+        if (key === "disabled") current.disabled = value;
+        if (key === "security-profile") current["security-profile"] = value;
+      }
+      return [];
+    }
+    if (command[0] === "/interface/wireless/security-profiles/add") {
+      const profile: Record<string, string> = { ".id": "*4" };
+      for (const item of command.slice(1)) {
+        const separator = item.indexOf("=", 1);
+        profile[item.slice(1, separator)] = item.slice(separator + 1);
+      }
+      profiles.push(profile);
+      return [];
+    }
+    if (command[0] === "/interface/wireless/security-profiles/print") {
+      const nameFilter = command.find(item => item.startsWith("?name="))?.slice("?name=".length);
+      return nameFilter ? profiles.filter(profile => profile.name === nameFilter) : profiles;
+    }
+    return [];
+  }, async ({ port }) => {
+    await patchWirelessInterface(routerCredentials(port), 7, {
+      interfaceId: "*2", ssid: "Guest Wi-Fi", password: "newpass123", disabled: true,
+    });
+    assert.ok(commands.some(command => command[0] === "/interface/wireless/set" && command.includes("=disabled=yes")));
+    assert.ok(commands.some(command => command[0] === "/interface/wireless/security-profiles/add" && command.some(item => item.startsWith("=name=ochola-wlan-7-"))));
+    assert.ok(!commands.some(command => command[0] === "/interface/wireless/security-profiles/set"));
+    assert.equal(current.ssid, "Guest Wi-Fi");
+    assert.equal(current.disabled, "yes");
+    assert.notEqual(current["security-profile"], "default");
+    assert.equal(profiles.find(profile => profile.name === "default")?.["wpa2-pre-shared-key"], "unchanged");
+    assert.equal(profiles.find(profile => profile.name === current["security-profile"])?.["wpa2-pre-shared-key"], "newpass123");
+  });
+});
+
+test("wireless deletion refuses physical and unowned interfaces", async (t) => {
+  for (const row of [
+    { ".id": "*1", name: "wlan1", "master-interface": "", comment: "ochola-wireless-app:7:abc" },
+    { ".id": "*2", name: "vap", "master-interface": "wlan1", comment: "customer-managed" },
+  ]) {
+    await t.test(row.name, async ({}) => {
+      await withMockRouterApi(() => [row], async ({ port }) => {
+        await assert.rejects(
+          deleteWirelessVirtualAp(routerCredentials(port), 7, row[".id"]),
+          /Only app-owned virtual wireless/,
+        );
+      });
+    });
+  }
 });
 
 test("managed reset planning retries empty access inventory with the management account and stays read-only", async () => {

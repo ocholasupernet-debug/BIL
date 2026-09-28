@@ -7,4 +7,4 @@ Before writing a GitHub branch, read its live ref and compare both trees from th
 
 **Why:** A stale workspace tracking ref can hide newer production commits, and a tree based on it can overwrite independent remote changes.
 
-**How to apply:** For production pushes, confirm the live branch head, merge remote-only changes, resolve overlaps, validate the combined tree, then write blobs, tree, commit, and non-forced ref update.
+**How to apply:** For production pushes, confirm the live branch head, merge remote-only changes, resolve overlaps, validate the combined tree, then write blobs, tree, commit, and non-forced ref update. GitHub REST reads a ref at `/git/ref/{ref}` but updates it at `/git/refs/{ref}`; use the plural path for `PATCH`.

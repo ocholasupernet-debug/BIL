@@ -161,14 +161,14 @@ function SyncFailedActions({
   /* Compact one-line error label */
   const isTimeout  = /timed out|etimedout|timeout/i.test(error);
   const isRefused  = /econnrefused|refused/i.test(error) && !isTimeout;
-  const isAuth     = /login|auth|password|permission/i.test(error);
+  const isAuth     = /login|auth|password|permission|unauthorized|forbidden|invalid token|not authenticated/i.test(error);
   const isVpn      = /ehostunreach|enetunreach|no route|unreachable/i.test(error);
 
   const errLabel = isTimeout  ? "Port 8728 blocked by firewall"
     : isRefused  ? "API service disabled on router"
     : isAuth     ? "Authentication failed"
     : isVpn      ? "VPN / routing unreachable"
-    : "Connection failed";
+    : "Sync failed";
 
   /* Manual fallback commands — shown only when auto-fix can't connect */
   const showFallback = fixResult && !fixResult.ok && fixResult.canConnect === false;
@@ -189,6 +189,9 @@ function SyncFailedActions({
         <AlertTriangle size={13} style={{ color: "#f87171", flexShrink: 0 }} />
         <span style={{ fontSize: "0.78rem", fontWeight: 700, color: "#f87171", flex: 1 }}>
           {errLabel}
+        </span>
+        <span style={{ width: "100%", fontSize: "0.74rem", color: "#fca5a5", wordBreak: "break-word" }}>
+          {error}
         </span>
 
         <button
@@ -452,6 +455,11 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
         password: selectedRouter.router_secret   || "",
         ...buildPayload(selectedRouter),
       };
+      const payloadPlans = (payload as { plans?: unknown }).plans;
+      if (Array.isArray(payloadPlans) && payloadPlans.length === 0) {
+        setResult({ ok: false, logs: [], error: "No visible plans are assigned to this router." });
+        return;
+      }
        const token = getAdminApiToken();
        const res  = await fetch(apiUrl(endpoint), { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(payload) });
       const data = await parseJsonResponse<{ ok: boolean; logs?: string[]; error?: string }>(res);
