@@ -33,6 +33,7 @@ import {
   ensureHotspotUserRateQueue,
   updateHotspotUser,
   fetchHotspotConnectedDevices,
+  resolveHotspotClientIpByMac,
   classifyRouterConnectionFailure,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
@@ -2339,7 +2340,6 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   const adminId = await resolvePortalAdminId(req, req.body?.adminId);
   const requestedMac = readMacAddress(req.body?.mac_address);
   const requestedDeviceName = readDeviceName(req.body?.device_name);
-  const clientIp = readClientIp(req.body?.client_ip);
 
   if (!/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId) || adminId === null || !Number.isSafeInteger(adminId) || adminId < 1 || requestedMac.invalid) {
     res.status(400).json({ ok: false, error: "A paid checkout and ISP context are required." });
@@ -2545,14 +2545,23 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
    )
      : [];
   const now = Date.now();
-   const isReusable = (customer: typeof linkedCustomers[number]) => {
+  const linkedCustomer = linkedCustomers[0];
+  const linkedExpiry = linkedCustomer?.expires_at ? Date.parse(linkedCustomer.expires_at) : 0;
+  if (linkedCustomer && (!Number.isFinite(linkedExpiry) || linkedExpiry <= now)) {
+    res.status(409).json({
+      ok: false,
+      error: "The package from this paid checkout has expired. Purchase a new package to reconnect.",
+    });
+    return;
+  }
+  const isReusable = (customer: typeof linkedCustomers[number]) => {
     const expiresAt = customer.expires_at ? Date.parse(customer.expires_at) : 0;
     return (customer.status === "active" || customer.status === "payment_cleared_router_pending") &&
       Number.isFinite(expiresAt) &&
       expiresAt > now &&
       typeof customer.username === "string";
   };
-   const reusableCustomer = linkedCustomers[0] && isReusable(linkedCustomers[0])
+  const reusableCustomer = linkedCustomers[0] && isReusable(linkedCustomers[0])
      ? linkedCustomers[0]
      : undefined;
 
@@ -2583,10 +2592,16 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     return;
   }
   const hotspotPassword = "12345";
-  const routerAddress = clientIp || reusableCustomer?.ip_address || "";
+  const isSameCheckoutRetry = !!reusableCustomer && transaction.customer_id === reusableCustomer.id;
+  const routerAddress = await resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
+    logger.warn({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] target device address lookup failed");
+    return null;
+  }) ?? "";
   const existingExpiry = reusableCustomer?.expires_at ? Date.parse(reusableCustomer.expires_at) : 0;
-  const expiryBase = reusableCustomer && Number.isFinite(existingExpiry) ? Math.max(now, existingExpiry) : now;
-  const expiresAt = new Date(expiryBase + Math.ceil(expiresInSeconds) * 1000);
+  const expiresAt = isSameCheckoutRetry
+    ? new Date(existingExpiry)
+    : new Date(now + Math.ceil(expiresInSeconds) * 1000);
+  const remainingExpirySeconds = Math.max(1, Math.ceil((expiresAt.getTime() - Date.now()) / 1000));
 
   const customerFields = {
     admin_id: customerAdminId,
@@ -2672,11 +2687,12 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         limitBytesTotal,
       });
     }
-    await resetHotspotUserCounters(credentials, hotspotUsername).catch(() => {});
-    await disconnectHotspotActiveUser(credentials, hotspotUsername).catch(() => {});
+    if (!isSameCheckoutRetry) {
+      await resetHotspotUserCounters(credentials, hotspotUsername).catch(() => {});
+    }
     await scheduleHotspotUserExpiry(credentials, {
       name: hotspotUsername,
-      expiresInSeconds: Math.max(1, Math.ceil((expiresAt.getTime() - now) / 1000)),
+      expiresInSeconds: remainingExpirySeconds,
     }).catch((error) => {
       logger.warn({ err: error, router: routerRow.name, username: hotspotUsername }, "[mpesa/hotspot-mac-access] expiry scheduling deferred");
     });
@@ -2687,7 +2703,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         macAddress: mac,
         ipAddress: routerAddress || undefined,
         comment: hotspotUsername,
-        expiresInSeconds,
+        expiresInSeconds: remainingExpirySeconds,
         bindingType: "regular",
       });
       if (paidBindingApplied) {
@@ -2700,8 +2716,9 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     } catch (error) {
       logger.warn({ err: error, router: routerRow.name, username: hotspotUsername, mac }, "[mpesa/hotspot-mac-access] device binding deferred; credentials remain available");
     }
-    if (paidBindingApplied && routerAddress) {
-      await connectHotspotUser(credentials, {
+    let routerConnected = false;
+    if (routerAddress) {
+      routerConnected = await connectHotspotUser(credentials, {
         user: hotspotUsername,
         password: hotspotPassword,
         ip: routerAddress,
@@ -2709,17 +2726,30 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         server: hotspotServer,
       }).catch((error) => {
         logger.warn({ err: error, username: hotspotUsername }, "[mpesa/hotspot-mac-access] active login deferred");
+        return false;
       });
     }
 
      await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
       customer_id: customer.id,
       plan_id: plan.id,
-      notes: `M-Pesa payment verified; hotspot credentials assigned on ${routerRow.name}${paidBindingApplied ? " and MAC access granted." : "; device binding is pending."}`,
+      notes: `M-Pesa payment verified; hotspot credentials assigned on ${routerRow.name}${routerConnected ? " and the device session is active." : paidBindingApplied ? "; MAC access is set up and session activation is pending." : "; device binding is pending."}`,
     });
     res.json({
       ok: true,
-      access: paidBindingApplied ? "hotspot-authenticated" : "hotspot-credentials",
+      access: routerConnected ? "hotspot-authenticated" : "hotspot-credentials",
+      connected: routerConnected,
+      ...(!routerConnected
+        ? {
+            message: routerAddress
+              ? paidBindingApplied
+                ? "Payment is confirmed and the package is bound to this device, but the router has not confirmed its login yet. Retry connection."
+                : "Payment is confirmed, but the router has not confirmed this device's hotspot login yet. Retry connection."
+              : paidBindingApplied
+                ? "Payment is confirmed and access is prepared for this device. Connect it to the hotspot Wi-Fi to finish signing in."
+                : "Payment is confirmed, but the router has not seen the paid device on the hotspot Wi-Fi yet.",
+          }
+        : {}),
       router: routerRow.name,
       mac_address: mac,
       credentials: { username: hotspotUsername, password: hotspotPassword },
@@ -2976,6 +3006,10 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   }
 
   const expiresInSeconds = Math.max(1, Math.ceil((expiresAtMs - Date.now()) / 1000));
+  const routerAddress = await resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
+    logger.warn({ err: error, receipt, routerId: routerRow.id, mac }, "[mpesa/verify] target device address lookup failed");
+    return null;
+  }) ?? "";
   const hotspotProfile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
   const dataLimitMb = Number(plan.data_limit_mb);
   const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
@@ -3001,7 +3035,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     await requireHotspotUserProfile(credentials, hotspotProfile);
     const paidBindingApplied = await addHotspotIpBinding(credentials, {
       macAddress: mac,
-      ipAddress: clientIp || undefined,
+      ipAddress: routerAddress || undefined,
       comment: customer.username,
       expiresInSeconds,
       bindingType: "regular",
@@ -3009,7 +3043,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     if (paidBindingApplied) {
       await ensureHotspotUserRateQueue(credentials, {
         username: customer.username,
-        address: clientIp || customer.ip_address || undefined,
+        address: routerAddress || undefined,
         maxLimit: hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit),
       });
     }
@@ -3020,7 +3054,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         disabled: false,
         comment: customer.username,
         server: hotspotServer,
-        address: clientIp || customer.ip_address || undefined,
+        address: routerAddress || undefined,
         limitBytesTotal,
       });
     } catch {
@@ -3030,34 +3064,35 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         profile: hotspotProfile,
         comment: customer.username,
         server: hotspotServer,
-        address: clientIp || customer.ip_address || undefined,
+        address: routerAddress || undefined,
         limitBytesTotal,
       });
     }
-    await resetHotspotUserCounters(credentials, customer.username).catch(() => {});
-    await disconnectHotspotActiveUser(credentials, customer.username).catch(() => {});
     await scheduleHotspotUserExpiry(credentials, {
       name: customer.username,
       expiresInSeconds,
     });
-    if (paidBindingApplied && (clientIp || customer.ip_address)) {
-      await connectHotspotUser(credentials, {
+    let routerConnected = false;
+    if (routerAddress) {
+      routerConnected = await connectHotspotUser(credentials, {
         user: customer.username,
         password: customer.password,
-        ip: clientIp || customer.ip_address!,
+        ip: routerAddress,
         macAddress: mac,
         server: hotspotServer,
       }).catch((error) => {
         logger.warn({ err: error, username: customer.username }, "[mpesa/verify] active login deferred");
+        return false;
       });
     }
     await sbUpdateStrict(
       "isp_customers",
       `id=eq.${customer.id}&admin_id=eq.${adminId}`,
-      { status: "active", updated_at: new Date().toISOString() },
+      { status: "active", ip_address: routerAddress || null, updated_at: new Date().toISOString() },
     );
     res.json({
       ok: true,
+      connected: routerConnected,
       transaction_id: transaction.id,
       router: routerRow.name,
       credentials: { username: customer.username, password: customer.password },

@@ -312,6 +312,8 @@ export default function HotspotLogin() {
   const [tvDeviceChoice, setTvDeviceChoice] = useState("");
   const [tvMacAddress, setTvMacAddress] = useState(portalContext.mac);
   const [tvDeviceName, setTvDeviceName] = useState("");
+  const [showTvSuccess, setShowTvSuccess] = useState(false);
+  const [paidAccessExpiresAt, setPaidAccessExpiresAt] = useState<string | null>(null);
   const [tvPlanId, setTvPlanId] = useState("");
   const [tvPhone, setTvPhone] = useState("");
   const [tvDialogError, setTvDialogError] = useState("");
@@ -325,6 +327,7 @@ export default function HotspotLogin() {
   const [paymentFailed, setPaymentFailed] = useState(false);
   const [hotspotCredentials, setHotspotCredentials] = useState<HotspotCredentials | null>(null);
   const bindingInFlight = useRef(false);
+  const statusPollInFlight = useRef(false);
   const [mpesaStatus, setMpesaStatus] = useState<{
     configured: boolean;
     env: string;
@@ -348,6 +351,7 @@ export default function HotspotLogin() {
   const [troubleshootMessage, setTroubleshootMessage] = useState("");
   const [troubleshootAction, setTroubleshootAction] = useState<"check" | "login" | null>(null);
   const troubleshootInFlight = useRef(false);
+  const autoTroubleshootKey = useRef("");
   const [mpesaMessage, setMpesaMessage] = useState("");
   const [mpesaReconnectLoading, setMpesaReconnectLoading] = useState(false);
   const [mpesaReconnectError, setMpesaReconnectError] = useState("");
@@ -435,13 +439,16 @@ export default function HotspotLogin() {
           ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
           mac_address: deviceMacAddress,
           device_name: deviceName,
-          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+          ...(paymentMode === "tv" ? { target_device: true } : portalContext.ip ? { client_ip: portalContext.ip } : {}),
         }),
       });
       const accessData = await accessResponse.json() as {
         ok?: boolean;
         error?: string;
         credentials?: HotspotCredentials;
+        connected?: boolean;
+        expires_at?: string;
+        message?: string;
       };
       if (!accessResponse.ok || !accessData.ok || !accessData.credentials?.username || !accessData.credentials.password) {
         throw new Error(accessData.error || "Payment confirmed, but the hotspot router could not be updated yet.");
@@ -451,20 +458,26 @@ export default function HotspotLogin() {
       setLoginPassword(accessData.credentials.password);
       storeHotspotCredentials(loginCredentialsStorageKey, accessData.credentials);
       setLoginCredentialsLocked(true);
-      setAccessReady(true);
+      const connected = accessData.connected === true;
+      setAccessReady(connected);
+      setPaidAccessExpiresAt(accessData.expires_at ?? null);
+      setShowTvSuccess(connected && paymentMode === "tv");
       setPaymentConfirmed(true);
-      setPayError(null);
-      return true;
+      setPayError(connected
+        ? null
+        : accessData.message || "Payment is confirmed, but the router has not confirmed this device's login yet.");
+      return connected;
     } catch (error) {
       setPaymentConfirmed(true);
       setAccessReady(false);
+      setShowTvSuccess(false);
       setPayError(error instanceof Error ? error.message : "The hotspot router could not be updated yet.");
       return false;
     } finally {
       setAccessRetrying(false);
       bindingInFlight.current = false;
     }
-  }, [adminId, deviceMacAddress, deviceName, loginCredentialsStorageKey, portalContext.ip]);
+  }, [adminId, deviceMacAddress, deviceName, loginCredentialsStorageKey, paymentMode, portalContext.ip]);
 
   useEffect(() => {
     if (!checkoutId || paymentConfirmed || paymentFailed) return;
@@ -477,25 +490,33 @@ export default function HotspotLogin() {
         clearInterval(interval);
         return;
       }
+      if (statusPollInFlight.current) return;
+      statusPollInFlight.current = true;
       try {
         const res = await fetch(hotspotApiUrl(`/api/mpesa/status?checkout_id=${encodeURIComponent(checkoutId)}`));
         const data = await res.json();
         if (data.paid && !bindingInFlight.current) {
           bindingInFlight.current = true;
           setPaymentConfirmed(true);
-          if (await bindPaidHotspotAccess(checkoutId)) clearInterval(interval);
+          clearInterval(interval);
+          await bindPaidHotspotAccess(checkoutId);
         } else if (data.status === "failed") {
           setPayError(data.failureReason || "M-Pesa cancelled or declined the payment prompt.");
           setPaymentFailed(true);
           clearInterval(interval);
         }
-      } catch {}
-    }, 3000);
+      } catch {
+        // Keep polling through brief network failures.
+      } finally {
+        statusPollInFlight.current = false;
+      }
+    }, 1000);
     return () => clearInterval(interval);
   }, [checkoutId, paymentConfirmed, paymentFailed, adminId, bindPaidHotspotAccess]);
 
   useEffect(() => {
     if (!accessReady) return;
+    if (paymentMode === "tv") return;
     const destination = portalContext.linkLogin || portalContext.linkOrig;
     if (!/^https?:\/\//i.test(destination) || !hotspotCredentials) {
       setActiveTab("login");
@@ -511,7 +532,7 @@ export default function HotspotLogin() {
       1200,
     );
     return () => window.clearTimeout(redirectTimer);
-  }, [accessReady, hotspotCredentials]);
+  }, [accessReady, hotspotCredentials, paymentMode]);
 
   const startPayment = async (options: {
     plan: Plan;
@@ -519,15 +540,17 @@ export default function HotspotLogin() {
     macValue: string;
     deviceNameValue?: string;
     deviceRouterId?: number;
+    targetDevice?: boolean;
   }) => {
-    const { plan, phoneValue, macValue, deviceNameValue = "", deviceRouterId } = options;
+    const { plan, phoneValue, macValue, deviceNameValue = "", deviceRouterId, targetDevice = false } = options;
     const macAddress = normalizeMacAddress(macValue);
     const normalizedDeviceName = deviceNameValue.trim().replace(/\s+/g, " ").slice(0, 64);
     setSelectedPlan(plan);
+    setPaymentMode(targetDevice ? "tv" : "data");
     setPhone(phoneValue);
     setDeviceMacAddress(macAddress);
     setDeviceName(normalizedDeviceName);
-    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setAccessReady(false); setHotspotCredentials(null); setPollTimedOut(false);
+    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setAccessReady(false); setShowTvSuccess(false); setPaidAccessExpiresAt(null); setHotspotCredentials(null); setPollTimedOut(false);
     bindingInFlight.current = false;
     try {
       const intentResponse = await fetch(hotspotApiUrl("/api/mpesa/intent"), {
@@ -542,7 +565,7 @@ export default function HotspotLogin() {
           ...(macAddress ? { mac_address: macAddress } : {}),
           ...(normalizedDeviceName ? { device_name: normalizedDeviceName } : {}),
           ...(deviceRouterId ? { device_router_id: deviceRouterId } : {}),
-          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+          ...(!targetDevice && portalContext.ip ? { client_ip: portalContext.ip } : {}),
         }),
       });
       const intentData = await intentResponse.json() as { ok?: boolean; error?: string; paymentIntent?: string; amount?: number; deviceMacAddress?: string };
@@ -639,6 +662,7 @@ export default function HotspotLogin() {
       macValue: macAddress,
       deviceNameValue: tvDeviceName,
       deviceRouterId: tvDevices.find(item => item.macAddress === macAddress)?.routerId,
+      targetDevice: true,
     });
   };
 
@@ -741,6 +765,103 @@ export default function HotspotLogin() {
       return null;
     }
   };
+
+  useEffect(() => {
+    if (!adminId || !portalContext.mac) return;
+    const lookupKey = `${adminId}:${portalContext.mac}`;
+    if (autoTroubleshootKey.current === lookupKey) return;
+    autoTroubleshootKey.current = lookupKey;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const res = await fetch(hotspotApiUrl("/api/customers/hotspot-troubleshoot"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ adminId, action: "check", mac_address: portalContext.mac }),
+        });
+        const data = await res.json() as {
+          found?: boolean;
+          status?: "active" | "expired" | "not_found" | "unavailable";
+          expiresAt?: string | null;
+          planName?: string | null;
+          username?: string | null;
+          customer?: { name?: string | null };
+        };
+        if (
+          cancelled ||
+          data.found !== true ||
+          (data.status !== "active" && data.status !== "expired")
+        ) return;
+        setLoginSession({
+          found: true,
+          status: data.status,
+          connected: false,
+          expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
+          planName: typeof data.planName === "string" ? data.planName : null,
+          username: typeof data.username === "string" ? data.username : null,
+        });
+        setLoggedInName(data.customer?.name || data.username || "your device");
+      } catch {
+        // The sign-in form remains available if automatic purchase lookup fails.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [adminId, portalContext.mac]);
+
+  useEffect(() => {
+    if (!loginSession || loginSession.status !== "active" || !loginSession.expiresAt) return;
+    const expiry = Date.parse(loginSession.expiresAt);
+    if (!Number.isFinite(expiry)) return;
+    let timer = 0;
+    const expireWhenDue = () => {
+      const remaining = expiry - Date.now();
+      if (remaining > 0) {
+        timer = window.setTimeout(expireWhenDue, Math.min(remaining, 2_147_000_000));
+        return;
+      }
+      setLoginSession(current =>
+        current?.expiresAt === loginSession.expiresAt
+          ? { ...current, status: "expired", connected: false }
+          : current,
+      );
+      setLoginSuccess(false);
+    };
+    expireWhenDue();
+    return () => window.clearTimeout(timer);
+  }, [loginSession?.expiresAt, loginSession?.status]);
+
+  useEffect(() => {
+    if (!accessReady || !paidAccessExpiresAt) return;
+    const expiry = Date.parse(paidAccessExpiresAt);
+    if (!Number.isFinite(expiry)) return;
+    let timer = 0;
+    const expireWhenDue = () => {
+      const remaining = expiry - Date.now();
+      if (remaining > 0) {
+        timer = window.setTimeout(expireWhenDue, Math.min(remaining, 2_147_000_000));
+        return;
+      }
+      setShowTvSuccess(false);
+      setAccessReady(false);
+      setPaymentConfirmed(false);
+      setStkSent(false);
+      setCheckoutId(null);
+      setActiveTab("login");
+      setLoginSession({
+        found: true,
+        status: "expired",
+        connected: false,
+        expiresAt: paidAccessExpiresAt,
+        planName: selectedPlan?.name ?? null,
+        username: hotspotCredentials?.username ?? null,
+      });
+    };
+    expireWhenDue();
+    return () => window.clearTimeout(timer);
+  }, [accessReady, hotspotCredentials?.username, paidAccessExpiresAt, selectedPlan?.name]);
 
   const handleTroubleshoot = async () => {
     if (troubleshootInFlight.current) return;
@@ -1306,6 +1427,44 @@ export default function HotspotLogin() {
         .hp-success h3 { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
         .hp-success p { color: rgba(255,255,255,0.45); font-size: 14px; margin-bottom: 6px; }
 
+        .hp-tv-success-screen {
+          position: fixed; inset: 0; z-index: 10000;
+          display: grid; place-items: center; padding: 24px;
+          background: radial-gradient(circle at 50% 35%, rgba(139,90,43,0.2), transparent 42%), #100d0a;
+          color: #fff; text-align: center;
+        }
+        .hp-tv-success-card {
+          width: min(100%, 460px); position: relative; overflow: hidden;
+          padding: 42px 28px 30px; border-radius: 24px;
+          background: linear-gradient(145deg, rgba(255,255,255,0.08), rgba(255,255,255,0.025));
+          border: 1px solid rgba(173,121,69,0.34);
+          box-shadow: 0 28px 90px rgba(0,0,0,0.5);
+        }
+        .hp-tv-watermark {
+          position: absolute; left: 50%; top: 24px; transform: translateX(-50%);
+          white-space: nowrap; color: rgba(167,112,59,0.16);
+          font-size: clamp(15px, 5vw, 25px); font-weight: 900; letter-spacing: 0.16em;
+          pointer-events: none;
+        }
+        .hp-tv-success-icon {
+          width: 76px; height: 76px; display: grid; place-items: center;
+          margin: 20px auto 22px; border-radius: 50%;
+          background: rgba(147,96,48,0.16); border: 1px solid rgba(182,127,72,0.48);
+          color: #c89057; box-shadow: 0 0 44px rgba(147,96,48,0.2);
+        }
+        .hp-tv-success-brand {
+          margin: 0 0 9px; color: #bd8957; font-size: 10px; font-weight: 900;
+          letter-spacing: 0.2em;
+        }
+        .hp-tv-success-card h1 { margin: 0 0 10px; font-size: clamp(28px, 7vw, 38px); font-weight: 850; }
+        .hp-tv-success-card p { color: rgba(255,255,255,0.62); font-size: 14px; line-height: 1.6; }
+        .hp-tv-success-card .hp-tv-expiry { margin: 8px 0 22px; color: rgba(255,255,255,0.42); font-size: 12px; }
+        .hp-tv-success-card .hp-tv-dismiss {
+          min-width: 130px; padding: 11px 20px; border-radius: 12px;
+          border: 1px solid rgba(182,127,72,0.45); background: rgba(147,96,48,0.2);
+          color: #f2d7b8; font: inherit; font-weight: 750; cursor: pointer;
+        }
+
         .hp-secured {
           display: flex; align-items: center; justify-content: center; gap: 5px;
           margin-top: 14px; font-size: 11px; color: rgba(255,255,255,0.2); font-weight: 500;
@@ -1359,6 +1518,22 @@ export default function HotspotLogin() {
       `}</style>
 
       <div className="hp-root">
+        {showTvSuccess && paymentMode === "tv" && accessReady && (
+          <div className="hp-tv-success-screen" role="status" aria-live="polite">
+            <div className="hp-tv-success-card">
+              <div className="hp-tv-watermark" aria-hidden="true">OCHOLASUPERNET</div>
+              <div className="hp-tv-success-icon"><CheckCircle2 size={38} strokeWidth={1.8} /></div>
+              <p className="hp-tv-success-brand">OCHOLASUPERNET</p>
+              <h1>You’re logged in.</h1>
+              <p>{deviceName || "Your TV"} is connected to the hotspot.</p>
+              {selectedPlan && <p>Package: <strong>{selectedPlan.name}</strong></p>}
+              {paidAccessExpiresAt && (
+                <p className="hp-tv-expiry">Access expires {formatSessionExpiry(paidAccessExpiresAt)}.</p>
+              )}
+              <button className="hp-tv-dismiss" onClick={() => setShowTvSuccess(false)}>Done</button>
+            </div>
+          </div>
+        )}
         {/* Ambient background orbs */}
         <div className="hp-bg-orb" style={{ width: 400, height: 400, top: -100, left: -100, background: "var(--isp-accent-glow)" }} />
         <div className="hp-bg-orb" style={{ width: 350, height: 350, bottom: -80, right: -80, background: "var(--isp-accent-glow)", animationDelay: "4s" }} />
@@ -1419,7 +1594,7 @@ export default function HotspotLogin() {
                         </div>
                           <h3>{accessReady ? (isTvMode ? "TV is ready to stream!" : "Device connected!") : "Payment Confirmed"}</h3>
                          <p>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</p>
-                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? "Your device has been authorized by the hotspot. Use the credentials below for the next sign-in." : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
+                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? (isTvMode ? "Your TV session was confirmed by the hotspot." : "Your device has been authorized by the hotspot. Use the credentials below for the next sign-in.") : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
                           {hotspotCredentials && (
                             <div style={{ display: "grid", gap: 8, textAlign: "left", margin: "0 auto 16px", maxWidth: 320 }}>
                               <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)" }}>
@@ -1447,10 +1622,14 @@ export default function HotspotLogin() {
                         <button className="hp-btn hp-btn-ghost" disabled={accessRetrying} style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
                           onClick={() => {
                             const destination = portalContext.linkOrig || portalContext.linkLogin;
+                            if (accessReady && isTvMode) {
+                              setShowTvSuccess(true);
+                              return;
+                            }
                             if (accessReady && /^https?:\/\//i.test(destination)) window.location.assign(destination);
                             else if (checkoutId && !accessRetrying) { bindingInFlight.current = true; void bindPaidHotspotAccess(checkoutId, true); }
                           }}>
-                          {accessReady ? "Continue online" : accessRetrying ? "Retrying connection…" : "Retry connection"}
+                          {accessReady ? (isTvMode ? "Show login confirmation" : "Continue online") : accessRetrying ? "Retrying connection…" : "Retry connection"}
                         </button>
                       </>
                     ) : paymentFailed ? (

@@ -2029,10 +2029,17 @@ function validRouterMac(value: unknown): string {
  */
 export async function fetchHotspotConnectedDevices(
   creds: RouterCredentials,
+  targetMacAddress?: string,
 ): Promise<HotspotConnectedDevice[]> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const targetMac = validRouterMac(targetMacAddress);
     const byMac = new Map<string, HotspotConnectedDevice>();
+    const hasTargetAddress = (): boolean => {
+      if (!targetMac) return false;
+      const target = byMac.get(targetMac);
+      return !!target?.address;
+    };
     const add = (row: Record<string, string>, source: HotspotConnectedDevice["source"]): void => {
       const mac = validRouterMac(row["mac-address"]);
       const reportedName = String(
@@ -2043,7 +2050,8 @@ export async function fetchHotspotConnectedDevices(
       if (!mac) return;
       const address = String(row.address ?? "").trim();
       const name = (reportedName || `Network device ${mac}`).slice(0, 64);
-      if (!byMac.has(mac) || source === "hotspot") {
+      const previous = byMac.get(mac);
+      if (!previous || source === "hotspot" || (!previous.address && address)) {
         byMac.set(mac, { name, macAddress: mac, address, source });
       }
     };
@@ -2054,6 +2062,7 @@ export async function fetchHotspotConnectedDevices(
         ms,
       ) as Record<string, string>[];
       for (const row of Array.isArray(rows) ? rows : []) add(row, "hotspot");
+      if (hasTargetAddress()) return [...byMac.values()];
     } catch {
       /* A router may expose DHCP but not the hotspot active table. */
     }
@@ -2064,6 +2073,7 @@ export async function fetchHotspotConnectedDevices(
         ms,
       ) as Record<string, string>[];
       for (const row of Array.isArray(rows) ? rows : []) add(row, "dhcp");
+      if (hasTargetAddress()) return [...byMac.values()];
     } catch {
       /* DHCP is optional on some RouterOS hotspot installations. */
     }
@@ -2074,6 +2084,7 @@ export async function fetchHotspotConnectedDevices(
         ms,
       ) as Record<string, string>[];
       for (const row of Array.isArray(rows) ? rows : []) add(row, "host");
+      if (hasTargetAddress()) return [...byMac.values()];
     } catch {
       /* Host entries are optional on non-hotspot RouterOS installations. */
     }
@@ -2090,6 +2101,27 @@ export async function fetchHotspotConnectedDevices(
 
     return [...byMac.values()].sort((a, b) => a.name.localeCompare(b.name));
   });
+}
+
+export function hotspotDeviceAddressForMac(
+  devices: ReadonlyArray<Pick<HotspotConnectedDevice, "macAddress" | "address">>,
+  macAddress: string,
+): string | null {
+  const targetMac = validRouterMac(macAddress);
+  if (!targetMac) return null;
+  const match = devices.find((device) =>
+    validRouterMac(device.macAddress) === targetMac && String(device.address ?? "").trim(),
+  );
+  return match ? String(match.address).trim() : null;
+}
+
+export async function resolveHotspotClientIpByMac(
+  creds: RouterCredentials,
+  macAddress: string,
+): Promise<string | null> {
+  if (!validRouterMac(macAddress)) return null;
+  const devices = await fetchHotspotConnectedDevices(creds, macAddress);
+  return hotspotDeviceAddressForMac(devices, macAddress);
 }
 
 export interface ActivePPPoESession {
@@ -2741,9 +2773,21 @@ export async function disconnectHotspotActiveUser(
 export async function connectHotspotUser(
   creds: RouterCredentials,
   opts: { user: string; password: string; ip: string; macAddress: string; server?: string },
-): Promise<void> {
+): Promise<boolean> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const readActive = async (): Promise<Record<string, string>[]> => {
+      const rows = await withTimeout(
+        conn.write(["/ip/hotspot/active/print", `?user=${opts.user}`, "=.proplist=user,address,mac-address"]),
+        ms,
+      );
+      return Array.isArray(rows) ? rows as Record<string, string>[] : [];
+    };
+    const isTargetSessionActive = (rows: Record<string, string>[]): boolean =>
+      hotspotActiveSessionMatchesDevice(rows, opts);
+
+    if (isTargetSessionActive(await readActive())) return true;
+
     const command = [
       "/ip/hotspot/active/login",
       `=user=${opts.user}`,
@@ -2753,7 +2797,23 @@ export async function connectHotspotUser(
     ];
     if (opts.server) command.push(`=server=${opts.server}`);
     await withTimeout(conn.write(command), ms);
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (isTargetSessionActive(await readActive())) return true;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return false;
   });
+}
+
+export function hotspotActiveSessionMatchesDevice(
+  sessions: ReadonlyArray<Record<string, string>>,
+  opts: { user: string; macAddress: string },
+): boolean {
+  const targetMac = validRouterMac(opts.macAddress);
+  return !!targetMac && sessions.some((session) =>
+    session.user === opts.user && validRouterMac(session["mac-address"]) === targetMac,
+  );
 }
 
 /**
