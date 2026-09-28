@@ -55,6 +55,8 @@ case "$name" in
             ;;
           esac
         fi
+      elif [ "${2:-}" = "--property=ExecMainStartTimestamp" ]; then
+        echo "${VPN_TEST_START_TIMESTAMP:-2100-01-01 00:00:00 UTC}"
       fi
     fi
     ;;
@@ -156,7 +158,8 @@ run_scenario() {
   local command_log="${WORK_DIR}/${scenario}/commands.log"
   local state_file="${WORK_DIR}/${scenario}/states"
   mkdir -p "${WORK_DIR}/${scenario}"
-  : > "$state_file"
+  [ -e "$state_file" ] || : > "$state_file"
+  : > "$command_log"
   if env \
     PATH="${MOCK_BIN}:${PATH}" \
     VPN_BOOTSTRAP_ROOT="$root" \
@@ -228,5 +231,72 @@ assert_contains "$SCENARIO_LOG" "ss <-H> <-lnt>"
 assert_contains "$SCENARIO_OUTPUT" "Primary OpenVPN: TCP 1196 on 10.8.5.0/24"
 assert_contains "$SCENARIO_OUTPUT" "Backup OpenVPN:  TCP 1197 on 10.8.6.0/24"
 echo "PASS: clean host starts modern units and verifies both tunnel addresses and listeners"
+
+unchanged_root="$(prepare_root modern-unchanged)"
+run_scenario modern-unchanged "$unchanged_root"
+if [ "$SCENARIO_STATUS" -ne 0 ]; then
+  echo "FAIL: initial modern unchanged setup failed" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+rm -f \
+  "${unchanged_root}/var/lib/openvpn/ochola-router-management/ochola-router.sha256" \
+  "${unchanged_root}/var/lib/openvpn/ochola-router-management/ochola-router-backup.sha256"
+run_scenario modern-unchanged "$unchanged_root"
+if [ "$SCENARIO_STATUS" -ne 0 ]; then
+  echo "FAIL: unchanged modern deployment failed" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+assert_contains "$SCENARIO_OUTPUT" "Adopting healthy openvpn-server@ochola-router;"
+assert_contains "$SCENARIO_OUTPUT" "Adopting healthy openvpn-server@ochola-router-backup;"
+assert_not_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn-server@ochola-router>"
+assert_not_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn-server@ochola-router-backup>"
+echo "PASS: healthy modern units are preserved on unchanged deployments"
+
+config_update_root="$(prepare_root modern-config-update)"
+run_scenario modern-config-update "$config_update_root"
+if [ "$SCENARIO_STATUS" -ne 0 ]; then
+  echo "FAIL: initial config-update setup failed" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+old_cert_dir="${config_update_root}/etc/letsencrypt/live/isplatty.org-wildcard"
+new_cert_dir="${config_update_root}/etc/letsencrypt/live/isplatty.org-required-hosts"
+mkdir -p "$new_cert_dir"
+cp "$old_cert_dir/fullchain.pem" "$new_cert_dir/fullchain.pem"
+cp "$old_cert_dir/privkey.pem" "$new_cert_dir/privkey.pem"
+cp "$old_cert_dir/chain.pem" "$new_cert_dir/chain.pem"
+rm -rf "$old_cert_dir"
+run_scenario modern-config-update "$config_update_root"
+if [ "$SCENARIO_STATUS" -ne 0 ]; then
+  echo "FAIL: config update did not restart and verify modern units" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+assert_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn-server@ochola-router>"
+assert_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn-server@ochola-router-backup>"
+assert_contains "${config_update_root}/etc/openvpn/server/ochola-router.conf" "$new_cert_dir/fullchain.pem"
+echo "PASS: changed modern config paths are applied by restarting both units"
+
+cert_update_root="$(prepare_root modern-cert-update)"
+run_scenario modern-cert-update "$cert_update_root"
+if [ "$SCENARIO_STATUS" -ne 0 ]; then
+  echo "FAIL: initial certificate-update setup failed" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+printf 'renewed certificate\n' > "${cert_update_root}/etc/letsencrypt/live/isplatty.org-wildcard/fullchain.pem"
+printf 'renewed private key\n' > "${cert_update_root}/etc/letsencrypt/live/isplatty.org-wildcard/privkey.pem"
+printf 'renewed chain\n' > "${cert_update_root}/etc/letsencrypt/live/isplatty.org-wildcard/chain.pem"
+run_scenario modern-cert-update "$cert_update_root"
+if [ "$SCENARIO_STATUS" -ne 0 ]; then
+  echo "FAIL: certificate update did not restart and verify modern units" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+assert_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn-server@ochola-router>"
+assert_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn-server@ochola-router-backup>"
+echo "PASS: renewed certificate material is applied by restarting both units"
 
 echo "All router-management VPN bootstrap tests passed."

@@ -98,9 +98,18 @@ fi
 echo "[vpn-bootstrap] Using public certificate from ${CERT_DIR}"
 
 $SUDO install -d -m 700 "$SERVER_DIR"
+$SUDO install -d -m 700 "$(rooted_path /var/lib/openvpn/ochola-router-management)"
 $SUDO install -d -m 755 "$(rooted_path /var/log/openvpn)"
 $SUDO install -d -m 700 "${SERVER_DIR}/ochola-router-ccd"
 $SUDO install -d -m 700 "${SERVER_DIR}/ochola-router-backup-ccd"
+
+CERT_FINGERPRINT="$(
+  {
+    $SUDO sha256sum "$CERT_FILE" | awk '{print $1}'
+    $SUDO sha256sum "$KEY_FILE" | awk '{print $1}'
+    $SUDO sha256sum "$CA_FILE" | awk '{print $1}'
+  } | sha256sum | awk '{print $1}'
+)"
 
 # The API readiness check uses this path for Easy-RSA. Debian packages it
 # under /usr/share/easy-rsa, so expose the expected stable path without
@@ -152,12 +161,6 @@ write_config() {
   local status="$7"
   local authfile="$8"
 
-  if [ -s "$config" ]; then
-    echo "[vpn-bootstrap] Rewriting existing dedicated config ${config}"
-  else
-    echo "[vpn-bootstrap] Creating dedicated config ${config}"
-  fi
-
   local tmp
   tmp="$(mktemp)"
   trap 'rm -f "$tmp"' RETURN
@@ -188,11 +191,26 @@ auth SHA1
 status ${status}
 verb 3
 EOF
-  $SUDO install -m 600 "$tmp" "$config"
+
+  CONFIG_FINGERPRINT="$(sha256sum "$tmp" | awk '{print $1}')"
+  if [ -s "$config" ] && $SUDO cmp -s "$tmp" "$config"; then
+    echo "[vpn-bootstrap] Dedicated config is unchanged: ${config}"
+    CONFIG_UNCHANGED=1
+  else
+    CONFIG_UNCHANGED=0
+    if [ -s "$config" ]; then
+      echo "[vpn-bootstrap] Updating dedicated config ${config}"
+    else
+      echo "[vpn-bootstrap] Creating dedicated config ${config}"
+    fi
+    $SUDO install -m 600 "$tmp" "$config"
+  fi
   rm -f "$tmp"
   trap - RETURN
 }
 
+CONFIG_FINGERPRINT=""
+CONFIG_UNCHANGED=0
 write_config \
   "${SERVER_DIR}/ochola-router.conf" \
   "1196" \
@@ -202,6 +220,8 @@ write_config \
   "${OVPN_DIR}/router-ipp.txt" \
   "/var/log/openvpn/ochola-router-status.log" \
   "${OVPN_DIR}/router-passwd"
+PRIMARY_CONFIG_FINGERPRINT="$CONFIG_FINGERPRINT"
+PRIMARY_CONFIG_UNCHANGED="$CONFIG_UNCHANGED"
 
 write_config \
   "${SERVER_DIR}/ochola-router-backup.conf" \
@@ -212,6 +232,8 @@ write_config \
   "${OVPN_DIR}/router-backup-ipp.txt" \
   "/var/log/openvpn/ochola-router-backup-status.log" \
   "${OVPN_DIR}/router-backup-passwd"
+BACKUP_CONFIG_FINGERPRINT="$CONFIG_FINGERPRINT"
+BACKUP_CONFIG_UNCHANGED="$CONFIG_UNCHANGED"
 
 # Keep the dedicated services separate from any legacy OpenVPN instance.
 $SUDO systemctl daemon-reload
@@ -246,6 +268,51 @@ wait_for_management_tunnel() {
   return 1
 }
 
+save_applied_fingerprints() {
+  local stem="$1"
+  local config_fingerprint="$2"
+  local state_file pending_file state_tmp
+
+  state_file="$(rooted_path "/var/lib/openvpn/ochola-router-management/${stem}.sha256")"
+  pending_file="$(rooted_path "/var/lib/openvpn/ochola-router-management/${stem}.pending")"
+  state_tmp="$(mktemp)"
+  printf '%s %s\n' "$config_fingerprint" "$CERT_FINGERPRINT" > "$state_tmp"
+  $SUDO install -m 600 "$state_tmp" "$state_file"
+  $SUDO rm -f "$pending_file"
+  rm -f "$state_tmp"
+}
+
+save_pending_fingerprints() {
+  local stem="$1"
+  local config_fingerprint="$2"
+  local pending_file pending_tmp
+
+  pending_file="$(rooted_path "/var/lib/openvpn/ochola-router-management/${stem}.pending")"
+  pending_tmp="$(mktemp)"
+  printf '%s %s\n' "$config_fingerprint" "$CERT_FINGERPRINT" > "$pending_tmp"
+  $SUDO install -m 600 "$pending_tmp" "$pending_file"
+  rm -f "$pending_tmp"
+}
+
+certificate_may_be_newer_than_service() {
+  local unit="$1"
+  local started_at started_epoch file modified_epoch
+
+  started_at="$($SUDO systemctl show --property=ExecMainStartTimestamp --value "$unit" 2>/dev/null || true)"
+  if [ -z "$started_at" ]; then
+    return 0
+  fi
+  started_epoch="$(date -d "$started_at" +%s 2>/dev/null)" || return 0
+
+  for file in "$CERT_FILE" "$KEY_FILE" "$CA_FILE"; do
+    modified_epoch="$($SUDO stat -c %Y "$file" 2>/dev/null)" || return 0
+    if [ "$modified_epoch" -gt "$started_epoch" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 show_management_diagnostics() {
   local stem="$1"
   local device="$2"
@@ -267,10 +334,12 @@ ensure_management_service() {
   local network="$3"
   local address="$4"
   local port="$5"
+  local config_fingerprint="$6"
+  local config_unchanged="$7"
   local modern="openvpn-server@${stem}"
   local legacy="openvpn@${stem}"
   local legacy_config="${OVPN_DIR}/${stem}.conf"
-  local modern_state legacy_state
+  local modern_state legacy_state state_file pending_file applied_config_fingerprint applied_cert_fingerprint
 
   modern_state="$(unit_state "$modern")"
   legacy_state="$(unit_state "$legacy")"
@@ -296,6 +365,36 @@ ensure_management_service() {
 
   if [ "$modern_state" = "active" ]; then
     $SUDO systemctl enable "$modern"
+    state_file="$(rooted_path "/var/lib/openvpn/ochola-router-management/${stem}.sha256")"
+    pending_file="$(rooted_path "/var/lib/openvpn/ochola-router-management/${stem}.pending")"
+    applied_config_fingerprint=""
+    applied_cert_fingerprint=""
+    if $SUDO test -r "$state_file"; then
+      read -r applied_config_fingerprint applied_cert_fingerprint \
+        <<<"$($SUDO cat "$state_file" 2>/dev/null || true)"
+    fi
+
+    if ! $SUDO test -e "$pending_file" &&
+       [ "$applied_config_fingerprint" = "$config_fingerprint" ] &&
+       [ "$applied_cert_fingerprint" = "$CERT_FINGERPRINT" ] &&
+       wait_for_management_tunnel "$device" "$address" "$port"
+    then
+      echo "[vpn-bootstrap] Preserving healthy ${modern}; config, certificate, address, and listener are unchanged."
+      return 0
+    fi
+
+    if ! $SUDO test -e "$pending_file" &&
+       [ -z "$applied_config_fingerprint" ] &&
+       [ "$config_unchanged" = "1" ] &&
+       ! certificate_may_be_newer_than_service "$modern" &&
+       wait_for_management_tunnel "$device" "$address" "$port"
+    then
+      echo "[vpn-bootstrap] Adopting healthy ${modern}; its config and certificate predate the running service."
+      save_applied_fingerprints "$stem" "$config_fingerprint"
+      return 0
+    fi
+
+    save_pending_fingerprints "$stem" "$config_fingerprint"
     if ! $SUDO systemctl restart "$modern"; then
       echo "ERROR: Could not restart ${modern}." >&2
       show_management_diagnostics "$stem" "$device"
@@ -306,6 +405,7 @@ ensure_management_service() {
       show_management_diagnostics "$stem" "$device"
       return 1
     fi
+    save_applied_fingerprints "$stem" "$config_fingerprint"
     return 0
   fi
 
@@ -332,10 +432,15 @@ ensure_management_service() {
     show_management_diagnostics "$stem" "$device"
     return 1
   fi
+  save_applied_fingerprints "$stem" "$config_fingerprint"
 }
 
-ensure_management_service "ochola-router" "tun-router" "10.8.5.0" "10.8.5.1" "1196"
-ensure_management_service "ochola-router-backup" "tun-router-bkp" "10.8.6.0" "10.8.6.1" "1197"
+ensure_management_service \
+  "ochola-router" "tun-router" "10.8.5.0" "10.8.5.1" "1196" \
+  "$PRIMARY_CONFIG_FINGERPRINT" "$PRIMARY_CONFIG_UNCHANGED"
+ensure_management_service \
+  "ochola-router-backup" "tun-router-bkp" "10.8.6.0" "10.8.6.1" "1197" \
+  "$BACKUP_CONFIG_FINGERPRINT" "$BACKUP_CONFIG_UNCHANGED"
 
 # Permit the two shared listeners and the stable per-router public range.
 $SUDO iptables -C INPUT -p tcp --dport 1196 -j ACCEPT 2>/dev/null || \
