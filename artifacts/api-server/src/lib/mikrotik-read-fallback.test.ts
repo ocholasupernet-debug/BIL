@@ -4,8 +4,10 @@ import test from "node:test";
 import { RouterOSAPI } from "node-routeros";
 import {
   buildManagedResetPlan,
+  connectHotspotUser,
   ensureHotspotServerAddressPool,
   ensureRouterFileDirectory,
+  resolveHotspotClientIpByMac,
   fetchBridgePortLayout,
   pingRouter,
   testConnection,
@@ -86,6 +88,70 @@ function routerCredentials(port: number, alternateUsernames?: string[]) {
     requestTimeoutMs: 1_000,
   };
 }
+
+test("a matching paid hotspot session is reused without disconnecting it", async () => {
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/print") {
+      return [{ user: "tv-package", address: "10.0.0.88", "mac-address": "AA:BB:CC:DD:EE:FF" }];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    const connected = await connectHotspotUser(routerCredentials(port), {
+      user: "tv-package",
+      password: "test-password",
+      ip: "10.0.0.88",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    });
+
+    assert.equal(connected, true);
+    assert.deepEqual(commands.map(({ command }) => command[0]), ["/ip/hotspot/active/print"]);
+  });
+});
+
+test("hotspot login uses the selected device IP and confirms its MAC session", async () => {
+  let loginSeen = false;
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/login") {
+      loginSeen = true;
+      return [];
+    }
+    if (command[0] === "/ip/hotspot/active/print" && loginSeen) {
+      return [{ user: "tv-package", address: "10.0.0.88", "mac-address": targetMac }];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    const connected = await connectHotspotUser(routerCredentials(port), {
+      user: "tv-package",
+      password: "test-password",
+      ip: "10.0.0.88",
+      macAddress: targetMac,
+    });
+
+    assert.equal(connected, true);
+    const loginCommand = commands.find(({ command }) => command[0] === "/ip/hotspot/active/login")?.command;
+    assert.ok(loginCommand?.includes("=ip=10.0.0.88"));
+    assert.ok(loginCommand?.includes(`=mac-address=${targetMac}`));
+    assert.equal(commands.some(({ command }) => command[0] === "/ip/hotspot/active/remove"), false);
+  });
+});
+
+test("target hotspot IP lookup stops once the matching MAC is found", async () => {
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/print") {
+      return [{ user: "tv-package", address: "10.0.0.88", "mac-address": "AA:BB:CC:DD:EE:FF" }];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    const address = await resolveHotspotClientIpByMac(
+      routerCredentials(port),
+      "AA:BB:CC:DD:EE:FF",
+    );
+
+    assert.equal(address, "10.0.0.88");
+    assert.deepEqual(commands.map(({ command }) => command[0]), ["/ip/hotspot/active/print"]);
+  });
+});
 
 test("RouterOS read-only checks fall back after a permission-denied probe", async (t) => {
   await t.test("ping returns identity and version from the management account", async () => {

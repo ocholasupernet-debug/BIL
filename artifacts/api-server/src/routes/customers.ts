@@ -19,6 +19,7 @@ import {
   reconcilePppoeUserAccess,
   disconnectHotspotActiveUser,
   fetchHotspotUsers,
+  resolveHotspotClientIpByMac,
   connectHotspotUser,
   removeHotspotIpBinding,
   hasPaidHotspotAccess,
@@ -907,7 +908,6 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   const adminId = Number(req.body?.adminId);
   const username = String(req.body?.username ?? "").trim();
   const password = String(req.body?.password ?? "");
-  const requestedIp = normalisePortalIp(req.body?.client_ip);
   const requestedMac = normalisePortalMac(req.body?.mac_address);
   if (!Number.isSafeInteger(adminId) || adminId < 1 || !username || !password) {
     res.status(400).json({ error: "username and password are required" });
@@ -972,7 +972,11 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   }
 
   const customerMac = normalisePortalMac(customerRow.mac_address);
-  const targetMac = requestedMac || customerMac;
+  if (customerMac && requestedMac && customerMac !== requestedMac) {
+    res.status(409).json({ error: "These hotspot credentials are linked to a different device." });
+    return;
+  }
+  const targetMac = customerMac || requestedMac;
   let activeUsers: Awaited<ReturnType<typeof fetchHotspotUsers>> = [];
   try {
     activeUsers = await fetchHotspotUsers(creds);
@@ -984,32 +988,30 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     return;
   }
 
-  const matchingDevice = activeUsers.find(user =>
-    (targetMac && normalisePortalMac(user.macAddress) === targetMac)
-    || (requestedIp && user.address === requestedIp)
-    || (!targetMac && !requestedIp && user.user === username),
-  );
   const connected = activeUsers.some(user =>
-    user.user === username && (
-      (targetMac && normalisePortalMac(user.macAddress) === targetMac)
-      || (requestedIp && user.address === requestedIp)
-    ),
+    user.user === username && !!targetMac && normalisePortalMac(user.macAddress) === targetMac,
   );
   if (!connected) {
-    const ip = requestedIp || matchingDevice?.address || normalisePortalIp(customerRow.ip_address);
+    const ip = targetMac ? await resolveHotspotClientIpByMac(creds, targetMac).catch(() => null) : null;
     if (!ip || !targetMac) {
       res.status(409).json({
-        error: "Credentials are valid, but this sign-in page did not provide the hotspot device context. Reopen it from the connected Wi-Fi network and try again.",
+        error: "Credentials are valid, but the router cannot find this device on the hotspot Wi-Fi yet. Connect the device to Wi-Fi and try again.",
       });
       return;
     }
     try {
-      await connectHotspotUser(creds, {
+      const loginAccepted = await connectHotspotUser(creds, {
         user: username,
         password,
         ip,
         macAddress: targetMac,
       });
+      if (!loginAccepted) {
+        res.status(503).json({
+          error: "The router has not confirmed this device's login yet. Please try again.",
+        });
+        return;
+      }
     } catch (error) {
       logger.warn({ err: error, adminId, routerId, username }, "[customers/hotspot-login] router login attempt failed");
       res.status(503).json({
@@ -1036,13 +1038,6 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
 function normalisePortalMac(value: unknown): string {
   const raw = String(value ?? "").trim().replace(/[:-]/g, "").toUpperCase();
   return /^[0-9A-F]{12}$/.test(raw) ? raw.match(/.{2}/g)!.join(":") : "";
-}
-
-function normalisePortalIp(value: unknown): string {
-  const raw = String(value ?? "").trim();
-  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(raw)) return "";
-  const octets = raw.split(".").map(Number);
-  return octets.every(octet => octet >= 0 && octet <= 255) ? raw : "";
 }
 
 type HotspotPurchaseTransaction = {
@@ -1265,7 +1260,6 @@ async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string
  */
 router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> => {
   const adminId = Number(req.body?.adminId);
-  const requestedIp = normalisePortalIp(req.body?.client_ip);
   const requestedMac = normalisePortalMac(req.body?.mac_address);
   const action = req.body?.action === "login" ? "login" : "check";
 
@@ -1332,37 +1326,39 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
 
   try {
     const activeUsers = await fetchHotspotUsers(creds);
-    const matchingDevice = activeUsers.find(user =>
-      normalisePortalMac(user.macAddress) === requestedMac
-      || (requestedIp && user.address === requestedIp),
-    );
     const connected = activeUsers.some(user =>
-      user.user === username && (
-        normalisePortalMac(user.macAddress) === requestedMac
-        || (requestedIp && user.address === requestedIp)
-      ),
+      user.user === username && normalisePortalMac(user.macAddress) === requestedMac,
     );
     if (connected) {
       res.json({ ...response, connected: true });
       return;
     }
 
-    const ip = requestedIp || matchingDevice?.address || normalisePortalIp(customer.ip_address);
+    const ip = await resolveHotspotClientIpByMac(creds, requestedMac);
     if (!ip) {
       res.status(409).json({
         ...response,
         ok: false,
-        error: "The hotspot could not find an IP address for this device. Reopen the Wi-Fi sign-in page and try again.",
+        error: "The router cannot find this device on the hotspot Wi-Fi yet. Connect it to Wi-Fi and try again.",
       });
       return;
     }
 
-    await connectHotspotUser(creds, {
+    const loginAccepted = await connectHotspotUser(creds, {
       user: username,
       password,
       ip,
       macAddress: requestedMac,
     });
+    if (!loginAccepted) {
+      res.status(503).json({
+        ...response,
+        ok: false,
+        retryable: true,
+        error: "The router has not confirmed this device's login yet. Tap Login now to retry.",
+      });
+      return;
+    }
     res.json({ ...response, connected: true });
   } catch (error) {
     logger.warn({ err: error, adminId, routerId, macAddress: requestedMac }, "[customers/hotspot-troubleshoot] router connection attempt failed");
