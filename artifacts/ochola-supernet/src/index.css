@@ -4490,3 +4490,168 @@ table:not([role="grid"]) td [data-technical="true"] {
   .sa-page-head { flex-direction: column; gap: 10px; }
   .sa-content { padding-inline: 12px; }
 }
+
+/* Reseller operations surface — a quiet signal room with warm paper panels,
+   strong orange action cues, and teal network health signals. */
+.reseller-dashboard {
+  gap: 20px;
+}
+.reseller-dashboard .reseller-page-header {
+  position: relative;
+  padding: 6px 0 15px 17px;
+  border-left: 3px solid var(--isp-accent);
+}
+.reseller-dashboard .reseller-page-header::after {
+  position: absolute;
+  left: 17px;
+  bottom: 0;
+  width: 110px;
+  height: 1px;
+  background: var(--isp-border);
+  content: "";
+}
+.reseller-dashboard .reseller-page-header h1 {
+  font-size: clamp(1.45rem, 2.6vw, 2rem);
+  letter-spacing: -0.055em;
+}
+.reseller-dashboard .reseller-page-header p {
+  max-width: 680px;
+  font-size: 0.83rem;
+}
+.reseller-dashboard .reseller-stat-grid {
+  gap: 12px;
+}
+.reseller-dashboard .reseller-stat-grid--activity {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.reseller-dashboard .reseller-stat-card {
+  position: relative;
+  min-height: 112px;
+  padding: 15px 16px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--metric-tone) 28%, var(--isp-border));
+  border-left: 4px solid var(--metric-tone);
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--metric-tone) 9%, var(--isp-card)), var(--isp-card) 72%);
+  box-shadow: var(--shadow-card);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.reseller-dashboard .reseller-stat-card::after {
+  position: absolute;
+  right: -22px;
+  bottom: -28px;
+  width: 92px;
+  height: 92px;
+  border: 1px solid color-mix(in srgb, var(--metric-tone) 20%, transparent);
+  border-radius: 50%;
+  content: "";
+  opacity: .65;
+}
+.reseller-dashboard .reseller-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+.reseller-dashboard .reseller-stat-card svg {
+  position: relative;
+  z-index: 1;
+  color: var(--metric-tone);
+  margin-bottom: 10px;
+}
+.reseller-dashboard .reseller-metric-label,
+.reseller-dashboard .reseller-metric-value {
+  position: relative;
+  z-index: 1;
+}
+.reseller-dashboard .reseller-metric-label {
+  letter-spacing: .07em;
+}
+.reseller-dashboard .reseller-metric-value {
+  font-size: clamp(1.05rem, 1.8vw, 1.38rem);
+  font-weight: 700;
+}
+.reseller-stat-card--green { --metric-tone: #168c78; }
+.reseller-stat-card--accent { --metric-tone: #6d7485; }
+.reseller-stat-card--teal { --metric-tone: #0b9d9a; }
+.reseller-stat-card--cyan { --metric-tone: #0786b9; }
+.reseller-stat-card--amber { --metric-tone: #c98a2e; }
+.reseller-stat-card--blue { --metric-tone: #4b6db2; }
+.reseller-stat-card--violet { --metric-tone: #81679b; }
+.reseller-live-panel {
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--isp-green) 30%, var(--isp-border)) !important;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--isp-green) 5%, var(--isp-card)), var(--isp-card) 64%) !important;
+}
+.reseller-live-panel__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: -2px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--isp-border-subtle);
+  border-radius: 8px;
+  color: var(--isp-text-muted);
+  background: color-mix(in srgb, var(--isp-inner-card) 78%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  font-variant-numeric: tabular-nums;
+}
+.reseller-live-panel__meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.reseller-live-badge {
+  min-width: 82px;
+  justify-content: center;
+  font-size: 0.68rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.reseller-live-error {
+  max-width: 150px;
+  color: var(--isp-text-sub);
+  font-size: 0.62rem;
+  line-height: 1.25;
+  text-align: right;
+}
+.reseller-dashboard .reseller-table tbody td {
+  padding-block: 12px;
+}
+
+@media (max-width: 860px) {
+  .reseller-dashboard > div > div[style*="repeat(2,minmax(0,1fr))"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+@media (max-width: 1050px) {
+  .reseller-dashboard .reseller-stat-grid--activity {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 767px) {
+  .reseller-dashboard .reseller-stat-grid--activity {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 520px) {
+  .reseller-dashboard .reseller-stat-grid--activity {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .reseller-dashboard .reseller-stat-card {
+    min-height: 98px;
+  }
+  .reseller-live-panel__meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .reseller-live-panel__head {
+    align-items: flex-start !important;
+  }
+  .reseller-live-panel__head button {
+    flex: 0 0 auto;
+  }
+}
