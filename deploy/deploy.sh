@@ -414,22 +414,28 @@ for host in vpn.isplatty.org; do
   verify_public_health "$host" || exit 1
 done
 
-PORTAL_REFRESH_MARKER="$PROJECT_DIR/deploy/portal-refresh-once.json"
-if [ -f "$PORTAL_REFRESH_MARKER" ]; then
-  echo "[12/12] Applying the requested one-time Hotspot portal refresh..."
-  node "$PROJECT_DIR/deploy/refresh-hotspot-portals-once.mjs" "$PORTAL_REFRESH_MARKER"
-fi
+ROUTER_ONESHOT_SKIP_MARKER="$PROJECT_DIR/deploy/skip-live-router-oneshots-once"
+if [ -f "$ROUTER_ONESHOT_SKIP_MARKER" ]; then
+  rm -f "$ROUTER_ONESHOT_SKIP_MARKER"
+  echo "Skipping optional one-time RouterOS operations for this deployment."
+else
+  PORTAL_REFRESH_MARKER="$PROJECT_DIR/deploy/portal-refresh-once.json"
+  if [ -f "$PORTAL_REFRESH_MARKER" ]; then
+    echo "[12/12] Applying the requested one-time Hotspot portal refresh..."
+    node "$PROJECT_DIR/deploy/refresh-hotspot-portals-once.mjs" "$PORTAL_REFRESH_MARKER"
+  fi
 
-VLAN_INSPECTION_MARKER="$PROJECT_DIR/deploy/vlan-200-inspection-once.json"
-if [ -f "$VLAN_INSPECTION_MARKER" ]; then
-  echo "[13/13] Checking the requested VLAN tag through the production read-only API..."
-  node "$PROJECT_DIR/deploy/inspect-vlan-200-once.mjs" "$VLAN_INSPECTION_MARKER"
-fi
+  VLAN_INSPECTION_MARKER="$PROJECT_DIR/deploy/vlan-200-inspection-once.json"
+  if [ -f "$VLAN_INSPECTION_MARKER" ]; then
+    echo "[13/13] Checking the requested VLAN tag through the production read-only API..."
+    node "$PROJECT_DIR/deploy/inspect-vlan-200-once.mjs" "$VLAN_INSPECTION_MARKER"
+  fi
 
-VLAN_PROVISION_RETRY_MARKER="$PROJECT_DIR/deploy/vlan-200-provisioning-retry-once.json"
-if [ -f "$VLAN_PROVISION_RETRY_MARKER" ]; then
-  echo "[14/14] Retrying the authorized VLAN 200 service provisioning..."
-  node "$PROJECT_DIR/deploy/retry-vlan-200-provisioning-once.mjs" "$VLAN_PROVISION_RETRY_MARKER"
+  VLAN_PROVISION_RETRY_MARKER="$PROJECT_DIR/deploy/vlan-200-provisioning-retry-once.json"
+  if [ -f "$VLAN_PROVISION_RETRY_MARKER" ]; then
+    echo "[14/14] Retrying the authorized VLAN 200 service provisioning..."
+    node "$PROJECT_DIR/deploy/retry-vlan-200-provisioning-once.mjs" "$VLAN_PROVISION_RETRY_MARKER"
+  fi
 fi
 
 if [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then
