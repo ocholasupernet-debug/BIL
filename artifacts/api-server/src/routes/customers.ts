@@ -1045,113 +1045,276 @@ function normalisePortalIp(value: unknown): string {
   return octets.every(octet => octet >= 0 && octet <= 255) ? raw : "";
 }
 
+type HotspotPurchaseTransaction = {
+  id: number;
+  customer_id: number | null;
+  plan_id: number | null;
+  mac_address: string | null;
+  status: string;
+  created_at: string | null;
+};
+
+type HotspotTroubleshootCustomer = Pick<
+  CustomerRow,
+  "id" | "admin_id" | "name" | "mac_address" | "username" | "password" | "plan_id" | "router_id" | "ip_address" | "status" | "expires_at"
+>;
+
+type HotspotTroubleshootStatus = "active" | "expired" | "not_found" | "unavailable";
+
+type HotspotPurchaseLookup = {
+  found: boolean;
+  status: HotspotTroubleshootStatus;
+  expiresAt: string | null;
+  planName: string | null;
+  username: string | null;
+  error?: string;
+  customer?: HotspotTroubleshootCustomer;
+  plan?: PlanRow;
+};
+
+async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string): Promise<HotspotPurchaseLookup> {
+  const macCandidates = Array.from(new Set([requestedMac, requestedMac.replace(/:/g, "")]));
+  const [directTransactions, macBoundCustomers] = await Promise.all([
+    Promise.all(macCandidates.map(mac => sbSelectStrict<HotspotPurchaseTransaction>(
+      "isp_transactions",
+      `admin_id=eq.${adminId}&mac_address=eq.${encodeURIComponent(mac)}&status=in.(completed,paid,success)&select=id,customer_id,plan_id,mac_address,status,created_at&order=created_at.desc.nullslast,id.desc&limit=25`,
+    ))).then(rows => rows.flat()),
+    Promise.all(macCandidates.map(mac => sbSelectStrict<{ id: number }>(
+      "isp_customers",
+      `admin_id=eq.${adminId}&type=eq.hotspot&mac_address=eq.${encodeURIComponent(mac)}&select=id&limit=100`,
+    ))).then(rows => rows.flat()),
+  ]);
+
+  const customerIds = Array.from(new Set(macBoundCustomers.map(customer => customer.id).filter(id => Number.isSafeInteger(id) && id > 0)));
+  const linkedTransactions = customerIds.length
+    ? await sbSelectStrict<HotspotPurchaseTransaction>(
+        "isp_transactions",
+        `admin_id=eq.${adminId}&customer_id=in.(${customerIds.join(",")})&status=in.(completed,paid,success)&select=id,customer_id,plan_id,mac_address,status,created_at&order=created_at.desc.nullslast,id.desc&limit=100`,
+      )
+    : [];
+
+  const seenTransactions = new Map<number, HotspotPurchaseTransaction>();
+  for (const transaction of [...directTransactions, ...linkedTransactions]) {
+    const rawMac = String(transaction.mac_address ?? "").trim();
+    const transactionMac = normalisePortalMac(rawMac);
+    if ((rawMac && transactionMac !== requestedMac) || (!rawMac && !customerIds.includes(Number(transaction.customer_id)))) continue;
+    seenTransactions.set(transaction.id, transaction);
+  }
+  const latestTransaction = Array.from(seenTransactions.values()).sort((left, right) => {
+    const leftTime = Date.parse(String(left.created_at ?? ""));
+    const rightTime = Date.parse(String(right.created_at ?? ""));
+    const timeDifference = (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+    return timeDifference || right.id - left.id;
+  })[0];
+
+  if (!latestTransaction) {
+    return {
+      found: false,
+      status: "not_found",
+      expiresAt: null,
+      planName: null,
+      username: null,
+      error: "No successfully purchased hotspot package was found for this device.",
+    };
+  }
+
+  const plan = latestTransaction.plan_id
+    ? (await sbSelectStrict<PlanRow>(
+        "isp_plans",
+        `id=eq.${latestTransaction.plan_id}&admin_id=eq.${adminId}&select=id,name,type,plan_type,router_id,port_id,owner_reseller_id&limit=1`,
+      ))[0]
+    : undefined;
+  if (plan && normalizePlanServiceType(plan.plan_type || plan.type) !== "hotspot") {
+    return {
+      found: false,
+      status: "not_found",
+      expiresAt: null,
+      planName: null,
+      username: null,
+      error: "No successfully purchased hotspot package was found for this device.",
+    };
+  }
+  if (!plan) {
+    return {
+      found: true,
+      status: "unavailable",
+      expiresAt: null,
+      planName: null,
+      username: null,
+      error: "The confirmed purchase was found, but its package details are unavailable. Contact support.",
+    };
+  }
+  if (!latestTransaction.customer_id) {
+    return {
+      found: true,
+      status: "unavailable",
+      expiresAt: null,
+      planName: plan.name,
+      username: null,
+      error: "The confirmed purchase has not been assigned a hotspot login yet. Contact support.",
+      plan,
+    };
+  }
+
+  const customerAdminId = plan.owner_reseller_id ?? adminId;
+  const customer = (await sbSelectStrict<HotspotTroubleshootCustomer>(
+    "isp_customers",
+    `id=eq.${latestTransaction.customer_id}&admin_id=eq.${customerAdminId}&type=eq.hotspot&select=id,admin_id,name,mac_address,username,password,plan_id,router_id,ip_address,status,expires_at&limit=1`,
+  ))[0];
+  if (!customer) {
+    return {
+      found: true,
+      status: "unavailable",
+      expiresAt: null,
+      planName: plan.name,
+      username: null,
+      error: "The confirmed purchase has no saved hotspot account. Contact support.",
+      plan,
+    };
+  }
+
+  const customerMacRaw = String(customer.mac_address ?? "").trim();
+  const customerMac = normalisePortalMac(customerMacRaw);
+  const transactionMacRaw = String(latestTransaction.mac_address ?? "").trim();
+  const transactionMac = normalisePortalMac(transactionMacRaw);
+  if (
+    (customerMacRaw && customerMac !== requestedMac)
+    || (!transactionMacRaw && customerMac !== requestedMac)
+    || (transactionMacRaw && transactionMac !== requestedMac)
+  ) {
+    return {
+      found: false,
+      status: "not_found",
+      expiresAt: null,
+      planName: null,
+      username: null,
+      error: "No successfully purchased hotspot package was found for this device.",
+    };
+  }
+  if (customer.plan_id !== latestTransaction.plan_id) {
+    return {
+      found: true,
+      status: "unavailable",
+      expiresAt: customer.expires_at,
+      planName: plan.name,
+      username: customer.username,
+      error: "The saved hotspot account does not match the latest confirmed purchase. Contact support.",
+      customer,
+      plan,
+    };
+  }
+
+  const expiresAt = customer.expires_at;
+  const expiresAtMs = expiresAt ? Date.parse(expiresAt) : NaN;
+  if (customer.status === "expired" || (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now())) {
+    return {
+      found: true,
+      status: "expired",
+      expiresAt,
+      planName: plan.name,
+      username: customer.username,
+      error: "This hotspot package has expired.",
+      customer,
+      plan,
+    };
+  }
+  if (
+    (customer.status !== "active" && customer.status !== "payment_cleared_router_pending")
+    || (expiresAt && !Number.isFinite(expiresAtMs))
+  ) {
+    return {
+      found: true,
+      status: "unavailable",
+      expiresAt,
+      planName: plan.name,
+      username: customer.username,
+      error: "This hotspot account is not active. Contact support.",
+      customer,
+      plan,
+    };
+  }
+  if (!String(customer.username ?? "").trim() || !String(customer.password ?? "")) {
+    return {
+      found: true,
+      status: "unavailable",
+      expiresAt,
+      planName: plan.name,
+      username: customer.username,
+      error: "This confirmed purchase does not have hotspot login credentials yet. Contact support.",
+      customer,
+      plan,
+    };
+  }
+
+  return {
+    found: true,
+    status: "active",
+    expiresAt,
+    planName: plan.name,
+    username: customer.username,
+    customer,
+    plan,
+  };
+}
+
 /*
  * POST /api/customers/hotspot-troubleshoot
- *
- * The browser may request this endpoint repeatedly, but each request performs
- * only one bounded RouterOS check/login attempt. The captive page supplies the
- * device MAC from RouterOS; the server resolves the matching tenant customer
- * and keeps the hotspot username/password entirely server-side.
+ * The check action reads only the latest confirmed purchase tied to this
+ * device MAC. Login re-runs that same entitlement check before using the
+ * saved RouterOS credentials; the password is never sent to the portal.
  */
 router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> => {
   const adminId = Number(req.body?.adminId);
   const requestedIp = normalisePortalIp(req.body?.client_ip);
   const requestedMac = normalisePortalMac(req.body?.mac_address);
+  const action = req.body?.action === "login" ? "login" : "check";
 
   if (!Number.isSafeInteger(adminId) || adminId < 1 || !requestedMac) {
     res.status(400).json({ ok: false, error: "ISP context and the hotspot device MAC address are required." });
     return;
   }
 
-  const macCandidates = Array.from(new Set([requestedMac, requestedMac.replace(/:/g, "")]));
-  let customer: CustomerRow | undefined;
-  for (const mac of macCandidates) {
-    const rows = await sbSelect<CustomerRow>(
-      "isp_customers",
-      `admin_id=eq.${adminId}&type=eq.hotspot&mac_address=eq.${encodeURIComponent(mac)}&select=*&limit=1`,
-    );
-    if (rows[0]) {
-      customer = rows[0];
-      break;
-    }
+  let lookup: HotspotPurchaseLookup;
+  try {
+    lookup = await lookupLatestHotspotPurchase(adminId, requestedMac);
+  } catch (error) {
+    logger.error({ err: error, adminId, macAddress: requestedMac }, "[customers/hotspot-troubleshoot] purchase lookup failed");
+    res.status(503).json({ ok: false, error: "Could not verify the latest hotspot purchase. Please try again." });
+    return;
   }
-  if (!customer) {
-    res.json({
-      ok: true,
-      status: "expired",
-      connected: false,
-      retryable: false,
-      expiresAt: null,
-      error: "No active hotspot package was found for this device.",
-    });
+
+  const customer = lookup.customer;
+  const plan = lookup.plan;
+  const response = {
+    ok: true,
+    found: lookup.found,
+    status: lookup.status,
+    connected: false,
+    retryable: false,
+    expiresAt: lookup.expiresAt,
+    planName: lookup.planName,
+    username: lookup.username,
+    customer: customer ? { name: customer.name, username: customer.username } : undefined,
+    error: lookup.error,
+  };
+  if (lookup.status !== "active" || !customer || !plan || action === "check") {
+    res.json(response);
     return;
   }
 
   const username = String(customer.username ?? "").trim();
   const password = String(customer.password ?? "");
-  if (!username || !password) {
-    res.json({
-      ok: true,
-      status: "active",
-      connected: false,
-      retryable: false,
-      expiresAt: customer.expires_at,
-      error: "This active package does not have a hotspot login assigned yet. Contact support.",
-      customer: { name: customer.name },
-    });
-    return;
-  }
-  const expiresAt = customer.expires_at;
-  const expiresAtMs = expiresAt ? Date.parse(expiresAt) : NaN;
-  const activeStatus = customer.status === "active" || customer.status === "payment_cleared_router_pending";
-  const hasActivePlan = activeStatus && Boolean(customer.plan_id) &&
-    (!Number.isFinite(expiresAtMs) || expiresAtMs > Date.now());
-  if (!hasActivePlan) {
-    res.json({
-      ok: true,
-      status: "expired",
-      connected: false,
-      retryable: false,
-      expiresAt,
-      customer: { name: customer.name, username: customer.username },
-    });
-    return;
-  }
-
-  const plan = customer.plan_id
-    ? (await sbSelect<PlanRow>(
-        "isp_plans",
-        `id=eq.${customer.plan_id}&admin_id=eq.${adminId}&select=id,router_id&limit=1`,
-      ))[0]
-    : undefined;
-  const routerId = customer.router_id ?? plan?.router_id ?? null;
+  const routerId = customer.router_id ?? plan.router_id ?? null;
   if (!routerId) {
-    res.json({
-      ok: true,
-      status: "active",
-      connected: false,
-      retryable: false,
-      expiresAt,
-      error: "Your plan is active, but it has not been linked to a hotspot router yet.",
-      customer: { name: customer.name, username: customer.username },
-    });
+    res.status(409).json({ ...response, ok: false, error: "Your active plan is not linked to a hotspot router yet." });
     return;
   }
-
-  const routerRow = (await sbSelect<RouterRow>(
+  const routerRow = (await sbSelectStrict<RouterRow>(
     "isp_routers",
     `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
   ))[0];
   if (!routerRow) {
-    res.json({
-      ok: true,
-      status: "active",
-      connected: false,
-      retryable: false,
-      expiresAt,
-      error: "Your plan is active, but its hotspot router could not be found.",
-      customer: { name: customer.name, username: customer.username },
-    });
+    res.status(409).json({ ...response, ok: false, error: "Your active plan's hotspot router could not be found." });
     return;
   }
 
@@ -1159,14 +1322,10 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
   try {
     creds = routerCredentials(routerRow);
   } catch (error) {
-    res.json({
-      ok: true,
-      status: "active",
-      connected: false,
-      retryable: false,
-      expiresAt,
+    res.status(503).json({
+      ...response,
+      ok: false,
       error: error instanceof Error ? error.message : "The hotspot router is not ready.",
-      customer: { name: customer.name, username: customer.username },
     });
     return;
   }
@@ -1184,27 +1343,16 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       ),
     );
     if (connected) {
-      res.json({
-        ok: true,
-        status: "active",
-        connected: true,
-        retryable: false,
-        expiresAt,
-        customer: { name: customer.name, username: customer.username },
-      });
+      res.json({ ...response, connected: true });
       return;
     }
 
     const ip = requestedIp || matchingDevice?.address || normalisePortalIp(customer.ip_address);
     if (!ip) {
-      res.json({
-        ok: true,
-        status: "active",
-        connected: false,
-        retryable: false,
-        expiresAt,
+      res.status(409).json({
+        ...response,
+        ok: false,
         error: "The hotspot could not find an IP address for this device. Reopen the Wi-Fi sign-in page and try again.",
-        customer: { name: customer.name, username: customer.username },
       });
       return;
     }
@@ -1215,24 +1363,14 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       ip,
       macAddress: requestedMac,
     });
-    res.json({
-      ok: true,
-      status: "active",
-      connected: true,
-      retryable: false,
-      expiresAt,
-      customer: { name: customer.name, username: customer.username },
-    });
+    res.json({ ...response, connected: true });
   } catch (error) {
     logger.warn({ err: error, adminId, routerId, macAddress: requestedMac }, "[customers/hotspot-troubleshoot] router connection attempt failed");
     res.status(503).json({
+      ...response,
       ok: false,
-      status: "active",
-      connected: false,
       retryable: true,
-      expiresAt,
-      error: "Your plan is active, but the hotspot router has not accepted the connection yet.",
-      customer: { name: customer.name, username: customer.username },
+      error: "Your plan is active, but the hotspot router has not accepted the connection yet. Tap Login now to retry.",
     });
   }
 });
