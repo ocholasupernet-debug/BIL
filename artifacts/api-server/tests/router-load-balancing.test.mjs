@@ -11,6 +11,7 @@ execFileSync("pnpm", [
 ], { stdio: "ignore" });
 const { buildLoadBalancingScript, validateLoadBalancingConfig, redactLoadBalancingScript } = await import(pathToFileURL(bundlePath).href);
 const migration = await readFile(new URL("../migrations/2026_router_load_balancing.sql", import.meta.url), "utf8");
+const protocolMigration = await readFile(new URL("../migrations/2026_router_multiwan_protocols.sql", import.meta.url), "utf8");
 const migrationRunner = await readFile(new URL("../scripts/apply-deployment-migrations.mjs", import.meta.url), "utf8");
 
 const config = {
@@ -108,12 +109,99 @@ test("accepts a stored PPPoE secret without exposing plaintext", () => {
   assert.match(script, /dst-address="1\.1\.1\.1\/32" gateway="isplatty-pppoe1"/);
 });
 
+test("escapes RouterOS variable markers inside PPPoE credentials", () => {
+  const pppoe = {
+    ...config.wans[0],
+    connectionType: "pppoe",
+    gateway: "",
+    pppoeUsername: "isp-user",
+    pppoePassword: "pa$ss",
+  };
+  const script = buildLoadBalancingScript({ ...config, wans: [pppoe, config.wans[1]] }).script;
+  assert.match(script, /password="pa\\\$ss"/);
+  assert.doesNotMatch(redactLoadBalancingScript(script), /pa\\\$ss/);
+});
+
 test("allows a static uplink to rely on an existing address", () => {
   const result = validateLoadBalancingConfig({
     ...config,
     wans: config.wans.map(wan => ({ ...wan, staticAddressCidr: "" })),
   }, 7, 3);
   assert.deepEqual(result.errors, []);
+});
+
+test("builds DHCP and VLAN-tagged WAN interfaces with lease-bound health routes", () => {
+  const script = buildLoadBalancingScript({
+    ...config,
+    wans: [
+      { ...config.wans[0], connectionType: "dhcp", gateway: "", vlanId: 120 },
+      config.wans[1],
+    ],
+  }).script;
+  assert.match(script, /\/interface vlan add name="isplatty-vlan1" interface="ether1" vlan-id=120/);
+  assert.match(script, /\/ip dhcp-client add interface="isplatty-vlan1"/);
+  assert.match(script, /ISPlatty-LB DHCP WAN 1/);
+  assert.match(script, /\/ip route disable \[find where comment="ISPlatty-LB health WAN 1"\]/);
+});
+
+test("routes a managed OpenVPN WAN through its selected non-OVPN underlay", () => {
+  const script = buildLoadBalancingScript({
+    ...config,
+    routerOsVersion: "7",
+    wans: [
+      config.wans[0],
+      {
+        ...config.wans[1],
+        connectionType: "ovpn",
+        interfaceName: "isplatty-ovpn-wan2",
+        gateway: "",
+        underlayWanPosition: 0,
+        ovpnRemoteAddresses: ["203.0.113.9"],
+      },
+    ],
+  }, "7.15").script;
+  assert.match(script, /dst-address="203\.0\.113\.9\/32" gateway="192\.0\.2\.1%ether1"/);
+  assert.match(script, /dst-address="8\.8\.8\.8\/32" gateway="isplatty-ovpn-wan2"/);
+  assert.match(script, /out-interface="isplatty-ovpn-wan2" action=masquerade/);
+  assert.doesNotMatch(script, /\/interface ovpn-client remove/);
+});
+
+test("disabling managed OVPN removes only tagged WAN clients", () => {
+  const script = buildLoadBalancingScript({
+    ...config,
+    enabled: false,
+    wans: [
+      config.wans[0],
+      {
+        ...config.wans[1],
+        connectionType: "ovpn",
+        interfaceName: "isplatty-ovpn-wan2",
+        underlayWanPosition: 0,
+      },
+    ],
+  }).script;
+  assert.match(script, /\/interface ovpn-client remove \[find where comment~"\^ISPlatty-LB OVPN WAN "\]/);
+  assert.doesNotMatch(script, /\/interface ovpn-client remove \[find\]/);
+});
+
+test("uses existing routed interfaces without claiming physical ports", () => {
+  const result = validateLoadBalancingConfig({
+    ...config,
+    wans: [
+      { ...config.wans[0], connectionType: "existing", interfaceName: "lte1", gateway: "" },
+      config.wans[1],
+    ],
+  }, 7, 3);
+  assert.deepEqual(result.errors, []);
+  const script = buildLoadBalancingScript({
+    ...config,
+    wans: [
+      { ...config.wans[0], connectionType: "existing", interfaceName: "lte1", gateway: "" },
+      config.wans[1],
+    ],
+  }).script;
+  assert.match(script, /dst-address="1\.1\.1\.1\/32" gateway="lte1"/);
+  assert.doesNotMatch(script, /\/interface vlan add name="isplatty-vlan1"/);
 });
 
 test("disabling removes only managed uplinks and restores bridge state", () => {
@@ -143,4 +231,7 @@ test("deploys the schema that preserves the original bridge-firewall setting", (
   assert.match(migrationRunner, /2026_router_load_balancing\.sql/);
   assert.match(migration, /bridge_firewall_original\s+boolean/);
   assert.match(migration, /bridge_firewall_original\s*=\s*excluded\.bridge_firewall_original/);
+  assert.match(migrationRunner, /2026_router_multiwan_protocols\.sql/);
+  assert.match(protocolMigration, /connection_type in \('static', 'pppoe', 'dhcp', 'existing', 'ovpn'\)/);
+  assert.match(protocolMigration, /isp_admin_openvpn_wan_profiles/);
 });

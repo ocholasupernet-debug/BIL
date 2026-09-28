@@ -1932,12 +1932,12 @@ export async function runRouterScript(
   });
 }
 
-/** Remove one exact uploaded script file after import. */
+/** Remove one exact uploaded script or profile file after use. */
 export async function removeRouterFile(
   creds: RouterCredentials,
   fileName: string,
 ): Promise<void> {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}\.rsc$/i.test(fileName) || fileName.includes("..")) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}\.(?:rsc|ovpn)$/i.test(fileName) || fileName.includes("..")) {
     throw new Error("Router file path is invalid.");
   }
   const wanted = fileName
@@ -6831,6 +6831,9 @@ export interface BridgePortLayout {
 export interface RouterLoadBalancingInventory extends BridgePortLayout {
   addresses: Array<{ interface: string; address: string; dynamic: boolean; comment: string }>;
   pppoeClients: Array<{ name: string; interface: string; comment: string; disabled: boolean }>;
+  dhcpClients: Array<{ name: string; interface: string; comment: string; disabled: boolean; status: string }>;
+  vlans: Array<{ name: string; interface: string; vlanId: number; comment: string; disabled: boolean }>;
+  ovpnClients: Array<{ id: string; name: string; connectTo: string; user: string; comment: string; disabled: boolean; running: boolean }>;
   bridgeUseIpFirewall: boolean;
   routerVersion: string;
 }
@@ -6945,13 +6948,16 @@ export async function fetchRouterLoadBalancingInventory(
       conn.write([path]),
       ms,
     ) as Promise<Record<string, string>[]>;
-    const [ifaceRows, bridgeRows, bridgePortRows, addressRows, pppoeRows, bridgeSettingsRows, resourceRows] =
+    const [ifaceRows, bridgeRows, bridgePortRows, addressRows, pppoeRows, dhcpRows, vlanRows, ovpnRows, bridgeSettingsRows, resourceRows] =
       await Promise.all([
         read("/interface/print"),
         read("/interface/bridge/print"),
         read("/interface/bridge/port/print"),
         read("/ip/address/print"),
         read("/interface/pppoe-client/print"),
+        read("/ip/dhcp-client/print"),
+        read("/interface/vlan/print"),
+        read("/interface/ovpn-client/print"),
         read("/interface/bridge/settings/print"),
         read("/system/resource/print"),
       ]);
@@ -6989,16 +6995,74 @@ export async function fetchRouterLoadBalancingInventory(
       comment: r.comment ?? "",
       disabled: parseBool(r.disabled),
     }));
+    const dhcpClients = (Array.isArray(dhcpRows) ? dhcpRows : []).map(r => ({
+      name: r.name ?? "",
+      interface: r.interface ?? "",
+      comment: r.comment ?? "",
+      disabled: parseBool(r.disabled),
+      status: r.status ?? "",
+    }));
+    const vlans = (Array.isArray(vlanRows) ? vlanRows : []).map(r => ({
+      name: r.name ?? "",
+      interface: r.interface ?? "",
+      vlanId: Number(r["vlan-id"] ?? 0),
+      comment: r.comment ?? "",
+      disabled: parseBool(r.disabled),
+    }));
+    const ovpnClients = (Array.isArray(ovpnRows) ? ovpnRows : []).map(r => ({
+      id: r[".id"] ?? "",
+      name: r.name ?? "",
+      connectTo: r["connect-to"] ?? "",
+      user: r.user ?? "",
+      comment: r.comment ?? "",
+      disabled: parseBool(r.disabled),
+      running: parseBool(r.running),
+    }));
     return {
       interfaces,
       bridges,
       bridgePorts,
       addresses,
       pppoeClients,
+      dhcpClients,
+      vlans,
+      ovpnClients,
       bridgeUseIpFirewall: parseBool(bridgeSettingsRows?.[0]?.["use-ip-firewall"]),
       routerVersion: resourceRows?.[0]?.version ?? "",
       connectedVia: connectedHost,
     };
+  });
+}
+
+/** Give a newly imported OVPN client a stable, feature-owned identity and safe routing defaults. */
+export async function configureRouterOvpnWanClient(
+  creds: RouterCredentials,
+  id: string,
+  name: string,
+  comment: string,
+): Promise<void> {
+  await withConn(creds, async conn => {
+    await withTimeout(conn.write([
+      "/interface/ovpn-client/set",
+      `=.id=${id}`,
+      `=name=${name}`,
+      `=comment=${comment}`,
+      "=disabled=no",
+      "=add-default-route=no",
+      "=route-nopull=yes",
+      "=use-peer-dns=no",
+      "=verify-server-certificate=yes",
+    ]), creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS);
+  });
+}
+
+export async function removeRouterOvpnWanClient(creds: RouterCredentials, id: string): Promise<void> {
+  if (!id) return;
+  await withConn(creds, async conn => {
+    await withTimeout(conn.write([
+      "/interface/ovpn-client/remove",
+      `=.id=${id}`,
+    ]), creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS);
   });
 }
 

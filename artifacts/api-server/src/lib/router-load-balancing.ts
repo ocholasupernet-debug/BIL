@@ -1,12 +1,15 @@
 export type LoadBalancingRouterOs = "auto" | "6" | "7";
 export type LoadBalancingMode = "weighted" | "failover";
-export type WanConnectionType = "static" | "pppoe";
+export type WanConnectionType = "static" | "pppoe" | "dhcp" | "existing" | "ovpn";
 
 export interface LoadBalancingWan {
   id?: number;
   name: string;
   interfaceName: string;
   connectionType?: WanConnectionType;
+  vlanId?: number;
+  underlayWanPosition?: number;
+  ovpnRemoteAddresses?: string[];
   staticAddressCidr?: string;
   gateway: string;
   weight: number;
@@ -71,12 +74,12 @@ const IPV4_PART = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
 const IPV4_RE = new RegExp(`^${IPV4_PART}(?:\\.${IPV4_PART}){3}$`);
 const INTERFACE_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
 const ROUTEROS_RE = /(?:^|[^0-9])([67])(?:[^0-9]|$)/;
-const secretKeys = /^(?:pppoePassword|password|secret)$/i;
+const secretKeys = /^(?:pppoePassword|ovpnPassword|keyPassphrase|password|secret)$/i;
 
 const text = (value: unknown, max = 64) => String(value ?? "").trim().slice(0, max);
 const bool = (value: unknown, fallback: boolean) => typeof value === "boolean" ? value : fallback;
 const quote = (value: unknown): string =>
-  `"${String(value ?? "").replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\r", "").replaceAll("\n", "")}"`;
+  `"${String(value ?? "").replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("$", "\\$").replaceAll("\r", "").replaceAll("\n", "")}"`;
 const validInt = (value: unknown) => Number.isInteger(Number(value)) ? Number(value) : NaN;
 
 export function resolveRouterOsMajor(configured: LoadBalancingRouterOs, routerVersion?: string | null): "6" | "7" {
@@ -104,16 +107,30 @@ export function validateLoadBalancingConfig(
   if (!INTERFACE_RE.test(lanInterface)) errors.push("LAN interface is invalid.");
   const mode: LoadBalancingMode = source.mode === "failover" || source.mode === "failover-only" ? "failover" : "weighted";
   const routerOsVersion: LoadBalancingRouterOs = source.routerOsVersion === "6" || source.routerOsVersion === "7" ? source.routerOsVersion : "auto";
-  const interfaces = new Set<string>();
+  const interfaceKeys = new Set<string>();
   const healthTargets = new Set<string>();
   const wans: LoadBalancingWan[] = rawWans.slice(0, 4).map((raw, index) => {
     const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-    const connectionType: WanConnectionType = item.connectionType === "pppoe" ? "pppoe" : "static";
+    const requestedType = text(item.connectionType, 20);
+    const connectionType: WanConnectionType = ["static", "pppoe", "dhcp", "existing", "ovpn"].includes(requestedType)
+      ? requestedType as WanConnectionType
+      : "static";
+    if (requestedType && !["static", "pppoe", "dhcp", "existing", "ovpn"].includes(requestedType)) {
+      errors.push(`WAN ${index + 1}: unsupported connection type "${requestedType}".`);
+    }
+    const position = index;
     return {
       id: typeof item.id === "number" ? item.id : undefined,
       name: text(item.name || `WAN ${index + 1}`, 40),
-      interfaceName: text(item.interfaceName),
+      interfaceName: connectionType === "ovpn" ? `isplatty-ovpn-wan${position + 1}` : text(item.interfaceName),
       connectionType,
+      vlanId: item.vlanId === "" || item.vlanId == null ? undefined : validInt(item.vlanId),
+      underlayWanPosition: item.underlayWanPosition === "" || item.underlayWanPosition == null
+        ? undefined
+        : validInt(item.underlayWanPosition),
+      ovpnRemoteAddresses: Array.isArray(item.ovpnRemoteAddresses)
+        ? item.ovpnRemoteAddresses.map(value => text(value, 15)).filter(Boolean)
+        : [],
       staticAddressCidr: text(item.staticAddressCidr, 32),
       gateway: text(item.gateway, 15),
       weight: validInt(item.weight) || 1,
@@ -133,17 +150,50 @@ export function validateLoadBalancingConfig(
     /* Disabled rows are drafts: preserve them for the editor, but do not
        reject an intentionally incomplete future uplink. */
     if (!wan.enabled && !wan.interfaceName && !wan.gateway && !wan.healthCheckIp) continue;
-    if (!wan.interfaceName || !INTERFACE_RE.test(wan.interfaceName)) errors.push(`${label}: enter a valid physical interface.`);
+    const usesPhysicalPort = wan.connectionType === "static" || wan.connectionType === "pppoe" || wan.connectionType === "dhcp";
+    if (wan.connectionType !== "ovpn" && (!wan.interfaceName || !INTERFACE_RE.test(wan.interfaceName))) {
+      errors.push(`${label}: select a valid router interface.`);
+    }
+    if (wan.connectionType === "ovpn" && wan.interfaceName !== `isplatty-ovpn-wan${wan.position + 1}`) {
+      errors.push(`${label}: the managed OpenVPN interface name is invalid.`);
+    }
     if (wan.interfaceName === lanInterface) errors.push(`${label}: WAN interface must differ from the LAN interface.`);
-    if (interfaces.has(wan.interfaceName)) errors.push(`${label}: interface is duplicated.`);
-    interfaces.add(wan.interfaceName);
+    const interfaceKey = `${wan.interfaceName}\0${wan.vlanId ?? 0}`;
+    if (interfaceKeys.has(interfaceKey)) errors.push(`${label}: interface and VLAN are duplicated.`);
+    interfaceKeys.add(interfaceKey);
+    if (wan.vlanId !== undefined && (!Number.isInteger(wan.vlanId) || wan.vlanId < 1 || wan.vlanId > 4094)) {
+      errors.push(`${label}: VLAN ID must be an integer from 1 to 4094.`);
+    }
+    if (wan.vlanId !== undefined && !usesPhysicalPort) {
+      errors.push(`${label}: VLAN tagging can only be configured on a physical Static, DHCP, or PPPoE uplink.`);
+    }
     if (wan.connectionType === "static" && wan.staticAddressCidr && !new RegExp(`^${IPV4_PART}\\/(?:[0-9]|[12][0-9]|3[0-2])$`).test(wan.staticAddressCidr)) errors.push(`${label}: static address must be IPv4 CIDR.`);
     if (wan.connectionType === "static" && !IPV4_RE.test(wan.gateway) && wan.enabled) errors.push(`${label}: gateway must be a valid IPv4 address.`);
+    if (wan.connectionType === "existing" && wan.gateway && !IPV4_RE.test(wan.gateway)) errors.push(`${label}: gateway must be a valid IPv4 address or blank for a point-to-point interface.`);
     if (!IPV4_RE.test(wan.healthCheckIp) && wan.enabled) errors.push(`${label}: health-check target must be a valid IPv4 address.`);
     if (wan.healthCheckIp && healthTargets.has(wan.healthCheckIp)) errors.push(`${label}: health-check targets must be unique.`);
     if (wan.healthCheckIp) healthTargets.add(wan.healthCheckIp);
     if (!Number.isInteger(wan.weight) || wan.weight < 1 || wan.weight > 100) errors.push(`${label}: weight must be an integer from 1 to 100.`);
     if (wan.enabled && wan.connectionType === "pppoe" && (!wan.pppoeUsername || (!wan.pppoePassword && !wan.pppoeSecretConfigured))) errors.push(`${label}: PPPoE username and password are required (or configure a stored secret).`);
+    if (wan.connectionType === "ovpn") {
+      if (!Number.isInteger(wan.underlayWanPosition) || wan.underlayWanPosition === wan.position) {
+        errors.push(`${label}: choose a different WAN to carry the OpenVPN connection.`);
+      }
+      if (wan.ovpnRemoteAddresses?.some(address => !IPV4_RE.test(address))) {
+        errors.push(`${label}: the OpenVPN profile has an invalid remote IPv4 address.`);
+      }
+       if (source.enabled === true && wan.enabled && !(wan.ovpnRemoteAddresses?.length)) {
+        errors.push(`${label}: configure the shared OpenVPN profile before enabling this WAN.`);
+      }
+    }
+  }
+  const ovpnWans = wans.filter(wan => wan.enabled && wan.connectionType === "ovpn");
+  if (ovpnWans.length > 1) errors.push("Only one managed OpenVPN WAN is supported per router with the shared profile.");
+  for (const wan of ovpnWans) {
+    const underlay = wans.find(candidate => candidate.position === wan.underlayWanPosition);
+    if (!underlay?.enabled || underlay.connectionType === "ovpn") {
+      errors.push(`${wan.name}: the OpenVPN underlay must be a different enabled non-OpenVPN WAN.`);
+    }
   }
   const active = wans.filter(wan => wan.enabled);
   if (source.enabled === true && active.length < 2) errors.push("Enable at least two WAN links before turning on load balancing.");
@@ -209,7 +259,19 @@ export interface LoadBalancingScriptResult {
   totalWeight: number;
 }
 
-export function buildLoadBalancingScript(config: LoadBalancingConfig, routerVersion?: string | null): LoadBalancingScriptResult {
+export interface LoadBalancingScriptOptions {
+  ovpnProfileFileName?: string;
+  ovpnProfileHash?: string;
+  ovpnUsername?: string;
+  ovpnPassword?: string;
+  ovpnKeyPassphrase?: string;
+}
+
+export function buildLoadBalancingScript(
+  config: LoadBalancingConfig,
+  routerVersion?: string | null,
+  options: LoadBalancingScriptOptions = {},
+): LoadBalancingScriptResult {
   const validation = validateLoadBalancingConfig(config, config.routerId, config.adminId);
   if (validation.errors.length || !validation.config) throw new Error(validation.errors.join(" ") || "Invalid load-balancing configuration.");
   const normalized = validation.config;
@@ -229,6 +291,11 @@ export function buildLoadBalancingScript(config: LoadBalancingConfig, routerVers
     "/ip address remove [find where comment~\"^ISPlatty-LB \"]",
     "/queue simple remove [find where comment~\"^ISPlatty-LB \"]",
     "/interface pppoe-client remove [find where comment~\"^ISPlatty-LB PPPoE \"]",
+    "/ip dhcp-client remove [find where comment~\"^ISPlatty-LB DHCP \"]",
+    "/interface vlan remove [find where comment~\"^ISPlatty-LB VLAN \"]",
+    ...(normalized.enabled && active.some(wan => wan.connectionType === "ovpn")
+      ? []
+      : ["/interface ovpn-client remove [find where comment~\"^ISPlatty-LB OVPN WAN \"]"]),
     ...(version === "7" ? ["/routing table remove [find where comment~\"^ISPlatty-LB \"]"] : []),
   ];
   const restoreBridgePorts = normalized.restoreBridgePorts ?? [];
@@ -249,13 +316,37 @@ export function buildLoadBalancingScript(config: LoadBalancingConfig, routerVers
     lines.push(...bridgeFirewallChange, ...bridgePortChanges);
     return { script: `${lines.join("\n")}\n`, effectiveVersion: version, activeWanCount: 0, totalWeight: 0 };
   }
+  for (const wan of active.filter(item => item.vlanId !== undefined)) {
+    lines.push(`/interface vlan add name=${quote(`isplatty-vlan${wan.position + 1}`)} interface=${quote(wan.interfaceName)} vlan-id=${wan.vlanId} disabled=no comment=${quote(marker(`VLAN WAN ${wan.position + 1}`))}`);
+  }
   for (const wan of active.filter(item => item.connectionType === "pppoe")) {
     lines.push(`/interface pppoe-client remove [find where comment=${quote(marker(`PPPoE ${wan.position + 1}`))}]`);
     const password = wan.pppoePassword ? ` password=${quote(wan.pppoePassword)}` : "";
-    lines.push(`/interface pppoe-client add name=${quote(`isplatty-pppoe${wan.position + 1}`)} interface=${quote(wan.interfaceName)} user=${quote(wan.pppoeUsername)}${password}${wan.pppoeServiceName ? ` service-name=${quote(wan.pppoeServiceName)}` : ""} disabled=no comment=${quote(marker(`PPPoE ${wan.position + 1}`))}`);
+    lines.push(`/interface pppoe-client add name=${quote(`isplatty-pppoe${wan.position + 1}`)} interface=${quote(wan.vlanId !== undefined ? `isplatty-vlan${wan.position + 1}` : wan.interfaceName)} user=${quote(wan.pppoeUsername)}${password}${wan.pppoeServiceName ? ` service-name=${quote(wan.pppoeServiceName)}` : ""} disabled=no comment=${quote(marker(`PPPoE ${wan.position + 1}`))}`);
+  }
+  for (const wan of active.filter(item => item.connectionType === "dhcp")) {
+    const logical = wan.vlanId !== undefined ? `isplatty-vlan${wan.position + 1}` : wan.interfaceName;
+    const leaseActions = [
+      `:local gw $"gateway-address";`,
+      `/ip route set [find where comment=${quote(marker(`health WAN ${wan.position + 1}`))}] gateway=($gw . "%" . $interface) disabled=no`,
+    ];
+    for (const candidate of active) {
+      if (candidate.connectionType === "ovpn" && candidate.underlayWanPosition === wan.position) {
+        for (const remote of candidate.ovpnRemoteAddresses ?? []) {
+          leaseActions.push(`/ip route set [find where comment=${quote(marker(`OVPN endpoint WAN ${candidate.position + 1} ${remote}`))}] gateway=($gw . "%" . $interface) disabled=no`);
+        }
+      }
+    }
+    lines.push(`/ip dhcp-client add interface=${quote(logical)} add-default-route=no use-peer-dns=no disabled=no script=${quote(`:if ($bound=1) do={ ${leaseActions.join("; ")} } else={ /ip route disable [find where comment=${quote(marker(`health WAN ${wan.position + 1}`))}] }`)} comment=${quote(marker(`DHCP WAN ${wan.position + 1}`))}`);
+  }
+  for (const wan of active.filter(item => item.connectionType === "ovpn")) {
+    if (options.ovpnProfileFileName && options.ovpnUsername) {
+      lines.push(`# Managed OVPN WAN ${wan.position + 1}; profile sha256=${options.ovpnProfileHash ?? "unavailable"}`);
+      lines.push(`# Import is performed before this routing script using ${options.ovpnProfileFileName}.`);
+    }
   }
   for (const wan of active.filter(item => item.connectionType === "static" && item.staticAddressCidr)) {
-    lines.push(`/ip address add address=${quote(wan.staticAddressCidr)} interface=${quote(wan.interfaceName)} comment=${quote(marker(`address WAN ${wan.position + 1}`))}`);
+    lines.push(`/ip address add address=${quote(wan.staticAddressCidr)} interface=${quote(wan.vlanId !== undefined ? `isplatty-vlan${wan.position + 1}` : wan.interfaceName)} comment=${quote(marker(`address WAN ${wan.position + 1}`))}`);
   }
   if (active.length < 2) {
     lines.push(...bridgeFirewallChange, ...bridgePortChanges);
@@ -263,7 +354,12 @@ export function buildLoadBalancingScript(config: LoadBalancingConfig, routerVers
   }
   lines.push(...["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "127.0.0.0/8"].map(ip => `/ip firewall address-list add list="ISPLATTY-LB-LOCAL" address=${quote(ip)} comment=${quote(marker("local exclusion"))}`));
   if (version === "7") lines.push(...active.map((_, i) => `/routing table add name=${quote(table(i))} fib=yes comment=${quote(marker(`table WAN ${i + 1}`))}`));
-  const wanOut = (wan: LoadBalancingWan) => wan.connectionType === "pppoe" ? `isplatty-pppoe${wan.position + 1}` : wan.interfaceName;
+  const wanOut = (wan: LoadBalancingWan) => {
+    if (wan.connectionType === "pppoe") return `isplatty-pppoe${wan.position + 1}`;
+    if (wan.connectionType === "ovpn") return `isplatty-ovpn-wan${wan.position + 1}`;
+    if (wan.vlanId !== undefined) return `isplatty-vlan${wan.position + 1}`;
+    return wan.interfaceName;
+  };
   lines.push("/ip firewall mangle");
   active.forEach((wan, i) => lines.push(`add chain=prerouting in-interface=${quote(wanOut(wan))} connection-state=new connection-mark=no-mark action=mark-connection new-connection-mark=${quote(connMark(i))} passthrough=yes comment=${quote(marker(`inbound WAN ${i + 1}`))}`));
   lines.push(`add chain=prerouting dst-address-list=${quote("ISPLATTY-LB-LOCAL")} action=accept comment=${quote(marker("exclude local transit"))}`, `add chain=output dst-address-list=${quote("ISPLATTY-LB-LOCAL")} action=accept comment=${quote(marker("exclude local output"))}`);
@@ -282,8 +378,28 @@ export function buildLoadBalancingScript(config: LoadBalancingConfig, routerVers
   }
   for (const [i, wan] of active.entries()) {
     const out = wanOut(wan);
-    const healthGateway = wan.connectionType === "pppoe" ? out : `${wan.gateway}%${out}`;
+    const healthGateway = wan.connectionType === "pppoe" || wan.connectionType === "ovpn" || (wan.connectionType === "existing" && !wan.gateway)
+      ? out
+      : `${wan.connectionType === "dhcp" ? wan.healthCheckIp : wan.gateway}%${out}`;
     lines.push(`/ip route add dst-address=${quote(`${wan.healthCheckIp}/32`)} gateway=${quote(healthGateway)} scope=10 check-gateway=ping comment=${quote(marker(`health WAN ${i + 1}`))}`);
+    if (wan.connectionType === "dhcp") {
+      lines.push(`/ip route disable [find where comment=${quote(marker(`health WAN ${wan.position + 1}`))}]`);
+    }
+    if (wan.connectionType === "ovpn") {
+      const underlay = active.find(candidate => candidate.position === wan.underlayWanPosition)!;
+      const underlayOut = wanOut(underlay);
+      const gateway = underlay.connectionType === "pppoe"
+        ? underlayOut
+        : underlay.connectionType === "existing" && !underlay.gateway
+          ? underlayOut
+          : underlay.connectionType === "dhcp"
+            ? underlay.healthCheckIp
+            : `${underlay.gateway}%${underlayOut}`;
+      for (const remote of wan.ovpnRemoteAddresses ?? []) {
+        lines.push(`/ip route add dst-address=${quote(`${remote}/32`)} gateway=${quote(gateway)} distance=1 comment=${quote(marker(`OVPN endpoint WAN ${wan.position + 1} ${remote}`))}`);
+        if (underlay.connectionType === "dhcp") lines.push(`/ip route disable [find where comment=${quote(marker(`OVPN endpoint WAN ${wan.position + 1} ${remote}`))}]`);
+      }
+    }
     active.forEach((candidate, j) => lines.push(`/ip route add dst-address="0.0.0.0/0" gateway=${quote(candidate.healthCheckIp)} target-scope=11 check-gateway=ping distance=${i === j ? 1 : 20 + j} ${routeOption(version, table(i))} comment=${quote(marker(`policy WAN ${i + 1} via ${j + 1}`))}`));
     lines.push(`/ip route add dst-address="0.0.0.0/0" gateway=${quote(wan.healthCheckIp)} target-scope=11 check-gateway=ping distance=${10 + i} comment=${quote(marker(`main WAN ${i + 1}`))}`, `/ip firewall nat add chain=srcnat out-interface=${quote(out)} action=masquerade comment=${quote(marker(`NAT WAN ${i + 1}`))}`);
   }
@@ -299,7 +415,7 @@ function slug(value: string) { return value.toLowerCase().replace(/[^a-z0-9]+/g,
 
 /** Remove PPPoE secrets from a script before displaying, logging, or downloading it. */
 export function redactLoadBalancingScript(script: string): string {
-  return script.replace(/(\b(?:password|secret)=)"(?:\\.|[^"])*"/gi, '$1"REDACTED"');
+  return script.replace(/(\b(?:password|secret|key-passphrase)=)"(?:\\.|[^"])*"/gi, '$1"REDACTED"');
 }
 
 export const redactLoadBalancingConfig = (config: unknown): unknown => {

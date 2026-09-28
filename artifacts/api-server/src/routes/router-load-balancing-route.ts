@@ -1,18 +1,22 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { lookup } from "node:dns/promises";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { requireAdmin } from "../lib/api-auth.js";
 import {
   buildLoadBalancingScript,
   redactLoadBalancingScript,
+  resolveRouterOsMajor,
   validateLoadBalancingConfig,
   type LoadBalancingConfig,
   type LoadBalancingWan,
 } from "../lib/router-load-balancing.js";
 import {
   deployRouterFile,
+  configureRouterOvpnWanClient,
   fetchRouterLoadBalancingInventory,
   fetchRouterSecurityState,
   removeRouterFile,
+  removeRouterOvpnWanClient,
   runRouterScript,
   type RouterCredentials,
   type RouterLoadBalancingInventory,
@@ -57,8 +61,10 @@ type WanRow = {
   health_check_ip: string;
   enabled: boolean;
   position: number;
-  connection_type: "static" | "pppoe";
+  connection_type: "static" | "pppoe" | "dhcp" | "existing" | "ovpn";
   static_address_cidr: string | null;
+  vlan_id: number | null;
+  underlay_wan_position: number | null;
   pppoe_username: string | null;
   pppoe_secret_ciphertext: string | null;
   pppoe_secret_iv: string | null;
@@ -86,6 +92,18 @@ type Profile = {
   publicConfig: Record<string, unknown>;
   rpcPayload: Record<string, unknown>;
 };
+type OpenVpnProfile = {
+  profileText: string;
+  username: string;
+  password: string;
+  keyPassphrase: string;
+};
+type OpenVpnProfileRow = {
+  admin_id: number;
+  profile_ciphertext: string;
+  profile_iv: string;
+  profile_auth_tag: string;
+};
 type Scope = {
   adminId: number;
   routerId: number;
@@ -110,6 +128,9 @@ type Prepared = {
   warnings: string[];
   changes: string[];
   inventory: RouterLoadBalancingInventory;
+  openVpnProfile?: OpenVpnProfile;
+  openVpnProfileHash?: string;
+  openVpnRemoteAddresses?: string[];
 };
 
 function requestOrigin(req: Request): string {
@@ -134,6 +155,82 @@ function previewHash(script: string): string {
 function requestAdminId(req: Request): number | null {
   const value = Number(req.authUser?.uid);
   return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+async function requireRootAdmin(req: Request, res: Response): Promise<number | null> {
+  const adminId = requestAdminId(req);
+  if (!adminId) {
+    res.status(403).json({ ok: false, error: "This setting requires an ISP admin session." });
+    return null;
+  }
+  const rows = await sbSelectStrict<AdminRow>(
+    "isp_admins",
+    `id=eq.${adminId}&is_active=is.true&select=id,parent_id,is_active&limit=1`,
+  );
+  if (!rows[0] || rows[0].parent_id !== null) {
+    res.status(403).json({ ok: false, error: "Only the ISP owner can manage the shared OpenVPN profile." });
+    return null;
+  }
+  return adminId;
+}
+
+async function loadOpenVpnProfile(adminId: number): Promise<OpenVpnProfile | null> {
+  const rows = await sbSelectStrict<OpenVpnProfileRow>(
+    "isp_admin_openvpn_wan_profiles",
+    `admin_id=eq.${adminId}&select=admin_id,profile_ciphertext,profile_iv,profile_auth_tag&limit=1`,
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const decoded = decryptVpnSecret({
+    ciphertext: row.profile_ciphertext,
+    iv: row.profile_iv,
+    auth_tag: row.profile_auth_tag,
+  });
+  const value = JSON.parse(decoded) as Partial<OpenVpnProfile>;
+  if (
+    typeof value.profileText !== "string"
+    || typeof value.username !== "string"
+    || typeof value.password !== "string"
+    || typeof value.keyPassphrase !== "string"
+  ) throw new Error("The stored OpenVPN profile is invalid.");
+  return value as OpenVpnProfile;
+}
+
+function openVpnProfileHash(profile: OpenVpnProfile): string {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) throw new Error("A server secret is required to identify the shared OpenVPN profile.");
+  return createHmac("sha256", secret)
+    .update("ochola-shared-openvpn-profile\0")
+    .update(profile.profileText)
+    .update("\0")
+    .update(profile.username)
+    .update("\0")
+    .update(profile.password)
+    .update("\0")
+    .update(profile.keyPassphrase)
+    .digest("hex");
+}
+
+async function openVpnRemoteAddresses(profileText: string): Promise<string[]> {
+  const remotes = new Set<string>();
+  for (const rawLine of profileText.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+    if (/^redirect-gateway\b/i.test(line)) {
+      throw new Error("The shared OpenVPN profile must not contain redirect-gateway; multi-WAN manages routing.");
+    }
+    const match = line.match(/^remote\s+([^\s]+)(?:\s+([0-9]+))?(?:\s+(?:tcp|udp)(?:-client)?)?/i);
+    if (!match) continue;
+    const host = match[1].replace(/^\[|\]$/g, "");
+    if (/^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(host)) {
+      remotes.add(host);
+      continue;
+    }
+    const resolved = await lookup(host, { all: true, family: 4 });
+    for (const address of resolved) remotes.add(address.address);
+  }
+  if (!remotes.size) throw new Error("The shared OpenVPN profile must contain at least one resolvable IPv4 remote endpoint.");
+  return [...remotes].sort();
 }
 
 async function resolveScope(req: Request, res: Response): Promise<Scope | null> {
@@ -215,6 +312,8 @@ function dbProfilePayload(parent: ConfigRow | null, wans: WanRow[], lans: LanRow
       position: wan.position,
       connectionType: wan.connection_type,
       staticAddressCidr: wan.static_address_cidr ?? "",
+      vlanId: wan.vlan_id ?? undefined,
+      underlayWanPosition: wan.underlay_wan_position ?? undefined,
       pppoeUsername: wan.pppoe_username ?? "",
       pppoeSecretCiphertext: wan.pppoe_secret_ciphertext ?? "",
       pppoeSecretIv: wan.pppoe_secret_iv ?? "",
@@ -253,7 +352,7 @@ async function loadProfile(adminId: number, routerId: number): Promise<Profile> 
   const [wans, lans] = await Promise.all([
     sbSelectStrict<WanRow>(
       "isp_router_load_balancing_wans",
-      `admin_id=eq.${adminId}&load_balancing_id=eq.${parent.id}&select=id,admin_id,load_balancing_id,name,interface_name,gateway,weight,health_check_ip,enabled,position,connection_type,static_address_cidr,pppoe_username,pppoe_secret_ciphertext,pppoe_secret_iv,pppoe_secret_auth_tag,reassign_from_bridge,bridge_name&order=position.asc`,
+      `admin_id=eq.${adminId}&load_balancing_id=eq.${parent.id}&select=id,admin_id,load_balancing_id,name,interface_name,gateway,weight,health_check_ip,enabled,position,connection_type,static_address_cidr,vlan_id,underlay_wan_position,pppoe_username,pppoe_secret_ciphertext,pppoe_secret_iv,pppoe_secret_auth_tag,reassign_from_bridge,bridge_name&order=position.asc`,
     ),
     sbSelectStrict<LanRow>(
       "isp_router_load_balancing_lans",
@@ -265,6 +364,8 @@ async function loadProfile(adminId: number, routerId: number): Promise<Profile> 
     name: wan.name,
     interfaceName: wan.interface_name,
     connectionType: wan.connection_type,
+    vlanId: wan.vlan_id ?? "",
+    underlayWanPosition: wan.underlay_wan_position == null ? "" : wan.underlay_wan_position + 1,
     staticAddressCidr: wan.static_address_cidr ?? "",
     gateway: wan.gateway ?? "",
     weight: wan.weight,
@@ -320,8 +421,14 @@ async function internalConfig(
     }
     wans.push({
       name: String(raw.name ?? `WAN ${index + 1}`),
-      interfaceName: String(raw.interfaceName ?? ""),
-      connectionType: raw.connectionType === "pppoe" ? "pppoe" : "static",
+      interfaceName: raw.connectionType === "ovpn"
+        ? `isplatty-ovpn-wan${index + 1}`
+        : String(raw.interfaceName ?? ""),
+      connectionType: String(raw.connectionType ?? "static") as LoadBalancingWan["connectionType"],
+      vlanId: raw.vlanId === "" || raw.vlanId == null ? undefined : Number(raw.vlanId),
+      underlayWanPosition: raw.underlayWanPosition === "" || raw.underlayWanPosition == null
+        ? undefined
+        : Number(raw.underlayWanPosition) - 1,
       staticAddressCidr: String(raw.staticAddressCidr ?? ""),
       gateway: String(raw.gateway ?? ""),
       weight: Number(raw.weight ?? 1),
@@ -392,7 +499,16 @@ function simpleBridgePort(settings: Record<string, string> | undefined): boolean
   return !String(settings.comment ?? "").trim();
 }
 
-async function livePreflight(config: LoadBalancingConfig, inventory: RouterLoadBalancingInventory, previous: Profile): Promise<{ errors: string[]; warnings: string[]; changes: string[] }> {
+function isProtectedManagementOvpn(name: string, comment: string): boolean {
+  return /mainbillingvpn|ochola.*management|vps tunnel|do not delete.*management vpn/i.test(`${name} ${comment}`);
+}
+
+async function livePreflight(
+  config: LoadBalancingConfig,
+  inventory: RouterLoadBalancingInventory,
+  previous: Profile,
+  profileHash?: string,
+): Promise<{ errors: string[]; warnings: string[]; changes: string[] }> {
   const errors: string[] = [];
   const warnings: string[] = [];
   const changes: string[] = [
@@ -414,13 +530,63 @@ async function livePreflight(config: LoadBalancingConfig, inventory: RouterLoadB
 
   for (const wan of active) {
     const iface = interfaceByName.get(wan.interfaceName);
+    if (wan.connectionType === "ovpn") {
+      if (resolveRouterOsMajor(config.routerOsVersion, inventory.routerVersion) !== "7") {
+        errors.push(`${wan.name}: managed OVPN profile import requires RouterOS 7; use a preconfigured tunnel on RouterOS 6.`);
+      } else {
+        warnings.push(`${wan.name}: MikroTik documents .ovpn import for RouterOS 7 but does not specify the first supporting 7.x release. Confirm the installed build supports /interface/ovpn-client/import-ovpn-configuration.`);
+      }
+      const externalClients = inventory.ovpnClients.filter(client =>
+        !client.comment.startsWith("ISPlatty-LB OVPN WAN ")
+        && !isProtectedManagementOvpn(client.name, client.comment),
+      );
+      if (externalClients.length) {
+        errors.push(`${wan.name}: an unrelated OVPN client already exists. Select that interface as an existing WAN instead of creating another tunnel.`);
+      }
+      const targetName = `isplatty-ovpn-wan${wan.position + 1}`;
+      const unrelatedName = inventory.interfaces.find(item =>
+        item.name === targetName && !item.type.toLowerCase().includes("ovpn"),
+      );
+      if (unrelatedName) errors.push(`${wan.name}: RouterOS already uses the managed tunnel name ${targetName} for another interface.`);
+      const existingManaged = inventory.ovpnClients.find(client =>
+        client.name === targetName && client.comment.startsWith(`ISPlatty-LB OVPN WAN ${wan.position + 1} `),
+      );
+      if (existingManaged && profileHash
+        && existingManaged.comment !== `ISPlatty-LB OVPN WAN ${wan.position + 1} profile-sha256=${profileHash}`) {
+        errors.push(`${wan.name}: the saved tunnel uses a different profile. Disable and remove it before replacing the shared profile.`);
+      }
+      changes.push(`${wan.name}: create or reuse the dedicated OpenVPN WAN interface; keep the router-management VPN separate.`);
+      continue;
+    }
+
+    const physicalMode = wan.connectionType === "static" || wan.connectionType === "pppoe" || wan.connectionType === "dhcp";
     const physical = iface && (
       iface.type.toLowerCase().includes("ether")
       || iface.type.toLowerCase().includes("sfp")
       || /^(ether|sfp|combo)/i.test(iface.name)
     );
-    if (!physical || iface?.disabled) {
-      errors.push(`${wan.name}: select an enabled Ethernet or SFP/SFP+ interface from this router.`);
+    if (wan.connectionType === "existing") {
+      if (!iface || iface.disabled) {
+        errors.push(`${wan.name}: select an enabled existing router interface.`);
+        continue;
+      }
+      if (iface.type.toLowerCase().includes("bridge")) {
+        errors.push(`${wan.name}: select a tunnel, LTE, VLAN, or other routed interface, not a bridge.`);
+        continue;
+      }
+      if (isProtectedManagementOvpn(iface.name, iface.comment)) {
+        errors.push(`${wan.name}: the router-management VPN cannot be used as a customer WAN.`);
+        continue;
+      }
+      if (inventory.bridgePorts.some(port => port.interface === wan.interfaceName)) {
+        errors.push(`${wan.name}: an interface that is still a LAN bridge port cannot be used as an existing WAN.`);
+        continue;
+      }
+      changes.push(`Use the preconfigured ${iface.type} interface ${wan.interfaceName}; its tunnel or LTE settings will not be changed.`);
+      continue;
+    }
+    if (!physicalMode || !physical || iface?.disabled) {
+      errors.push(`${wan.name}: select an enabled Ethernet or SFP/SFP+ interface for this connection type.`);
       continue;
     }
     const memberships = inventory.bridgePorts.filter(port => port.interface === wan.interfaceName);
@@ -444,16 +610,29 @@ async function livePreflight(config: LoadBalancingConfig, inventory: RouterLoadB
       const assigned = await awaitAssignmentCheck(config, wan);
       if (assigned) errors.push(`${wan.name}: ${wan.interfaceName} has an ISP service assignment. Release that service assignment before promoting the port.`);
     }
+    if (wan.vlanId !== undefined) {
+      const vlanName = `isplatty-vlan${wan.position + 1}`;
+      const collision = inventory.vlans.find(item => item.name === vlanName && !item.comment.startsWith("ISPlatty-LB "));
+      const duplicateTag = inventory.vlans.find(item =>
+        item.interface === wan.interfaceName
+        && item.vlanId === wan.vlanId
+        && !(item.name === vlanName && item.comment.startsWith("ISPlatty-LB ")),
+      );
+      if (collision) errors.push(`${wan.name}: RouterOS already has an unrelated VLAN interface named ${vlanName}.`);
+      if (duplicateTag) errors.push(`${wan.name}: VLAN ${wan.vlanId} already exists on ${wan.interfaceName} as ${duplicateTag.name}; select that interface as an existing WAN instead.`);
+      changes.push(`Create VLAN ${wan.vlanId} on ${wan.interfaceName} before configuring the WAN service.`);
+    }
     if (wan.connectionType === "static") {
       const address = (wan.staticAddressCidr ?? "").trim();
-      const existing = inventory.addresses.filter(item => item.interface === wan.interfaceName && !item.dynamic);
+      const logicalInterface = wan.vlanId === undefined ? wan.interfaceName : `isplatty-vlan${wan.position + 1}`;
+      const existing = inventory.addresses.filter(item => item.interface === logicalInterface && !item.dynamic);
       if (!address && existing.length === 0) errors.push(`${wan.name}: enter a static address or configure a static address on ${wan.interfaceName} first.`);
       if (address) {
-        const duplicate = inventory.addresses.find(item => item.address === address && item.interface !== wan.interfaceName);
+        const duplicate = inventory.addresses.find(item => item.address === address && item.interface !== logicalInterface);
         if (duplicate) errors.push(`${wan.name}: ${address} is already assigned to ${duplicate.interface}.`);
-        const existingSame = inventory.addresses.find(item => item.address === address && item.interface === wan.interfaceName);
+        const existingSame = inventory.addresses.find(item => item.address === address && item.interface === logicalInterface);
         if (existingSame && !existingSame.comment.startsWith("ISPlatty-LB ")) {
-          errors.push(`${wan.name}: ${address} already exists on ${wan.interfaceName}; leave Address / CIDR blank to reuse it.`);
+          errors.push(`${wan.name}: ${address} already exists on ${logicalInterface}; leave Address / CIDR blank to reuse it.`);
         }
       }
     }
@@ -461,9 +640,16 @@ async function livePreflight(config: LoadBalancingConfig, inventory: RouterLoadB
       const expectedName = `isplatty-pppoe${wan.position + 1}`;
       const collision = inventory.pppoeClients.find(item => item.name === expectedName && !item.comment.startsWith("ISPlatty-LB "));
       if (collision) errors.push(`${wan.name}: RouterOS already has an unrelated PPPoE client named ${expectedName}.`);
-      changes.push(`Configure a PPPoE client on ${wan.interfaceName}; its password remains encrypted in the ISP database.`);
-    } else {
-      if (wan.staticAddressCidr) changes.push(`Set ${wan.staticAddressCidr} on ${wan.interfaceName} and route through ${wan.gateway}.`);
+      changes.push(`Configure a PPPoE client on ${wan.vlanId === undefined ? wan.interfaceName : `VLAN ${wan.vlanId}`}; its password remains encrypted in the ISP database.`);
+    } else if (wan.connectionType === "dhcp") {
+      const logicalInterface = wan.vlanId === undefined ? wan.interfaceName : `isplatty-vlan${wan.position + 1}`;
+      const existing = inventory.dhcpClients.find(client =>
+        client.interface === logicalInterface && !client.comment.startsWith("ISPlatty-LB DHCP "),
+      );
+      if (existing) errors.push(`${wan.name}: an unrelated DHCP client already runs on ${logicalInterface}; select its routed interface as an existing WAN instead.`);
+      changes.push(`Create a DHCP client on ${wan.vlanId === undefined ? wan.interfaceName : `VLAN ${wan.vlanId}`} and use its lease gateway for health-checked routing.`);
+    } else if (wan.connectionType === "static") {
+      if (wan.staticAddressCidr) changes.push(`Set ${wan.staticAddressCidr} on ${wan.vlanId === undefined ? wan.interfaceName : `VLAN ${wan.vlanId}`} and route through ${wan.gateway}.`);
       else changes.push(`Reuse the existing static address on ${wan.interfaceName} and route through ${wan.gateway}.`);
     }
   }
@@ -521,27 +707,75 @@ async function prepare(scope: Scope, value: unknown): Promise<Prepared> {
   }
   const previous = await loadProfile(scope.adminId, scope.routerId);
   const internal = await internalConfig(client, scope, previous);
+  let openVpnProfile: OpenVpnProfile | undefined;
+  let openVpnProfileHashValue: string | undefined;
+  let remoteAddresses: string[] = [];
+  let openVpnProfileError = "";
+  if (internal.enabled && internal.wans.some(wan => wan.enabled && wan.connectionType === "ovpn")) {
+    try {
+      const profile = await loadOpenVpnProfile(scope.adminId);
+      if (!profile) {
+        openVpnProfileError = "Upload the shared OpenVPN profile before enabling a managed OVPN WAN.";
+      } else {
+        openVpnProfile = profile;
+        openVpnProfileHashValue = openVpnProfileHash(profile);
+        remoteAddresses = await openVpnRemoteAddresses(profile.profileText);
+        for (const wan of internal.wans) {
+          if (wan.connectionType === "ovpn") wan.ovpnRemoteAddresses = remoteAddresses;
+        }
+      }
+    } catch (error) {
+      openVpnProfileError = error instanceof Error
+        ? error.message
+        : "The shared OpenVPN profile could not be read.";
+    }
+  }
   const validation = validateLoadBalancingConfig(internal, scope.routerId, scope.adminId);
   if (validation.errors.length || !validation.config) {
     return {
       internal,
       script: "",
       previewHash: "",
-      errors: validation.errors,
+      errors: [...validation.errors, ...(openVpnProfileError ? [openVpnProfileError] : [])],
       warnings: [],
       changes: [],
       inventory: await fetchRouterLoadBalancingInventory(scope.creds),
+      ...(openVpnProfile ? { openVpnProfile } : {}),
+      ...(openVpnProfileHashValue ? { openVpnProfileHash: openVpnProfileHashValue } : {}),
+      openVpnRemoteAddresses: remoteAddresses,
     };
   }
   const inventory = await fetchRouterLoadBalancingInventory(scope.creds);
   const effective = validation.config;
+  if (openVpnProfileError) {
+    return {
+      internal: effective,
+      script: "",
+      previewHash: "",
+      errors: [openVpnProfileError],
+      warnings: [],
+      changes: [],
+      inventory,
+    };
+  }
   if (effective.allowBridgeFirewall && (effective.lanPortPins?.length ?? 0) > 0 && effective.bridgeFirewallOriginal === undefined) {
     effective.bridgeFirewallOriginal = inventory.bridgeUseIpFirewall;
   }
-  const safety = await livePreflight(effective, inventory, previous);
+  const safety = await livePreflight(effective, inventory, previous, openVpnProfileHashValue);
   let script = "";
   try {
-    script = buildLoadBalancingScript(effective, inventory.routerVersion).script;
+    const ovpnPosition = effective.wans.find(wan => wan.enabled && wan.connectionType === "ovpn")?.position;
+    script = buildLoadBalancingScript(effective, inventory.routerVersion, {
+      ...(ovpnPosition !== undefined && openVpnProfile
+        ? {
+            ovpnProfileFileName: `isplatty-ovpn-wan${ovpnPosition + 1}.ovpn`,
+            ovpnProfileHash: openVpnProfileHashValue,
+            ovpnUsername: openVpnProfile.username,
+            ovpnPassword: openVpnProfile.password,
+            ovpnKeyPassphrase: openVpnProfile.keyPassphrase,
+          }
+        : {}),
+    }).script;
   } catch (error) {
     safety.errors.push(error instanceof Error ? error.message : "RouterOS script could not be generated.");
   }
@@ -553,6 +787,9 @@ async function prepare(scope: Scope, value: unknown): Promise<Prepared> {
     warnings: safety.warnings,
     changes: safety.changes,
     inventory,
+    ...(openVpnProfile ? { openVpnProfile } : {}),
+    ...(openVpnProfileHashValue ? { openVpnProfileHash: openVpnProfileHashValue } : {}),
+    openVpnRemoteAddresses: remoteAddresses,
   };
 }
 
@@ -593,7 +830,11 @@ function previousInternalConfig(scope: Scope, previous: Profile): LoadBalancingC
       healthCheckIp: String(row.healthCheckIp ?? ""),
       enabled: row.enabled !== false,
       position: index,
-      connectionType: row.connectionType === "pppoe" ? "pppoe" : "static",
+      connectionType: String(row.connectionType ?? "static") as LoadBalancingWan["connectionType"],
+      vlanId: row.vlanId == null || row.vlanId === "" ? undefined : Number(row.vlanId),
+      underlayWanPosition: row.underlayWanPosition == null || row.underlayWanPosition === ""
+        ? undefined
+        : Number(row.underlayWanPosition),
       staticAddressCidr: String(row.staticAddressCidr ?? ""),
       pppoeUsername: String(row.pppoeUsername ?? ""),
       pppoePassword: row.pppoeSecretCiphertext && row.pppoeSecretIv && row.pppoeSecretAuthTag
@@ -653,6 +894,8 @@ async function saveConfig(scope: Scope, config: LoadBalancingConfig, previous: P
       position: index,
       connectionType: wan.connectionType ?? "static",
       staticAddressCidr: wan.staticAddressCidr ?? "",
+      vlanId: wan.vlanId ?? null,
+      underlayWanPosition: wan.underlayWanPosition ?? null,
       pppoeUsername: wan.pppoeUsername ?? "",
       ...encrypted,
       reassignFromBridge: wan.reassignFromBridge ?? false,
@@ -714,6 +957,122 @@ async function transferAndRun(scope: Scope, req: Request, script: string): Promi
   }
 }
 
+async function uploadTemporaryRouterFile(
+  scope: Scope,
+  req: Request,
+  content: string,
+  destinationPath: string,
+): Promise<{ token: string; path: string }> {
+  const origin = requestOrigin(req);
+  if (!origin.startsWith("https://")) {
+    throw new Error("OpenVPN profile transfer requires a publicly trusted HTTPS API origin.");
+  }
+  await removeRouterFile(scope.creds, destinationPath).catch(() => undefined);
+  const source = registerSource(content);
+  const sourceUrl = `${origin}/api/router-load-balancing-source/${source.token}`;
+  try {
+    await deployRouterFile(scope.creds, {
+      sourceUrl,
+      destinationPath,
+      overwrite: false,
+      uploadId: source.token.slice(0, 16),
+    });
+    return { token: source.token, path: destinationPath };
+  } catch (error) {
+    scriptSources.delete(source.token);
+    throw error;
+  }
+}
+
+async function cleanupTemporaryRouterFile(
+  scope: Scope,
+  file: { token: string; path: string },
+): Promise<void> {
+  await removeRouterFile(scope.creds, file.path).catch(() => undefined);
+  scriptSources.delete(file.token);
+}
+
+function routerOsQuote(value: string): string {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("$", "\\$").replaceAll("\r", "").replaceAll("\n", "")}"`;
+}
+
+async function ensureOpenVpnWan(
+  scope: Scope,
+  req: Request,
+  config: LoadBalancingConfig,
+  profile: OpenVpnProfile,
+): Promise<string[]> {
+  const wan = config.enabled ? config.wans.find(row => row.enabled && row.connectionType === "ovpn") : undefined;
+  if (!wan) return [];
+  const name = `isplatty-ovpn-wan${wan.position + 1}`;
+  const hash = openVpnProfileHash(profile);
+  const managedComment = `ISPlatty-LB OVPN WAN ${wan.position + 1} profile-sha256=${hash}`;
+  const before = await fetchRouterLoadBalancingInventory(scope.creds);
+  const existingManaged = before.ovpnClients.find(client =>
+    client.name === name && client.comment.startsWith(`ISPlatty-LB OVPN WAN ${wan.position + 1} `),
+  );
+  if (existingManaged?.comment === managedComment) return [];
+  if (existingManaged) {
+    throw new Error("The managed OpenVPN profile differs from the active tunnel. Disable that WAN before replacing the shared profile.");
+  }
+  const unrelated = before.ovpnClients.filter(client =>
+    !client.comment.startsWith("ISPlatty-LB OVPN WAN ")
+    && !isProtectedManagementOvpn(client.name, client.comment),
+  );
+  if (unrelated.length) {
+    throw new Error("An unrelated OVPN client exists on this router; it was not modified. Select it as an existing WAN instead.");
+  }
+
+  const profileFileName = `isplatty-ovpn-wan${wan.position + 1}.ovpn`;
+  const uploaded = await uploadTemporaryRouterFile(scope, req, profile.profileText, profileFileName);
+  const beforeIds = new Set(before.ovpnClients.map(client => client.id));
+  const keyPassphrase = profile.keyPassphrase
+    ? ` key-passphrase=${routerOsQuote(profile.keyPassphrase)}`
+    : "";
+  const importScript = [
+    "# Import the shared ISP-managed OVPN profile.",
+    `/interface/ovpn-client/import-ovpn-configuration file-name=${routerOsQuote(profileFileName)} skip-cert-import=no ovpn-user=${routerOsQuote(profile.username)} ovpn-password=${routerOsQuote(profile.password)}${keyPassphrase}`,
+  ].join("\n");
+  let createdIds: string[] = [];
+  try {
+    await transferAndRun(scope, req, importScript);
+    const after = await fetchRouterLoadBalancingInventory(scope.creds);
+    const created = after.ovpnClients.filter(client => client.id && !beforeIds.has(client.id));
+    createdIds = created.map(client => client.id);
+    if (created.length !== 1) {
+      throw new Error("RouterOS did not create exactly one OpenVPN WAN client from the shared profile.");
+    }
+    await configureRouterOvpnWanClient(scope.creds, created[0].id, name, managedComment);
+    const verified = await fetchRouterLoadBalancingInventory(scope.creds);
+    if (!verified.ovpnClients.some(client => client.name === name && client.comment === managedComment)) {
+      await removeRouterOvpnWanClient(scope.creds, created[0].id).catch(() => undefined);
+      throw new Error("RouterOS did not confirm the managed OpenVPN WAN interface.");
+    }
+    return [created[0].id];
+  } catch (error) {
+    if (!createdIds.length) {
+      const after = await fetchRouterLoadBalancingInventory(scope.creds).catch(() => null);
+      createdIds = after?.ovpnClients
+        .filter(client => client.id && !beforeIds.has(client.id))
+        .map(client => client.id) ?? [];
+    }
+    await Promise.all(createdIds.map(id => removeRouterOvpnWanClient(scope.creds, id).catch(() => undefined)));
+    throw error;
+  } finally {
+    await cleanupTemporaryRouterFile(scope, uploaded);
+  }
+}
+
+function encryptedRecoveryOpenVpnProfile(profile?: OpenVpnProfile | null): Record<string, string> | undefined {
+  if (!profile) return undefined;
+  const encrypted = encryptVpnSecret(JSON.stringify(profile));
+  return {
+    ciphertext: encrypted.ciphertext,
+    iv: encrypted.iv,
+    auth_tag: encrypted.auth_tag,
+  };
+}
+
 function verifyApplied(
   internal: LoadBalancingConfig,
   inventory: RouterLoadBalancingInventory,
@@ -727,6 +1086,9 @@ function verifyApplied(
   if (!internal.enabled) {
     if (ownedMangle.length || ownedNat.length || ownedRoutes.length) errors.push("RouterOS still reports active ISPlatty-LB routing or firewall rules.");
     if (inventory.pppoeClients.some(client => client.comment.startsWith("ISPlatty-LB PPPoE "))
+      || inventory.dhcpClients.some(client => client.comment.startsWith("ISPlatty-LB DHCP "))
+      || inventory.vlans.some(vlan => vlan.comment.startsWith("ISPlatty-LB VLAN "))
+      || inventory.ovpnClients.some(client => client.comment.startsWith("ISPlatty-LB OVPN WAN "))
       || inventory.addresses.some(address => address.comment.startsWith("ISPlatty-LB "))) {
       errors.push("RouterOS still reports active ISPlatty-LB WAN interface resources.");
     }
@@ -771,9 +1133,29 @@ function verifyApplied(
         errors.push(`${wan.name}: the generated PPPoE client is missing after apply.`);
       }
     }
+    if (wan.connectionType === "dhcp") {
+      if (!inventory.dhcpClients.some(client =>
+        client.interface === (wan.vlanId === undefined ? wan.interfaceName : `isplatty-vlan${wan.position + 1}`)
+        && client.comment === `ISPlatty-LB DHCP WAN ${wan.position + 1}`,
+      )) errors.push(`${wan.name}: the managed DHCP client is missing after apply.`);
+    }
+    if (wan.vlanId !== undefined) {
+      if (!inventory.vlans.some(vlan =>
+        vlan.name === `isplatty-vlan${wan.position + 1}`
+        && vlan.vlanId === wan.vlanId
+        && vlan.comment.startsWith("ISPlatty-LB VLAN "),
+      )) errors.push(`${wan.name}: the tagged VLAN interface is missing after apply.`);
+    }
+    if (wan.connectionType === "ovpn") {
+      const name = `isplatty-ovpn-wan${wan.position + 1}`;
+      if (!inventory.ovpnClients.some(client =>
+        client.name === name && client.comment.startsWith(`ISPlatty-LB OVPN WAN ${wan.position + 1} `),
+      )) errors.push(`${wan.name}: the managed OpenVPN WAN interface is missing after apply.`);
+    }
     if (wan.connectionType === "static" && wan.staticAddressCidr) {
+      const logicalInterface = wan.vlanId === undefined ? wan.interfaceName : `isplatty-vlan${wan.position + 1}`;
       if (!inventory.addresses.some(address =>
-        address.interface === wan.interfaceName && address.address === wan.staticAddressCidr,
+        address.interface === logicalInterface && address.address === wan.staticAddressCidr,
       )) errors.push(`${wan.name}: the static address is missing after apply.`);
     }
   }
@@ -788,15 +1170,26 @@ async function getRecovery(scope: Scope): Promise<RecoveryRow | null> {
   return rows[0] ?? null;
 }
 
-async function saveRecovery(scope: Scope, script: string, previousConfig: Record<string, unknown>, bridgeFirewallState: boolean): Promise<void> {
+async function saveRecovery(
+  scope: Scope,
+  script: string,
+  previousConfig: Record<string, unknown>,
+  bridgeFirewallState: boolean,
+  previousOpenVpnProfile?: OpenVpnProfile | null,
+): Promise<void> {
   const encrypted = encryptVpnSecret(script);
+  const recoveryProfile = encryptedRecoveryOpenVpnProfile(previousOpenVpnProfile);
   await sbUpsertStrict("isp_router_load_balancing_recovery", "admin_id,router_id", {
     admin_id: scope.adminId,
     router_id: scope.routerId,
     script_ciphertext: encrypted.ciphertext,
     script_iv: encrypted.iv,
     script_auth_tag: encrypted.auth_tag,
-    previous_config: { ...previousConfig, recoveryBridgeFirewall: bridgeFirewallState },
+    previous_config: {
+      ...previousConfig,
+      recoveryBridgeFirewall: bridgeFirewallState,
+      ...(recoveryProfile ? { recoveryOpenVpnProfile: recoveryProfile } : {}),
+    },
     expires_at: new Date(Date.now() + RECOVERY_TTL_MS).toISOString(),
   });
 }
@@ -818,8 +1211,22 @@ async function restoreFromRecovery(scope: Scope, req: Request, recovery: Recover
     iv: recovery.script_iv,
     auth_tag: recovery.script_auth_tag,
   });
-  await transferAndRun(scope, req, script);
   const previous = safeInternalFromPayload(scope, recovery.previous_config);
+  if (previous.enabled && previous.wans.some(wan => wan.enabled && wan.connectionType === "ovpn")) {
+    const encryptedProfile = recovery.previous_config.recoveryOpenVpnProfile;
+    if (!encryptedProfile || typeof encryptedProfile !== "object") {
+      throw new Error("The encrypted OpenVPN recovery profile is missing.");
+    }
+    const record = encryptedProfile as Record<string, unknown>;
+    const decoded = decryptVpnSecret({
+      ciphertext: String(record.ciphertext ?? ""),
+      iv: String(record.iv ?? ""),
+      auth_tag: String(record.auth_tag ?? ""),
+    });
+    const profile = JSON.parse(decoded) as OpenVpnProfile;
+    await ensureOpenVpnWan(scope, req, previous, profile);
+  }
+  await transferAndRun(scope, req, script);
   const [inventory, security] = await Promise.all([
     fetchRouterLoadBalancingInventory(scope.creds),
     fetchRouterSecurityState(scope.creds),
@@ -830,10 +1237,13 @@ async function restoreFromRecovery(scope: Scope, req: Request, recovery: Recover
       && inventory.bridgeUseIpFirewall !== recovery.previous_config.recoveryBridgeFirewall)) {
     throw new Error("RouterOS could not confirm the saved recovery state.");
   }
+  const previousPayload = { ...recovery.previous_config };
+  delete previousPayload.recoveryBridgeFirewall;
+  delete previousPayload.recoveryOpenVpnProfile;
   await sbRpc<{ id: number }>("save_isp_router_load_balancing", {
     p_admin_id: scope.adminId,
     p_router_id: scope.routerId,
-    p_payload: recovery.previous_config,
+    p_payload: previousPayload,
   });
 }
 
@@ -851,6 +1261,93 @@ router.get("/router-load-balancing-source/:token", (req, res): void => {
   }
   res.setHeader("Cache-Control", "no-store, max-age=0");
   res.type("text/plain").send(entry.content);
+});
+
+router.get("/load-balancing/openvpn-profile", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const adminId = await requireRootAdmin(req, res);
+    if (!adminId) return;
+    const profile = await loadOpenVpnProfile(adminId);
+    res.json({
+      ok: true,
+      configured: Boolean(profile),
+      username: profile?.username ?? "",
+    });
+  } catch (error) {
+    logger.error("Shared OpenVPN profile could not be loaded");
+    res.status(500).json({ ok: false, error: "The shared OpenVPN profile could not be loaded." });
+  }
+});
+
+router.put("/load-balancing/openvpn-profile", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const adminId = await requireRootAdmin(req, res);
+    if (!adminId) return;
+    const current = await loadOpenVpnProfile(adminId);
+    const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+    const suppliedText = typeof body.profileText === "string" ? body.profileText : "";
+    const profileText = suppliedText.trim() ? suppliedText : current?.profileText ?? "";
+    const username = String(body.username ?? current?.username ?? "").trim().slice(0, 128);
+    const suppliedPassword = String(body.password ?? "");
+    const suppliedKeyPassphrase = String(body.keyPassphrase ?? "");
+    const password = suppliedPassword.length ? suppliedPassword : current?.password || "";
+    const keyPassphrase = suppliedKeyPassphrase.length ? suppliedKeyPassphrase : current?.keyPassphrase || "";
+    if (!profileText) {
+      res.status(400).json({ ok: false, error: "Choose a .ovpn profile file before saving." });
+      return;
+    }
+    if (Buffer.byteLength(profileText, "utf8") > 300_000) {
+      res.status(413).json({ ok: false, error: "The .ovpn profile is too large (maximum 300 KB)." });
+      return;
+    }
+    if (!username || !password) {
+      res.status(400).json({ ok: false, error: "OpenVPN username and password are required." });
+      return;
+    }
+    if (password.length > 256 || keyPassphrase.length > 256) {
+      res.status(400).json({ ok: false, error: "OpenVPN passwords must be 256 characters or fewer." });
+      return;
+    }
+    try {
+      await openVpnRemoteAddresses(profileText);
+    } catch (error) {
+      res.status(400).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "The .ovpn profile has no usable remote endpoint.",
+      });
+      return;
+    }
+    const next: OpenVpnProfile = { profileText, username, password, keyPassphrase };
+    const enabledConfigs = await sbSelectStrict<{ id: number }>(
+      "isp_router_load_balancing",
+      `admin_id=eq.${adminId}&enabled=is.true&select=id`,
+    );
+    const activeWans = enabledConfigs.length
+      ? await sbSelectStrict<{ id: number }>(
+          "isp_router_load_balancing_wans",
+          `admin_id=eq.${adminId}&load_balancing_id=in.(${enabledConfigs.map(row => row.id).join(",")})&connection_type=eq.ovpn&enabled=is.true&select=id&limit=1`,
+        )
+      : [];
+    if (activeWans.length && (!current || openVpnProfileHash(current) !== openVpnProfileHash(next))) {
+      res.status(409).json({
+        ok: false,
+        error: "Disable managed OpenVPN WANs on all routers before changing the shared profile.",
+      });
+      return;
+    }
+    const encrypted = encryptVpnSecret(JSON.stringify(next));
+    await sbUpsertStrict("isp_admin_openvpn_wan_profiles", "admin_id", {
+      admin_id: adminId,
+      profile_ciphertext: encrypted.ciphertext,
+      profile_iv: encrypted.iv,
+      profile_auth_tag: encrypted.auth_tag,
+      updated_at: new Date().toISOString(),
+    });
+    res.json({ ok: true, configured: true, username });
+  } catch (error) {
+    logger.error("Shared OpenVPN profile could not be saved");
+    res.status(500).json({ ok: false, error: "The shared OpenVPN profile could not be saved." });
+  }
 });
 
 router.get("/router/:id/load-balancing", requireAdmin(), async (req, res): Promise<void> => {
@@ -882,7 +1379,7 @@ router.get("/router/:id/load-balancing/interfaces", requireAdmin(), async (req, 
     res.json({
       ok: true,
       interfaces: {
-        interfaces: inventory.interfaces.map(({ name, type, running, disabled }) => ({ name, type, running, disabled })),
+        interfaces: inventory.interfaces.map(({ name, type, running, disabled, comment }) => ({ name, type, running, disabled, comment })),
         bridges: inventory.bridges,
         bridgePorts: inventory.bridgePorts.map(({ bridge, interface: interfaceName }) => ({ bridge, interface: interfaceName })),
         addresses: inventory.addresses.map(({ interface: interfaceName, address }) => ({ interface: interfaceName, address })),
@@ -906,6 +1403,17 @@ router.put("/router/:id/load-balancing", requireAdmin(), async (req, res): Promi
     }
     const previous = await loadProfile(scope.adminId, scope.routerId);
     const internal = await internalConfig(client, scope, previous);
+    if (internal.enabled && internal.wans.some(wan => wan.enabled && wan.connectionType === "ovpn")) {
+      const profile = await loadOpenVpnProfile(scope.adminId);
+      if (!profile) {
+        res.status(400).json({ ok: false, errors: ["Upload the shared OpenVPN profile before enabling a managed OVPN WAN."] });
+        return;
+      }
+      const remotes = await openVpnRemoteAddresses(profile.profileText);
+      for (const wan of internal.wans) {
+        if (wan.connectionType === "ovpn") wan.ovpnRemoteAddresses = remotes;
+      }
+    }
     const validation = validateLoadBalancingConfig(internal, scope.routerId, scope.adminId);
     if (validation.errors.length || !validation.config) {
       res.status(400).json({ ok: false, errors: validation.errors });
@@ -971,9 +1479,26 @@ router.post("/router/:id/load-balancing/apply", requireAdmin(), async (req, res)
     const oldScript = buildLoadBalancingScript(oldInternal, prepared.inventory.routerVersion).script;
     const bridgeRestore = previousProfileBridgeRestoreScript(prepared.internal, prepared.inventory);
     const recoveryScript = `${oldScript}${bridgeRestore}`;
-    await saveRecovery(scope, recoveryScript, previous.rpcPayload, prepared.inventory.bridgeUseIpFirewall);
+    const previousNeedsOvpn = oldInternal.enabled && oldInternal.wans.some(wan => wan.enabled && wan.connectionType === "ovpn");
+    const previousOpenVpnProfile = previousNeedsOvpn ? await loadOpenVpnProfile(scope.adminId) : null;
+    if (previousNeedsOvpn && !previousOpenVpnProfile) {
+      res.status(409).json({ ok: false, error: "The existing OpenVPN WAN has no recoverable shared profile. Restore the profile before applying changes." });
+      return;
+    }
+    await saveRecovery(
+      scope,
+      recoveryScript,
+      previous.rpcPayload,
+      prepared.inventory.bridgeUseIpFirewall,
+      previousOpenVpnProfile,
+    );
+    const recovery = await getRecovery(scope);
+    if (!recovery) throw new Error("The encrypted recovery point could not be saved.");
 
     try {
+      if (prepared.openVpnProfile) {
+        await ensureOpenVpnWan(scope, req, prepared.internal, prepared.openVpnProfile);
+      }
       await transferAndRun(scope, req, prepared.script);
       const [inventory, security] = await Promise.all([
         fetchRouterLoadBalancingInventory(scope.creds),
@@ -986,22 +1511,7 @@ router.post("/router/:id/load-balancing/apply", requireAdmin(), async (req, res)
     } catch (error) {
       let rollbackOk = false;
       try {
-        await transferAndRun(scope, req, recoveryScript);
-        const [restoredInventory, restoredSecurity] = await Promise.all([
-          fetchRouterLoadBalancingInventory(scope.creds),
-          fetchRouterSecurityState(scope.creds),
-        ]);
-        if (verifyApplied(oldInternal, restoredInventory, restoredSecurity).length
-          || restoredInventory.bridgeUseIpFirewall !== prepared.inventory.bridgeUseIpFirewall) {
-          throw new Error("The previous RouterOS state could not be verified.");
-        }
-        if (previous.parent) {
-          await sbRpc<{ id: number }>("save_isp_router_load_balancing", {
-            p_admin_id: scope.adminId,
-            p_router_id: scope.routerId,
-            p_payload: previous.rpcPayload,
-          });
-        }
+        await restoreFromRecovery(scope, req, recovery);
         rollbackOk = true;
       } catch {
         rollbackOk = false;

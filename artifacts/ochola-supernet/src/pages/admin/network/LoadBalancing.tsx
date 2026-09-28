@@ -29,7 +29,7 @@ import {
   useAdminRouterContext,
 } from "@/lib/admin-router-context";
 
-type ConnectionType = "static" | "pppoe";
+type ConnectionType = "static" | "pppoe" | "dhcp" | "existing" | "ovpn";
 type BalancingMode = "weighted" | "failover";
 type RouterOsVersion = "auto" | "6" | "7";
 
@@ -37,6 +37,8 @@ type WanConfig = {
   name: string;
   interfaceName: string;
   connectionType: ConnectionType;
+  vlanId?: number | "";
+  underlayWanPosition?: number | "";
   staticAddressCidr: string;
   gateway: string;
   weight: number;
@@ -72,6 +74,7 @@ type InterfaceInfo = {
   type: string;
   running: boolean;
   disabled: boolean;
+  comment?: string;
 };
 
 type InterfacePayload = {
@@ -93,6 +96,11 @@ type PreviewResult = {
   scriptPreview: string;
   previewHash: string;
   enabledWanCount: number;
+};
+
+type OpenVpnProfileInfo = {
+  configured: boolean;
+  username: string;
 };
 
 const card: CSSProperties = {
@@ -132,6 +140,8 @@ function defaultWan(position: number, interfaceName = ""): WanConfig {
     pppoeUsername: "",
     pppoePassword: "",
     pppoeSecretConfigured: false,
+    vlanId: "",
+    underlayWanPosition: "",
     reassignFromBridge: false,
     bridgeName: "",
   };
@@ -139,13 +149,15 @@ function defaultWan(position: number, interfaceName = ""): WanConfig {
 
 function normalizeConfig(raw: Partial<LoadBalancingConfig> | null | undefined, routerId: number): LoadBalancingConfig {
   const sourceWans = Array.isArray(raw?.wans) ? raw.wans : [];
-  const wans = (sourceWans.length ? sourceWans : [defaultWan(1)]).map((wan, index) => ({
+  const wans: WanConfig[] = (sourceWans.length ? sourceWans : [defaultWan(1)]).map((wan, index) => ({
     ...defaultWan(index + 1),
     ...wan,
     position: Number(wan.position) || index + 1,
     weight: Number(wan.weight) || 1,
     pppoePassword: "",
     pppoeSecretConfigured: Boolean(wan.pppoeSecretConfigured),
+    vlanId: wan.vlanId == null ? "" : Number(wan.vlanId),
+    underlayWanPosition: wan.underlayWanPosition == null ? "" : Number(wan.underlayWanPosition),
     reassignFromBridge: Boolean(wan.reassignFromBridge),
   }));
   return {
@@ -255,12 +267,43 @@ export default function LoadBalancing() {
   const [confirmationName, setConfirmationName] = useState("");
   const [applyOpen, setApplyOpen] = useState(false);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [openVpnProfileInfo, setOpenVpnProfileInfo] = useState<OpenVpnProfileInfo | null>(null);
+  const [openVpnProfileEditable, setOpenVpnProfileEditable] = useState(true);
+  const [openVpnProfileText, setOpenVpnProfileText] = useState("");
+  const [openVpnProfileFileName, setOpenVpnProfileFileName] = useState("");
+  const [openVpnUsername, setOpenVpnUsername] = useState("");
+  const [openVpnPassword, setOpenVpnPassword] = useState("");
+  const [openVpnKeyPassphrase, setOpenVpnKeyPassphrase] = useState("");
+  const [openVpnProfileSaving, setOpenVpnProfileSaving] = useState(false);
+  const [openVpnProfileError, setOpenVpnProfileError] = useState("");
+  const [openVpnProfileNotice, setOpenVpnProfileNotice] = useState("");
 
   useEffect(() => {
     if (selectedRouterId === null && routers.length > 0) setSelectedRouterId(routers[0].id);
   }, [routers, selectedRouterId]);
 
   const selectedRouter = routers.find(router => router.id === selectedRouterId);
+
+  const loadOpenVpnProfileInfo = useCallback(async () => {
+    try {
+      const response = await apiJson<{ ok: boolean; configured: boolean; username: string }>("/api/load-balancing/openvpn-profile");
+      setOpenVpnProfileInfo({ configured: response.configured, username: response.username || "" });
+      setOpenVpnUsername(response.username || "");
+      setOpenVpnProfileEditable(true);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause.message : "Shared OpenVPN profile access is unavailable.";
+      if (/only the isp owner/i.test(error)) {
+        setOpenVpnProfileEditable(false);
+        setOpenVpnProfileError("");
+      } else {
+        setOpenVpnProfileError(error);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadOpenVpnProfileInfo();
+  }, [loadOpenVpnProfileInfo]);
 
   const loadRouterData = useCallback(async (routerId: number) => {
     setLoading(true);
@@ -296,6 +339,16 @@ export default function LoadBalancing() {
     }),
     [interfaces],
   );
+  const existingWanInterfaces = useMemo(
+    () => (interfaces?.interfaces ?? []).filter(item => {
+      const type = item.type.toLowerCase();
+      const identity = `${item.name} ${item.comment ?? ""}`;
+      if (item.disabled || type.includes("bridge") || type.includes("ether") || type.includes("sfp")) return false;
+      if (/mainbillingvpn|ochola.*management|vps tunnel|do not delete.*management vpn/i.test(identity)) return false;
+      return true;
+    }),
+    [interfaces],
+  );
   const availableLanInterfaces = useMemo(
     () => interfaces?.bridges ?? [],
     [interfaces],
@@ -324,12 +377,20 @@ export default function LoadBalancing() {
     if (config.enabled && enabledWans.length === 0) issues.push("Enable at least one WAN before previewing.");
     if (config.enabled && !config.lanInterface) issues.push("Choose the LAN bridge that serves customer traffic.");
     enabledWans.forEach((wan, index) => {
-      if (!wan.interfaceName) issues.push(`WAN ${index + 1} needs a physical interface.`);
+      if (["static", "pppoe", "dhcp", "existing"].includes(wan.connectionType) && !wan.interfaceName) {
+        issues.push(`WAN ${index + 1} needs an interface.`);
+      }
       if (wan.connectionType === "static" && !wan.gateway) issues.push(`${wan.name || `WAN ${index + 1}`} needs a gateway.`);
+      if (config.enabled && wan.connectionType === "ovpn" && !wan.underlayWanPosition) issues.push(`${wan.name || `WAN ${index + 1}`} needs a transport WAN.`);
+      if (config.enabled && wan.connectionType === "ovpn" && wan.underlayWanPosition) {
+        const underlay = config.wans.find(candidate => candidate.position === wan.underlayWanPosition);
+        if (!underlay?.enabled || underlay.connectionType === "ovpn") issues.push(`${wan.name || `WAN ${index + 1}`} needs a different enabled non-OpenVPN transport WAN.`);
+      }
+      if (config.enabled && wan.connectionType === "ovpn" && openVpnProfileInfo?.configured === false) issues.push("Save the shared OpenVPN profile before previewing this WAN.");
       if (config.mode === "weighted" && wan.weight < 1) issues.push(`${wan.name || `WAN ${index + 1}`} needs a weight of at least 1.`);
     });
     return issues;
-  }, [config]);
+  }, [config, openVpnProfileInfo]);
 
   const addWan = () => updateConfig(next => {
     const position = next.wans.length + 1;
@@ -341,7 +402,15 @@ export default function LoadBalancing() {
     if (next.wans.length <= 1) return;
     next.wans = next.wans
       .filter(wan => wan.position !== position)
-      .map((wan, index) => ({ ...wan, position: index + 1 }));
+      .map((wan, index) => ({
+        ...wan,
+        position: index + 1,
+        underlayWanPosition: wan.underlayWanPosition === position
+          ? ""
+          : wan.underlayWanPosition && wan.underlayWanPosition > position
+            ? wan.underlayWanPosition - 1
+            : wan.underlayWanPosition,
+      }));
     next.lanLinks = next.lanLinks.map(link => ({
       ...link,
       wanPosition: link.wanPosition === position ? 1 : link.wanPosition > position ? link.wanPosition - 1 : link.wanPosition,
@@ -353,7 +422,23 @@ export default function LoadBalancing() {
     const target = index + direction;
     if (index < 0 || target < 0 || target >= next.wans.length) return;
     [next.wans[index], next.wans[target]] = [next.wans[target], next.wans[index]];
-    next.wans = next.wans.map((wan, itemIndex) => ({ ...wan, position: itemIndex + 1 }));
+    next.wans = next.wans.map((wan, itemIndex) => {
+      const oldUnderlay = Number(wan.underlayWanPosition) || 0;
+      const movedUnderlay = oldUnderlay === position
+        ? position + direction
+        : oldUnderlay === position + direction
+          ? position
+          : oldUnderlay;
+      return { ...wan, position: itemIndex + 1, underlayWanPosition: movedUnderlay || "" };
+    });
+    next.lanLinks = next.lanLinks.map(link => ({
+      ...link,
+      wanPosition: link.wanPosition === position
+        ? position + direction
+        : link.wanPosition === position + direction
+          ? position
+          : link.wanPosition,
+    }));
   });
 
   const addLanLink = () => updateConfig(next => {
@@ -361,6 +446,34 @@ export default function LoadBalancing() {
     if (!unused) return;
     next.lanLinks.push({ interfaceName: unused, wanPosition: next.wans[0]?.position ?? 1, maxMbps: 10 });
   });
+
+  const saveOpenVpnProfile = async () => {
+    setOpenVpnProfileSaving(true);
+    setOpenVpnProfileError("");
+    setOpenVpnProfileNotice("");
+    try {
+      const result = await apiJson<{ configured: boolean; username: string }>("/api/load-balancing/openvpn-profile", {
+        method: "PUT",
+        body: JSON.stringify({
+          profileText: openVpnProfileText,
+          username: openVpnUsername,
+          password: openVpnPassword,
+          keyPassphrase: openVpnKeyPassphrase,
+        }),
+      });
+      setOpenVpnProfileInfo({ configured: result.configured, username: result.username || "" });
+      setOpenVpnUsername(result.username || "");
+      setOpenVpnProfileText("");
+      setOpenVpnProfileFileName("");
+      setOpenVpnPassword("");
+      setOpenVpnKeyPassphrase("");
+      setOpenVpnProfileNotice("Shared OpenVPN profile saved securely.");
+    } catch (cause) {
+      setOpenVpnProfileError(cause instanceof Error ? cause.message : "The shared OpenVPN profile could not be saved.");
+    } finally {
+      setOpenVpnProfileSaving(false);
+    }
+  };
 
   const previewChanges = async () => {
     if (!config || selectedRouterId === null) return;
@@ -605,6 +718,79 @@ export default function LoadBalancing() {
                 <section className="isp-card lw-section">
                   <div className="lw-section-head">
                     <div>
+                      <div className="lw-section-title"><ShieldCheck size={17} /> Shared OpenVPN WAN profile</div>
+                      <p className="lw-section-note">Used only when creating a dedicated customer WAN tunnel. The router-management VPN is never reused.</p>
+                    </div>
+                    {openVpnProfileInfo?.configured && <span className="lw-status"><span className="lw-status-dot" /> profile saved</span>}
+                  </div>
+                  <div className="lw-section-body" style={{ display: "grid", gap: 12 }}>
+                    {!openVpnProfileEditable ? (
+                      <Notice kind="info">Only the ISP owner can manage this shared profile.</Notice>
+                    ) : (
+                      <>
+                        <p className="lw-section-note" style={{ margin: 0 }}>
+                          Upload a standard .ovpn file and enter its authentication details here. The file and passwords are encrypted and never shown again. Disable managed OVPN WANs on all routers before replacing a profile that is in use.
+                        </p>
+                        <div className="lw-field">
+                          <label style={fieldLabel}>OpenVPN profile file</label>
+                          <input
+                            className="lw-input"
+                            type="file"
+                            accept=".ovpn,application/x-openvpn-profile,text/plain"
+                            onChange={async event => {
+                              const file = event.target.files?.[0];
+                              if (!file) return;
+                              if (file.size > 300_000) {
+                                setOpenVpnProfileError("The .ovpn profile is too large (maximum 300 KB).");
+                                return;
+                              }
+                              try {
+                                setOpenVpnProfileText(await file.text());
+                                setOpenVpnProfileFileName(file.name);
+                                setOpenVpnProfileError("");
+                              } catch {
+                                setOpenVpnProfileError("The selected .ovpn file could not be read.");
+                              }
+                            }}
+                          />
+                          {openVpnProfileFileName && <div className="lw-secret-note">Selected: {openVpnProfileFileName}</div>}
+                          {openVpnProfileInfo?.configured && !openVpnProfileFileName && <div className="lw-secret-note">Leave the file empty to keep the saved profile.</div>}
+                        </div>
+                        <div className="lw-general-grid">
+                          <div className="lw-field">
+                            <label style={fieldLabel}>OpenVPN username</label>
+                            <input className="lw-input" value={openVpnUsername} onChange={event => setOpenVpnUsername(event.target.value)} autoComplete="username" />
+                          </div>
+                          <div className="lw-field">
+                            <label style={fieldLabel}>OpenVPN password</label>
+                            <input className="lw-input" type="password" value={openVpnPassword} onChange={event => setOpenVpnPassword(event.target.value)} placeholder={openVpnProfileInfo?.configured ? "Leave blank to keep current password" : "Write-only secret"} autoComplete="new-password" />
+                          </div>
+                          <div className="lw-field">
+                            <label style={fieldLabel}>Certificate key passphrase</label>
+                            <input className="lw-input" type="password" value={openVpnKeyPassphrase} onChange={event => setOpenVpnKeyPassphrase(event.target.value)} placeholder={openVpnProfileInfo?.configured ? "Leave blank to keep current passphrase" : "Optional"} autoComplete="new-password" />
+                          </div>
+                        </div>
+                        {openVpnProfileError && <Notice kind="error">{openVpnProfileError}</Notice>}
+                        {openVpnProfileNotice && <Notice kind="success">{openVpnProfileNotice}</Notice>}
+                        <div>
+                          <button
+                            type="button"
+                            className="lw-btn lw-btn-primary"
+                            onClick={() => void saveOpenVpnProfile()}
+                            disabled={openVpnProfileSaving || !openVpnUsername.trim() || (!openVpnProfileInfo?.configured && !openVpnPassword) || (!openVpnProfileInfo?.configured && !openVpnProfileText)}
+                          >
+                            {openVpnProfileSaving ? <Loader2 size={14} className="spin" /> : <ShieldCheck size={14} />}
+                            {openVpnProfileSaving ? "Saving profile…" : "Save shared profile"}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </section>
+
+                <section className="isp-card lw-section">
+                  <div className="lw-section-head">
+                    <div>
                       <div className="lw-section-title"><PlugZap size={17} /> Uplink inventory</div>
                       <p className="lw-section-note">{config.mode === "weighted" ? "Weights influence new connections; health checks remove failed uplinks from rotation." : "Position 1 is primary. Later uplinks are used only when earlier paths fail."}</p>
                     </div>
@@ -629,23 +815,59 @@ export default function LoadBalancing() {
                               <input className="lw-input" value={wan.name} onChange={event => updateConfig(next => { next.wans[index].name = event.target.value; })} placeholder="e.g. Safaricom fibre" />
                             </div>
                             <div className="lw-field">
-                              <label style={fieldLabel}>Router interface</label>
-                              <select className="lw-select" value={wan.interfaceName} onChange={event => updateConfig(next => { next.wans[index].interfaceName = event.target.value; })}>
-                                <option value="">Select port</option>
-                                {physicalInterfaces.map(item => <option key={item.name} value={item.name}>{item.name} · {item.type}{item.running ? "" : " · down"}</option>)}
-                              </select>
+                              <label style={fieldLabel}>{wan.connectionType === "ovpn" ? "Managed tunnel interface" : wan.connectionType === "existing" ? "Existing routed interface" : "Physical port"}</label>
+                              {wan.connectionType === "ovpn" ? (
+                                <input className="lw-input" value={`isplatty-ovpn-wan${wan.position}`} readOnly />
+                              ) : (
+                                <select
+                                  className="lw-select"
+                                  value={wan.interfaceName}
+                                  onChange={event => updateConfig(next => { next.wans[index].interfaceName = event.target.value; })}
+                                >
+                                  <option value="">Select interface</option>
+                                  {(wan.connectionType === "existing" ? existingWanInterfaces : physicalInterfaces).map(item => (
+                                    <option key={item.name} value={item.name}>{item.name} · {item.type}{item.running ? "" : " · down"}</option>
+                                  ))}
+                                </select>
+                              )}
                             </div>
                             <div className="lw-field">
                               <label style={fieldLabel}>Connection type</label>
-                              <select className="lw-select" value={wan.connectionType} onChange={event => updateConfig(next => { next.wans[index].connectionType = event.target.value as ConnectionType; })}>
+                              <select className="lw-select" value={wan.connectionType} onChange={event => updateConfig(next => {
+                                const connectionType = event.target.value as ConnectionType;
+                                const row = next.wans[index];
+                                row.connectionType = connectionType;
+                                row.vlanId = ["static", "pppoe", "dhcp"].includes(connectionType) ? row.vlanId ?? "" : "";
+                                row.reassignFromBridge = false;
+                                if (connectionType === "ovpn") {
+                                  row.interfaceName = `isplatty-ovpn-wan${row.position}`;
+                                  const underlay = next.wans.find(candidate => candidate.position !== row.position && candidate.enabled && candidate.connectionType !== "ovpn");
+                                  row.underlayWanPosition = underlay?.position ?? "";
+                                } else if (connectionType === "existing") {
+                                  row.interfaceName = "";
+                                  row.underlayWanPosition = "";
+                                } else {
+                                  if (!physicalInterfaces.some(item => item.name === row.interfaceName)) row.interfaceName = physicalInterfaces[0]?.name ?? "";
+                                  row.underlayWanPosition = "";
+                                }
+                              })}>
                                 <option value="static">Static address</option>
                                 <option value="pppoe">PPPoE client</option>
+                                <option value="dhcp">DHCP client</option>
+                                <option value="existing">Use existing interface</option>
+                                <option value="ovpn">Managed OpenVPN tunnel</option>
                               </select>
                             </div>
                             <div className="lw-field">
                               <label style={fieldLabel}>{config.mode === "weighted" ? "Connection weight" : "Failover order"}</label>
                               <input className="lw-input" type="number" min={1} step={1} value={config.mode === "weighted" ? wan.weight : wan.position} disabled={config.mode === "failover"} onChange={event => updateConfig(next => { next.wans[index].weight = Math.max(1, Number(event.target.value) || 1); })} />
                             </div>
+                            {["static", "pppoe", "dhcp"].includes(wan.connectionType) && (
+                              <div className="lw-field">
+                                <label style={fieldLabel}>VLAN tag (optional)</label>
+                                <input className="lw-input" type="number" min={1} max={4094} step={1} value={wan.vlanId ?? ""} onChange={event => updateConfig(next => { next.wans[index].vlanId = event.target.value ? Number(event.target.value) : ""; })} placeholder="1–4094" />
+                              </div>
+                            )}
                             {wan.connectionType === "static" ? (
                               <>
                                 <div className="lw-field lw-span-2">
@@ -657,7 +879,7 @@ export default function LoadBalancing() {
                                   <input className="lw-input" value={wan.gateway} onChange={event => updateConfig(next => { next.wans[index].gateway = event.target.value; })} placeholder="e.g. 197.248.12.9" />
                                 </div>
                               </>
-                            ) : (
+                            ) : wan.connectionType === "pppoe" ? (
                               <>
                                 <div className="lw-field">
                                   <label style={fieldLabel}>PPPoE username</label>
@@ -669,17 +891,44 @@ export default function LoadBalancing() {
                                   <div className="lw-secret-note">Stored passwords are never displayed. Leave blank to keep the current secret.</div>
                                 </div>
                               </>
+                            ) : wan.connectionType === "dhcp" ? (
+                              <div className="lw-field lw-span-2">
+                                <div className="lw-secret-note">RouterOS will obtain the address and gateway from the ISP using DHCP.</div>
+                              </div>
+                            ) : wan.connectionType === "existing" ? (
+                              <div className="lw-field">
+                                <label style={fieldLabel}>Gateway (optional for point-to-point)</label>
+                                <input className="lw-input" value={wan.gateway} onChange={event => updateConfig(next => { next.wans[index].gateway = event.target.value; })} placeholder="IPv4 gateway, or blank" />
+                              </div>
+                            ) : (
+                              <>
+                                <div className="lw-field lw-span-2">
+                                  <label style={fieldLabel}>Transport WAN</label>
+                                  <select className="lw-select" value={wan.underlayWanPosition ?? ""} onChange={event => updateConfig(next => { next.wans[index].underlayWanPosition = event.target.value ? Number(event.target.value) : ""; })}>
+                                    <option value="">Select an enabled non-OpenVPN WAN</option>
+                                    {config.wans.filter(candidate => candidate.enabled && candidate.position !== wan.position && candidate.connectionType !== "ovpn").map(candidate => (
+                                      <option key={candidate.position} value={candidate.position}>{candidate.position} · {candidate.name || `WAN ${candidate.position}`}</option>
+                                    ))}
+                                  </select>
+                                  <div className="lw-secret-note">The tunnel endpoint is pinned to this WAN to prevent a routing loop.</div>
+                                </div>
+                                <div className="lw-field lw-span-2">
+                                  {openVpnProfileInfo?.configured
+                                    ? <div className="lw-secret-note">The ISP owner's shared profile is saved and will be imported for this dedicated WAN tunnel.</div>
+                                    : <Notice kind="warning">Save the shared OpenVPN profile above before enabling this WAN.</Notice>}
+                                </div>
+                              </>
                             )}
                             <div className="lw-field">
                               <label style={fieldLabel}>Health check IP</label>
                               <input className="lw-input" value={wan.healthCheckIp} onChange={event => updateConfig(next => { next.wans[index].healthCheckIp = event.target.value; })} placeholder="1.1.1.1" />
                             </div>
-                            <div className="lw-field lw-span-2">
+                            {["static", "pppoe", "dhcp"].includes(wan.connectionType) && <div className="lw-field lw-span-2">
                               <div className="lw-check-row" style={{ minHeight: 38 }}>
                                 <div className="lw-check-copy"><strong>Promote an existing bridge port</strong><span>Remove this port from its current bridge before assigning it as WAN.</span></div>
                                 <Toggle checked={wan.reassignFromBridge} onChange={checked => updateConfig(next => { next.wans[index].reassignFromBridge = checked; })} label={`Promote ${wan.interfaceName || "port"} from its bridge`} />
                               </div>
-                            </div>
+                            </div>}
                             {wan.reassignFromBridge && (
                               <div className="lw-field">
                                 <label style={fieldLabel}>Current bridge</label>
