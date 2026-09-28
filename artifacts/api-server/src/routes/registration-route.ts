@@ -16,6 +16,11 @@ import {
   getWhatsAppSettings,
   isWhatsAppFeatureEnabled,
 } from "../services/whatsapp/whatsapp-service.js";
+import {
+  consumeSmsActionToken,
+  getSmsSettings,
+  isSmsFeatureEnabled,
+} from "../services/sms/sms-service.js";
 
 const router: IRouter = Router();
 const INITIAL_ADMIN_USERNAME = "admin";
@@ -260,6 +265,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
 
   let registrationVerificationRequired =
     process.env.WHATSAPP_REQUIRE_REGISTRATION_VERIFICATION === "true";
+  let smsRegistrationVerificationRequired = false;
   try {
     const whatsappSettings = await getWhatsAppSettings();
     registrationVerificationRequired ||= isWhatsAppFeatureEnabled(
@@ -276,17 +282,30 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
       return;
     }
   }
+  try {
+    const smsSettings = await getSmsSettings();
+    smsRegistrationVerificationRequired = isSmsFeatureEnabled(
+      smsSettings,
+      "registrationVerification",
+    );
+  } catch (error) {
+    logger.warn({ err: error }, "[registration] SMS settings unavailable");
+  }
+  registrationVerificationRequired ||= smsRegistrationVerificationRequired;
   if (registrationVerificationRequired) {
     const verificationToken = typeof req.body?.phoneVerificationToken === "string"
       ? req.body.phoneVerificationToken.trim()
       : "";
     const consumed = verificationToken
-      ? await consumeWhatsAppActionToken(verificationToken, phoneE164, "registration")
+      ? await consumeWhatsAppActionToken(verificationToken, phoneE164, "registration") ||
+        await consumeSmsActionToken(verificationToken, phoneE164, "registration")
       : null;
     if (!consumed) {
       res.status(403).json({
         ok: false,
-        error: "Verify this phone number through WhatsApp before continuing registration.",
+        error: smsRegistrationVerificationRequired
+          ? "Verify this phone number through SMS before continuing registration."
+          : "Verify this phone number through WhatsApp before continuing registration.",
       });
       return;
     }

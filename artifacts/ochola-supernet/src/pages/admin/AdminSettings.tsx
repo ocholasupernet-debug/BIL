@@ -947,50 +947,14 @@ function BillingTab() {
 
 function SmsEmailTab() {
   const brand = useBrand();
-  const [smsGateway, setSmsGateway] = useState("africastalking");
   const [smtpAuth, setSmtpAuth] = useState(true);
 
   return (
     <>
-      <Card title="SMS Gateway" desc="Send OTPs, expiry alerts, and bulk SMS to customers">
-        <Field label="SMS Provider">
-          <Select value={smsGateway} onChange={e => setSmsGateway(e.target.value)}>
-            <option value="africastalking">Africa's Talking</option>
-            <option value="twilio">Twilio</option>
-            <option value="vonage">Vonage (Nexmo)</option>
-            <option value="custom">Custom HTTP API</option>
-          </Select>
-        </Field>
-        {smsGateway === "africastalking" && (
-          <Grid2>
-            <Field label="Username"><Input defaultValue="ocholasupernet" /></Field>
-            <Field label="API Key"><Input type="password" placeholder="•••••••••••••••••" /></Field>
-            <Field label="Sender ID"><Input defaultValue="ISPLATTY" /></Field>
-            <Field label="Environment">
-              <Select defaultValue="live">
-                <option value="sandbox">Sandbox</option>
-                <option value="live">Live</option>
-              </Select>
-            </Field>
-          </Grid2>
-        )}
-        {smsGateway === "twilio" && (
-          <Grid2>
-            <Field label="Account SID"><Input placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" /></Field>
-            <Field label="Auth Token"><Input type="password" placeholder="•••••••••••••••••" /></Field>
-            <Field label="From Number"><Input placeholder="+1234567890" /></Field>
-          </Grid2>
-        )}
-        {smsGateway === "custom" && (
-          <>
-            <Field label="API Endpoint URL"><Input placeholder="https://sms.yourgw.com/send" /></Field>
-            <Grid2>
-              <Field label="Auth Header Name"><Input placeholder="Authorization" /></Field>
-              <Field label="Auth Header Value"><Input type="password" placeholder="Bearer xxxxxxxx" /></Field>
-            </Grid2>
-          </>
-        )}
-        <Row><SaveBtn label="Save SMS Settings" /></Row>
+      <Card title="SMS Gateway" desc="The platform owner manages the Africa’s Talking connection and SMS feature switches">
+        <p style={{ color: C.muted, fontSize: "0.84rem", lineHeight: 1.6, margin: 0 }}>
+          Do not enter provider credentials here. SMS delivery, authentication codes, and notification settings are managed centrally.
+        </p>
       </Card>
 
       <Card title="Email / SMTP" desc="Outgoing email for invoices, welcome messages, and expiry alerts">

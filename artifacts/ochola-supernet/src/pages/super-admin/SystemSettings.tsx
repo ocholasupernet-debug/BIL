@@ -52,8 +52,6 @@ export default function SuperAdminSystemSettings() {
     radiusHost: "127.0.0.1",
     radiusPort: "1812",
     radiusSecret: "",
-    smsApiKey: "",
-    smsProvider: "AfricasTalking",
     taxRate: "16",
     currency: "KES",
     timezone: "Africa/Nairobi",
@@ -61,7 +59,6 @@ export default function SuperAdminSystemSettings() {
     maintenanceMode: false,
     registrationOpen: true,
     emailVerification: false,
-    smsNotifications: true,
     autoSuspend: true,
     darkModeDefault: true,
   });
@@ -193,19 +190,14 @@ export default function SuperAdminSystemSettings() {
           </div>
         </Card>
 
-        {/* SMS */}
-        <Card title="SMS Provider" icon={Sliders}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
-            <Field label="SMS Provider">
-              <select style={inp} value={cfg.smsProvider} onChange={e => set("smsProvider", e.target.value)}>
-                <option value="AfricasTalking">Africa's Talking</option>
-                <option value="Twilio">Twilio</option>
-                <option value="Nexmo">Vonage / Nexmo</option>
-                <option value="Custom">Custom API</option>
-              </select>
-            </Field>
-            <Field label="API Key"><input style={inp} type="password" value={cfg.smsApiKey} onChange={e => set("smsApiKey", e.target.value)} placeholder="••••••••••" /></Field>
-          </div>
+        {/* SMS settings are managed in their dedicated platform integration page. */}
+        <Card title="SMS Messaging" icon={Sliders}>
+          <p style={{ color: "var(--text-muted, #94a3b8)", fontSize: 13, lineHeight: 1.6, marginTop: 0 }}>
+            Configure Africa’s Talking credentials and SMS features in the dedicated messaging settings.
+          </p>
+          <a href="/super-admin/sms" style={{ display: "inline-block", color: "var(--accent, #38bdf8)", fontSize: 13, fontWeight: 600, textDecoration: "none" }}>
+            Open SMS settings →
+          </a>
         </Card>
 
         {/* Flags */}
@@ -213,7 +205,6 @@ export default function SuperAdminSystemSettings() {
           <Toggle on={cfg.maintenanceMode} onChange={v => set("maintenanceMode", v)} label="Maintenance Mode (locks out all ISP admins)" />
           <Toggle on={cfg.registrationOpen} onChange={v => set("registrationOpen", v)} label="Open ISP Registration (allow new signups)" />
           <Toggle on={cfg.emailVerification} onChange={v => set("emailVerification", v)} label="Require Email Verification on Signup" />
-          <Toggle on={cfg.smsNotifications} onChange={v => set("smsNotifications", v)} label="SMS Notifications Enabled" />
           <Toggle on={cfg.autoSuspend} onChange={v => set("autoSuspend", v)} label="Auto-Suspend overdue ISP accounts" />
           <Toggle on={cfg.darkModeDefault} onChange={v => set("darkModeDefault", v)} label="Dark Mode as Default Theme" />
         </Card>

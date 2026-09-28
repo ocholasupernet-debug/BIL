@@ -5,6 +5,10 @@ import {
   enqueueWhatsAppExpiryNotifications,
   processWhatsAppOutboxBatch,
 } from "./services/whatsapp/whatsapp-service.js";
+import {
+  enqueueSmsExpiryNotifications,
+  processSmsOutboxBatch,
+} from "./services/sms/sms-service.js";
 
 const rawPort = process.env["PORT"];
 
@@ -51,6 +55,30 @@ app.listen(port, (err) => {
       setInterval(() => void runWhatsAppWorker(), 30_000);
     }, 15_000);
     logger.info({ intervalSeconds: 30 }, "[whatsapp] outbox worker started");
+  }
+  if (process.env.NODE_ENV === "production" && process.env.SMS_WORKER_ENABLED !== "false") {
+    let smsWorkerBusy = false;
+    let lastSmsExpirySweep = 0;
+    const runSmsWorker = async () => {
+      if (smsWorkerBusy) return;
+      smsWorkerBusy = true;
+      try {
+        await processSmsOutboxBatch(10);
+        if (Date.now() - lastSmsExpirySweep >= 60 * 60 * 1000) {
+          await enqueueSmsExpiryNotifications();
+          lastSmsExpirySweep = Date.now();
+        }
+      } catch (error) {
+        logger.warn({ err: error }, "[sms] background delivery sweep failed");
+      } finally {
+        smsWorkerBusy = false;
+      }
+    };
+    setTimeout(() => {
+      void runSmsWorker();
+      setInterval(() => void runSmsWorker(), 30_000);
+    }, 15_000);
+    logger.info({ intervalSeconds: 30 }, "[sms] outbox worker started");
   }
 
   /* ── Background router health monitor ─────────────────────────────────────

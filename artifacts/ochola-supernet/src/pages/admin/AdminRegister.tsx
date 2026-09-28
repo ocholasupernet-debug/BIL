@@ -37,6 +37,8 @@ export default function AdminRegister() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [whatsappRegistrationCheck, setWhatsappRegistrationCheck] = useState(false);
+  const [smsRegistrationCheck, setSmsRegistrationCheck] = useState(false);
+  const [phoneVerificationChannel, setPhoneVerificationChannel] = useState<"whatsapp" | "sms">("whatsapp");
   const [phoneVerificationChallenge, setPhoneVerificationChallenge] = useState("");
   const [phoneVerificationCode, setPhoneVerificationCode] = useState("");
   const [phoneVerificationToken, setPhoneVerificationToken] = useState("");
@@ -72,32 +74,43 @@ export default function AdminRegister() {
   const [manualCheckNow, setManualCheckNow] = useState(0);
 
   useEffect(() => {
-    void fetch("/api/whatsapp/public-config", { cache: "no-store" })
-      .then(response => response.json())
-      .then(data => setWhatsappRegistrationCheck(data?.registrationVerificationEnabled === true))
-      .catch(() => setWhatsappRegistrationCheck(false));
+    void Promise.all([
+      fetch("/api/whatsapp/public-config", { cache: "no-store" })
+        .then(response => response.ok ? response.json() : null)
+        .catch(() => null),
+      fetch("/api/sms/public-config", { cache: "no-store" })
+        .then(response => response.ok ? response.json() : null)
+        .catch(() => null),
+    ]).then(([whatsapp, sms]) => {
+      setWhatsappRegistrationCheck(whatsapp?.registrationVerificationEnabled === true);
+      setSmsRegistrationCheck(sms?.registrationVerificationEnabled === true);
+    });
   }, []);
 
-  const requestPhoneVerification = async () => {
+  const requestPhoneVerification = async (channel: "whatsapp" | "sms") => {
     setServerErr("");
     if (phone.trim().length < 7) {
       setErrors(current => ({ ...current, phone: "Enter a valid contact number first." }));
       return;
     }
+    setPhoneVerificationChannel(channel);
+    setPhoneVerificationChallenge("");
+    setPhoneVerificationToken("");
+    setPhoneVerificationCode("");
     setRequestingPhoneCode(true);
     try {
-      const response = await fetch("/api/auth/whatsapp/request-otp", {
+      const response = await fetch(`/api/auth/${channel}/request-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: phone.trim(), purpose: "registration" }),
       });
       const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || "Could not request a WhatsApp verification code.");
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not request a phone verification code.");
       setPhoneVerificationChallenge(data.challengeId);
       setPhoneVerificationToken("");
       setPhoneVerificationCode("");
     } catch (cause) {
-      setServerErr(cause instanceof Error ? cause.message : "Could not request a WhatsApp verification code.");
+      setServerErr(cause instanceof Error ? cause.message : "Could not request a phone verification code.");
     } finally {
       setRequestingPhoneCode(false);
     }
@@ -107,7 +120,7 @@ export default function AdminRegister() {
     setServerErr("");
     setVerifyingPhoneCode(true);
     try {
-      const response = await fetch("/api/auth/whatsapp/verify-otp", {
+      const response = await fetch(`/api/auth/${phoneVerificationChannel}/verify-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ challengeId: phoneVerificationChallenge, code: phoneVerificationCode }),
@@ -272,8 +285,8 @@ export default function AdminRegister() {
     }
     if (!phone.trim()) e.phone = "Contact number is required";
     if (phoneAvailable === false) e.phone = "This phone number is already registered";
-    if (whatsappRegistrationCheck && !phoneVerificationToken) {
-      e.phoneVerification = "Verify your contact number through WhatsApp before continuing.";
+    if ((whatsappRegistrationCheck || smsRegistrationCheck) && !phoneVerificationToken) {
+      e.phoneVerification = "Verify your contact number by WhatsApp or SMS before continuing.";
     }
     if (!email.trim()) e.email = "Email address is required";
     else if (!EMAIL_PATTERN.test(email.trim())) e.email = "Enter a valid email address";
@@ -308,7 +321,7 @@ export default function AdminRegister() {
           role: accountRole,
            username: INITIAL_ADMIN_USERNAME,
           paymentMode,
-          ...(whatsappRegistrationCheck ? { phoneVerificationToken } : {}),
+          ...(whatsappRegistrationCheck || smsRegistrationCheck ? { phoneVerificationToken } : {}),
         }),
       });
       const data = await response.json() as {
@@ -674,25 +687,34 @@ export default function AdminRegister() {
               </p>
             )}
             {errors.phone && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.phone}</p>}
-            {whatsappRegistrationCheck && (
+            {(whatsappRegistrationCheck || smsRegistrationCheck) && (
               <div style={{ marginTop: 10, padding: 12, border: "1px solid var(--isp-border)", borderRadius: 10, background: "var(--isp-inner-card)" }}>
                 {phoneVerificationToken ? (
-                  <p style={{ margin: 0, color: "var(--isp-green)", fontSize: "0.82rem", fontWeight: 600 }}>Phone number verified through WhatsApp.</p>
+                  <p style={{ margin: 0, color: "var(--isp-green)", fontSize: "0.82rem", fontWeight: 600 }}>Phone number verified through {phoneVerificationChannel === "sms" ? "SMS" : "WhatsApp"}.</p>
                 ) : (
                   <>
-                    <button type="button" onClick={() => void requestPhoneVerification()} disabled={requestingPhoneCode || phone.trim().length < 7} className="btn btn-secondary" style={{ padding: "8px 12px", fontSize: "0.82rem", opacity: requestingPhoneCode ? 0.6 : 1 }}>
-                      {requestingPhoneCode ? "Sending code…" : phoneVerificationChallenge ? "Resend WhatsApp code" : "Verify phone with WhatsApp"}
-                    </button>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {whatsappRegistrationCheck && (
+                        <button type="button" onClick={() => void requestPhoneVerification("whatsapp")} disabled={requestingPhoneCode || phone.trim().length < 7} className="btn btn-secondary" style={{ padding: "8px 12px", fontSize: "0.82rem", opacity: requestingPhoneCode ? 0.6 : 1 }}>
+                          {requestingPhoneCode && phoneVerificationChannel === "whatsapp" ? "Sending code…" : phoneVerificationChallenge && phoneVerificationChannel === "whatsapp" ? "Resend WhatsApp code" : "Verify with WhatsApp"}
+                        </button>
+                      )}
+                      {smsRegistrationCheck && (
+                        <button type="button" onClick={() => void requestPhoneVerification("sms")} disabled={requestingPhoneCode || phone.trim().length < 7} className="btn btn-secondary" style={{ padding: "8px 12px", fontSize: "0.82rem", opacity: requestingPhoneCode ? 0.6 : 1 }}>
+                          {requestingPhoneCode && phoneVerificationChannel === "sms" ? "Sending code…" : phoneVerificationChallenge && phoneVerificationChannel === "sms" ? "Resend SMS code" : "Verify with SMS"}
+                        </button>
+                      )}
+                    </div>
                     {phoneVerificationChallenge && (
                       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                        <input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="[0-9]{6}" value={phoneVerificationCode} onChange={event => setPhoneVerificationCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6-digit code" className="register-input" aria-label="WhatsApp verification code" />
+                        <input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="[0-9]{6}" value={phoneVerificationCode} onChange={event => setPhoneVerificationCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6-digit code" className="register-input" aria-label="Phone verification code" />
                         <button type="button" onClick={() => void verifyRegistrationPhone()} disabled={verifyingPhoneCode || phoneVerificationCode.length !== 6} className="btn btn-primary" style={{ padding: "8px 12px", fontSize: "0.82rem" }}>
                           {verifyingPhoneCode ? "Checking…" : "Verify"}
                         </button>
                       </div>
                     )}
                     {errors.phoneVerification && <p style={{ fontSize: "0.75rem", color: "#DC2626", margin: "7px 0 0" }}>{errors.phoneVerification}</p>}
-                    {phoneVerificationChallenge && <p style={{ fontSize: "0.74rem", color: "var(--isp-text-muted)", margin: "7px 0 0" }}>If the number is eligible, a code will arrive in WhatsApp.</p>}
+                    {phoneVerificationChallenge && <p style={{ fontSize: "0.74rem", color: "var(--isp-text-muted)", margin: "7px 0 0" }}>If the number is eligible, a code will arrive by {phoneVerificationChannel === "sms" ? "SMS" : "WhatsApp"}.</p>}
                   </>
                 )}
               </div>

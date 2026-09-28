@@ -6,7 +6,7 @@ import {
    LayoutDashboard, Users, ShieldCheck, Settings, CreditCard, Package,
   Router, Receipt, BarChart3, Lock, Bell, Zap, Database,
    Plug, Gauge, LogOut, Menu, ChevronRight, HardDrive,
-  Globe, LogIn, Sun, Moon, Clock, PanelLeftClose, MessageCircle,
+   Globe, LogIn, Sun, Moon, Clock, PanelLeftClose, MessageCircle, Phone,
 } from "lucide-react";
 
 interface NavSection {
@@ -52,6 +52,7 @@ const NAV: NavSection[] = [
       { name: "Security Logs", href: "/super-admin/security-logs", icon: Lock },
       { name: "Notifications", href: "/super-admin/notifications", icon: Bell },
       { name: "WhatsApp", href: "/super-admin/whatsapp", icon: MessageCircle },
+      { name: "SMS", href: "/super-admin/sms", icon: Phone },
       { name: "Automation", href: "/super-admin/automation", icon: Zap },
     ],
   },
@@ -80,6 +81,8 @@ const PAGE_CONTEXT: { prefix: string; title: string }[] = [
   { prefix: "/super-admin/reports", title: "Reports" },
   { prefix: "/super-admin/security-logs", title: "Security logs" },
   { prefix: "/super-admin/notifications", title: "Notifications" },
+  { prefix: "/super-admin/whatsapp", title: "WhatsApp messaging" },
+  { prefix: "/super-admin/sms", title: "SMS messaging" },
   { prefix: "/super-admin/automation", title: "Automation" },
   { prefix: "/super-admin/backups", title: "Backups" },
   { prefix: "/super-admin/storage", title: "Storage governance" },

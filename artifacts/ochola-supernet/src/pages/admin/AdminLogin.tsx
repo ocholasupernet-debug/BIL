@@ -26,7 +26,10 @@ export default function AdminLogin() {
   const [error, setError]               = useState("");
   const [whatsappLoginEnabled, setWhatsappLoginEnabled] = useState(false);
   const [whatsappRecoveryEnabled, setWhatsappRecoveryEnabled] = useState(false);
-  const [loginMethod, setLoginMethod] = useState<"password" | "whatsapp" | "recovery">("password");
+  const [smsLoginEnabled, setSmsLoginEnabled] = useState(false);
+  const [smsRecoveryEnabled, setSmsRecoveryEnabled] = useState(false);
+  const [loginMethod, setLoginMethod] = useState<"password" | "whatsapp" | "sms" | "recovery">("password");
+  const [otpChannel, setOtpChannel] = useState<"whatsapp" | "sms">("whatsapp");
   const [whatsappPhone, setWhatsappPhone] = useState("");
   const [otpChallengeId, setOtpChallengeId] = useState("");
   const [otpCode, setOtpCode] = useState("");
@@ -63,16 +66,19 @@ export default function AdminLogin() {
   }, []);
 
   useEffect(() => {
-    void fetch("/api/whatsapp/public-config", { cache: "no-store" })
-      .then(response => response.json())
-      .then(data => {
-        setWhatsappLoginEnabled(data?.loginEnabled === true);
-        setWhatsappRecoveryEnabled(data?.passwordRecoveryEnabled === true);
-      })
-      .catch(() => {
-        setWhatsappLoginEnabled(false);
-        setWhatsappRecoveryEnabled(false);
-      });
+    void Promise.all([
+      fetch("/api/whatsapp/public-config", { cache: "no-store" })
+        .then(response => response.ok ? response.json() : null)
+        .catch(() => null),
+      fetch("/api/sms/public-config", { cache: "no-store" })
+        .then(response => response.ok ? response.json() : null)
+        .catch(() => null),
+    ]).then(([whatsapp, sms]) => {
+      setWhatsappLoginEnabled(whatsapp?.loginEnabled === true);
+      setWhatsappRecoveryEnabled(whatsapp?.passwordRecoveryEnabled === true);
+      setSmsLoginEnabled(sms?.loginEnabled === true);
+      setSmsRecoveryEnabled(sms?.passwordRecoveryEnabled === true);
+    });
   }, []);
 
   useEffect(() => {
@@ -81,16 +87,19 @@ export default function AdminLogin() {
     return () => window.clearTimeout(timer);
   }, [resendWait]);
 
-  const requestWhatsappCode = async (purpose: "login" | "recovery") => {
+  const requestOtpCode = async (
+    purpose: "login" | "recovery",
+    channel: "whatsapp" | "sms" = otpChannel,
+  ) => {
     setError("");
     setOtpNotice("");
     if (!whatsappPhone.trim()) {
-      setError("Enter your WhatsApp phone number.");
+      setError("Enter your phone number.");
       return;
     }
     setOtpLoading(true);
     try {
-      const response = await fetch("/api/auth/whatsapp/request-otp", {
+      const response = await fetch(`/api/auth/${channel}/request-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -101,15 +110,16 @@ export default function AdminLogin() {
         }),
       });
       const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error(data.error || "Could not request a WhatsApp code.");
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not request a verification code.");
+      setOtpChannel(channel);
       setOtpChallengeId(data.challengeId);
       setOtpPurpose(purpose);
       setOtpCode("");
       setResendWait(Number(data.resendAfterSeconds) || 60);
       if (purpose === "recovery") setRecoveryStage("verify");
-      setOtpNotice(data.message || "If eligible, a code will be sent to WhatsApp.");
+      setOtpNotice(data.message || `If eligible, a code will be sent by ${channel === "sms" ? "SMS" : "WhatsApp"}.`);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not request a WhatsApp code.");
+      setError(cause instanceof Error ? cause.message : "Could not request a verification code.");
     } finally {
       setOtpLoading(false);
     }
@@ -120,7 +130,7 @@ export default function AdminLogin() {
     setOtpNotice("");
     setOtpLoading(true);
     try {
-      const response = await fetch("/api/auth/whatsapp/verify-otp", {
+      const response = await fetch(`/api/auth/${otpChannel}/verify-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ challengeId: otpChallengeId, code: otpCode }),
@@ -164,7 +174,7 @@ export default function AdminLogin() {
       } catch {}
       setLocation(admin.role === "reseller" ? "/admin/reseller" : "/admin/dashboard");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "WhatsApp verification failed.");
+      setError(cause instanceof Error ? cause.message : "Phone verification failed.");
     } finally {
       setOtpLoading(false);
     }
@@ -174,7 +184,7 @@ export default function AdminLogin() {
     setError("");
     setOtpLoading(true);
     try {
-      const response = await fetch("/api/auth/whatsapp/reset-password", {
+      const response = await fetch(`/api/auth/${otpChannel}/reset-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ resetToken, password: newPassword }),
@@ -371,13 +381,16 @@ export default function AdminLogin() {
             Sign in to your admin dashboard
           </p>
 
-          {(whatsappLoginEnabled || whatsappRecoveryEnabled) && (
+          {(whatsappLoginEnabled || smsLoginEnabled || whatsappRecoveryEnabled || smsRecoveryEnabled) && (
             <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
               <button type="button" onClick={() => { setLoginMethod("password"); setError(""); }} aria-pressed={loginMethod === "password"} style={{ flex: 1, border: "1px solid var(--isp-input-border)", borderRadius: 9, padding: "9px 10px", background: loginMethod === "password" ? "var(--isp-accent-glow)" : "transparent", color: "var(--isp-text)", cursor: "pointer", fontWeight: 600 }}>
                 Use password
               </button>
-              {whatsappLoginEnabled && <button type="button" onClick={() => { setLoginMethod("whatsapp"); setOtpChallengeId(""); setOtpCode(""); setError(""); setOtpNotice(""); }} aria-pressed={loginMethod === "whatsapp"} style={{ flex: 1, border: "1px solid var(--isp-input-border)", borderRadius: 9, padding: "9px 10px", background: loginMethod === "whatsapp" ? "var(--isp-accent-glow)" : "transparent", color: "var(--isp-text)", cursor: "pointer", fontWeight: 600 }}>
-                Continue with WhatsApp
+              {whatsappLoginEnabled && <button type="button" onClick={() => { setLoginMethod("whatsapp"); setOtpChannel("whatsapp"); setOtpChallengeId(""); setOtpCode(""); setError(""); setOtpNotice(""); }} aria-pressed={loginMethod === "whatsapp"} style={{ flex: 1, border: "1px solid var(--isp-input-border)", borderRadius: 9, padding: "9px 10px", background: loginMethod === "whatsapp" ? "var(--isp-accent-glow)" : "transparent", color: "var(--isp-text)", cursor: "pointer", fontWeight: 600 }}>
+                WhatsApp
+              </button>}
+              {smsLoginEnabled && <button type="button" onClick={() => { setLoginMethod("sms"); setOtpChannel("sms"); setOtpChallengeId(""); setOtpCode(""); setError(""); setOtpNotice(""); }} aria-pressed={loginMethod === "sms"} style={{ flex: 1, border: "1px solid var(--isp-input-border)", borderRadius: 9, padding: "9px 10px", background: loginMethod === "sms" ? "var(--isp-accent-glow)" : "transparent", color: "var(--isp-text)", cursor: "pointer", fontWeight: 600 }}>
+                SMS
               </button>}
             </div>
           )}
@@ -484,19 +497,41 @@ export default function AdminLogin() {
                 >
                   {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
-                {whatsappRecoveryEnabled && (
-                  <button type="button" onClick={() => { setLoginMethod("recovery"); setRecoveryStage("request"); setOtpChallengeId(""); setResetToken(""); setError(""); setOtpNotice(""); }} style={{ display: "block", marginTop: 8, marginLeft: "auto", padding: 0, border: 0, background: "none", color: "var(--isp-accent)", cursor: "pointer", fontSize: "0.8rem", fontWeight: 600 }}>
+                {(whatsappRecoveryEnabled || smsRecoveryEnabled) && (
+                  <button type="button" onClick={() => { setLoginMethod("recovery"); setOtpChannel(smsRecoveryEnabled && !whatsappRecoveryEnabled ? "sms" : "whatsapp"); setRecoveryStage("request"); setOtpChallengeId(""); setResetToken(""); setError(""); setOtpNotice(""); }} style={{ display: "block", marginTop: 8, marginLeft: "auto", padding: 0, border: 0, background: "none", color: "var(--isp-accent)", cursor: "pointer", fontSize: "0.8rem", fontWeight: 600 }}>
                     Forgot password?
                   </button>
                 )}
               </div>
             </div></>}
 
-            {(loginMethod === "whatsapp" || loginMethod === "recovery") && (
+            {(loginMethod === "whatsapp" || loginMethod === "sms" || loginMethod === "recovery") && (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {loginMethod === "recovery" && whatsappRecoveryEnabled && smsRecoveryEnabled && (
+                  <div>
+                    <label style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>
+                      Recovery method
+                    </label>
+                    <select
+                      value={otpChannel}
+                      onChange={event => {
+                        const channel = event.target.value as "whatsapp" | "sms";
+                        setOtpChannel(channel);
+                        setOtpChallengeId("");
+                        setOtpCode("");
+                        setRecoveryStage("request");
+                        setOtpNotice("");
+                      }}
+                      style={inputStyle}
+                    >
+                      <option value="whatsapp">WhatsApp</option>
+                      <option value="sms">SMS</option>
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>
-                    WhatsApp phone number
+                    {otpChannel === "sms" ? "SMS phone number" : "WhatsApp phone number"}
                   </label>
                   <input
                     type="tel"
@@ -508,19 +543,19 @@ export default function AdminLogin() {
                   />
                 </div>
 
-                {loginMethod === "whatsapp" && !otpChallengeId && (
-                  <button type="button" onClick={() => void requestWhatsappCode("login")} disabled={otpLoading} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading ? 0.6 : 1 }}>
-                    {otpLoading ? "Requesting code…" : "Continue with WhatsApp"}
+                {(loginMethod === "whatsapp" || loginMethod === "sms") && !otpChallengeId && (
+                  <button type="button" onClick={() => void requestOtpCode("login", otpChannel)} disabled={otpLoading} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading ? 0.6 : 1 }}>
+                    {otpLoading ? "Requesting code…" : otpChannel === "sms" ? "Continue with SMS" : "Continue with WhatsApp"}
                   </button>
                 )}
 
                 {loginMethod === "recovery" && recoveryStage === "request" && (
-                  <button type="button" onClick={() => void requestWhatsappCode("recovery")} disabled={otpLoading} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading ? 0.6 : 1 }}>
+                  <button type="button" onClick={() => void requestOtpCode("recovery", otpChannel)} disabled={otpLoading} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading ? 0.6 : 1 }}>
                     {otpLoading ? "Requesting code…" : "Send recovery code"}
                   </button>
                 )}
 
-                {((loginMethod === "whatsapp" && otpChallengeId && otpPurpose === "login") || (loginMethod === "recovery" && recoveryStage === "verify")) && (
+                {(((loginMethod === "whatsapp" || loginMethod === "sms") && otpChallengeId && otpPurpose === "login") || (loginMethod === "recovery" && recoveryStage === "verify")) && (
                   <>
                     <div>
                       <label style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>
@@ -540,7 +575,7 @@ export default function AdminLogin() {
                     <button type="button" onClick={() => void verifyWhatsappCode()} disabled={otpLoading || otpCode.length !== 6} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || otpCode.length !== 6 ? 0.6 : 1 }}>
                       {otpLoading ? "Verifying…" : "Verify code"}
                     </button>
-                    <button type="button" onClick={() => void requestWhatsappCode(otpPurpose)} disabled={otpLoading || resendWait > 0} style={{ border: 0, background: "none", color: "var(--isp-accent)", cursor: resendWait > 0 ? "default" : "pointer", fontSize: "0.82rem", opacity: resendWait > 0 ? 0.6 : 1 }}>
+                    <button type="button" onClick={() => void requestOtpCode(otpPurpose, otpChannel)} disabled={otpLoading || resendWait > 0} style={{ border: 0, background: "none", color: "var(--isp-accent)", cursor: resendWait > 0 ? "default" : "pointer", fontSize: "0.82rem", opacity: resendWait > 0 ? 0.6 : 1 }}>
                       {resendWait > 0 ? `Resend code in ${resendWait}s` : "Resend code"}
                     </button>
                   </>
