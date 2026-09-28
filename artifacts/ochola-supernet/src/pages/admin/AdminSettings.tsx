@@ -229,7 +229,7 @@ function IspProfileTab() {
 const ADMIN_PAYMENT_GATEWAY_OPTIONS = [
   { id: "mpesa_paybill", label: "M-Pesa PayBill (STK Push)" },
   { id: "mpesa_till_push", label: "M-Pesa Till Push (Buy Goods & Services)" },
-  { id: "bank_stk_push", label: "BankStkPush" },
+  { id: "bank_stk_push", label: "Bank STK Push" },
   { id: "airtel", label: "AirtelMoney" },
   { id: "azampay", label: "AzamPay" },
   { id: "custom_paybill", label: "CustomPaybill" },
@@ -241,6 +241,7 @@ const ADMIN_PAYMENT_GATEWAY_OPTIONS = [
   { id: "paypal", label: "PayPal" },
   { id: "tigopesa", label: "TigoPesa" },
   { id: "xendit", label: "XenditEwallet" },
+  { id: "bank_transfer", label: "Bank transfer (manual confirmation)" },
   { id: "manual", label: "Cash / Manual" },
 ];
 
@@ -2010,7 +2011,7 @@ const GATEWAYS: GatewayDef[] = [
     ],
   },
   {
-    id: "bank_stk_push", name: "BankStkPush", category: "Kenyan Banks", color: "#00529b", icon: Landmark,
+    id: "bank_stk_push", name: "Bank STK Push", category: "Kenyan Banks", color: "#00529b", icon: Landmark,
     fields: [
       { key: "bankName", label: "Bank Name", type: "select", options: KENYAN_BANKS },
       { key: "paybillNumber", label: "PayBill Number", hint: "Enter the PayBill number provided by your bank" },
@@ -2107,6 +2108,16 @@ const GATEWAYS: GatewayDef[] = [
     ],
   },
   {
+    id: "bank_transfer", name: "Bank transfer (manual confirmation)", category: "Manual", color: "#64748b", icon: Landmark,
+    fields: [
+      { key: "bankName", label: "Bank Name" },
+      { key: "accountName", label: "Account Name" },
+      { key: "accountNumber", label: "Account Number" },
+      { key: "branchCode", label: "Branch Code" },
+      { key: "paymentInstructions", label: "Payment Instructions", hint: "Reference customers should include when transferring" },
+    ],
+  },
+  {
     id: "manual", name: "Cash / Manual", category: "Manual", color: "#64748b", icon: Banknote,
     fields: [
       { key: "bankName", label: "Bank Name" },
@@ -2117,6 +2128,21 @@ const GATEWAYS: GatewayDef[] = [
     ],
   },
 ];
+
+const RESELLER_GATEWAYS = GATEWAYS.filter(gateway =>
+  gateway.id === "mpesa_paybill" || gateway.id === "mpesa_till_push",
+);
+
+const ROUTING_CHECKOUT_READY_GATEWAYS = new Set([
+  "mpesa_paybill",
+  "mpesa_till_push",
+  "bank_stk_push",
+]);
+
+const ROUTING_CONFIGURABLE_GATEWAYS = new Set([
+  ...ROUTING_CHECKOUT_READY_GATEWAYS,
+  "bank_transfer",
+]);
 
 function PaymentGatewaysTab() {
   const isReseller = getAdminRole() === "reseller";
@@ -2204,14 +2230,14 @@ function PaymentGatewaysTab() {
     setSavingGateway(gwId);
     try { localStorage.setItem("ochola_gw_fields", JSON.stringify(fields)); } catch {}
     try {
-      if (gwId === "bank_stk_push" || gwId === "mpesa_till_push" || gwId === "mpesa_paybill") {
+      if (gwId === "bank_stk_push" || gwId === "mpesa_till_push" || gwId === "mpesa_paybill" || gwId === "bank_transfer") {
         const response = await fetch("/api/admin/mpesa-gateway-config", {
           method: "POST",
           headers: adminApiHeaders(),
           body: JSON.stringify({ adminId: ADMIN_ID, gatewayId: gwId, config: fields[gwId] || {} }),
         });
         const data = await response.json() as { ok?: boolean; error?: string };
-        if (!response.ok || !data.ok) throw new Error(data.error || "Could not save M-Pesa gateway settings.");
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not save payment gateway settings.");
         window.dispatchEvent(new Event("ochola-payment-gateway-change"));
       }
       setSaved(gwId);
@@ -2259,20 +2285,24 @@ function PaymentGatewaysTab() {
     }
   };
 
-  const routingGatewayOptions = GATEWAYS.filter(gateway =>
-    gateway.id === "mpesa_paybill" || gateway.id === "mpesa_till_push" || gateway.id === "bank_stk_push"
-  );
-  const routingFields = (gatewayId: string) => GATEWAYS.find(gateway => gateway.id === gatewayId)?.fields ?? [];
+  const routingGatewayOptions = GATEWAYS;
+  const routingFields = (gatewayId: string) =>
+    ROUTING_CONFIGURABLE_GATEWAYS.has(gatewayId)
+      ? GATEWAYS.find(gateway => gateway.id === gatewayId)?.fields ?? []
+      : [];
 
   const activeGw = GATEWAYS.find(g => g.id === selectedGw);
+  const setupOnlyGateway = Boolean(activeGw && ![
+    "mpesa_paybill", "mpesa_till_push", "bank_stk_push", "bank_transfer",
+  ].includes(activeGw.id));
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
-        Select one active payment gateway for this ISP. You can switch to another gateway whenever needed without Super Admin approval.
+        Choose a payment gateway to configure. Customer checkout only shows a method when its payment flow is connected and configured.
       </div>
       <AdminPaymentGatewayCard />
 
-      <Card title="Service payment routing" desc="Use one collection account for both services, or send Hotspot and PPPoE payments to separate M-Pesa destinations. API credentials remain managed centrally by Super Admin.">
+      <Card title="Service payment routing" desc="Use one collection account for both services, or configure separate Hotspot and PPPoE destinations. Customer checkout only offers connected payment flows.">
         <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
           {([
             ["shared", "Shared account", "One destination for Hotspot and PPPoE"],
@@ -2317,9 +2347,20 @@ function PaymentGatewaysTab() {
                       }))}
                       style={{ width: 190 }}
                     >
-                      {routingGatewayOptions.map(gateway => <option key={gateway.id} value={gateway.id}>{gateway.name}</option>)}
+                      {routingGatewayOptions.map(gateway => (
+                        <option key={gateway.id} value={gateway.id}>
+                          {gateway.name}{ROUTING_CHECKOUT_READY_GATEWAYS.has(gateway.id) ? "" : " — setup only"}
+                        </option>
+                      ))}
                     </Select>
                   </div>
+                  {!ROUTING_CHECKOUT_READY_GATEWAYS.has(serviceGateway) && (
+                    <p role="status" style={{ color: "#f59e0b", fontSize: "0.72rem", lineHeight: 1.5, margin: "0 0 10px" }}>
+                      {serviceGateway === "bank_transfer"
+                        ? "Manual bank transfer is saved as a setup choice only; customer checkout stays disabled until payment confirmation and settlement are implemented."
+                        : "This gateway is saved as a setup choice only. Its customer payment flow is not connected, so it will not be offered at checkout."}
+                    </p>
+                  )}
                   {fieldsForGateway.map(field => (
                     <div key={field.key} style={{ display: "flex", alignItems: "center", gap: 12, padding: "7px 0" }}>
                       <label style={{ width: 170, flexShrink: 0, color: C.muted, fontSize: "0.72rem", textAlign: "right" }}>{field.label}</label>
@@ -2358,7 +2399,7 @@ function PaymentGatewaysTab() {
         </Row>
       </Card>
 
-      <Card title="Payment Gateway Configurations" desc="Add or update the account details for the payment gateways available to this ISP.">
+      <Card title="Payment Gateway Configurations" desc="Configure M-Pesa destinations and bank-transfer account details. Other providers remain setup options until their payment integrations are connected.">
         <div style={{
           display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8,
           marginBottom: selectedGw ? 20 : 0,
@@ -2403,13 +2444,24 @@ function PaymentGatewaysTab() {
               padding: "16px 20px", borderBottom: `1px solid ${C.border}`,
             }}>
               <p style={{ fontSize: "1rem", fontWeight: 800, color: C.text, margin: 0 }}>
-                {activeGw.name === "BankStkPush"
+                {activeGw.id === "bank_stk_push"
                   ? `Bank Stk Push - ${brand.ispName.toUpperCase()}`
                   : `${activeGw.name} Configuration`}
               </p>
             </div>
 
             <div style={{ padding: "20px" }}>
+              {setupOnlyGateway ? (
+                <div style={{
+                  background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)",
+                  borderRadius: 8, padding: "12px 16px",
+                }}>
+                  <p style={{ fontSize: "0.78rem", color: "#f59e0b", margin: 0, lineHeight: 1.6 }}>
+                    This provider is listed for future setup, but its payment connection is not implemented yet. No API credentials are collected here, and this method stays hidden from customer checkout until connected.
+                  </p>
+                </div>
+              ) : (
+                <>
               {activeGw.id === "bank_stk_push" && (
                 <div style={{
                   background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)",
@@ -2495,6 +2547,17 @@ function PaymentGatewaysTab() {
                 </div>
               )}
 
+              {activeGw.id === "bank_transfer" && (
+                <div style={{
+                  background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)",
+                  borderRadius: 8, padding: "12px 16px", marginTop: 20,
+                }}>
+                  <p style={{ fontSize: "0.78rem", color: "#f59e0b", margin: 0, lineHeight: 1.6 }}>
+                    Bank details are saved for account routing. Customers will not be offered bank transfer until manual payment confirmation is implemented.
+                  </p>
+                </div>
+              )}
+
               {saveError && <p style={{ display: "flex", alignItems: "center", gap: 5, color: "#f87171", fontSize: "0.74rem", margin: "14px 0 0" }}><AlertTriangle size={13} aria-hidden="true" /> {saveError}</p>}
               <Row>
                 <button
@@ -2512,6 +2575,8 @@ function PaymentGatewaysTab() {
                   {saved === activeGw.id ? <><Check size={13} /> Saved!</> : savingGateway === activeGw.id ? "Saving…" : <><Save size={13} /> Save Changes</>}
                 </button>
               </Row>
+                </>
+              )}
             </div>
           </div>
         )}

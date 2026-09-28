@@ -42,6 +42,7 @@ import {
   collectionConfig,
   gatewayConfigMap,
   isGatewayConfigComplete,
+  isDarajaGateway,
   paymentCollectionMode,
   servicePaymentConfigMap,
   type PaymentService,
@@ -73,6 +74,7 @@ const PAYMENT_GATEWAY_LABELS: Record<string, string> = {
   paypal: "PayPal",
   tigopesa: "TigoPesa",
   xendit: "XenditEwallet",
+  bank_transfer: "Bank transfer (manual confirmation)",
   manual: "Cash / Manual",
 };
 const PAYMENT_GATEWAY_IDS = new Set(Object.keys(PAYMENT_GATEWAY_LABELS));
@@ -318,10 +320,6 @@ function resolveDarajaPayment(
 
 function paymentGatewayLabel(paymentGateway: PaymentGateway): string {
   return PAYMENT_GATEWAY_LABELS[paymentGateway] ?? paymentGateway;
-}
-
-function isDarajaGateway(paymentGateway: PaymentGateway): boolean {
-  return paymentGateway === "mpesa_paybill" || paymentGateway === "mpesa_till_push" || paymentGateway === "bank_stk_push";
 }
 
 async function getAdminPaymentSettings(
