@@ -124,6 +124,7 @@ const navSections: NavSection[] = [
           { name: "Queues",         href: "/admin/network/queues" },
           { name: "IP Pools",       href: "/admin/network/ip-pools" },
           { name: "API Config",     href: "/admin/network/router-api-config" },
+           { name: "Multi-WAN Load Balancing", href: "/admin/network/load-balancing" },
         ],
       },
       {

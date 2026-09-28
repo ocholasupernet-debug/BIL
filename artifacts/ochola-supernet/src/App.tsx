@@ -76,6 +76,7 @@ import AdminSetPassword from "./pages/admin/AdminSetPassword";
 import ResellerWorkspace from "./pages/admin/ResellerWorkspace";
 import CarrierControls from "./pages/admin/network/CarrierControls";
 import ResellerConnector from "./pages/admin/network/ResellerConnector";
+import NetworkLoadBalancing from "./pages/admin/network/LoadBalancing";
 import AdminRegister from "./pages/admin/AdminRegister";
 import VisualCheckHarness from "./visual/VisualCheckHarness";
 
@@ -146,6 +147,7 @@ function Router() {
       <Route path="/admin/reseller/connector" component={ResellerConnector} />
       <Route path="/admin/network/carrier-controls" component={CarrierControls} />
       <Route path="/admin/carrier-controls" component={CarrierControls} />
+       <Route path="/admin/network/load-balancing" component={getAdminRole() === "reseller" ? ResellerBlockedPage : NetworkLoadBalancing} />
       <Route path="/admin/customers" component={AdminCustomers} />
       <Route path="/admin/network" component={NetworkRouters} />
       <Route path="/admin/network/routers"        component={NetworkRouters}       />

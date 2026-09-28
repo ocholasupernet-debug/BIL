@@ -34,6 +34,7 @@ import billingRouter from "./billing-route.js";
 import hotspotBrandingRouter from "./hotspot-branding-route.js";
 import whatsappRouter from "./whatsapp-route.js";
 import smsRouter from "./sms-route.js";
+import routerLoadBalancingRouter from "./router-load-balancing-route.js";
 
 const router: IRouter = Router();
 
@@ -72,5 +73,6 @@ router.use(dashboardPreferencesRouter);
   router.use(hotspotBrandingRouter);
   router.use(whatsappRouter);
   router.use(smsRouter);
+  router.use(routerLoadBalancingRouter);
 
 export default router;

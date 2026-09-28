@@ -61,6 +61,7 @@ export const ADMIN_PAGE_VISIBILITY_CATALOG: AdminVisibilitySection[] = [
       { key: "network.router-api-config", label: "API Config", description: "Configure router API access." },
       { key: "network.bridge-ports", label: "Bridge Ports", description: "Manage bridge ports." },
       { key: "network.multiport", label: "Multiport", description: "Configure isolated Hotspot and PPPoE services per physical router port." },
+      { key: "network.load-balancing", label: "Multi-WAN Load Balancing", description: "Configure weighted uplinks, failover, LAN pinning, and per-link capacity." },
       { key: "network.access-points", label: "Access Points", description: "Manage wireless access points." },
       { key: "network.pppoe-settings", label: "PPPoE Settings", description: "Manage global PPPoE settings." },
       { key: "network.hotspot-settings", label: "Hotspot Settings", description: "Manage global hotspot settings." },

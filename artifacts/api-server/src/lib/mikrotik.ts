@@ -1918,6 +1918,49 @@ export async function deployRouterFile(
   });
 }
 
+/** Execute an already-uploaded RouterOS script file. */
+export async function runRouterScript(
+  creds: RouterCredentials,
+  fileName: string,
+): Promise<void> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}\.rsc$/i.test(fileName) || fileName.includes("..")) {
+    throw new Error("Router script filename is invalid.");
+  }
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    await withTimeout(conn.write(["/import", `=file-name=${fileName}`]), ms);
+  });
+}
+
+/** Remove one exact uploaded script file after import. */
+export async function removeRouterFile(
+  creds: RouterCredentials,
+  fileName: string,
+): Promise<void> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}\.rsc$/i.test(fileName) || fileName.includes("..")) {
+    throw new Error("Router file path is invalid.");
+  }
+  const wanted = fileName
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\/+|\/+$/g, "")
+    .toLowerCase();
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write(["/file/print", "=.proplist=.id,name,type"]),
+      ms,
+    ) as Record<string, string>[];
+    const match = (Array.isArray(rows) ? rows : []).find(row =>
+      String(row.name ?? "").trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "").toLowerCase() === wanted
+      && !String(row.type ?? "").toLowerCase().includes("directory"),
+    );
+    if (match?.[".id"]) {
+      await withTimeout(conn.write(["/file/remove", `=.id=${match[".id"]}`]), ms);
+    }
+  });
+}
+
 export async function ensureRouterFileDirectory(
   creds: RouterCredentials,
   directoryPath: string,
@@ -6775,6 +6818,7 @@ export interface BridgePortEntry {
   id: string;
   bridge: string;
   interface: string;
+  settings?: Record<string, string>;
 }
 
 export interface BridgePortLayout {
@@ -6782,6 +6826,13 @@ export interface BridgePortLayout {
   bridges: BridgeEntry[];
   bridgePorts: BridgePortEntry[];
   connectedVia: string;
+}
+
+export interface RouterLoadBalancingInventory extends BridgePortLayout {
+  addresses: Array<{ interface: string; address: string; dynamic: boolean; comment: string }>;
+  pppoeClients: Array<{ name: string; interface: string; comment: string; disabled: boolean }>;
+  bridgeUseIpFirewall: boolean;
+  routerVersion: string;
 }
 
 export interface RouterSecurityState {
@@ -6881,6 +6932,73 @@ export async function fetchBridgePortLayout(
     }));
 
     return { interfaces, bridges, bridgePorts, connectedVia: connectedHost };
+  });
+}
+
+/** Read the exact live router facts needed before a multi-WAN change. */
+export async function fetchRouterLoadBalancingInventory(
+  creds: RouterCredentials,
+): Promise<RouterLoadBalancingInventory> {
+  return withReadConn(creds, async (conn, connectedHost) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const read = (path: string) => withTimeout(
+      conn.write([path]),
+      ms,
+    ) as Promise<Record<string, string>[]>;
+    const [ifaceRows, bridgeRows, bridgePortRows, addressRows, pppoeRows, bridgeSettingsRows, resourceRows] =
+      await Promise.all([
+        read("/interface/print"),
+        read("/interface/bridge/print"),
+        read("/interface/bridge/port/print"),
+        read("/ip/address/print"),
+        read("/interface/pppoe-client/print"),
+        read("/interface/bridge/settings/print"),
+        read("/system/resource/print"),
+      ]);
+
+    const interfaces: RouterInterface[] = (Array.isArray(ifaceRows) ? ifaceRows : []).map(r => ({
+      id:         r[".id"]         ?? "",
+      name:       r.name           ?? "",
+      type:       r.type           ?? "",
+      running:    parseBool(r.running),
+      disabled:   parseBool(r.disabled),
+      macAddress: r["mac-address"] ?? "",
+      comment:    r.comment        ?? "",
+      txBps:      parseBytes(r["tx-byte"]),
+      rxBps:      parseBytes(r["rx-byte"]),
+    }));
+    const bridges: BridgeEntry[] = (Array.isArray(bridgeRows) ? bridgeRows : []).map(r => ({
+      name: r.name ?? "",
+      running: parseBool(r.running),
+    }));
+    const bridgePorts: BridgePortEntry[] = (Array.isArray(bridgePortRows) ? bridgePortRows : []).map(r => ({
+      id: r[".id"] ?? "",
+      bridge: r.bridge ?? "",
+      interface: r.interface ?? "",
+      settings: { ...r },
+    }));
+    const addresses = (Array.isArray(addressRows) ? addressRows : []).map(r => ({
+      interface: r.interface ?? "",
+      address: r.address ?? "",
+      dynamic: parseBool(r.dynamic),
+      comment: r.comment ?? "",
+    }));
+    const pppoeClients = (Array.isArray(pppoeRows) ? pppoeRows : []).map(r => ({
+      name: r.name ?? "",
+      interface: r.interface ?? "",
+      comment: r.comment ?? "",
+      disabled: parseBool(r.disabled),
+    }));
+    return {
+      interfaces,
+      bridges,
+      bridgePorts,
+      addresses,
+      pppoeClients,
+      bridgeUseIpFirewall: parseBool(bridgeSettingsRows?.[0]?.["use-ip-firewall"]),
+      routerVersion: resourceRows?.[0]?.version ?? "",
+      connectedVia: connectedHost,
+    };
   });
 }
 
