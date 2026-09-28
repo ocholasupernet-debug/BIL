@@ -75,7 +75,6 @@ type PlanRow = {
   name: string;
   is_active?: boolean;
   type: string | null;
-  plan_type: string | null;
   router_id: number | null;
   port_id: number | null;
   speed_down: number | null;
@@ -127,7 +126,7 @@ async function loadScopedCustomerPlan(
   const portFilter = Number.isSafeInteger(Number(portId)) && Number(portId) > 0 ? `&port_id=eq.${Number(portId)}` : "";
   const rows = await sbSelectStrict<PlanRow>(
     "isp_plans",
-    `id=eq.${planId}&admin_id=eq.${tenantId}&${planOwnerFilter(ownerId)}&${allowInactive ? "" : "is_active=is.true&"}${typeFilter}${routerFilter}${portFilter}&select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active,owner_reseller_id&limit=1`,
+    `id=eq.${planId}&admin_id=eq.${tenantId}&${planOwnerFilter(ownerId)}&${allowInactive ? "" : "is_active=is.true&"}${typeFilter}${routerFilter}${portFilter}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active,owner_reseller_id&limit=1`,
   );
   const plan = rows[0];
   if (!plan) return undefined;
@@ -149,7 +148,7 @@ async function loadVlanCustomerContext(
   requestedRouterId?: unknown,
   requestedPortId?: unknown,
 ): Promise<{ router: RouterRow; port: VlanPortRow; parentQueue: string; parentComment: string }> {
-  if (normalizePlanServiceType(plan.plan_type || plan.type) !== "vlan") {
+  if (normalizePlanServiceType(plan.type) !== "vlan") {
     throw new Error("Choose a VLAN plan for this customer.");
   }
   if (!plan.router_id || !plan.port_id) {
@@ -292,10 +291,10 @@ async function reconcileCustomerAccess(
   const plan = nextPlanId
     ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
-        `id=eq.${nextPlanId}&admin_id=eq.${adminId}&${options.allowInactivePlan ? "" : "is_active=is.true&"}select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
+        `id=eq.${nextPlanId}&admin_id=eq.${adminId}&${options.allowInactivePlan ? "" : "is_active=is.true&"}select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
       ))[0]
     : undefined;
-  const planType = normalizePlanServiceType(plan?.plan_type || plan?.type || nextType);
+  const planType = normalizePlanServiceType(plan?.type || nextType);
   if (!plan) {
     throw new Error("An existing plan linked to MikroTik is required before editing this prepaid user.");
   }
@@ -557,7 +556,7 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
   let plan: PlanRow | undefined;
   if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
     const planFilter =
-      `id=eq.${requestedPlanId}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(null)}&select=id,name,type,plan_type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active,owner_reseller_id&limit=1`;
+      `id=eq.${requestedPlanId}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(null)}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active,owner_reseller_id&limit=1`;
     const planRows = needsVlanPlanCheck
       ? await sbSelectStrict<PlanRow>("isp_plans", planFilter)
       : await sbSelect<PlanRow>("isp_plans", planFilter);
@@ -567,7 +566,7 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
       return;
     }
   }
-  const planServiceType = normalizePlanServiceType(plan?.plan_type || plan?.type);
+  const planServiceType = normalizePlanServiceType(plan?.type);
   const requestedType = String(type ?? (planServiceType === "vlan" ? "vlan" : "hotspot")).trim().toLowerCase();
   if (planServiceType === "vlan" && requestedType !== "vlan") {
     res.status(400).json({ error: "The selected plan is VLAN service; create the customer as type vlan." });
@@ -1116,10 +1115,10 @@ async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string
   const plan = latestTransaction.plan_id
     ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
-        `id=eq.${latestTransaction.plan_id}&admin_id=eq.${adminId}&select=id,name,type,plan_type,router_id,port_id,owner_reseller_id&limit=1`,
+        `id=eq.${latestTransaction.plan_id}&admin_id=eq.${adminId}&select=id,name,type,router_id,port_id,owner_reseller_id&limit=1`,
       ))[0]
     : undefined;
-  if (plan && normalizePlanServiceType(plan.plan_type || plan.type) !== "hotspot") {
+  if (plan && normalizePlanServiceType(plan.type) !== "hotspot") {
     return {
       found: false,
       status: "not_found",

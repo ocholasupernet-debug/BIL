@@ -60,7 +60,6 @@ interface SbPlan {
   admin_id?: number;
   name: string;
   type: string;
-  plan_type: string;
   validity: number | null;
   validity_unit: string | null;
   validity_days: number;
@@ -133,16 +132,15 @@ export async function reactivatePppoeAccess(opts: {
     admin_id: number;
     name: string;
     type: string | null;
-    plan_type: string | null;
     router_id: number | null;
     port_id: number | null;
     owner_reseller_id: number | null;
   }>(
     "isp_plans",
-    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,plan_type,router_id,port_id,owner_reseller_id&limit=1`,
+    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,router_id,port_id,owner_reseller_id&limit=1`,
   );
   const plan = plans[0];
-  const planType = String(plan?.plan_type || plan?.type || "").toLowerCase();
+  const planType = String(plan?.type || "").toLowerCase();
   if (!plan || planType !== "pppoe") return { ok: true, skipped: true };
   if (!plan.router_id) {
     return { ok: false, error: "The PPPoE plan is not assigned to a router." };
@@ -248,10 +246,10 @@ export async function reactivateVlanAccess(opts: {
 }): Promise<PppoeRenewalAccessResult> {
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,plan_type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,owner_reseller_id&limit=1`,
+    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,owner_reseller_id&limit=1`,
   );
   const plan = plans[0];
-  if (!plan || normalizePlanServiceType(plan.plan_type || plan.type) !== "vlan") {
+  if (!plan || normalizePlanServiceType(plan.type) !== "vlan") {
     return { ok: true, skipped: true };
   }
   if (!plan.router_id || !plan.port_id) {
@@ -475,7 +473,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&admin_id=eq.${customer.admin_id}&is_active=is.true&select=id,admin_id,name,type,plan_type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,active_ip_pool,expired_ip_pool&limit=1`
+    `id=eq.${customer.plan_id}&admin_id=eq.${customer.admin_id}&is_active=is.true&select=id,admin_id,name,type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,active_ip_pool,expired_ip_pool&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -484,7 +482,7 @@ export async function autoProvision(opts: {
     return { ok: false, error: msg };
   }
 
-  const planType = normalizePlanServiceType(plan.plan_type || plan.type || "hotspot");
+  const planType = normalizePlanServiceType(plan.type || "hotspot");
   if (planType === "vlan") {
     if (String(customer.type ?? "").toLowerCase() !== "vlan") {
       const msg = "A VLAN plan can only renew an existing VLAN customer account.";
@@ -712,7 +710,7 @@ async function activateCustomer(
   username?: string,
   expiresAt?: string,
 ): Promise<void> {
-  const planType = normalizePlanServiceType(plan.plan_type || plan.type);
+  const planType = normalizePlanServiceType(plan.type);
   await sbUpdate("isp_customers", `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`, {
     status:     "active",
     expires_at: expiresAt ?? calcExpiry(plan.validity, plan.validity_unit, plan.validity_days),

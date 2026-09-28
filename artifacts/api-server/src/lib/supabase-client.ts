@@ -39,8 +39,20 @@ function headers(extra: Record<string, string> = {}): Record<string, string> {
   };
 }
 
+function normalizeSelectQuery(table: string, query = ""): string {
+  if (table !== "isp_plans") return query;
+  // isp_plans.type is the service type; data_limit_mb determines limited plans.
+  // Older callers may still request the removed plan_type field.
+  return query.replace(/(^|&)select=([^&]*)/, (match, prefix: string, columns: string) => {
+    const supportedColumns = columns.split(",").filter(column => column !== "plan_type");
+    return supportedColumns.length > 0
+      ? `${prefix}select=${supportedColumns.join(",")}`
+      : match;
+  });
+}
 function url(table: string, query = ""): string {
-  return `${SUPABASE_URL}/rest/v1/${table}${query ? `?${query}` : ""}`;
+  const normalizedQuery = normalizeSelectQuery(table, query);
+  return `${SUPABASE_URL}/rest/v1/${table}${normalizedQuery ? `?${normalizedQuery}` : ""}`;
 }
 
 export class SupabaseHttpError extends Error {
