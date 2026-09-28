@@ -20,7 +20,8 @@
     "test:hotspot-portal-live": "tsx --test tests/hotspot-router-staging.test.ts",
     "test:hotspot-portal-deploy": "tsx --test src/lib/hotspot-portal-deploy.test.ts",
     "test:payment-routing": "node --test tests/payment-routing.test.mjs",
-    "test:storage-governance": "node --test tests/storage-governance.test.mjs"
+    "test:storage-governance": "node --test tests/storage-governance.test.mjs",
+    "test:whatsapp": "tsx --test src/services/whatsapp/whatsapp-service.test.ts && node --test tests/whatsapp-integration.test.mjs"
   },
   "dependencies": {
     "@types/pg": "^8.18.0",

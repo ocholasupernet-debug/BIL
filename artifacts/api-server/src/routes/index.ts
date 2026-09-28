@@ -32,6 +32,7 @@ import resellerRouter from "./reseller-route.js";
 import portServicesRouter from "./port-services-route.js";
 import billingRouter from "./billing-route.js";
 import hotspotBrandingRouter from "./hotspot-branding-route.js";
+import whatsappRouter from "./whatsapp-route.js";
 
 const router: IRouter = Router();
 
@@ -68,5 +69,6 @@ router.use(dashboardPreferencesRouter);
   router.use(portServicesRouter);
   router.use(billingRouter);
   router.use(hotspotBrandingRouter);
+  router.use(whatsappRouter);
 
 export default router;

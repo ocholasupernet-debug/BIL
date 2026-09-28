@@ -11,6 +11,11 @@ import {
 import { logger } from "../lib/logger.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
+import {
+  consumeWhatsAppActionToken,
+  getWhatsAppSettings,
+  isWhatsAppFeatureEnabled,
+} from "../services/whatsapp/whatsapp-service.js";
 
 const router: IRouter = Router();
 const INITIAL_ADMIN_USERNAME = "admin";
@@ -162,6 +167,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     : null;
   const slug = slugify(company);
   const formattedPhone = normalizeKenyanPhone(phone);
+  const phoneE164 = `+${formattedPhone}`;
   const formattedPaymentPhone = normalizeKenyanPhone(paymentPhone);
 
   if (company.length < 2 || !/^[a-z]+$/.test(company) || !slug) {
@@ -229,11 +235,17 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     return;
   }
 
-  const phoneMatches = await sbSelect<{ id: number }>(
-    "isp_admins",
-    `phone=eq.${encodeURIComponent(phone)}&select=id&limit=1`,
-  );
-  if (phoneMatches.length) {
+  const [phoneMatches, e164PhoneMatches] = await Promise.all([
+    sbSelect<{ id: number }>(
+      "isp_admins",
+      `phone=eq.${encodeURIComponent(phone)}&select=id&limit=1`,
+    ),
+    sbSelect<{ id: number }>(
+      "isp_admins",
+      `phone_e164=eq.${encodeURIComponent(phoneE164)}&select=id&limit=1`,
+    ),
+  ]);
+  if (phoneMatches.length || e164PhoneMatches.length) {
     res.status(409).json({ ok: false, error: "This phone number is already registered." });
     return;
   }
@@ -246,12 +258,50 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     return;
   }
 
+  let registrationVerificationRequired =
+    process.env.WHATSAPP_REQUIRE_REGISTRATION_VERIFICATION === "true";
+  try {
+    const whatsappSettings = await getWhatsAppSettings();
+    registrationVerificationRequired ||= isWhatsAppFeatureEnabled(
+      whatsappSettings,
+      "registrationVerification",
+    );
+  } catch (error) {
+    logger.warn({ err: error }, "[registration] WhatsApp settings unavailable; using the configured registration policy");
+    if (registrationVerificationRequired) {
+      res.status(503).json({
+        ok: false,
+        error: "Phone verification is temporarily unavailable. Please try again later.",
+      });
+      return;
+    }
+  }
+  if (registrationVerificationRequired) {
+    const verificationToken = typeof req.body?.phoneVerificationToken === "string"
+      ? req.body.phoneVerificationToken.trim()
+      : "";
+    const consumed = verificationToken
+      ? await consumeWhatsAppActionToken(verificationToken, phoneE164, "registration")
+      : null;
+    if (!consumed) {
+      res.status(403).json({
+        ok: false,
+        error: "Verify this phone number through WhatsApp before continuing registration.",
+      });
+      return;
+    }
+  }
+
   let pendingAdmin: { id: number; username: string; subdomain: string } | undefined;
   for (let attempt = 0; attempt < 5 && !pendingAdmin; attempt += 1) {
     const candidate = await findAvailableSubdomain(company);
     try {
       const inserted = await sbInsertStrict<{ id: number; username: string; subdomain: string }>("isp_admins", {
-        name: company, fullname: displayName || null, email, phone, payment_phone: formattedPaymentPhone, username: INITIAL_ADMIN_USERNAME,
+        name: company, fullname: displayName || null, email, phone,
+        phone_e164: phoneE164,
+        phone_verified: registrationVerificationRequired,
+        phone_verified_at: registrationVerificationRequired ? new Date().toISOString() : null,
+        payment_phone: formattedPaymentPhone, username: INITIAL_ADMIN_USERNAME,
         password: await hashIspAdminPassword(INITIAL_ADMIN_PASSWORD), must_change_password: true,
         is_active: false, role, subdomain: candidate, status: "pending_payment",
         created_at: new Date().toISOString(), updated_at: new Date().toISOString(),

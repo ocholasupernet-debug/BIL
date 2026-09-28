@@ -177,7 +177,10 @@ router.post("/auth/customer/login", async (req: Request, res: Response): Promise
   );
   const customer = rows[0];
 
-  if (!customer || customer.password !== password) {
+  if (!customer || !await verifyIspAdminPassword(
+    typeof customer.password === "string" ? customer.password : "",
+    password,
+  )) {
     setTimeout(() => {
       res.status(401).json({ ok: false, error: "Invalid credentials" });
     }, 400);

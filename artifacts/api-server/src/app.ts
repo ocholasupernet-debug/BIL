@@ -45,6 +45,8 @@ app.use(
   }),
 );
 app.use(cors());
+/* Meta signs the exact incoming bytes, so capture this route before JSON parsing. */
+app.use("/api/whatsapp/webhook", express.raw({ type: "application/json", limit: "1mb" }));
 app.use(express.json({ limit: "8mb" }));
 app.use(express.urlencoded({ extended: true }));
 

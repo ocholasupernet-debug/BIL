@@ -90,6 +90,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_plan_service_pools.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_reseller_scoped_payment_gateways.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_reseller_subdomains.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_whatsapp_integration.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
 

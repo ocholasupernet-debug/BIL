@@ -24,6 +24,19 @@ export default function AdminLogin() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
   const [error, setError]               = useState("");
+  const [whatsappLoginEnabled, setWhatsappLoginEnabled] = useState(false);
+  const [whatsappRecoveryEnabled, setWhatsappRecoveryEnabled] = useState(false);
+  const [loginMethod, setLoginMethod] = useState<"password" | "whatsapp" | "recovery">("password");
+  const [whatsappPhone, setWhatsappPhone] = useState("");
+  const [otpChallengeId, setOtpChallengeId] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [otpPurpose, setOtpPurpose] = useState<"login" | "recovery">("login");
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpNotice, setOtpNotice] = useState("");
+  const [resendWait, setResendWait] = useState(0);
+  const [resetToken, setResetToken] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [recoveryStage, setRecoveryStage] = useState<"request" | "verify" | "password">("request");
 
   const [company, setCompany]               = useState<CompanyInfo | null>(null);
   const [companyLoading, setCompanyLoading] = useState(false);
@@ -48,6 +61,137 @@ export default function AdminLogin() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    void fetch("/api/whatsapp/public-config", { cache: "no-store" })
+      .then(response => response.json())
+      .then(data => {
+        setWhatsappLoginEnabled(data?.loginEnabled === true);
+        setWhatsappRecoveryEnabled(data?.passwordRecoveryEnabled === true);
+      })
+      .catch(() => {
+        setWhatsappLoginEnabled(false);
+        setWhatsappRecoveryEnabled(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (resendWait <= 0) return;
+    const timer = window.setTimeout(() => setResendWait(value => Math.max(0, value - 1)), 1000);
+    return () => window.clearTimeout(timer);
+  }, [resendWait]);
+
+  const requestWhatsappCode = async (purpose: "login" | "recovery") => {
+    setError("");
+    setOtpNotice("");
+    if (!whatsappPhone.trim()) {
+      setError("Enter your WhatsApp phone number.");
+      return;
+    }
+    setOtpLoading(true);
+    try {
+      const response = await fetch("/api/auth/whatsapp/request-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: whatsappPhone.trim(),
+          purpose,
+          accountType: "admin",
+          subdomain: (hostSubdomain || companySubdomain).trim().toLowerCase(),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not request a WhatsApp code.");
+      setOtpChallengeId(data.challengeId);
+      setOtpPurpose(purpose);
+      setOtpCode("");
+      setResendWait(Number(data.resendAfterSeconds) || 60);
+      if (purpose === "recovery") setRecoveryStage("verify");
+      setOtpNotice(data.message || "If eligible, a code will be sent to WhatsApp.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not request a WhatsApp code.");
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const verifyWhatsappCode = async () => {
+    setError("");
+    setOtpNotice("");
+    setOtpLoading(true);
+    try {
+      const response = await fetch("/api/auth/whatsapp/verify-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeId: otpChallengeId, code: otpCode }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "The code is invalid or expired.");
+
+      if (otpPurpose === "recovery") {
+        if (!data.resetToken) throw new Error("Could not start password recovery. Request a new code.");
+        setResetToken(data.resetToken);
+        setRecoveryStage("password");
+        return;
+      }
+      const admin = data.admin as {
+        id: number;
+        name?: string;
+        fullname?: string | null;
+        username: string;
+        email?: string | null;
+        role?: string;
+        area?: string;
+        currency?: string;
+      } | undefined;
+      if (!admin || (company && admin.id !== company.id)) {
+        throw new Error("This number could not be matched to this company portal.");
+      }
+      if (data.requiresPasswordSetup) {
+        if (!data.setupToken) throw new Error("Could not start password setup. Please try again.");
+        clearAdminAuth();
+        clearPasswordSetupToken();
+        setPasswordSetupToken(data.setupToken);
+        setLocation("/admin/set-password");
+        return;
+      }
+      if (!data.token) throw new Error("Could not create a secure admin session. Please try again.");
+      clearPasswordSetupToken();
+      setAdminAuth(admin.id, admin.username, admin.name || admin.username, admin.role, data.token, admin.fullname || undefined);
+      try {
+        if (admin.currency) localStorage.setItem("ochola_admin_currency", admin.currency);
+        if (admin.area) localStorage.setItem("ochola_admin_country", admin.area);
+      } catch {}
+      setLocation(admin.role === "reseller" ? "/admin/reseller" : "/admin/dashboard");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "WhatsApp verification failed.");
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const saveRecoveredPassword = async () => {
+    setError("");
+    setOtpLoading(true);
+    try {
+      const response = await fetch("/api/auth/whatsapp/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resetToken, password: newPassword }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Password could not be reset.");
+      setOtpNotice("Password updated. Sign in with your new password.");
+      setLoginMethod("password");
+      setRecoveryStage("request");
+      setResetToken("");
+      setNewPassword("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Password could not be reset.");
+    } finally {
+      setOtpLoading(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -227,6 +371,17 @@ export default function AdminLogin() {
             Sign in to your admin dashboard
           </p>
 
+          {(whatsappLoginEnabled || whatsappRecoveryEnabled) && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+              <button type="button" onClick={() => { setLoginMethod("password"); setError(""); }} aria-pressed={loginMethod === "password"} style={{ flex: 1, border: "1px solid var(--isp-input-border)", borderRadius: 9, padding: "9px 10px", background: loginMethod === "password" ? "var(--isp-accent-glow)" : "transparent", color: "var(--isp-text)", cursor: "pointer", fontWeight: 600 }}>
+                Use password
+              </button>
+              {whatsappLoginEnabled && <button type="button" onClick={() => { setLoginMethod("whatsapp"); setOtpChallengeId(""); setOtpCode(""); setError(""); setOtpNotice(""); }} aria-pressed={loginMethod === "whatsapp"} style={{ flex: 1, border: "1px solid var(--isp-input-border)", borderRadius: 9, padding: "9px 10px", background: loginMethod === "whatsapp" ? "var(--isp-accent-glow)" : "transparent", color: "var(--isp-text)", cursor: "pointer", fontWeight: 600 }}>
+                Continue with WhatsApp
+              </button>}
+            </div>
+          )}
+
           {error && (
             <div style={{
               display: "flex", alignItems: "center", gap: 10,
@@ -237,6 +392,7 @@ export default function AdminLogin() {
                <p style={{ fontSize: "0.9rem", color: "#DC2626", margin: 0 }}>{error}</p>
             </div>
           )}
+          {otpNotice && <p role="status" style={{ margin: "0 0 16px", fontSize: "0.83rem", color: "var(--isp-text-muted)" }}>{otpNotice}</p>}
 
            <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
              {!hostSubdomain && (
@@ -270,7 +426,7 @@ export default function AdminLogin() {
                  </p>
                </div>
              )}
-            <div>
+             {loginMethod === "password" && <><div>
               <label style={{
                  display: "block", fontSize: "0.88rem", fontWeight: 600,
                 color: "var(--isp-text)", marginBottom: 7,
@@ -295,7 +451,7 @@ export default function AdminLogin() {
               </div>
             </div>
 
-            <div>
+             <div>
               <label style={{
                  display: "block", fontSize: "0.88rem", fontWeight: 600,
                 color: "var(--isp-text)", marginBottom: 7,
@@ -328,10 +484,83 @@ export default function AdminLogin() {
                 >
                   {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
+                {whatsappRecoveryEnabled && (
+                  <button type="button" onClick={() => { setLoginMethod("recovery"); setRecoveryStage("request"); setOtpChallengeId(""); setResetToken(""); setError(""); setOtpNotice(""); }} style={{ display: "block", marginTop: 8, marginLeft: "auto", padding: 0, border: 0, background: "none", color: "var(--isp-accent)", cursor: "pointer", fontSize: "0.8rem", fontWeight: 600 }}>
+                    Forgot password?
+                  </button>
+                )}
               </div>
-            </div>
+            </div></>}
 
-            <button
+            {(loginMethod === "whatsapp" || loginMethod === "recovery") && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>
+                    WhatsApp phone number
+                  </label>
+                  <input
+                    type="tel"
+                    value={whatsappPhone}
+                    onChange={event => { setWhatsappPhone(event.target.value); setOtpChallengeId(""); setOtpCode(""); setResetToken(""); setRecoveryStage("request"); }}
+                    placeholder="+254712345678"
+                    autoComplete="tel"
+                    style={inputStyle}
+                  />
+                </div>
+
+                {loginMethod === "whatsapp" && !otpChallengeId && (
+                  <button type="button" onClick={() => void requestWhatsappCode("login")} disabled={otpLoading} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading ? 0.6 : 1 }}>
+                    {otpLoading ? "Requesting code…" : "Continue with WhatsApp"}
+                  </button>
+                )}
+
+                {loginMethod === "recovery" && recoveryStage === "request" && (
+                  <button type="button" onClick={() => void requestWhatsappCode("recovery")} disabled={otpLoading} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading ? 0.6 : 1 }}>
+                    {otpLoading ? "Requesting code…" : "Send recovery code"}
+                  </button>
+                )}
+
+                {((loginMethod === "whatsapp" && otpChallengeId && otpPurpose === "login") || (loginMethod === "recovery" && recoveryStage === "verify")) && (
+                  <>
+                    <div>
+                      <label style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>
+                        Enter the 6-digit code
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        value={otpCode}
+                        onChange={event => setOtpCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                        placeholder="000000"
+                        style={inputStyle}
+                      />
+                    </div>
+                    <button type="button" onClick={() => void verifyWhatsappCode()} disabled={otpLoading || otpCode.length !== 6} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || otpCode.length !== 6 ? 0.6 : 1 }}>
+                      {otpLoading ? "Verifying…" : "Verify code"}
+                    </button>
+                    <button type="button" onClick={() => void requestWhatsappCode(otpPurpose)} disabled={otpLoading || resendWait > 0} style={{ border: 0, background: "none", color: "var(--isp-accent)", cursor: resendWait > 0 ? "default" : "pointer", fontSize: "0.82rem", opacity: resendWait > 0 ? 0.6 : 1 }}>
+                      {resendWait > 0 ? `Resend code in ${resendWait}s` : "Resend code"}
+                    </button>
+                  </>
+                )}
+
+                {loginMethod === "recovery" && recoveryStage === "password" && (
+                  <>
+                    <div>
+                      <label style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>New password</label>
+                      <input type="password" autoComplete="new-password" value={newPassword} onChange={event => setNewPassword(event.target.value)} minLength={10} style={inputStyle} />
+                    </div>
+                    <button type="button" onClick={() => void saveRecoveredPassword()} disabled={otpLoading || newPassword.length < 10} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || newPassword.length < 10 ? 0.6 : 1 }}>
+                      {otpLoading ? "Updating…" : "Reset password"}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+
+            {loginMethod === "password" && <button
               type="submit"
               disabled={isLoading || companyLoading}
               className="btn btn-primary"
@@ -345,7 +574,7 @@ export default function AdminLogin() {
             >
               {isLoading ? "Signing in…" : "Sign In"}
               {!isLoading && <ArrowRight size={16} />}
-            </button>
+            </button>}
           </form>
 
            <p style={{ marginTop: 28, textAlign: "center", fontSize: "0.9rem", color: "var(--isp-text-sub)" }}>

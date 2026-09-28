@@ -1,6 +1,10 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { sweepAllRouters } from "./routes/routers-route";
+import {
+  enqueueWhatsAppExpiryNotifications,
+  processWhatsAppOutboxBatch,
+} from "./services/whatsapp/whatsapp-service.js";
 
 const rawPort = process.env["PORT"];
 
@@ -23,6 +27,31 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  if (process.env.NODE_ENV === "production" && process.env.WHATSAPP_WORKER_ENABLED !== "false") {
+    let whatsappWorkerBusy = false;
+    let lastExpirySweep = 0;
+    const runWhatsAppWorker = async () => {
+      if (whatsappWorkerBusy) return;
+      whatsappWorkerBusy = true;
+      try {
+        await processWhatsAppOutboxBatch(10);
+        if (Date.now() - lastExpirySweep >= 60 * 60 * 1000) {
+          await enqueueWhatsAppExpiryNotifications();
+          lastExpirySweep = Date.now();
+        }
+      } catch (error) {
+        logger.warn({ err: error }, "[whatsapp] background delivery sweep failed");
+      } finally {
+        whatsappWorkerBusy = false;
+      }
+    };
+    setTimeout(() => {
+      void runWhatsAppWorker();
+      setInterval(() => void runWhatsAppWorker(), 30_000);
+    }, 15_000);
+    logger.info({ intervalSeconds: 30 }, "[whatsapp] outbox worker started");
+  }
 
   /* ── Background router health monitor ─────────────────────────────────────
    * Pings all routers every 5 minutes and updates their status in Supabase.
