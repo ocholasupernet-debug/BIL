@@ -401,7 +401,7 @@ ensure_management_service() {
       return 1
     fi
     if ! wait_for_management_tunnel "$device" "$address" "$port"; then
-      echo "ERROR: ${modern} did not provide ${device} (${address}) and TCP ${port}." >&2
+      echo "ERROR: The management tunnel is not ready for ${stem}; expected ${device} (${address}) and TCP ${port}." >&2
       show_management_diagnostics "$stem" "$device"
       return 1
     fi
@@ -428,7 +428,7 @@ ensure_management_service() {
     return 1
   fi
   if ! wait_for_management_tunnel "$device" "$address" "$port"; then
-    echo "ERROR: ${modern} did not provide ${device} (${address}) and TCP ${port}." >&2
+    echo "ERROR: The management tunnel is not ready for ${stem}; expected ${device} (${address}) and TCP ${port}." >&2
     show_management_diagnostics "$stem" "$device"
     return 1
   fi

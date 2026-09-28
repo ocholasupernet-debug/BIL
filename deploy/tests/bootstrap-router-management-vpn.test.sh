@@ -72,7 +72,13 @@ case "$name" in
     fi
     if [ "${1:-}" = "-4" ] && [ "${2:-}" = "addr" ]; then
       case "${5:-}" in
-        tun-router) echo "inet 10.8.5.1/24 scope global tun-router" ;;
+        tun-router)
+          if [ "$VPN_TEST_SCENARIO" = "wrong-primary-address" ]; then
+            echo "inet 10.8.5.9/24 scope global tun-router"
+          else
+            echo "inet 10.8.5.1/24 scope global tun-router"
+          fi
+          ;;
         tun-router-bkp) echo "inet 10.8.6.1/24 scope global tun-router-bkp" ;;
       esac
     fi
@@ -80,9 +86,13 @@ case "$name" in
   ss)
     log_call "$@"
     if [ "${1:-}" = "-H" ] && [ "${2:-}" = "-lnt" ]; then
-      printf '%s\n' \
-        'LISTEN 0 128 0.0.0.0:1196 0.0.0.0:*' \
-        'LISTEN 0 128 0.0.0.0:1197 0.0.0.0:*'
+      if [ "$VPN_TEST_SCENARIO" = "missing-primary-listener" ]; then
+        echo 'LISTEN 0 128 0.0.0.0:1197 0.0.0.0:*'
+      else
+        printf '%s\n' \
+          'LISTEN 0 128 0.0.0.0:1196 0.0.0.0:*' \
+          'LISTEN 0 128 0.0.0.0:1197 0.0.0.0:*'
+      fi
     fi
     ;;
   apt-get|iptables-save|journalctl|fuser|iptables|sleep)
@@ -231,6 +241,30 @@ assert_contains "$SCENARIO_LOG" "ss <-H> <-lnt>"
 assert_contains "$SCENARIO_OUTPUT" "Primary OpenVPN: TCP 1196 on 10.8.5.0/24"
 assert_contains "$SCENARIO_OUTPUT" "Backup OpenVPN:  TCP 1197 on 10.8.6.0/24"
 echo "PASS: clean host starts modern units and verifies both tunnel addresses and listeners"
+
+wrong_address_root="$(prepare_root wrong-primary-address)"
+run_scenario wrong-primary-address "$wrong_address_root"
+if [ "$SCENARIO_STATUS" -eq 0 ]; then
+  echo "FAIL: wrong management address unexpectedly succeeded" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+assert_contains "$SCENARIO_OUTPUT" "The management tunnel is not ready"
+assert_contains "$SCENARIO_LOG" "ip <-4> <addr> <show> <dev> <tun-router>"
+assert_contains "$SCENARIO_LOG" "ss <-H> <-lnt>"
+echo "PASS: wrong management address fails tunnel readiness"
+
+missing_listener_root="$(prepare_root missing-primary-listener)"
+run_scenario missing-primary-listener "$missing_listener_root"
+if [ "$SCENARIO_STATUS" -eq 0 ]; then
+  echo "FAIL: missing TCP listener unexpectedly succeeded" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+assert_contains "$SCENARIO_OUTPUT" "The management tunnel is not ready"
+assert_contains "$SCENARIO_LOG" "ip <-4> <addr> <show> <dev> <tun-router>"
+assert_contains "$SCENARIO_LOG" "ss <-H> <-lnt>"
+echo "PASS: missing TCP listener fails tunnel readiness"
 
 unchanged_root="$(prepare_root modern-unchanged)"
 run_scenario modern-unchanged "$unchanged_root"
