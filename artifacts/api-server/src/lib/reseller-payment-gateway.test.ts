@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bankBusinessNumberFor, resellerDestinationConfigured } from "./reseller-payment-gateway.js";
+import {
+  bankBusinessNumberFor,
+  isResellerGatewayTestMetadata,
+  resellerGatewayCheckoutSupported,
+  resellerGatewayConfigComplete,
+  resellerDestinationConfigured,
+} from "./reseller-payment-gateway.js";
 
 test("uses the known KCB business number", () => {
   assert.equal(bankBusinessNumberFor("KCB Bank"), "533533");
@@ -22,4 +28,35 @@ test("accepts current and legacy reseller PayBill metadata", () => {
   assert.equal(resellerDestinationConfigured("mpesa_paybill", { paybillNumber: "123456", accountNumber: "ISP" }), true);
   assert.equal(resellerDestinationConfigured("mpesa_paybill", { merchant_identifier: "123456", account_reference: "ISP" }), true);
   assert.equal(resellerDestinationConfigured("mpesa_paybill", { paybillNumber: "123456" }), false);
+});
+
+test("requires reseller-owned Daraja credentials before an M-Pesa route is complete", () => {
+  assert.equal(resellerGatewayConfigComplete("mpesa_paybill", {
+    paybillNumber: "123456",
+    accountNumber: "REF",
+    businessShortcode: "123456",
+    consumerKey: "key",
+    consumerSecret: "secret",
+    passkey: "passkey",
+  }), true);
+  assert.equal(resellerGatewayConfigComplete("mpesa_paybill", {
+    paybillNumber: "123456",
+    accountNumber: "REF",
+  }), false);
+});
+
+test("allows setup checks for other gateways without enabling their checkout", () => {
+  assert.equal(resellerGatewayConfigComplete("stripe", {
+    publishableKey: "pk_test",
+    secretKey: "sk_test",
+  }), true);
+  assert.equal(resellerGatewayCheckoutSupported("stripe"), false);
+  assert.equal(resellerGatewayCheckoutSupported("mpesa_paybill"), true);
+});
+
+test("recognizes only explicitly marked reseller gateway test payments", () => {
+  assert.equal(isResellerGatewayTestMetadata({ source: "reseller_gateway_test" }), true);
+  assert.equal(isResellerGatewayTestMetadata({ source: "reseller_daraja_bridge" }), false);
+  assert.equal(isResellerGatewayTestMetadata(null), false);
+  assert.equal(isResellerGatewayTestMetadata("reseller_gateway_test"), false);
 });

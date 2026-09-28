@@ -55,7 +55,15 @@ import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
-import { bankBusinessNumberFor, resolveResellerGatewayRoute } from "../lib/reseller-payment-gateway.js";
+import {
+  bankBusinessNumberFor,
+  decryptGatewayConfig,
+  encryptGatewayConfig,
+  isResellerGatewayTestMetadata,
+  resellerDestinationConfigured,
+  resolveResellerGatewayRoute,
+  type ResellerGatewayRouteRow,
+} from "../lib/reseller-payment-gateway.js";
 
 const router: IRouter = Router();
 
@@ -372,6 +380,8 @@ async function getAdminPaymentSettings(
 type ResellerPaymentRoute = {
   resellerId: number;
   portId: number;
+  gatewayRouteId: number | null;
+  gatewayConfigCiphertext: string;
   paymentGateway: PaymentGateway;
   settings: MpesaSettings;
   bankStkPush: BankStkPushConfig;
@@ -380,6 +390,21 @@ type ResellerPaymentRoute = {
   merchantIdentifier: string;
   accountReference: string;
 };
+
+function resellerDarajaSettings(
+  config: Record<string, string>,
+  callbackUrl: string,
+): MpesaSettings {
+  return {
+    consumerKey: config.consumerKey ?? "",
+    consumerSecret: config.consumerSecret ?? "",
+    shortcode: config.businessShortcode ?? config.shortcode ?? "",
+    passkey: config.passkey ?? "",
+    callbackUrl: config.callbackUrl || callbackUrl,
+    env: config.environment === "production" ? "production" : "sandbox",
+    tillNumber: config.tillNumber ?? "",
+  };
+}
 
 async function getResellerPaymentRoute(
   adminId: number,
@@ -419,7 +444,7 @@ async function getResellerPaymentRoute(
     throw new Error("This reseller link is not active for checkout.");
   }
 
-  const [route, fallback, legacyRows, legacyAccountRows] = await Promise.all([
+  const [route, sharedCallbackSettings, legacyRows, legacyAccountRows] = await Promise.all([
     resolveResellerGatewayRoute(adminId, port.assigned_reseller_id, routerId, portId),
     getMpesaSettings(),
     sbSelectStrict<{
@@ -536,8 +561,13 @@ async function getResellerPaymentRoute(
   return {
     resellerId: port.assigned_reseller_id,
     portId,
+    gatewayRouteId: route?.id ?? null,
+    gatewayConfigCiphertext: route?.config_ciphertext ?? encryptGatewayConfig(resellerSharedConfig),
     paymentGateway,
-    settings: fallback,
+    settings: resellerDarajaSettings(
+      routeConfig && Object.keys(routeConfig).length > 0 ? routeConfig : resellerSharedConfig,
+      sharedCallbackSettings.callbackUrl,
+    ),
     bankStkPush,
     mpesaTillPush,
     mpesaPaybill,
@@ -880,6 +910,7 @@ interface PendingMpesaTransaction {
   reseller_port_id: number | null;
   amount: number;
   payment_method: string;
+  payment_metadata?: unknown;
   payment_phone: string | null;
   mac_address: string | null;
 }
@@ -983,7 +1014,27 @@ export async function processMpesaCallback(
 ): Promise<boolean> {
   const dependencies: MpesaCallbackDependencies = {
     selectPending: filter => sbSelect<PendingMpesaTransaction>("isp_transactions", filter),
-    getSettings: async () => getMpesaSettings(),
+    getSettings: async transaction => {
+      const metadata = transaction?.payment_metadata;
+      const fields = metadata && typeof metadata === "object" && !Array.isArray(metadata)
+        ? metadata as Record<string, unknown>
+        : {};
+      const source = String(fields.source ?? "");
+      if (source === "reseller_gateway_test" || source === "reseller_daraja_bridge") {
+        const configCiphertext = typeof fields.resellerGatewayConfigCiphertext === "string"
+          ? fields.resellerGatewayConfigCiphertext
+          : "";
+        if (!configCiphertext) {
+          throw new Error("This reseller payment has no saved reseller-owned gateway credential snapshot.");
+        }
+        const [config, platformSettings] = await Promise.all([
+          Promise.resolve(decryptGatewayConfig(configCiphertext)),
+          getMpesaSettings(),
+        ]);
+        return resellerDarajaSettings(config, platformSettings.callbackUrl);
+      }
+      return getMpesaSettings();
+    },
     verifyStk: queryDarajaStkResult,
     reactivatePppoeAccess,
     reactivateVlanAccess,
@@ -1219,6 +1270,205 @@ export async function processDeferredMpesaCallbacks(checkoutId?: string): Promis
 setInterval(() => {
   void processDeferredMpesaCallbacks().catch(err => logger.error({ err }, "[mpesa/callback] Deferred callback retry failed"));
 }, 60_000).unref();
+
+type ResellerMpesaTestAccount = {
+  id: number;
+  parent_id: number;
+  role: string;
+  is_active: boolean;
+};
+
+async function resellerMpesaTestAccountFromRequest(req: Request): Promise<ResellerMpesaTestAccount | null> {
+  const token = validateToken(extractToken(req));
+  if (!token || token.type !== "a" || !/^[1-9]\d*$/.test(token.uid)) return null;
+  const id = Number(token.uid);
+  if (!Number.isSafeInteger(id)) return null;
+  const accounts = await sbSelect<ResellerMpesaTestAccount>(
+    "isp_admins",
+    `id=eq.${id}&role=eq.reseller&is_active=eq.true&select=id,parent_id,role,is_active&limit=1`,
+  );
+  const account = accounts[0];
+  return account && Number.isSafeInteger(account.parent_id) && account.parent_id > 0
+    ? account
+    : null;
+}
+
+router.post("/mpesa/reseller-test", async (req: Request, res: Response): Promise<void> => {
+  const account = await resellerMpesaTestAccountFromRequest(req);
+  if (!account) {
+    res.status(401).json({ ok: false, error: "Sign in to a connected reseller account to test its payment gateway." });
+    return;
+  }
+
+  const routeId = Number(req.body?.routeId);
+  const amount = Number(req.body?.amount);
+  if (!Number.isSafeInteger(routeId) || routeId <= 0) {
+    res.status(400).json({ ok: false, error: "Choose a saved reseller payment route." });
+    return;
+  }
+  if (!Number.isSafeInteger(amount) || amount < 1 || amount > 1000) {
+    res.status(400).json({ ok: false, error: "Enter a test amount from 1 to 1,000." });
+    return;
+  }
+  const normalised = normaliseKenyanPhone(String(req.body?.phone ?? ""));
+  if (!/^254\d{9}$/.test(normalised)) {
+    res.status(400).json({ ok: false, error: "Enter a valid Kenyan M-Pesa phone number." });
+    return;
+  }
+  if (!allowStkRequest(req, account.id, normalised)) {
+    res.status(429).json({ ok: false, error: "Too many payment prompts. Please wait before trying again." });
+    return;
+  }
+
+  let transactionId: number | null = null;
+  try {
+    const routes = await sbSelectStrict<ResellerGatewayRouteRow>(
+      "reseller_payment_gateway_routes",
+      `id=eq.${routeId}&admin_id=eq.${account.parent_id}&reseller_id=eq.${account.id}&select=id,admin_id,reseller_id,router_id,port_id,gateway_type,config_ciphertext,config_preview,is_active&limit=1`,
+    );
+    const route = routes[0];
+    if (!route) {
+      res.status(404).json({ ok: false, error: "That M-Pesa route was not added to this reseller account." });
+      return;
+    }
+    if (route.gateway_type !== "mpesa_paybill" && route.gateway_type !== "mpesa_till_push") {
+      res.status(409).json({ ok: false, error: "Reseller payment tests currently support M-Pesa PayBill and Till only." });
+      return;
+    }
+
+    const config = decryptGatewayConfig(route.config_ciphertext);
+    if (!resellerDestinationConfigured(route.gateway_type, config)) {
+      res.status(400).json({ ok: false, error: "Complete and save this reseller’s M-Pesa collection details before testing." });
+      return;
+    }
+    const platformSettings = await getMpesaSettings();
+    const settings = resellerDarajaSettings(config, platformSettings.callbackUrl);
+    if (!isMpesaConfigured(settings)) {
+      res.status(400).json({ ok: false, error: "Save this reseller’s own Daraja Business Shortcode, Consumer Key, Consumer Secret, and Passkey before testing." });
+      return;
+    }
+    if (!supabaseServiceRoleConfigured) {
+      res.status(503).json({ ok: false, error: "Live M-Pesa payment testing is unavailable in this preview." });
+      return;
+    }
+    const resolvedCallbackUrl = callbackUrl(settings);
+    if (!hasValidCallbackUrl(resolvedCallbackUrl)) {
+      res.status(503).json({ ok: false, error: "M-Pesa requires a saved HTTPS callback URL before testing." });
+      return;
+    }
+
+    const till = resellerRouteMpesaTillConfig(config);
+    const paybill = resellerRouteMpesaPaybillConfig(config);
+    const payment = resolveDarajaPayment(
+      route.gateway_type,
+      settings,
+      { bankName: "", paybillNumber: "", accountNumber: "" },
+      till,
+      paybill,
+    );
+    if (!payment.destination) {
+      res.status(400).json({ ok: false, error: "The reseller M-Pesa destination is incomplete." });
+      return;
+    }
+
+    const created = await sbInsertStrict<{ id: number }>("isp_transactions", {
+      admin_id: account.parent_id,
+      reseller_id: account.id,
+      reseller_port_id: route.port_id,
+      amount,
+      payment_method: "mpesa",
+      payment_phone: normalised,
+      payment_metadata: {
+        source: "reseller_gateway_test",
+        gatewayType: route.gateway_type,
+        routeId: route.id,
+        routeScope: route.port_id !== null ? "port" : route.router_id !== null ? "router" : "default",
+        destinationType: route.gateway_type === "mpesa_till_push" ? "till" : "paybill",
+        merchantIdentifier: payment.destination,
+        accountReference: payment.accountReference ?? "",
+        resellerGatewayConfigCiphertext: route.config_ciphertext,
+      },
+      reference: `initiating:${randomUUID()}`,
+      status: "initiating",
+      notes: `Reseller M-Pesa gateway test prompt is being created for ${normalised}`,
+      created_at: new Date().toISOString(),
+    });
+    const transaction = created[0];
+    if (!transaction) {
+      res.status(503).json({ ok: false, error: "Could not safely create the test payment request. Please try again." });
+      return;
+    }
+    transactionId = transaction.id;
+
+    const token = await getDarajaToken(settings);
+    const { timestamp, password } = stkCredentials(payment.businessShortcode, settings.passkey);
+    const response = await fetch(`${darajaBase(settings)}/mpesa/stkpush/v1/processrequest`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        BusinessShortCode: payment.businessShortcode,
+        Password: password,
+        Timestamp: timestamp,
+        TransactionType: route.gateway_type === "mpesa_till_push" ? "CustomerBuyGoodsOnline" : "CustomerPayBillOnline",
+        Amount: amount,
+        PartyA: normalised,
+        PartyB: payment.destination,
+        PhoneNumber: normalised,
+        CallBackURL: resolvedCallbackUrl,
+        AccountReference: payment.accountReference ?? "ResellerTest",
+        TransactionDesc: "Reseller M-Pesa gateway test",
+      }),
+    });
+    const data = await response.json() as Record<string, unknown>;
+    if (!response.ok || data.ResponseCode !== "0") {
+      await sbUpdate("isp_transactions", `id=eq.${transaction.id}&status=eq.initiating`, {
+        status: "failed",
+        notes: `Reseller STK test prompt failed: ${String(data.errorMessage ?? data.ResponseDescription ?? "Unknown error")}`,
+      });
+      res.status(400).json({ ok: false, error: String(data.errorMessage ?? data.ResponseDescription ?? "M-Pesa could not send the test prompt.") });
+      return;
+    }
+
+    const checkoutId = String(data.CheckoutRequestID ?? "");
+    const reconciled = checkoutId && await reconcileInitiatedStkRequest(
+      transaction.id,
+      checkoutId,
+      String(data.MerchantRequestID ?? ""),
+      `Reseller M-Pesa test prompt to ${normalised}`,
+    );
+    if (!reconciled) {
+      logger.error({ checkoutId, transactionId: transaction.id }, "[mpesa/reseller-test] Could not reconcile initiated test transaction");
+      res.status(502).json({
+        ok: false,
+        error: "The prompt was sent but confirmation tracking could not be saved. Do not retry until you check M-Pesa.",
+        CheckoutRequestID: checkoutId,
+        environment: settings.env,
+        shortcode: settings.shortcode,
+      });
+      return;
+    }
+    await processDeferredMpesaCallbacks(checkoutId).catch(error => {
+      logger.warn({ err: error, checkoutId }, "[mpesa/reseller-test] Immediate callback reconciliation deferred");
+    });
+    res.json({
+      ok: true,
+      CheckoutRequestID: checkoutId,
+      MerchantRequestID: String(data.MerchantRequestID ?? ""),
+      environment: settings.env,
+      shortcode: settings.shortcode,
+      destinationType: route.gateway_type === "mpesa_till_push" ? "till" : "paybill",
+    });
+  } catch (error) {
+    if (transactionId !== null) {
+      await sbUpdate("isp_transactions", `id=eq.${transactionId}&status=eq.initiating`, {
+        status: "failed",
+        notes: "Reseller M-Pesa test prompt could not be created.",
+      }).catch(() => undefined);
+    }
+    logger.error({ err: error, resellerId: account.id, routeId }, "[mpesa/reseller-test] Test prompt failed");
+    res.status(500).json({ ok: false, error: "Could not create the reseller M-Pesa test prompt." });
+  }
+});
 
 /**
  * Return named devices currently visible on this ISP's hotspot routers.
@@ -1871,7 +2121,6 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     return;
   }
 
-  const globalCfg = await getMpesaSettings();
   let resellerRoute: ResellerPaymentRoute | null = null;
   if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
     try {
@@ -1881,13 +2130,15 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       return;
     }
   }
-  const cfg = resellerRoute?.settings ?? globalCfg;
+  const cfg = resellerRoute?.settings ?? await getMpesaSettings();
   if (!isMpesaConfigured(cfg)) {
     logger.warn("[mpesa/stk] M-Pesa credentials not configured — returning 503");
     res.status(503).json({
       ok: false,
       demo: true,
-      error: "M-Pesa is not configured. Ask the Super Admin to complete Payment Gateways.",
+      error: resellerRoute
+        ? "This reseller’s own Daraja credentials are incomplete. Ask the reseller to complete its Payment Gateways setup."
+        : "M-Pesa is not configured. Ask the Super Admin to complete Payment Gateways.",
     });
     return;
   }
@@ -1953,6 +2204,9 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
           : resellerRoute
           ? {
               source: "reseller_daraja_bridge",
+              gatewayRouteId: resellerRoute.gatewayRouteId,
+              resellerGatewayConfigCiphertext: resellerRoute.gatewayConfigCiphertext,
+              gatewayType: resellerRoute.paymentGateway,
               destinationType: resellerRoute.paymentGateway === "mpesa_till_push" ? "till" : "paybill",
               merchantIdentifier: resellerRoute.merchantIdentifier,
               accountReference: resellerRoute.accountReference,

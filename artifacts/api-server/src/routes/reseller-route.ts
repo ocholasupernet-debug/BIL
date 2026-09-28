@@ -38,10 +38,16 @@ import {
   gatewayConfigPreview,
   bankBusinessNumberFor,
   isResellerGatewayId,
+  resellerGatewayCheckoutSupported,
+  resellerGatewayConfigComplete,
   resolveResellerGatewayRoute,
   resellerGatewayScope,
   type ResellerGatewayRouteRow,
 } from "../lib/reseller-payment-gateway.js";
+import {
+  allowResellerGatewayProbe,
+  probeResellerGatewayConnection,
+} from "../lib/reseller-gateway-probe.js";
 import {
   compileResellerActivation,
   compileResellerPaymentNoticeNatComment,
@@ -3603,24 +3609,69 @@ router.get("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
         routers: routers.map((router) => ({ id: router.id, name: router.name, status: router.status })),
         ports: ports.map((port) => ({ id: port.id, routerId: port.router_id, label: portLabels.get(Number(port.id)) })),
       },
-      routes: routes.map((route) => ({
-        id: route.id,
-        gatewayType: route.gateway_type,
-        routerId: route.router_id,
-        portId: route.port_id,
-        scopeType: resellerGatewayScope(route.router_id, route.port_id),
-        scopeLabel: route.port_id
-          ? portLabels.get(Number(route.port_id)) ?? "Assigned VLAN port"
-          : route.router_id
-            ? `Router · ${routerNames.get(Number(route.router_id)) ?? "Assigned router"}`
-            : "Reseller default",
-        config: route.config_preview ?? {},
-        hasStoredSecrets: Boolean(route.config_ciphertext),
-        isActive: route.is_active,
-      })),
+      routes: routes.map((route) => {
+        const config = decryptGatewayConfig(route.config_ciphertext);
+        return {
+          id: route.id,
+          gatewayType: route.gateway_type,
+          routerId: route.router_id,
+          portId: route.port_id,
+          scopeType: resellerGatewayScope(route.router_id, route.port_id),
+          scopeLabel: route.port_id
+            ? portLabels.get(Number(route.port_id)) ?? "Assigned VLAN port"
+            : route.router_id
+              ? `Router · ${routerNames.get(Number(route.router_id)) ?? "Assigned router"}`
+              : "Reseller default",
+          config: route.config_preview ?? {},
+          destinationConfigured: resellerGatewayConfigComplete(route.gateway_type, config),
+          hasStoredSecrets: Boolean(route.config_ciphertext),
+          isActive: route.is_active,
+        };
+      }),
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load reseller payment gateways." });
+  }
+});
+
+router.post("/reseller/payment-gateways/:routeId/test", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role !== "reseller") {
+      res.status(403).json({ ok: false, error: "Only reseller accounts can test their payment gateways." });
+      return;
+    }
+    const routeId = Number(req.params.routeId);
+    if (!Number.isSafeInteger(routeId) || routeId <= 0) {
+      res.status(400).json({ ok: false, error: "Choose a saved reseller payment route." });
+      return;
+    }
+    if (!allowResellerGatewayProbe(account.id)) {
+      res.status(429).json({ ok: false, error: "Too many gateway tests. Wait a minute before trying again." });
+      return;
+    }
+    const rows = await sbSelectStrict<ResellerGatewayRouteRow>(
+      "reseller_payment_gateway_routes",
+      `id=eq.${routeId}&admin_id=eq.${account.parent_id ?? 0}&reseller_id=eq.${account.id}&select=id,admin_id,reseller_id,router_id,port_id,gateway_type,config_ciphertext,config_preview,is_active&limit=1`,
+    );
+    const route = rows[0];
+    if (!route) {
+      res.status(404).json({ ok: false, error: "That gateway route was not added to this reseller account." });
+      return;
+    }
+    if (!isResellerGatewayId(route.gateway_type)) {
+      res.status(409).json({ ok: false, error: "This saved route uses an unsupported gateway type." });
+      return;
+    }
+    const config = decryptGatewayConfig(route.config_ciphertext);
+    const result = await probeResellerGatewayConnection(route.gateway_type, config);
+    const statusCode = result.status === "rejected" ? 400 : result.status === "unavailable" ? 502 : 200;
+    res.status(statusCode).json({ ok: statusCode === 200, ...result });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to test this reseller payment gateway.",
+    });
   }
 });
 
@@ -3671,8 +3722,23 @@ router.put("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
     const existing = existingRows[0];
     const submitted = cleanGatewayConfig(req.body?.config);
     let previous: Record<string, string> = {};
-    if (existing) previous = decryptGatewayConfig(existing.config_ciphertext);
+    if (existing && existing.gateway_type === gatewayType) previous = decryptGatewayConfig(existing.config_ciphertext);
     const config = { ...previous, ...submitted };
+    const isActive = req.body?.isActive !== false;
+    if (isActive && !resellerGatewayCheckoutSupported(gatewayType)) {
+      res.status(409).json({
+        ok: false,
+        error: "This provider can be saved and tested, but customer checkout is not connected yet. Save it as inactive.",
+      });
+      return;
+    }
+    if (isActive && !resellerGatewayConfigComplete(gatewayType, config)) {
+      res.status(400).json({
+        ok: false,
+        error: "Complete this reseller’s gateway destination and Daraja credentials before activating the route.",
+      });
+      return;
+    }
     if (req.body?.isActive !== false && Object.keys(config).length === 0) {
       res.status(400).json({ ok: false, error: "Add at least one collection account or gateway credential before activating this route." });
       return;

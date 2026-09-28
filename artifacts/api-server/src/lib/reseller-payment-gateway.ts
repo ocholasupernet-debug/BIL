@@ -4,7 +4,7 @@ import { sbSelectStrict } from "./supabase-client.js";
 export const RESELLER_GATEWAY_IDS = [
   "mpesa_paybill", "mpesa_till_push", "bank_stk_push", "airtel", "azampay",
   "custom_paybill", "dpo_payments", "flutterwave", "intasend", "pesapal",
-  "stripe", "paypal", "tigopesa", "xendit", "manual",
+  "stripe", "paypal", "tigopesa", "xendit", "bank_transfer", "manual",
 ] as const;
 
 export type ResellerGatewayId = typeof RESELLER_GATEWAY_IDS[number];
@@ -26,6 +26,9 @@ export function bankBusinessNumberFor(bankName: unknown): string {
 }
 
 const SECRET_FIELDS: Record<string, Set<string>> = {
+  mpesa_paybill: new Set(["consumerKey", "consumerSecret", "passkey"]),
+  mpesa_till_push: new Set(["consumerKey", "consumerSecret", "passkey"]),
+  bank_stk_push: new Set(["consumerKey", "consumerSecret", "passkey"]),
   airtel: new Set(["clientId", "clientSecret"]),
   azampay: new Set(["clientId", "clientSecret"]),
   dpo_payments: new Set(["companyToken"]),
@@ -62,6 +65,13 @@ export function gatewayConfigPreview(gatewayType: string, config: Record<string,
   return Object.fromEntries(Object.entries(config).filter(([key]) => !secrets.has(key)));
 }
 
+export function isResellerGatewayTestMetadata(value: unknown): boolean {
+  return !!value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>).source === "reseller_gateway_test";
+}
+
 export function encryptGatewayConfig(config: Record<string, string>): string {
   return JSON.stringify(encryptVpnSecret(JSON.stringify(config)));
 }
@@ -89,7 +99,50 @@ export function resellerDestinationConfigured(
       (config.accountNumber || config.accountReference || config.account_reference)
     );
   }
+  if (gatewayType === "bank_stk_push") {
+    return !!(
+      (config.paybillNumber || config.merchantIdentifier || config.merchant_identifier) &&
+      (config.accountNumber || config.accountReference || config.account_reference)
+    );
+  }
   return false;
+}
+
+const RESELLER_GATEWAY_REQUIRED_FIELDS: Record<string, string[]> = {
+  mpesa_paybill: ["businessShortcode", "consumerKey", "consumerSecret", "passkey"],
+  mpesa_till_push: ["businessShortcode", "consumerKey", "consumerSecret", "passkey"],
+  bank_stk_push: ["bankName", "businessShortcode", "consumerKey", "consumerSecret", "passkey"],
+  airtel: ["clientId", "clientSecret"],
+  azampay: ["appName", "clientId", "clientSecret"],
+  custom_paybill: ["paybillNumber", "accountNumber"],
+  dpo_payments: ["companyToken", "serviceType"],
+  flutterwave: ["publicKey", "secretKey"],
+  intasend: ["publishableKey", "secretKey"],
+  pesapal: ["consumerKey", "consumerSecret"],
+  stripe: ["publishableKey", "secretKey"],
+  paypal: ["clientId", "clientSecret"],
+  tigopesa: ["accountId", "apiKey", "apiSecret"],
+  xendit: ["apiKey"],
+  bank_transfer: ["bankName", "accountName", "accountNumber"],
+  manual: ["paymentInstructions"],
+};
+
+export function resellerGatewayConfigComplete(
+  gatewayType: string,
+  config: Record<string, string>,
+): boolean {
+  const required = RESELLER_GATEWAY_REQUIRED_FIELDS[gatewayType];
+  if (!required || !required.every((key) => Boolean(config[key]?.trim()))) return false;
+  if (gatewayType === "mpesa_paybill" || gatewayType === "mpesa_till_push" || gatewayType === "bank_stk_push") {
+    return resellerDestinationConfigured(gatewayType, config);
+  }
+  return true;
+}
+
+export function resellerGatewayCheckoutSupported(gatewayType: string): boolean {
+  return gatewayType === "mpesa_paybill"
+    || gatewayType === "mpesa_till_push"
+    || gatewayType === "bank_stk_push";
 }
 
 export type ResellerGatewayRouteRow = {

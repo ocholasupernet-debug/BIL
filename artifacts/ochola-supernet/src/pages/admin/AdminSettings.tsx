@@ -442,6 +442,294 @@ function AdminPaymentTestCard({ currency }: { currency: string }) {
   );
 }
 
+function ResellerPaymentTestCard() {
+  type Route = {
+    id: number;
+    gatewayType: string;
+    scopeLabel: string;
+    config: Record<string, string>;
+    destinationConfigured: boolean;
+    isActive: boolean;
+  };
+  const [routes, setRoutes] = useState<Route[]>([]);
+  const [routeId, setRouteId] = useState("");
+  const [phone, setPhone] = useState("");
+  const [amount, setAmount] = useState("");
+  const [status, setStatus] = useState<PaymentTestStatus>("idle");
+  const [checkoutId, setCheckoutId] = useState("");
+  const [error, setError] = useState("");
+  const [needsManualCheck, setNeedsManualCheck] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<"idle" | "checking" | "verified" | "setup_only" | "failed">("idle");
+  const [connectionMessage, setConnectionMessage] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const routesResponse = await fetch("/api/reseller/payment-gateways", {
+          headers: adminApiHeaders(),
+          cache: "no-store",
+        });
+        const routeData = await routesResponse.json() as { ok?: boolean; routes?: Route[]; error?: string };
+        if (!active) return;
+        if (!routesResponse.ok || !routeData.ok) {
+          throw new Error(routeData.error || "Could not load reseller payment routes.");
+        }
+        const nextRoutes = routeData.routes || [];
+        setRoutes(nextRoutes);
+        setConnectionStatus("idle");
+        setConnectionMessage("");
+        setRouteId(current => {
+          if (current && nextRoutes.some(route => String(route.id) === current)) return current;
+          const preferred = nextRoutes.find(route => route.isActive)
+            ?? nextRoutes[0];
+          return preferred ? String(preferred.id) : "";
+        });
+        setError("");
+      } catch (loadError) {
+        if (active) setError(loadError instanceof Error ? loadError.message : "Could not load reseller payment testing.");
+      }
+    };
+    void load();
+    window.addEventListener("ochola-payment-gateway-change", load);
+    return () => {
+      active = false;
+      window.removeEventListener("ochola-payment-gateway-change", load);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!checkoutId || status !== "pending") return;
+    const startedAt = Date.now();
+    let active = true;
+    const poll = async () => {
+      if (Date.now() - startedAt >= 3 * 60 * 1000) {
+        if (active) setStatus("expired");
+        return;
+      }
+      try {
+        const response = await fetch(`/api/mpesa/status?checkout_id=${encodeURIComponent(checkoutId)}`, {
+          headers: adminApiHeaders(),
+          cache: "no-store",
+        });
+        const data = await response.json() as { paid?: boolean; status?: string; failureReason?: string; error?: string };
+        if (!active) return;
+        if (!response.ok) {
+          setError(data.error || "Could not check the test payment status.");
+          setStatus("failed");
+        } else if (data.paid) {
+          setError("");
+          setNeedsManualCheck(false);
+          setStatus("paid");
+        } else if (data.status === "failed") {
+          setError(data.failureReason || "M-Pesa cancelled or declined the test prompt.");
+          setNeedsManualCheck(false);
+          setStatus("failed");
+        }
+      } catch {
+        /* Keep polling while the payment provider finishes the callback. */
+      }
+    };
+    void poll();
+    const interval = window.setInterval(poll, 3000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [checkoutId, status]);
+
+  const selectedRoute = routes.find(route => String(route.id) === routeId);
+  const promptGateway = selectedRoute?.gatewayType === "mpesa_paybill"
+    || selectedRoute?.gatewayType === "mpesa_till_push";
+  const testConnection = async () => {
+    if (!selectedRoute) return;
+    setConnectionStatus("checking");
+    setConnectionMessage("");
+    setError("");
+    try {
+      const response = await fetch(`/api/reseller/payment-gateways/${selectedRoute.id}/test`, {
+        method: "POST",
+        headers: adminApiHeaders(),
+      });
+      const data = await response.json() as {
+        ok?: boolean;
+        status?: "verified" | "setup_only" | "rejected" | "unavailable";
+        message?: string;
+        error?: string;
+      };
+      if (data.status === "verified" || data.status === "setup_only") {
+        setConnectionStatus(data.status);
+        setConnectionMessage(data.message || "Gateway test finished.");
+      } else {
+        setConnectionStatus("failed");
+        setConnectionMessage(data.message || data.error || "Gateway connection test failed.");
+      }
+    } catch {
+      setConnectionStatus("failed");
+      setConnectionMessage("Could not reach the payment server.");
+    }
+  };
+
+  const sendPrompt = async () => {
+    const numericAmount = Number(amount);
+    if (!selectedRoute || !promptGateway || !selectedRoute.destinationConfigured) {
+      setError("Choose a saved reseller PayBill or Till route with complete collection details.");
+      return;
+    }
+    if (!phone.trim() || !Number.isSafeInteger(numericAmount) || numericAmount < 1 || numericAmount > 1000) {
+      setError("Enter a valid phone number and a test amount from 1 to 1,000.");
+      return;
+    }
+    setError("");
+    setStatus("sending");
+    setCheckoutId("");
+    setNeedsManualCheck(false);
+    setConnectionStatus("idle");
+    setConnectionMessage("");
+    try {
+      const response = await fetch("/api/mpesa/reseller-test", {
+        method: "POST",
+        headers: adminApiHeaders(),
+        body: JSON.stringify({ routeId: selectedRoute.id, phone: phone.trim(), amount: numericAmount }),
+      });
+      const data = await response.json() as {
+        ok?: boolean;
+        error?: string;
+        CheckoutRequestID?: string;
+        environment?: "sandbox" | "production";
+        shortcode?: string;
+      };
+      if (!response.ok || !data.ok) {
+        setError(data.error || "M-Pesa could not send the test prompt.");
+        if (data.CheckoutRequestID) {
+          setNeedsManualCheck(true);
+          setCheckoutId(data.CheckoutRequestID);
+          setStatus("pending");
+        } else {
+          setStatus("idle");
+        }
+        return;
+      }
+      setNeedsManualCheck(false);
+      setCheckoutId(data.CheckoutRequestID || "");
+      setStatus(data.CheckoutRequestID ? "pending" : "expired");
+    } catch {
+      setStatus("idle");
+      setError("Could not reach the payment server.");
+    }
+  };
+
+  const selectedGatewayLabel = selectedRoute?.gatewayType === "mpesa_till_push"
+    ? "M-Pesa Till"
+    : selectedRoute?.gatewayType === "mpesa_paybill"
+      ? "M-Pesa PayBill"
+      : GATEWAYS.find(gateway => gateway.id === selectedRoute?.gatewayType)?.name ?? "Payment gateway";
+  const statusMessage = {
+    idle: "",
+    sending: "Contacting M-Pesa…",
+    pending: needsManualCheck
+      ? "The prompt was sent, but confirmation tracking is incomplete. Do not send another test until you check M-Pesa."
+      : "Prompt sent. Approve it on the selected phone to confirm the route.",
+    paid: "Payment confirmed. No customer account or reseller earnings balance was changed.",
+    failed: "The test prompt was cancelled or declined. No payment was confirmed.",
+    expired: "No confirmation arrived within three minutes. Check M-Pesa before retrying.",
+  }[status];
+  const environment = selectedRoute?.config.environment === "production" ? "production" : "sandbox";
+  const shortcode = selectedRoute?.config.businessShortcode?.trim() || "";
+  const submitDisabled = !selectedRoute
+    || !selectedRoute.destinationConfigured
+    || status === "sending"
+    || status === "pending"
+    || needsManualCheck;
+  const connectionDisabled = !selectedRoute
+    || !selectedRoute.destinationConfigured
+    || connectionStatus === "checking"
+    || status === "sending"
+    || status === "pending";
+
+  return (
+    <Card title="Test Reseller Gateways" desc="Only routes saved under your reseller account appear here. Connection checks do not send payments.">
+      {selectedRoute && promptGateway && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "9px 11px", borderRadius: 8, background: environment === "production" ? "rgba(245,158,11,0.08)" : "rgba(37,99,235,0.06)", border: `1px solid ${environment === "production" ? "rgba(245,158,11,0.25)" : "var(--isp-border)"}`, color: environment === "production" ? "#fbbf24" : C.muted, fontSize: "0.72rem", lineHeight: 1.45 }}>
+          {environment === "production"
+            ? `Live mode: approving an STK prompt charges the phone and sends the payment to this reseller’s saved destination${shortcode ? ` using its Daraja shortcode ${shortcode}` : ""}. Test payments do not activate service or count toward revenue.`
+            : `Sandbox mode: the prompt uses this reseller’s own Daraja credentials${shortcode ? ` and shortcode ${shortcode}` : ""}. No live payment is collected.`}
+        </div>
+      )}
+      <Field label="Reseller payment route">
+        <Select value={routeId} onChange={event => {
+          setRouteId(event.target.value);
+          setConnectionStatus("idle");
+          setConnectionMessage("");
+          setStatus("idle");
+          setCheckoutId("");
+          setError("");
+        }}>
+          <option value="">Choose a saved reseller route</option>
+          {routes.map(route => (
+            <option key={route.id} value={route.id}>
+              {(GATEWAYS.find(gateway => gateway.id === route.gatewayType)?.name ?? route.gatewayType)} · {route.scopeLabel}
+              {!route.destinationConfigured ? " · incomplete" : ""}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      {routes.length === 0 && (
+        <p style={{ color: "#fbbf24", fontSize: "0.74rem", margin: "0 0 10px" }}>
+          Add and save a gateway route in Payment Gateways before testing. ISP payment settings are not used here.
+        </p>
+      )}
+      {selectedRoute && !selectedRoute.destinationConfigured && (
+        <p style={{ color: "#fbbf24", fontSize: "0.74rem", margin: "0 0 10px" }}>
+          Complete and save this reseller’s {selectedGatewayLabel} configuration before testing.
+        </p>
+      )}
+      {error && <p style={{ display: "flex", alignItems: "center", gap: 5, color: "#f87171", fontSize: "0.74rem", margin: "0 0 10px" }}><AlertTriangle size={13} aria-hidden="true" /> {error}</p>}
+      {connectionMessage && (
+        <p style={{ color: connectionStatus === "verified" ? "#34d399" : connectionStatus === "failed" ? "#f87171" : "#fbbf24", fontSize: "0.74rem", lineHeight: 1.45, margin: "0 0 10px" }}>
+          {connectionStatus === "verified" && <Check size={13} aria-hidden="true" />} {connectionMessage}
+        </p>
+      )}
+      {statusMessage && (
+        <p style={{ color: status === "paid" ? "#34d399" : status === "failed" || status === "expired" ? "#fbbf24" : C.muted, fontSize: "0.74rem", lineHeight: 1.45, margin: "0 0 10px" }}>
+          {status === "paid" && <Check size={13} aria-hidden="true" />}{statusMessage}
+        </p>
+      )}
+      <Row>
+        <button
+          type="button"
+          onClick={() => void testConnection()}
+          disabled={connectionDisabled}
+          style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: connectionDisabled ? "not-allowed" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: connectionDisabled ? 0.55 : 1 }}
+        >
+          {connectionStatus === "checking" ? "Checking…" : "Test connection"}
+        </button>
+      </Row>
+      {promptGateway && selectedRoute && (
+        <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
+          <Grid2>
+            <Field label="Subscriber phone number" hint="Use 07…, 01…, or +254…">
+              <Input value={phone} onChange={event => setPhone(event.target.value)} placeholder="0712 345 678" inputMode="tel" />
+            </Field>
+            <Field label="Test amount (KES)" hint="Maximum 1,000">
+              <Input value={amount} onChange={event => setAmount(event.target.value)} placeholder="e.g. 50" type="number" min="1" max="1000" step="1" inputMode="numeric" />
+            </Field>
+          </Grid2>
+          <Row>
+            <button
+              type="button"
+              onClick={() => void sendPrompt()}
+              disabled={submitDisabled}
+              style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: submitDisabled ? "not-allowed" : "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit", opacity: submitDisabled ? 0.55 : 1 }}
+            >
+              {status === "sending" ? "Sending…" : status === "pending" ? "Waiting for approval…" : "Send test STK prompt"}
+            </button>
+          </Row>
+        </div>
+      )}
+    </Card>
+  );
+}
 function AdminPaymentGatewayCard() {
   const [paymentGateway, setPaymentGateway] = useState("mpesa_paybill");
   const [saving, setSaving] = useState(false);
@@ -580,7 +868,7 @@ function ResellerPaymentGatewayCard() {
       routerId: route.routerId ? String(route.routerId) : "",
       portId: route.portId ? String(route.portId) : "",
       config: { ...route.config },
-      isActive: route.isActive,
+      isActive: route.isActive && RESELLER_CHECKOUT_READY_GATEWAYS.has(route.gatewayType),
     });
     setSaved(false);
     setError("");
@@ -588,7 +876,7 @@ function ResellerPaymentGatewayCard() {
 
   const newRoute = () => {
     setSelectedRoute(null);
-    setForm({ gatewayType: "mpesa_paybill", scopeType: "default", routerId: "", portId: "", config: {}, isActive: true });
+    setForm({ gatewayType: "mpesa_paybill", scopeType: "default", routerId: "", portId: "", config: { environment: "sandbox" }, isActive: true });
     setSaved(false);
     setError("");
   };
@@ -607,7 +895,7 @@ function ResellerPaymentGatewayCard() {
           routerId: form.routerId ? Number(form.routerId) : undefined,
           portId: form.portId ? Number(form.portId) : undefined,
           config: form.config,
-          isActive: form.isActive,
+          isActive: form.isActive && RESELLER_CHECKOUT_READY_GATEWAYS.has(form.gatewayType),
         }),
       });
       const data = await response.json() as { ok?: boolean; error?: string };
@@ -658,7 +946,12 @@ function ResellerPaymentGatewayCard() {
               key={gateway.id}
               type="button"
               onClick={() => {
-                setForm(current => ({ ...current, gatewayType: gateway.id, config: {} }));
+                setForm(current => ({
+                  ...current,
+                  gatewayType: gateway.id,
+                  config: { environment: "sandbox" },
+                  isActive: RESELLER_CHECKOUT_READY_GATEWAYS.has(gateway.id),
+                }));
                 setSaved(false);
                 setError("");
               }}
@@ -761,7 +1054,11 @@ function ResellerPaymentGatewayCard() {
             )}
             {activeGateway.fields.map(field => {
               const selectedBank = form.config.bankName || "";
-              const storedSecret = Boolean(selectedExistingRoute?.hasStoredSecrets && field.secret);
+              const storedSecret = Boolean(
+                selectedExistingRoute?.gatewayType === activeGateway.id
+                && selectedExistingRoute.hasStoredSecrets
+                && field.secret,
+              );
               if (activeGateway.id === "bank_stk_push" && (field.key === "paybillNumber" || field.key === "accountNumber") && !selectedBank) return null;
               const fieldLabel = field.key === "paybillNumber" && selectedBank
                 ? `${selectedBank} Business / PayBill Number`
@@ -832,13 +1129,14 @@ function ResellerPaymentGatewayCard() {
           </div>
         </div>
       )}
-      <label style={{ display: "flex", alignItems: "center", gap: 9, color: C.muted, fontSize: "0.75rem", marginTop: 12 }}>
-        <input type="checkbox" checked={form.isActive} onChange={event => setForm(current => ({ ...current, isActive: event.target.checked }))} />
-        Use this route for matching reseller payments
-      </label>
-      {activeGateway && !["mpesa_paybill", "mpesa_till_push", "bank_stk_push", "manual"].includes(activeGateway.id) && (
+      {RESELLER_CHECKOUT_READY_GATEWAYS.has(form.gatewayType) ? (
+        <label style={{ display: "flex", alignItems: "center", gap: 9, color: C.muted, fontSize: "0.75rem", marginTop: 12 }}>
+          <input type="checkbox" checked={form.isActive} onChange={event => setForm(current => ({ ...current, isActive: event.target.checked }))} />
+          Use this route for matching reseller payments
+        </label>
+      ) : (
         <p style={{ color: "#fbbf24", fontSize: "0.72rem", lineHeight: 1.45, margin: "12px 0 0" }}>
-          This gateway is saved and routed for your account. Automated checkout support for this provider is not connected yet.
+          This gateway can be saved and tested, but customer checkout is not connected yet. It will be saved inactive.
         </p>
       )}
       {error && <p style={{ color: "#f87171", fontSize: "0.74rem", margin: "12px 0 0" }}><AlertTriangle size={13} style={{ verticalAlign: "middle", marginRight: 5 }} />{error}</p>}
@@ -869,13 +1167,7 @@ function BillingTab() {
         </p>
       </Card>
       {getAdminRole() !== "reseller" && <AdminPaymentTestCard currency={currency} />}
-      {getAdminRole() === "reseller" && (
-        <Card title="Reseller payment testing" desc="Your reseller gateway routes are managed independently in the Payment Gateways tab.">
-          <p style={{ color: C.muted, fontSize: "0.8rem", lineHeight: 1.55, margin: 0 }}>
-            The ISP payment test is hidden for reseller accounts so it cannot use or test the connected ISP’s collection account.
-          </p>
-        </Card>
-      )}
+      {getAdminRole() === "reseller" && <ResellerPaymentTestCard />}
 
       <Card title="Billing Preferences" desc="Currency, VAT, grace periods, and invoice configuration">
         <Grid2>
@@ -2000,14 +2292,24 @@ const GATEWAYS: GatewayDef[] = [
   {
     id: "mpesa_paybill", name: "M-Pesa PayBill", category: "Mobile Money", color: "#00a651", icon: Phone,
     fields: [
-      { key: "paybillNumber", label: "PayBill Number", hint: "Enter the PayBill number used by this ISP" },
-      { key: "accountNumber", label: "Account / Business Number", hint: "Enter the account or business number required by this PayBill" },
+      { key: "paybillNumber", label: "PayBill Number", hint: "Enter your reseller collection PayBill" },
+      { key: "accountNumber", label: "Account / Business Number", hint: "Enter your reseller account reference" },
+      { key: "businessShortcode", label: "Daraja Business Shortcode" },
+      { key: "consumerKey", label: "Daraja Consumer Key", secret: true },
+      { key: "consumerSecret", label: "Daraja Consumer Secret", secret: true },
+      { key: "passkey", label: "Daraja Passkey", secret: true },
+      { key: "environment", label: "Environment", type: "select", options: ["sandbox", "production"] },
     ],
   },
   {
     id: "mpesa_till_push", name: "M-Pesa Till Push", category: "Mobile Money", color: "#00a651", icon: Phone,
     fields: [
-      { key: "tillNumber", label: "Buy Goods Till Number", hint: "Enter the Till Number used by this ISP" },
+      { key: "tillNumber", label: "Buy Goods Till Number", hint: "Enter your reseller collection Till" },
+      { key: "businessShortcode", label: "Daraja Business Shortcode" },
+      { key: "consumerKey", label: "Daraja Consumer Key", secret: true },
+      { key: "consumerSecret", label: "Daraja Consumer Secret", secret: true },
+      { key: "passkey", label: "Daraja Passkey", secret: true },
+      { key: "environment", label: "Environment", type: "select", options: ["sandbox", "production"] },
     ],
   },
   {
@@ -2016,6 +2318,11 @@ const GATEWAYS: GatewayDef[] = [
       { key: "bankName", label: "Bank Name", type: "select", options: KENYAN_BANKS },
       { key: "paybillNumber", label: "PayBill Number", hint: "Enter the PayBill number provided by your bank" },
       { key: "accountNumber", label: "Account / Business Number", hint: "Enter the account or business number required by the bank" },
+      { key: "businessShortcode", label: "Daraja Business Shortcode" },
+      { key: "consumerKey", label: "Daraja Consumer Key", secret: true },
+      { key: "consumerSecret", label: "Daraja Consumer Secret", secret: true },
+      { key: "passkey", label: "Daraja Passkey", secret: true },
+      { key: "environment", label: "Environment", type: "select", options: ["sandbox", "production"] },
     ],
   },
   {
@@ -2024,6 +2331,7 @@ const GATEWAYS: GatewayDef[] = [
       { key: "clientId", label: "Client ID", secret: true },
       { key: "clientSecret", label: "Client Secret", secret: true },
       { key: "callbackUrl", label: "Callback URL" },
+      { key: "environment", label: "Environment", type: "select", options: ["sandbox", "production"] },
     ],
   },
   {
@@ -2073,6 +2381,7 @@ const GATEWAYS: GatewayDef[] = [
       { key: "consumerKey", label: "Consumer Key", secret: true },
       { key: "consumerSecret", label: "Consumer Secret", secret: true },
       { key: "callbackUrl", label: "IPN Callback URL" },
+      { key: "environment", label: "Environment", type: "select", options: ["sandbox", "production"] },
     ],
   },
   {
@@ -2089,6 +2398,7 @@ const GATEWAYS: GatewayDef[] = [
       { key: "clientId", label: "Client ID", secret: true },
       { key: "clientSecret", label: "Client Secret", secret: true },
       { key: "webhookUrl", label: "Webhook URL" },
+      { key: "environment", label: "Environment", type: "select", options: ["sandbox", "production"] },
     ],
   },
   {
@@ -2129,9 +2439,13 @@ const GATEWAYS: GatewayDef[] = [
   },
 ];
 
-const RESELLER_GATEWAYS = GATEWAYS.filter(gateway =>
-  gateway.id === "mpesa_paybill" || gateway.id === "mpesa_till_push",
-);
+const RESELLER_GATEWAYS = GATEWAYS;
+
+const RESELLER_CHECKOUT_READY_GATEWAYS = new Set([
+  "mpesa_paybill",
+  "mpesa_till_push",
+  "bank_stk_push",
+]);
 
 const ROUTING_CHECKOUT_READY_GATEWAYS = new Set([
   "mpesa_paybill",
