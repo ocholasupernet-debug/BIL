@@ -188,9 +188,129 @@ write_config \
 
 # Keep the dedicated services separate from any legacy OpenVPN instance.
 $SUDO systemctl daemon-reload
-$SUDO systemctl enable "openvpn-server@ochola-router" "openvpn-server@ochola-router-backup"
-$SUDO systemctl restart "openvpn-server@ochola-router"
-$SUDO systemctl restart "openvpn-server@ochola-router-backup"
+
+unit_state() {
+  $SUDO systemctl show --property=ActiveState --value "$1" 2>/dev/null || true
+}
+
+management_tunnel_ready() {
+  local device="$1"
+  local address="$2"
+  local port="$3"
+
+  $SUDO ip -4 addr show dev "$device" 2>/dev/null |
+    awk -v address="$address" '$1 == "inet" && ($2 == address || index($2, address "/") == 1) { found=1 } END { exit !found }' &&
+    $SUDO ss -H -lnt 2>/dev/null |
+      awk -v port="$port" '$4 ~ (":" port "$") { found=1 } END { exit !found }'
+}
+
+wait_for_management_tunnel() {
+  local device="$1"
+  local address="$2"
+  local port="$3"
+  local attempt
+
+  for attempt in $(seq 1 15); do
+    if management_tunnel_ready "$device" "$address" "$port"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+show_management_diagnostics() {
+  local stem="$1"
+  local device="$2"
+  local modern="openvpn-server@${stem}"
+  local legacy="openvpn@${stem}"
+
+  echo "=== Read-only OpenVPN diagnostics for ${stem} ===" >&2
+  $SUDO systemctl show -p LoadState,ActiveState,SubState,MainPID,NRestarts \
+    "$modern" "$legacy" 2>&1 || true
+  $SUDO ip -d -4 addr show dev "$device" 2>&1 || true
+  $SUDO ss -H -lnt 2>&1 || true
+  $SUDO fuser -v /dev/net/tun 2>&1 || true
+  $SUDO journalctl -u "$modern" -u "$legacy" -n 30 --no-pager 2>&1 || true
+}
+
+ensure_management_service() {
+  local stem="$1"
+  local device="$2"
+  local network="$3"
+  local address="$4"
+  local port="$5"
+  local modern="openvpn-server@${stem}"
+  local legacy="openvpn@${stem}"
+  local legacy_config="/etc/openvpn/${stem}.conf"
+  local modern_state legacy_state
+
+  modern_state="$(unit_state "$modern")"
+  legacy_state="$(unit_state "$legacy")"
+
+  if [ "$modern_state" = "active" ]; then
+    $SUDO systemctl enable "$modern"
+    if ! $SUDO systemctl restart "$modern"; then
+      echo "ERROR: Could not restart ${modern}." >&2
+      show_management_diagnostics "$stem" "$device"
+      return 1
+    fi
+    if ! wait_for_management_tunnel "$device" "$address" "$port"; then
+      echo "ERROR: ${modern} did not provide ${device} (${address}) and TCP ${port}." >&2
+      show_management_diagnostics "$stem" "$device"
+      return 1
+    fi
+    return 0
+  fi
+
+  if [ "$legacy_state" = "active" ]; then
+    if ! grep -Fxq "port ${port}" "$legacy_config" 2>/dev/null ||
+       ! grep -Fxq "dev ${device}" "$legacy_config" 2>/dev/null ||
+       ! grep -Fxq "server ${network} 255.255.255.0" "$legacy_config" 2>/dev/null ||
+       ! wait_for_management_tunnel "$device" "$address" "$port"
+    then
+      echo "ERROR: ${legacy} is active, but its config or live tunnel does not match the isolated management network; refusing to start a duplicate." >&2
+      $SUDO systemctl stop "$modern" 2>/dev/null || true
+      show_management_diagnostics "$stem" "$device"
+      return 1
+    fi
+
+    # A healthy compatibility unit already owns the TUN device. Stop and
+    # disable the failing duplicate, but leave the live legacy tunnel alone.
+    $SUDO systemctl stop "$modern" 2>/dev/null || true
+    $SUDO systemctl disable "$modern" 2>/dev/null || true
+    echo "[vpn-bootstrap] Preserving active ${legacy}; it already owns the verified ${device} management tunnel."
+    return 0
+  fi
+
+  if $SUDO ip link show dev "$device" >/dev/null 2>&1; then
+    # The interface exists but neither supported unit is active. Do not try
+    # to claim or delete it: an unmanaged process may still own /dev/net/tun.
+    $SUDO systemctl stop "$modern" 2>/dev/null || true
+    echo "ERROR: ${device} exists without an active ${modern} or ${legacy}; refusing to disturb its owner." >&2
+    show_management_diagnostics "$stem" "$device"
+    return 1
+  fi
+
+  # No existing service or interface owns this tunnel, so start the current
+  # dedicated unit. Reset a prior failed state to avoid a stale restart loop.
+  $SUDO systemctl stop "$modern" 2>/dev/null || true
+  $SUDO systemctl reset-failed "$modern" 2>/dev/null || true
+  $SUDO systemctl enable "$modern"
+  if ! $SUDO systemctl start "$modern"; then
+    echo "ERROR: Could not start ${modern}." >&2
+    show_management_diagnostics "$stem" "$device"
+    return 1
+  fi
+  if ! wait_for_management_tunnel "$device" "$address" "$port"; then
+    echo "ERROR: ${modern} did not provide ${device} (${address}) and TCP ${port}." >&2
+    show_management_diagnostics "$stem" "$device"
+    return 1
+  fi
+}
+
+ensure_management_service "ochola-router" "tun-router" "10.8.5.0" "10.8.5.1" "1196"
+ensure_management_service "ochola-router-backup" "tun-router-bkp" "10.8.6.0" "10.8.6.1" "1197"
 
 # Permit the two shared listeners and the stable per-router public range.
 $SUDO iptables -C INPUT -p tcp --dport 1196 -j ACCEPT 2>/dev/null || \
@@ -210,10 +330,21 @@ if command -v iptables-save >/dev/null 2>&1 && [ -d /etc/iptables ]; then
   $SUDO iptables-save | $SUDO tee /etc/iptables/rules.v4 >/dev/null
 fi
 
-for unit in openvpn-server@ochola-router openvpn-server@ochola-router-backup; do
-  if ! $SUDO systemctl is-active --quiet "$unit"; then
-    echo "ERROR: ${unit} is not active." >&2
-    $SUDO journalctl -u "$unit" -n 80 --no-pager >&2 || true
+for entry in \
+  "ochola-router tun-router 10.8.5.1 1196" \
+  "ochola-router-backup tun-router-bkp 10.8.6.1 1197"
+do
+  read -r stem device address port <<<"$entry"
+  if [ "$(unit_state "openvpn-server@${stem}")" != "active" ] &&
+     [ "$(unit_state "openvpn@${stem}")" != "active" ]
+  then
+    echo "ERROR: No supported OpenVPN service is active for ${stem}." >&2
+    show_management_diagnostics "$stem" "$device"
+    exit 1
+  fi
+  if ! management_tunnel_ready "$device" "$address" "$port"; then
+    echo "ERROR: The verified management tunnel is not ready for ${stem}." >&2
+    show_management_diagnostics "$stem" "$device"
     exit 1
   fi
 done
