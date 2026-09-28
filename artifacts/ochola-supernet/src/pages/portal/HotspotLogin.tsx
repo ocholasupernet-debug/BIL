@@ -28,9 +28,12 @@ interface HotspotCredentials {
   password: string;
 }
 interface HotspotSession {
-  status: "active" | "expired";
+  status: "active" | "expired" | "not_found" | "unavailable";
   connected: boolean;
   expiresAt: string | null;
+  found?: boolean;
+  planName?: string | null;
+  username?: string | null;
 }
 interface ConnectedDevice {
   name: string;
@@ -190,26 +193,30 @@ const PLAN_GRADIENTS = [
   { bg: "linear-gradient(135deg, #0acffe 0%, #495aff 100%)", light: "#0acffe" },
 ];
 
-const PAYMENT_GATEWAY_LABELS: Record<string, string> = {
-  mpesa_paybill: "M-Pesa PayBill",
-  mpesa_till_push: "M-Pesa Till Push",
-  bank_stk_push: "BankStkPush",
-  airtel: "AirtelMoney",
-  azampay: "AzamPay",
-  custom_paybill: "CustomPaybill",
-  dpo_payments: "DpoPayments",
-  flutterwave: "Flutterwave",
-  intasend: "Intasend",
-  pesapal: "PesaPal",
-  stripe: "Stripe",
-  paypal: "PayPal",
-  tigopesa: "TigoPesa",
-  xendit: "XenditEwallet",
-  manual: "Cash / Manual",
+function isDarajaGateway(paymentGateway: string): boolean {
+  return paymentGateway === "mpesa_paybill"
+    || paymentGateway === "mpesa_till_push"
+    || paymentGateway === "bank_stk_push";
+}
+
+type CheckoutPaymentStatus = {
+  configured: boolean;
+  destinationConfigured: boolean;
+  paymentGateway: string;
 };
 
-function isDarajaGateway(paymentGateway: string): boolean {
-  return paymentGateway === "mpesa_paybill" || paymentGateway === "mpesa_till_push";
+function isPaymentMethodReady(status: CheckoutPaymentStatus | null): boolean {
+  return Boolean(
+    status?.configured
+    && status.destinationConfigured
+    && isDarajaGateway(status.paymentGateway),
+  );
+}
+
+function checkoutPaymentLabel(paymentGateway: string): string {
+  if (paymentGateway === "bank_stk_push") return "Bank STK Push";
+  if (paymentGateway === "mpesa_till_push") return "M-Pesa Till";
+  return "M-Pesa PayBill";
 }
 
 export default function HotspotLogin() {
@@ -326,6 +333,7 @@ export default function HotspotLogin() {
     destinationConfigured: boolean;
     paymentGateway: string;
   } | null>(null);
+  const [paymentStatusLoaded, setPaymentStatusLoaded] = useState(false);
   const loginCredentialsStorageKey = hotspotLoginStorageKey(adminId);
   const storedLoginCredentials = readStoredHotspotCredentials(loginCredentialsStorageKey);
   const [loginUsername, setLoginUsername] = useState(storedLoginCredentials?.username ?? "");
@@ -338,7 +346,7 @@ export default function HotspotLogin() {
   const [loginSession, setLoginSession] = useState<HotspotSession | null>(null);
   const [troubleshootLoading, setTroubleshootLoading] = useState(false);
   const [troubleshootMessage, setTroubleshootMessage] = useState("");
-  const [troubleshootAttempts, setTroubleshootAttempts] = useState(0);
+  const [troubleshootAction, setTroubleshootAction] = useState<"check" | "login" | null>(null);
   const troubleshootInFlight = useRef(false);
   const [mpesaMessage, setMpesaMessage] = useState("");
   const [mpesaReconnectLoading, setMpesaReconnectLoading] = useState(false);
@@ -347,8 +355,10 @@ export default function HotspotLogin() {
   useEffect(() => {
     if (HOTSPOT_RUNTIME_CONFIG.previewOnly) {
       setPlansLoading(false);
+      setPaymentStatusLoaded(true);
       return;
     }
+    setPaymentStatusLoaded(false);
     (async () => {
       try {
         const [plansRes, mpesaRes] = await Promise.all([
@@ -381,7 +391,10 @@ export default function HotspotLogin() {
         // Keep the package list embedded during deployment if the live API is
         // temporarily unreachable from the RouterOS client network.
       }
-      finally { setPlansLoading(false); }
+      finally {
+        setPlansLoading(false);
+        setPaymentStatusLoaded(true);
+      }
     })();
   }, [adminId, planScopeQuery]);
 
@@ -650,15 +663,17 @@ export default function HotspotLogin() {
   };
 
   type TroubleshootResult = {
+    found: boolean;
+    status: "active" | "expired" | "not_found" | "unavailable";
     connected: boolean;
-    status: "active" | "expired";
     expiresAt: string | null;
-    retryable: boolean;
+    planName: string | null;
+    username: string | null;
     name: string;
     error?: string;
   };
 
-  const attemptHotspotConnection = async (): Promise<TroubleshootResult | null> => {
+  const requestHotspotTroubleshoot = async (action: "check" | "login"): Promise<TroubleshootResult | null> => {
     if (!adminId || !portalContext.mac) {
       setLoginError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
       return null;
@@ -669,41 +684,55 @@ export default function HotspotLogin() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           adminId,
+          action,
           ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
           mac_address: portalContext.mac,
         }),
       });
       const data = await res.json() as {
         ok?: boolean;
-        status?: "active" | "expired";
+        found?: boolean;
+        status?: "active" | "expired" | "not_found" | "unavailable";
         connected?: boolean;
-        retryable?: boolean;
         expiresAt?: string | null;
+        planName?: string | null;
+        username?: string | null;
         error?: string;
         customer?: { name?: string | null };
       };
-      const result: TroubleshootResult = {
-        connected: data.connected === true,
-        status: data.status === "expired" ? "expired" : "active",
-        expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
-        retryable: data.retryable === true,
-        name: data.customer?.name || "your device",
-        error: data.error,
-      };
       if (!res.ok && !data.status) {
-        setLoginError(data.error ?? "Login failed.");
+        setLoginError(data.error ?? "Could not verify the latest hotspot purchase.");
         return null;
       }
+      const result: TroubleshootResult = {
+        found: data.found === true,
+        connected: data.connected === true,
+        status: data.status === "active" || data.status === "expired" || data.status === "not_found"
+          ? data.status
+          : "unavailable",
+        expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
+        planName: typeof data.planName === "string" ? data.planName : null,
+        username: typeof data.username === "string" ? data.username : null,
+        name: data.customer?.name || data.username || "your device",
+        error: data.error,
+      };
       setLoginSession({
+        found: result.found,
         status: result.status,
         connected: result.connected,
         expiresAt: result.expiresAt,
+        planName: result.planName,
+        username: result.username,
       });
       setLoggedInName(result.name);
-      if (result.error && !result.connected) setTroubleshootMessage(result.error);
-      if (result.connected) {
+      setLoginError("");
+      setTroubleshootMessage(
+        result.status === "active" || result.status === "unavailable"
+          ? result.error ?? ""
+          : "",
+      );
+      if (action === "login" && result.connected) {
         setLoginSuccess(true);
-        setLoginError("");
         setTroubleshootMessage("");
       }
       return result;
@@ -719,25 +748,31 @@ export default function HotspotLogin() {
     setTroubleshootLoading(true);
     setTroubleshootMessage("");
     setLoginError("");
-    setTroubleshootAttempts(0);
+    setTroubleshootAction("check");
     try {
-      const maxAttempts = 6;
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        setTroubleshootAttempts(attempt);
-        const result = await attemptHotspotConnection();
-        if (!result) break;
-        if (result.connected) break;
-        if (result.status === "expired" || !result.retryable) break;
-        if (attempt < maxAttempts) {
-          setTroubleshootMessage("Your plan is active. Retrying the hotspot connection…");
-          await new Promise(resolve => window.setTimeout(resolve, 1500));
-        } else {
-          setTroubleshootMessage("Your plan is active, but the router did not accept the connection. Try again or contact support.");
-        }
+      await requestHotspotTroubleshoot("check");
+    } finally {
+      troubleshootInFlight.current = false;
+      setTroubleshootLoading(false);
+      setTroubleshootAction(null);
+    }
+  };
+
+  const handlePlanLogin = async () => {
+    if (troubleshootInFlight.current) return;
+    troubleshootInFlight.current = true;
+    setTroubleshootLoading(true);
+    setTroubleshootAction("login");
+    setLoginError("");
+    try {
+      const result = await requestHotspotTroubleshoot("login");
+      if (result && result.status === "active" && !result.connected && !result.error) {
+        setTroubleshootMessage("The router did not confirm the login. Tap Login now to retry.");
       }
     } finally {
       troubleshootInFlight.current = false;
       setTroubleshootLoading(false);
+      setTroubleshootAction(null);
     }
   };
 
@@ -1537,35 +1572,45 @@ export default function HotspotLogin() {
                                 <div className="hp-plan-pay">
                                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                      <Phone size={14} color="#22c55e" />
+                                      {isPaymentMethodReady(mpesaStatus)
+                                        ? <Phone size={14} color="#22c55e" />
+                                        : <AlertCircle size={14} color="#f59e0b" />}
                                       <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>
-                                        {isTvMode ? "Pay for TV with M-Pesa" : "Pay with M-Pesa"}
+                                        {isPaymentMethodReady(mpesaStatus)
+                                          ? `${isTvMode ? "Pay for TV with" : "Pay with"} ${checkoutPaymentLabel(mpesaStatus?.paymentGateway ?? "")}`
+                                          : paymentStatusLoaded ? "Online payment unavailable" : "Checking payment options…"}
                                       </span>
                                     </div>
-                                     {mpesaStatus && (
+                                    {mpesaStatus && isPaymentMethodReady(mpesaStatus) && (
                                       <span style={{
                                         fontSize: 10, fontWeight: 700,
                                         padding: "3px 8px", borderRadius: 6,
-                                         background: mpesaStatus.configured ? "rgba(52,211,153,0.1)" : "rgba(239,68,68,0.1)",
-                                         color: mpesaStatus.configured ? "#34d399" : "#fca5a5",
-                                         border: `1px solid ${mpesaStatus.configured ? "rgba(52,211,153,0.2)" : "rgba(239,68,68,0.2)"}`,
+                                          background: "rgba(52,211,153,0.1)",
+                                          color: "#34d399",
+                                          border: "1px solid rgba(52,211,153,0.2)",
                                       }}>
-                                         {mpesaStatus.configured
-                                           ? mpesaStatus.env === "sandbox" ? "SANDBOX" : "LIVE"
-                                          : "NOT CONFIGURED"}
+                                         {mpesaStatus.env === "sandbox" ? "SANDBOX" : "LIVE"}
                                       </span>
                                     )}
                                   </div>
 
-                                    {mpesaStatus && (!mpesaStatus.configured || !isDarajaGateway(mpesaStatus.paymentGateway) || !mpesaStatus.destinationConfigured) ? (
+                                  {!paymentStatusLoaded ? (
+                                    <div style={{
+                                      padding: 14, borderRadius: 10, textAlign: "center",
+                                      background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)",
+                                      fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.5,
+                                    }}>
+                                      Checking available payment methods…
+                                    </div>
+                                  ) : !isPaymentMethodReady(mpesaStatus) ? (
                                     <div style={{
                                       padding: 14, borderRadius: 10, textAlign: "center",
                                       background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)",
                                       fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.5,
                                     }}>
                                       <AlertCircle size={16} color="#f59e0b" style={{ marginBottom: 6 }} />
-                                        <p style={{ margin: 0 }}>{!isDarajaGateway(mpesaStatus.paymentGateway) ? `${PAYMENT_GATEWAY_LABELS[mpesaStatus.paymentGateway] || "Selected payment gateway"} is not connected for automated payments yet.` : !mpesaStatus.destinationConfigured ? "The M-Pesa collection destination is not configured yet." : "M-Pesa Daraja API is not configured yet."}</p>
-                                         <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>{!isDarajaGateway(mpesaStatus.paymentGateway) ? "Choose a connected payment gateway to continue." : !mpesaStatus.destinationConfigured ? "Ask the Super Admin to assign an active Till or PayBill destination to this reseller service." : "Complete the required M-Pesa connection settings to continue."}</p>
+                                       <p style={{ margin: 0 }}>No connected online payment method is currently available for this service.</p>
+                                       <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>Please contact the network administrator for payment options.</p>
                                     </div>
                                   ) : (
                                     <form onSubmit={handlePay}>
@@ -1598,14 +1643,17 @@ export default function HotspotLogin() {
                                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
                                     <div className="hp-secured" style={{ margin: 0 }}>
                                       <Shield size={11} />
-                                        {!isDarajaGateway(mpesaStatus?.paymentGateway || "")
-                                          ? <>{PAYMENT_GATEWAY_LABELS[mpesaStatus?.paymentGateway || ""] || "Payment gateway"} selected</>
+                                      {isPaymentMethodReady(mpesaStatus)
+                                        ? mpesaStatus?.paymentGateway === "bank_stk_push"
+                                          ? <>Bank STK Push &middot; Safaricom Daraja</>
                                           : mpesaStatus?.paymentGateway === "mpesa_till_push" && mpesaStatus.hasTillNumber
-                                         ? <>Buy Goods &amp; Services Till &middot; Safaricom Daraja</>
-                                         : mpesaStatus?.shortcode
-                                          ? <>Daraja shortcode {mpesaStatus.shortcode} &middot; Safaricom Daraja</>
-                                        : <>Secured by Safaricom M-Pesa</>
-                                      }
+                                            ? <>Buy Goods &amp; Services Till &middot; Safaricom Daraja</>
+                                            : mpesaStatus?.shortcode
+                                              ? <>Daraja shortcode {mpesaStatus.shortcode} &middot; Safaricom Daraja</>
+                                              : <>Secured by Safaricom M-Pesa</>
+                                        : paymentStatusLoaded
+                                          ? <>No connected payment method</>
+                                          : <>Checking payment methods</>}
                                     </div>
                                       <button className="hp-plan-change" onClick={() => { setSelectedPlan(null); setPhone(""); setPayError(null); }}>
                                       <ArrowRight size={12} style={{ transform: "rotate(180deg)" }} /> Change plan
@@ -1667,9 +1715,15 @@ export default function HotspotLogin() {
                       <h3>Welcome, {loggedInName}!</h3>
                       <p style={{ marginBottom: 8 }}>You're now connected to the network.</p>
                       {loginSession && (
-                        <p style={{ margin: "0 0 24px", color: "rgba(255,255,255,0.5)", fontSize: 12 }}>
-                          Plan expires {formatSessionExpiry(loginSession.expiresAt)}
-                        </p>
+                        <div style={{ margin: "0 0 24px", color: "rgba(255,255,255,0.5)", fontSize: 12 }}>
+                          {loginSession.planName && <p style={{ margin: "0 0 5px" }}>Plan: {loginSession.planName}</p>}
+                          {loginSession.username && <p style={{ margin: "0 0 5px" }}>Username: {loginSession.username}</p>}
+                          <p style={{ margin: 0 }}>
+                            {loginSession.expiresAt
+                              ? `Plan expires ${formatSessionExpiry(loginSession.expiresAt)}`
+                              : "No expiry time is recorded for this plan."}
+                          </p>
+                        </div>
                       )}
                       <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
                         onClick={() => { setLoginSuccess(false); setLoginSession(null); setLoginError(""); }}>
@@ -1685,33 +1739,66 @@ export default function HotspotLogin() {
                             padding: 14,
                             marginBottom: 16,
                             borderRadius: 12,
-                            background: loginSession.status === "expired" ? "rgba(245,158,11,0.08)" : "rgba(34,197,94,0.08)",
-                            border: `1px solid ${loginSession.status === "expired" ? "rgba(245,158,11,0.2)" : "rgba(34,197,94,0.2)"}`,
+                            background: loginSession.status === "active"
+                              ? "rgba(34,197,94,0.08)"
+                              : loginSession.status === "expired"
+                                ? "rgba(245,158,11,0.08)"
+                                : "rgba(239,68,68,0.08)",
+                            border: `1px solid ${loginSession.status === "active"
+                              ? "rgba(34,197,94,0.2)"
+                              : loginSession.status === "expired"
+                                ? "rgba(245,158,11,0.2)"
+                                : "rgba(239,68,68,0.2)"}`,
                           }}
                         >
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-                            {loginSession.status === "expired"
-                              ? <AlertCircle size={16} color="#fbbf24" />
-                              : <CheckCircle2 size={16} color="#4ade80" />}
-                            <strong style={{ color: loginSession.status === "expired" ? "#fbbf24" : "#86efac", fontSize: 13 }}>
-                              {loginSession.status === "expired" ? "Session expired" : "Plan active"}
+                            {loginSession.status === "active"
+                              ? <CheckCircle2 size={16} color="#4ade80" />
+                              : <AlertCircle size={16} color={loginSession.status === "expired" ? "#fbbf24" : "#fca5a5"} />}
+                            <strong style={{
+                              color: loginSession.status === "active" ? "#86efac" : loginSession.status === "expired" ? "#fbbf24" : "#fca5a5",
+                              fontSize: 13,
+                            }}>
+                              {loginSession.status === "active"
+                                ? "Plan active"
+                                : loginSession.status === "expired"
+                                  ? "Plan expired"
+                                  : loginSession.status === "not_found"
+                                    ? "No purchased plan found"
+                                    : "Purchase needs help"}
                             </strong>
                           </div>
+                          {loginSession.planName && (
+                            <p style={{ margin: "0 0 5px", color: "rgba(255,255,255,0.72)", fontSize: 12 }}>
+                              Plan: <strong>{loginSession.planName}</strong>
+                            </p>
+                          )}
+                          {loginSession.username && (
+                            <p style={{ margin: "0 0 5px", color: "rgba(255,255,255,0.58)", fontSize: 12 }}>
+                              Username: <strong>{loginSession.username}</strong>
+                            </p>
+                          )}
                           <p style={{ margin: 0, color: "rgba(255,255,255,0.58)", fontSize: 12, lineHeight: 1.5 }}>
                             {loginSession.status === "expired"
-                              ? `Your hotspot session expired ${formatSessionExpiry(loginSession.expiresAt)}. Renew a package to reconnect.`
-                              : `Your plan expires ${formatSessionExpiry(loginSession.expiresAt)}.`}
+                              ? `Your plan expired${loginSession.expiresAt ? ` on ${formatSessionExpiry(loginSession.expiresAt)}` : ""}. Renew a package to reconnect.`
+                              : loginSession.status === "active"
+                                ? loginSession.expiresAt
+                                  ? `Your plan is active and expires ${formatSessionExpiry(loginSession.expiresAt)}.`
+                                  : "Your plan is active. No expiry time is recorded."
+                                : loginSession.status === "not_found"
+                                  ? "No successfully purchased hotspot package matches this device MAC address."
+                                  : "A purchase was found, but its hotspot account could not be confirmed. Contact support."}
                           </p>
                           {loginSession.status === "active" && (
                             <button
                               type="button"
                               className="hp-btn"
                               style={{ marginTop: 12, background: "linear-gradient(135deg,#16a34a,#059669)", color: "#fff", boxShadow: "0 4px 15px rgba(22,163,74,.25)" }}
-                              onClick={handleTroubleshoot}
+                              onClick={handlePlanLogin}
                               disabled={troubleshootLoading}
                             >
                               {troubleshootLoading
-                                ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Connecting…</>
+                                ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> {troubleshootAction === "login" ? "Logging in…" : "Checking purchase…"}</>
                                 : <><Wifi size={15} /> Login now</>}
                             </button>
                           )}
@@ -1768,13 +1855,13 @@ export default function HotspotLogin() {
                           onClick={handleTroubleshoot}
                         >
                           {troubleshootLoading ? (
-                            <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Troubleshooting connection {troubleshootAttempts}/6…</>
+                            <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> {troubleshootAction === "login" ? "Logging in…" : "Checking latest purchase…"}</>
                           ) : (
                             <><AlertCircle size={16} /> Troubleshoot connection</>
                           )}
                         </button>
                         <p style={{ margin: "8px 0 0", color: "rgba(255,255,255,0.32)", fontSize: 11, lineHeight: 1.45 }}>
-                          This checks the active package for this device using its hotspot MAC address. No username or password is needed.
+                          This checks the latest successful hotspot purchase linked to this device MAC. If it is active, you can log in without entering a password.
                         </p>
                         {troubleshootMessage && (
                           <p role="status" style={{ margin: "8px 0 0", color: "rgba(255,255,255,0.48)", fontSize: 11, lineHeight: 1.45 }}>
