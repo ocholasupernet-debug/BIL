@@ -28,9 +28,12 @@ interface HotspotCredentials {
   password: string;
 }
 interface HotspotSession {
-  status: "active" | "expired";
+  status: "active" | "expired" | "not_found" | "unavailable";
   connected: boolean;
   expiresAt: string | null;
+  found?: boolean;
+  planName?: string | null;
+  username?: string | null;
 }
 interface ConnectedDevice {
   name: string;
@@ -338,7 +341,7 @@ export default function HotspotLogin() {
   const [loginSession, setLoginSession] = useState<HotspotSession | null>(null);
   const [troubleshootLoading, setTroubleshootLoading] = useState(false);
   const [troubleshootMessage, setTroubleshootMessage] = useState("");
-  const [troubleshootAttempts, setTroubleshootAttempts] = useState(0);
+  const [troubleshootAction, setTroubleshootAction] = useState<"check" | "login" | null>(null);
   const troubleshootInFlight = useRef(false);
   const [mpesaMessage, setMpesaMessage] = useState("");
   const [mpesaReconnectLoading, setMpesaReconnectLoading] = useState(false);
@@ -650,15 +653,17 @@ export default function HotspotLogin() {
   };
 
   type TroubleshootResult = {
+    found: boolean;
+    status: "active" | "expired" | "not_found" | "unavailable";
     connected: boolean;
-    status: "active" | "expired";
     expiresAt: string | null;
-    retryable: boolean;
+    planName: string | null;
+    username: string | null;
     name: string;
     error?: string;
   };
 
-  const attemptHotspotConnection = async (): Promise<TroubleshootResult | null> => {
+  const requestHotspotTroubleshoot = async (action: "check" | "login"): Promise<TroubleshootResult | null> => {
     if (!adminId || !portalContext.mac) {
       setLoginError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
       return null;
@@ -669,41 +674,55 @@ export default function HotspotLogin() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           adminId,
+          action,
           ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
           mac_address: portalContext.mac,
         }),
       });
       const data = await res.json() as {
         ok?: boolean;
-        status?: "active" | "expired";
+        found?: boolean;
+        status?: "active" | "expired" | "not_found" | "unavailable";
         connected?: boolean;
-        retryable?: boolean;
         expiresAt?: string | null;
+        planName?: string | null;
+        username?: string | null;
         error?: string;
         customer?: { name?: string | null };
       };
-      const result: TroubleshootResult = {
-        connected: data.connected === true,
-        status: data.status === "expired" ? "expired" : "active",
-        expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
-        retryable: data.retryable === true,
-        name: data.customer?.name || "your device",
-        error: data.error,
-      };
       if (!res.ok && !data.status) {
-        setLoginError(data.error ?? "Login failed.");
+        setLoginError(data.error ?? "Could not verify the latest hotspot purchase.");
         return null;
       }
+      const result: TroubleshootResult = {
+        found: data.found === true,
+        connected: data.connected === true,
+        status: data.status === "active" || data.status === "expired" || data.status === "not_found"
+          ? data.status
+          : "unavailable",
+        expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
+        planName: typeof data.planName === "string" ? data.planName : null,
+        username: typeof data.username === "string" ? data.username : null,
+        name: data.customer?.name || data.username || "your device",
+        error: data.error,
+      };
       setLoginSession({
+        found: result.found,
         status: result.status,
         connected: result.connected,
         expiresAt: result.expiresAt,
+        planName: result.planName,
+        username: result.username,
       });
       setLoggedInName(result.name);
-      if (result.error && !result.connected) setTroubleshootMessage(result.error);
-      if (result.connected) {
+      setLoginError("");
+      setTroubleshootMessage(
+        result.status === "active" || result.status === "unavailable"
+          ? result.error ?? ""
+          : "",
+      );
+      if (action === "login" && result.connected) {
         setLoginSuccess(true);
-        setLoginError("");
         setTroubleshootMessage("");
       }
       return result;
@@ -719,25 +738,31 @@ export default function HotspotLogin() {
     setTroubleshootLoading(true);
     setTroubleshootMessage("");
     setLoginError("");
-    setTroubleshootAttempts(0);
+    setTroubleshootAction("check");
     try {
-      const maxAttempts = 6;
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        setTroubleshootAttempts(attempt);
-        const result = await attemptHotspotConnection();
-        if (!result) break;
-        if (result.connected) break;
-        if (result.status === "expired" || !result.retryable) break;
-        if (attempt < maxAttempts) {
-          setTroubleshootMessage("Your plan is active. Retrying the hotspot connection…");
-          await new Promise(resolve => window.setTimeout(resolve, 1500));
-        } else {
-          setTroubleshootMessage("Your plan is active, but the router did not accept the connection. Try again or contact support.");
-        }
+      await requestHotspotTroubleshoot("check");
+    } finally {
+      troubleshootInFlight.current = false;
+      setTroubleshootLoading(false);
+      setTroubleshootAction(null);
+    }
+  };
+
+  const handlePlanLogin = async () => {
+    if (troubleshootInFlight.current) return;
+    troubleshootInFlight.current = true;
+    setTroubleshootLoading(true);
+    setTroubleshootAction("login");
+    setLoginError("");
+    try {
+      const result = await requestHotspotTroubleshoot("login");
+      if (result && result.status === "active" && !result.connected && !result.error) {
+        setTroubleshootMessage("The router did not confirm the login. Tap Login now to retry.");
       }
     } finally {
       troubleshootInFlight.current = false;
       setTroubleshootLoading(false);
+      setTroubleshootAction(null);
     }
   };
 
@@ -1667,9 +1692,15 @@ export default function HotspotLogin() {
                       <h3>Welcome, {loggedInName}!</h3>
                       <p style={{ marginBottom: 8 }}>You're now connected to the network.</p>
                       {loginSession && (
-                        <p style={{ margin: "0 0 24px", color: "rgba(255,255,255,0.5)", fontSize: 12 }}>
-                          Plan expires {formatSessionExpiry(loginSession.expiresAt)}
-                        </p>
+                        <div style={{ margin: "0 0 24px", color: "rgba(255,255,255,0.5)", fontSize: 12 }}>
+                          {loginSession.planName && <p style={{ margin: "0 0 5px" }}>Plan: {loginSession.planName}</p>}
+                          {loginSession.username && <p style={{ margin: "0 0 5px" }}>Username: {loginSession.username}</p>}
+                          <p style={{ margin: 0 }}>
+                            {loginSession.expiresAt
+                              ? `Plan expires ${formatSessionExpiry(loginSession.expiresAt)}`
+                              : "No expiry time is recorded for this plan."}
+                          </p>
+                        </div>
                       )}
                       <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
                         onClick={() => { setLoginSuccess(false); setLoginSession(null); setLoginError(""); }}>
@@ -1685,33 +1716,66 @@ export default function HotspotLogin() {
                             padding: 14,
                             marginBottom: 16,
                             borderRadius: 12,
-                            background: loginSession.status === "expired" ? "rgba(245,158,11,0.08)" : "rgba(34,197,94,0.08)",
-                            border: `1px solid ${loginSession.status === "expired" ? "rgba(245,158,11,0.2)" : "rgba(34,197,94,0.2)"}`,
+                            background: loginSession.status === "active"
+                              ? "rgba(34,197,94,0.08)"
+                              : loginSession.status === "expired"
+                                ? "rgba(245,158,11,0.08)"
+                                : "rgba(239,68,68,0.08)",
+                            border: `1px solid ${loginSession.status === "active"
+                              ? "rgba(34,197,94,0.2)"
+                              : loginSession.status === "expired"
+                                ? "rgba(245,158,11,0.2)"
+                                : "rgba(239,68,68,0.2)"}`,
                           }}
                         >
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-                            {loginSession.status === "expired"
-                              ? <AlertCircle size={16} color="#fbbf24" />
-                              : <CheckCircle2 size={16} color="#4ade80" />}
-                            <strong style={{ color: loginSession.status === "expired" ? "#fbbf24" : "#86efac", fontSize: 13 }}>
-                              {loginSession.status === "expired" ? "Session expired" : "Plan active"}
+                            {loginSession.status === "active"
+                              ? <CheckCircle2 size={16} color="#4ade80" />
+                              : <AlertCircle size={16} color={loginSession.status === "expired" ? "#fbbf24" : "#fca5a5"} />}
+                            <strong style={{
+                              color: loginSession.status === "active" ? "#86efac" : loginSession.status === "expired" ? "#fbbf24" : "#fca5a5",
+                              fontSize: 13,
+                            }}>
+                              {loginSession.status === "active"
+                                ? "Plan active"
+                                : loginSession.status === "expired"
+                                  ? "Plan expired"
+                                  : loginSession.status === "not_found"
+                                    ? "No purchased plan found"
+                                    : "Purchase needs help"}
                             </strong>
                           </div>
+                          {loginSession.planName && (
+                            <p style={{ margin: "0 0 5px", color: "rgba(255,255,255,0.72)", fontSize: 12 }}>
+                              Plan: <strong>{loginSession.planName}</strong>
+                            </p>
+                          )}
+                          {loginSession.username && (
+                            <p style={{ margin: "0 0 5px", color: "rgba(255,255,255,0.58)", fontSize: 12 }}>
+                              Username: <strong>{loginSession.username}</strong>
+                            </p>
+                          )}
                           <p style={{ margin: 0, color: "rgba(255,255,255,0.58)", fontSize: 12, lineHeight: 1.5 }}>
                             {loginSession.status === "expired"
-                              ? `Your hotspot session expired ${formatSessionExpiry(loginSession.expiresAt)}. Renew a package to reconnect.`
-                              : `Your plan expires ${formatSessionExpiry(loginSession.expiresAt)}.`}
+                              ? `Your plan expired${loginSession.expiresAt ? ` on ${formatSessionExpiry(loginSession.expiresAt)}` : ""}. Renew a package to reconnect.`
+                              : loginSession.status === "active"
+                                ? loginSession.expiresAt
+                                  ? `Your plan is active and expires ${formatSessionExpiry(loginSession.expiresAt)}.`
+                                  : "Your plan is active. No expiry time is recorded."
+                                : loginSession.status === "not_found"
+                                  ? "No successfully purchased hotspot package matches this device MAC address."
+                                  : "A purchase was found, but its hotspot account could not be confirmed. Contact support."}
                           </p>
                           {loginSession.status === "active" && (
                             <button
                               type="button"
                               className="hp-btn"
                               style={{ marginTop: 12, background: "linear-gradient(135deg,#16a34a,#059669)", color: "#fff", boxShadow: "0 4px 15px rgba(22,163,74,.25)" }}
-                              onClick={handleTroubleshoot}
+                              onClick={handlePlanLogin}
                               disabled={troubleshootLoading}
                             >
                               {troubleshootLoading
-                                ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Connecting…</>
+                                ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> {troubleshootAction === "login" ? "Logging in…" : "Checking purchase…"}</>
                                 : <><Wifi size={15} /> Login now</>}
                             </button>
                           )}
@@ -1768,13 +1832,13 @@ export default function HotspotLogin() {
                           onClick={handleTroubleshoot}
                         >
                           {troubleshootLoading ? (
-                            <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Troubleshooting connection {troubleshootAttempts}/6…</>
+                            <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> {troubleshootAction === "login" ? "Logging in…" : "Checking latest purchase…"}</>
                           ) : (
                             <><AlertCircle size={16} /> Troubleshoot connection</>
                           )}
                         </button>
                         <p style={{ margin: "8px 0 0", color: "rgba(255,255,255,0.32)", fontSize: 11, lineHeight: 1.45 }}>
-                          This checks the active package for this device using its hotspot MAC address. No username or password is needed.
+                          This checks the latest successful hotspot purchase linked to this device MAC. If it is active, you can log in without entering a password.
                         </p>
                         {troubleshootMessage && (
                           <p role="status" style={{ margin: "8px 0 0", color: "rgba(255,255,255,0.48)", fontSize: 11, lineHeight: 1.45 }}>
