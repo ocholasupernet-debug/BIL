@@ -160,12 +160,16 @@ export interface DbPlan {
   bandwidth_id: number | null;
   speed_down: number;
   speed_up: number;
+  speed_down_unit: string;
+  speed_up_unit: string;
   price: number;
-  plan_type: string;
   validity: number;
   validity_unit: string;
   validity_days: number;
   data_limit_mb: number | null;
+  data_cap_mode: "disconnect" | "throttle";
+  fup_speed_down: number | null;
+  fup_speed_up: number | null;
   burst_limit: string | null;
   shared_users: number;
   client_can_purchase: boolean;
