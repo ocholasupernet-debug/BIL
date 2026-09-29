@@ -11,6 +11,11 @@ import {
   type LoadBalancingWan,
 } from "../lib/router-load-balancing.js";
 import {
+  buildOpenVpnProviderProfile,
+  hasActiveCustomerOvpnClient,
+  isProtectedManagementOvpn,
+} from "../lib/openvpn-profile.js";
+import {
   deployRouterFile,
   configureRouterOvpnWanClient,
   fetchRouterLoadBalancingInventory,
@@ -97,6 +102,12 @@ type OpenVpnProfile = {
   username: string;
   password: string;
   keyPassphrase: string;
+  remoteHost?: string;
+  remotePort?: number;
+  protocol?: "udp" | "tcp";
+  caCertificate?: string;
+  clientCertificate?: string;
+  clientKey?: string;
 };
 type OpenVpnProfileRow = {
   admin_id: number;
@@ -209,6 +220,20 @@ function openVpnProfileHash(profile: OpenVpnProfile): string {
     .update("\0")
     .update(profile.keyPassphrase)
     .digest("hex");
+}
+
+function publicOpenVpnProfileInfo(profile: OpenVpnProfile | null) {
+  const providerGenerated = Boolean(profile?.remoteHost && profile.remotePort && profile.caCertificate);
+  return {
+    configured: Boolean(profile),
+    username: profile?.username ?? "",
+    source: providerGenerated ? "provider" : profile ? "legacy" : "none",
+    remoteHost: profile?.remoteHost ?? "",
+    remotePort: profile?.remotePort ?? null,
+    protocol: profile?.protocol ?? "",
+    caCertificateConfigured: Boolean(profile?.caCertificate),
+    clientCertificateConfigured: Boolean(profile?.clientCertificate && profile?.clientKey),
+  };
 }
 
 async function openVpnRemoteAddresses(profileText: string): Promise<string[]> {
@@ -499,10 +524,6 @@ function simpleBridgePort(settings: Record<string, string> | undefined): boolean
   return !String(settings.comment ?? "").trim();
 }
 
-function isProtectedManagementOvpn(name: string, comment: string): boolean {
-  return /mainbillingvpn|ochola.*management|vps tunnel|do not delete.*management vpn/i.test(`${name} ${comment}`);
-}
-
 async function livePreflight(
   config: LoadBalancingConfig,
   inventory: RouterLoadBalancingInventory,
@@ -715,7 +736,7 @@ async function prepare(scope: Scope, value: unknown): Promise<Prepared> {
     try {
       const profile = await loadOpenVpnProfile(scope.adminId);
       if (!profile) {
-        openVpnProfileError = "Upload the shared OpenVPN profile before enabling a managed OVPN WAN.";
+        openVpnProfileError = "Generate and save the provider profile before enabling a managed OVPN WAN.";
       } else {
         openVpnProfile = profile;
         openVpnProfileHashValue = openVpnProfileHash(profile);
@@ -1270,8 +1291,7 @@ router.get("/load-balancing/openvpn-profile", requireAdmin(), async (req, res): 
     const profile = await loadOpenVpnProfile(adminId);
     res.json({
       ok: true,
-      configured: Boolean(profile),
-      username: profile?.username ?? "",
+      ...publicOpenVpnProfileInfo(profile),
     });
   } catch (error) {
     logger.error("Shared OpenVPN profile could not be loaded");
@@ -1286,20 +1306,11 @@ router.put("/load-balancing/openvpn-profile", requireAdmin(), async (req, res): 
     const current = await loadOpenVpnProfile(adminId);
     const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
     const suppliedText = typeof body.profileText === "string" ? body.profileText : "";
-    const profileText = suppliedText.trim() ? suppliedText : current?.profileText ?? "";
     const username = String(body.username ?? current?.username ?? "").trim().slice(0, 128);
     const suppliedPassword = String(body.password ?? "");
     const suppliedKeyPassphrase = String(body.keyPassphrase ?? "");
     const password = suppliedPassword.length ? suppliedPassword : current?.password || "";
     const keyPassphrase = suppliedKeyPassphrase.length ? suppliedKeyPassphrase : current?.keyPassphrase || "";
-    if (!profileText) {
-      res.status(400).json({ ok: false, error: "Choose a .ovpn profile file before saving." });
-      return;
-    }
-    if (Buffer.byteLength(profileText, "utf8") > 300_000) {
-      res.status(413).json({ ok: false, error: "The .ovpn profile is too large (maximum 300 KB)." });
-      return;
-    }
     if (!username || !password) {
       res.status(400).json({ ok: false, error: "OpenVPN username and password are required." });
       return;
@@ -1308,16 +1319,75 @@ router.put("/load-balancing/openvpn-profile", requireAdmin(), async (req, res): 
       res.status(400).json({ ok: false, error: "OpenVPN passwords must be 256 characters or fewer." });
       return;
     }
+    let next: OpenVpnProfile;
+    if (suppliedText.trim()) {
+      // Preserve compatibility with previously deployed clients that submit
+      // provider-supplied profiles directly.
+      const profileText = suppliedText.trim();
+      if (Buffer.byteLength(profileText, "utf8") > 300_000) {
+        res.status(413).json({ ok: false, error: "The .ovpn profile is too large (maximum 300 KB)." });
+        return;
+      }
+      next = { profileText, username, password, keyPassphrase };
+    } else {
+      const suppliedClientCertificate = String(body.clientCertificate ?? "").trim();
+      const suppliedClientKey = String(body.clientKey ?? "").trim();
+      if (Boolean(suppliedClientCertificate) !== Boolean(suppliedClientKey)) {
+        res.status(400).json({ ok: false, error: "A new client certificate and private key must be provided together." });
+        return;
+      }
+      const clearClientCertificate = body.clearClientCertificate === true
+        && !suppliedClientCertificate
+        && !suppliedClientKey;
+      const caCertificate = String(body.caCertificate ?? "").trim() || current?.caCertificate || "";
+      const clientCertificate = suppliedClientCertificate
+        || (clearClientCertificate ? "" : current?.clientCertificate || "");
+      const clientKey = suppliedClientKey
+        || (clearClientCertificate ? "" : current?.clientKey || "");
+      const profileKeyPassphrase = clientKey
+        ? suppliedClientKey
+          ? suppliedKeyPassphrase
+          : keyPassphrase
+        : "";
+      try {
+        const generated = buildOpenVpnProviderProfile({
+          server: body.remoteHost ?? current?.remoteHost,
+          port: body.remotePort ?? current?.remotePort,
+          protocol: body.protocol ?? current?.protocol,
+          caCertificate,
+          clientCertificate,
+          clientKey,
+          keyPassphrase: profileKeyPassphrase,
+        });
+        next = {
+          profileText: generated.profileText,
+          username,
+          password,
+          keyPassphrase: profileKeyPassphrase,
+          remoteHost: generated.server,
+          remotePort: generated.port,
+          protocol: generated.protocol,
+          caCertificate: generated.caCertificate,
+          clientCertificate: generated.clientCertificate,
+          clientKey: generated.clientKey,
+        };
+      } catch (error) {
+        res.status(400).json({
+          ok: false,
+          error: error instanceof Error ? error.message : "Provider settings could not be converted to an OpenVPN profile.",
+        });
+        return;
+      }
+    }
     try {
-      await openVpnRemoteAddresses(profileText);
+      await openVpnRemoteAddresses(next.profileText);
     } catch (error) {
       res.status(400).json({
         ok: false,
-        error: error instanceof Error ? error.message : "The .ovpn profile has no usable remote endpoint.",
+        error: error instanceof Error ? error.message : "The OpenVPN profile has no usable remote endpoint.",
       });
       return;
     }
-    const next: OpenVpnProfile = { profileText, username, password, keyPassphrase };
     const enabledConfigs = await sbSelectStrict<{ id: number }>(
       "isp_router_load_balancing",
       `admin_id=eq.${adminId}&enabled=is.true&select=id`,
@@ -1343,7 +1413,7 @@ router.put("/load-balancing/openvpn-profile", requireAdmin(), async (req, res): 
       profile_auth_tag: encrypted.auth_tag,
       updated_at: new Date().toISOString(),
     });
-    res.json({ ok: true, configured: true, username });
+    res.json({ ok: true, ...publicOpenVpnProfileInfo(next) });
   } catch (error) {
     logger.error("Shared OpenVPN profile could not be saved");
     res.status(500).json({ ok: false, error: "The shared OpenVPN profile could not be saved." });
@@ -1383,6 +1453,7 @@ router.get("/router/:id/load-balancing/interfaces", requireAdmin(), async (req, 
         bridges: inventory.bridges,
         bridgePorts: inventory.bridgePorts.map(({ bridge, interface: interfaceName }) => ({ bridge, interface: interfaceName })),
         addresses: inventory.addresses.map(({ interface: interfaceName, address }) => ({ interface: interfaceName, address })),
+        hasActiveCustomerOvpn: hasActiveCustomerOvpnClient(inventory.ovpnClients),
         connectedVia: inventory.connectedVia,
       },
     });
@@ -1406,7 +1477,7 @@ router.put("/router/:id/load-balancing", requireAdmin(), async (req, res): Promi
     if (internal.enabled && internal.wans.some(wan => wan.enabled && wan.connectionType === "ovpn")) {
       const profile = await loadOpenVpnProfile(scope.adminId);
       if (!profile) {
-        res.status(400).json({ ok: false, errors: ["Upload the shared OpenVPN profile before enabling a managed OVPN WAN."] });
+        res.status(400).json({ ok: false, errors: ["Generate and save the provider profile before enabling a managed OVPN WAN."] });
         return;
       }
       const remotes = await openVpnRemoteAddresses(profile.profileText);

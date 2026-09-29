@@ -84,6 +84,7 @@ type InterfacePayload = {
     bridges: Array<{ name: string; running: boolean }>;
     bridgePorts: Array<{ bridge: string; interface: string }>;
     addresses: Array<{ interface: string; address: string }>;
+    hasActiveCustomerOvpn?: boolean;
     connectedVia?: string;
   };
 };
@@ -101,6 +102,12 @@ type PreviewResult = {
 type OpenVpnProfileInfo = {
   configured: boolean;
   username: string;
+  source: "provider" | "legacy" | "none";
+  remoteHost: string;
+  remotePort: number | null;
+  protocol: "udp" | "tcp" | "";
+  caCertificateConfigured: boolean;
+  clientCertificateConfigured: boolean;
 };
 
 const card: CSSProperties = {
@@ -269,8 +276,13 @@ export default function LoadBalancing() {
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [openVpnProfileInfo, setOpenVpnProfileInfo] = useState<OpenVpnProfileInfo | null>(null);
   const [openVpnProfileEditable, setOpenVpnProfileEditable] = useState(true);
-  const [openVpnProfileText, setOpenVpnProfileText] = useState("");
-  const [openVpnProfileFileName, setOpenVpnProfileFileName] = useState("");
+  const [openVpnRemoteHost, setOpenVpnRemoteHost] = useState("");
+  const [openVpnRemotePort, setOpenVpnRemotePort] = useState("");
+  const [openVpnProtocol, setOpenVpnProtocol] = useState<"udp" | "tcp">("udp");
+  const [openVpnCaCertificate, setOpenVpnCaCertificate] = useState("");
+  const [openVpnClientCertificate, setOpenVpnClientCertificate] = useState("");
+  const [openVpnClientKey, setOpenVpnClientKey] = useState("");
+  const [clearOpenVpnClientCertificate, setClearOpenVpnClientCertificate] = useState(false);
   const [openVpnUsername, setOpenVpnUsername] = useState("");
   const [openVpnPassword, setOpenVpnPassword] = useState("");
   const [openVpnKeyPassphrase, setOpenVpnKeyPassphrase] = useState("");
@@ -286,9 +298,12 @@ export default function LoadBalancing() {
 
   const loadOpenVpnProfileInfo = useCallback(async () => {
     try {
-      const response = await apiJson<{ ok: boolean; configured: boolean; username: string }>("/api/load-balancing/openvpn-profile");
-      setOpenVpnProfileInfo({ configured: response.configured, username: response.username || "" });
+      const response = await apiJson<OpenVpnProfileInfo>("/api/load-balancing/openvpn-profile");
+      setOpenVpnProfileInfo(response);
       setOpenVpnUsername(response.username || "");
+      setOpenVpnRemoteHost(response.remoteHost || "");
+      setOpenVpnRemotePort(response.remotePort ? String(response.remotePort) : "");
+      setOpenVpnProtocol(response.protocol === "tcp" ? "tcp" : "udp");
       setOpenVpnProfileEditable(true);
     } catch (cause) {
       const error = cause instanceof Error ? cause.message : "Shared OpenVPN profile access is unavailable.";
@@ -358,6 +373,7 @@ export default function LoadBalancing() {
     [physicalInterfaces],
   );
   const bridgePorts = interfaces?.bridgePorts ?? [];
+  const hasActiveCustomerOvpn = Boolean(interfaces?.hasActiveCustomerOvpn);
 
   const updateConfig = (updater: (next: LoadBalancingConfig) => void) => {
     setConfig(current => {
@@ -386,7 +402,7 @@ export default function LoadBalancing() {
         const underlay = config.wans.find(candidate => candidate.position === wan.underlayWanPosition);
         if (!underlay?.enabled || underlay.connectionType === "ovpn") issues.push(`${wan.name || `WAN ${index + 1}`} needs a different enabled non-OpenVPN transport WAN.`);
       }
-      if (config.enabled && wan.connectionType === "ovpn" && openVpnProfileInfo?.configured === false) issues.push("Save the shared OpenVPN profile before previewing this WAN.");
+      if (config.enabled && wan.connectionType === "ovpn" && openVpnProfileInfo?.configured === false) issues.push("Generate and save the provider profile before previewing this WAN.");
       if (config.mode === "weighted" && wan.weight < 1) issues.push(`${wan.name || `WAN ${index + 1}`} needs a weight of at least 1.`);
     });
     return issues;
@@ -452,22 +468,33 @@ export default function LoadBalancing() {
     setOpenVpnProfileError("");
     setOpenVpnProfileNotice("");
     try {
-      const result = await apiJson<{ configured: boolean; username: string }>("/api/load-balancing/openvpn-profile", {
+      const result = await apiJson<OpenVpnProfileInfo>("/api/load-balancing/openvpn-profile", {
         method: "PUT",
         body: JSON.stringify({
-          profileText: openVpnProfileText,
+          remoteHost: openVpnRemoteHost,
+          remotePort: Number(openVpnRemotePort),
+          protocol: openVpnProtocol,
+          caCertificate: openVpnCaCertificate,
+          clientCertificate: openVpnClientCertificate,
+          clientKey: openVpnClientKey,
+          clearClientCertificate: clearOpenVpnClientCertificate,
           username: openVpnUsername,
           password: openVpnPassword,
           keyPassphrase: openVpnKeyPassphrase,
         }),
       });
-      setOpenVpnProfileInfo({ configured: result.configured, username: result.username || "" });
+      setOpenVpnProfileInfo(result);
       setOpenVpnUsername(result.username || "");
-      setOpenVpnProfileText("");
-      setOpenVpnProfileFileName("");
+      setOpenVpnRemoteHost(result.remoteHost || "");
+      setOpenVpnRemotePort(result.remotePort ? String(result.remotePort) : "");
+      setOpenVpnProtocol(result.protocol === "tcp" ? "tcp" : "udp");
+      setOpenVpnCaCertificate("");
+      setOpenVpnClientCertificate("");
+      setOpenVpnClientKey("");
+      setClearOpenVpnClientCertificate(false);
       setOpenVpnPassword("");
       setOpenVpnKeyPassphrase("");
-      setOpenVpnProfileNotice("Shared OpenVPN profile saved securely.");
+      setOpenVpnProfileNotice("Provider settings saved. The .ovpn profile and RouterOS import script are generated automatically.");
     } catch (cause) {
       setOpenVpnProfileError(cause instanceof Error ? cause.message : "The shared OpenVPN profile could not be saved.");
     } finally {
@@ -715,78 +742,105 @@ export default function LoadBalancing() {
                   </div>
                 </section>
 
-                <section className="isp-card lw-section">
-                  <div className="lw-section-head">
-                    <div>
-                      <div className="lw-section-title"><ShieldCheck size={17} /> Shared OpenVPN WAN profile</div>
-                      <p className="lw-section-note">Used only when creating a dedicated customer WAN tunnel. The router-management VPN is never reused.</p>
+                {hasActiveCustomerOvpn ? (
+                  <Notice kind="info">
+                    A running customer OpenVPN tunnel already exists on this router, so another managed tunnel is not offered. Select the existing tunnel as an uplink if needed. The router-management VPN is excluded.
+                  </Notice>
+                ) : (
+                  <section className="isp-card lw-section">
+                    <div className="lw-section-head">
+                      <div>
+                        <div className="lw-section-title"><ShieldCheck size={17} /> Generated OpenVPN WAN profile</div>
+                        <p className="lw-section-note">The management VPN stays separate from customer WAN tunnels.</p>
+                      </div>
+                      {openVpnProfileInfo?.configured && <span className="lw-status"><span className="lw-status-dot" /> {openVpnProfileInfo.source === "provider" ? "generated profile saved" : "existing profile saved"}</span>}
                     </div>
-                    {openVpnProfileInfo?.configured && <span className="lw-status"><span className="lw-status-dot" /> profile saved</span>}
-                  </div>
-                  <div className="lw-section-body" style={{ display: "grid", gap: 12 }}>
-                    {!openVpnProfileEditable ? (
-                      <Notice kind="info">Only the ISP owner can manage this shared profile.</Notice>
-                    ) : (
-                      <>
-                        <p className="lw-section-note" style={{ margin: 0 }}>
-                          Upload a standard .ovpn file and enter its authentication details here. The file and passwords are encrypted and never shown again. Disable managed OVPN WANs on all routers before replacing a profile that is in use.
-                        </p>
-                        <div className="lw-field">
-                          <label style={fieldLabel}>OpenVPN profile file</label>
-                          <input
-                            className="lw-input"
-                            type="file"
-                            accept=".ovpn,application/x-openvpn-profile,text/plain"
-                            onChange={async event => {
-                              const file = event.target.files?.[0];
-                              if (!file) return;
-                              if (file.size > 300_000) {
-                                setOpenVpnProfileError("The .ovpn profile is too large (maximum 300 KB).");
-                                return;
+                    <div className="lw-section-body" style={{ display: "grid", gap: 12 }}>
+                      {!openVpnProfileEditable ? (
+                        <Notice kind="info">Only the ISP owner can manage this shared profile.</Notice>
+                      ) : (
+                        <>
+                          <p className="lw-section-note" style={{ margin: 0 }}>
+                            Enter the provider settings once. The app generates the encrypted .ovpn profile and creates the RouterOS import script automatically. Credentials, certificates, and private keys are encrypted and never returned.
+                            {openVpnProfileInfo?.source === "legacy" && " The currently saved profile will keep working until you save generated provider settings."}
+                          </p>
+                          <div className="lw-general-grid">
+                            <div className="lw-field">
+                              <label style={fieldLabel}>VPN server (IPv4 or hostname)</label>
+                              <input className="lw-input" value={openVpnRemoteHost} onChange={event => setOpenVpnRemoteHost(event.target.value)} placeholder="vpn.example.net" autoComplete="off" />
+                            </div>
+                            <div className="lw-field">
+                              <label style={fieldLabel}>Server port</label>
+                              <input className="lw-input" type="number" min={1} max={65535} step={1} value={openVpnRemotePort} onChange={event => setOpenVpnRemotePort(event.target.value)} placeholder="1194" />
+                            </div>
+                            <div className="lw-field">
+                              <label style={fieldLabel}>Transport protocol</label>
+                              <select className="lw-select" value={openVpnProtocol} onChange={event => setOpenVpnProtocol(event.target.value as "udp" | "tcp")}>
+                                <option value="udp">UDP</option>
+                                <option value="tcp">TCP</option>
+                              </select>
+                            </div>
+                            <div className="lw-field">
+                              <label style={fieldLabel}>OpenVPN username</label>
+                              <input className="lw-input" value={openVpnUsername} onChange={event => setOpenVpnUsername(event.target.value)} autoComplete="username" />
+                            </div>
+                            <div className="lw-field">
+                              <label style={fieldLabel}>OpenVPN password</label>
+                              <input className="lw-input" type="password" value={openVpnPassword} onChange={event => setOpenVpnPassword(event.target.value)} placeholder={openVpnProfileInfo?.configured ? "Leave blank to keep current password" : "Write-only secret"} autoComplete="new-password" />
+                            </div>
+                            <div className="lw-field">
+                              <label style={fieldLabel}>Private-key passphrase</label>
+                              <input className="lw-input" type="password" value={openVpnKeyPassphrase} onChange={event => setOpenVpnKeyPassphrase(event.target.value)} placeholder={openVpnProfileInfo?.configured ? "Leave blank to keep current passphrase" : "Optional"} autoComplete="new-password" />
+                            </div>
+                          </div>
+                          <div className="lw-field">
+                            <label style={fieldLabel}>CA certificate (PEM)</label>
+                            <textarea className="lw-input" rows={5} value={openVpnCaCertificate} onChange={event => setOpenVpnCaCertificate(event.target.value)} placeholder={openVpnProfileInfo?.caCertificateConfigured ? "Leave blank to keep the saved CA certificate" : "Paste the provider's CA certificate block"} />
+                            <div className="lw-secret-note">A CA certificate is required to verify the VPN server.</div>
+                          </div>
+                          <div className="lw-general-grid">
+                            <div className="lw-field">
+                              <label style={fieldLabel}>Client certificate (optional PEM)</label>
+                              <textarea className="lw-input" rows={5} value={openVpnClientCertificate} onChange={event => setOpenVpnClientCertificate(event.target.value)} placeholder={openVpnProfileInfo?.clientCertificateConfigured ? "Leave blank to keep the saved certificate" : "Only if required by the provider"} />
+                            </div>
+                            <div className="lw-field">
+                              <label style={fieldLabel}>Client private key (optional PEM)</label>
+                              <textarea className="lw-input" rows={5} value={openVpnClientKey} onChange={event => setOpenVpnClientKey(event.target.value)} placeholder={openVpnProfileInfo?.clientCertificateConfigured ? "Leave blank to keep the saved key" : "Only if required by the provider"} autoComplete="new-password" />
+                              <div className="lw-secret-note">Private keys are write-only and encrypted at rest.</div>
+                            </div>
+                          </div>
+                          {openVpnProfileInfo?.clientCertificateConfigured && (
+                            <label className="lw-check-row">
+                              <span className="lw-check-copy"><strong>Remove saved client certificate and key</strong><span>Use this only if the provider does not require a client certificate.</span></span>
+                              <input type="checkbox" checked={clearOpenVpnClientCertificate} onChange={event => setClearOpenVpnClientCertificate(event.target.checked)} />
+                            </label>
+                          )}
+                          {openVpnProfileError && <Notice kind="error">{openVpnProfileError}</Notice>}
+                          {openVpnProfileNotice && <Notice kind="success">{openVpnProfileNotice}</Notice>}
+                          <div>
+                            <button
+                              type="button"
+                              className="lw-btn lw-btn-primary"
+                              onClick={() => void saveOpenVpnProfile()}
+                              disabled={
+                                openVpnProfileSaving
+                                || !openVpnRemoteHost.trim()
+                                || !/^\d+$/.test(openVpnRemotePort)
+                                || !openVpnUsername.trim()
+                                || (!openVpnProfileInfo?.configured && !openVpnPassword)
+                                || (!openVpnProfileInfo?.caCertificateConfigured && !openVpnCaCertificate.trim())
+                                || Boolean(openVpnClientCertificate.trim()) !== Boolean(openVpnClientKey.trim())
                               }
-                              try {
-                                setOpenVpnProfileText(await file.text());
-                                setOpenVpnProfileFileName(file.name);
-                                setOpenVpnProfileError("");
-                              } catch {
-                                setOpenVpnProfileError("The selected .ovpn file could not be read.");
-                              }
-                            }}
-                          />
-                          {openVpnProfileFileName && <div className="lw-secret-note">Selected: {openVpnProfileFileName}</div>}
-                          {openVpnProfileInfo?.configured && !openVpnProfileFileName && <div className="lw-secret-note">Leave the file empty to keep the saved profile.</div>}
-                        </div>
-                        <div className="lw-general-grid">
-                          <div className="lw-field">
-                            <label style={fieldLabel}>OpenVPN username</label>
-                            <input className="lw-input" value={openVpnUsername} onChange={event => setOpenVpnUsername(event.target.value)} autoComplete="username" />
+                            >
+                              {openVpnProfileSaving ? <Loader2 size={14} className="spin" /> : <ShieldCheck size={14} />}
+                              {openVpnProfileSaving ? "Generating profile…" : "Generate and save profile"}
+                            </button>
                           </div>
-                          <div className="lw-field">
-                            <label style={fieldLabel}>OpenVPN password</label>
-                            <input className="lw-input" type="password" value={openVpnPassword} onChange={event => setOpenVpnPassword(event.target.value)} placeholder={openVpnProfileInfo?.configured ? "Leave blank to keep current password" : "Write-only secret"} autoComplete="new-password" />
-                          </div>
-                          <div className="lw-field">
-                            <label style={fieldLabel}>Certificate key passphrase</label>
-                            <input className="lw-input" type="password" value={openVpnKeyPassphrase} onChange={event => setOpenVpnKeyPassphrase(event.target.value)} placeholder={openVpnProfileInfo?.configured ? "Leave blank to keep current passphrase" : "Optional"} autoComplete="new-password" />
-                          </div>
-                        </div>
-                        {openVpnProfileError && <Notice kind="error">{openVpnProfileError}</Notice>}
-                        {openVpnProfileNotice && <Notice kind="success">{openVpnProfileNotice}</Notice>}
-                        <div>
-                          <button
-                            type="button"
-                            className="lw-btn lw-btn-primary"
-                            onClick={() => void saveOpenVpnProfile()}
-                            disabled={openVpnProfileSaving || !openVpnUsername.trim() || (!openVpnProfileInfo?.configured && !openVpnPassword) || (!openVpnProfileInfo?.configured && !openVpnProfileText)}
-                          >
-                            {openVpnProfileSaving ? <Loader2 size={14} className="spin" /> : <ShieldCheck size={14} />}
-                            {openVpnProfileSaving ? "Saving profile…" : "Save shared profile"}
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </section>
+                        </>
+                      )}
+                    </div>
+                  </section>
+                )}
 
                 <section className="isp-card lw-section">
                   <div className="lw-section-head">
@@ -855,7 +909,12 @@ export default function LoadBalancing() {
                                 <option value="pppoe">PPPoE client</option>
                                 <option value="dhcp">DHCP client</option>
                                 <option value="existing">Use existing interface</option>
-                                <option value="ovpn">Managed OpenVPN tunnel</option>
+                                {(wan.connectionType === "ovpn" || (
+                                  !hasActiveCustomerOvpn
+                                  && !config.wans.some((candidate, candidateIndex) =>
+                                    candidateIndex !== index && candidate.connectionType === "ovpn",
+                                  )
+                                )) && <option value="ovpn">Managed OpenVPN tunnel</option>}
                               </select>
                             </div>
                             <div className="lw-field">
@@ -914,8 +973,8 @@ export default function LoadBalancing() {
                                 </div>
                                 <div className="lw-field lw-span-2">
                                   {openVpnProfileInfo?.configured
-                                    ? <div className="lw-secret-note">The ISP owner's shared profile is saved and will be imported for this dedicated WAN tunnel.</div>
-                                    : <Notice kind="warning">Save the shared OpenVPN profile above before enabling this WAN.</Notice>}
+                                    ? <div className="lw-secret-note">The generated provider profile will be imported for this dedicated WAN tunnel.</div>
+                                    : <Notice kind="warning">Generate and save the provider profile above before enabling this WAN.</Notice>}
                                 </div>
                               </>
                             )}
