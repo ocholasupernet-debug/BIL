@@ -23,7 +23,10 @@ interface VoucherRow {
   created_at: string;
 }
 
-interface DbPlanLite { id: number; name: string; type: string; price: number; validity: number; speed_down: number; speed_up: number; }
+interface DbPlanLite {
+  id: number; name: string; type: string; price: number; validity: number;
+  speed_down: number; speed_up: number; router_id: number | null;
+}
 interface DbRouterLite { id: number; name: string; host: string; status: string; }
 
 /* ─────────────────────────── Helpers ─────────────────────────── */
@@ -48,7 +51,7 @@ function fmtDate(d: string) {
 
 /* ─────────────────────────── DB Functions ─────────────────────── */
 async function fetchPlans(): Promise<DbPlanLite[]> {
-  const { data, error } = await supabase.from("isp_plans").select("id,name,type,price,validity,speed_down,speed_up").eq("admin_id", ADMIN_ID).eq("type", "hotspot").is("port_id", null).order("price", { ascending: true });
+  const { data, error } = await supabase.from("isp_plans").select("id,name,type,price,validity,speed_down,speed_up,router_id").eq("admin_id", ADMIN_ID).eq("type", "hotspot").is("port_id", null).order("price", { ascending: true });
   if (error) throw error;
   return data ?? [];
 }
@@ -575,14 +578,23 @@ export default function Vouchers() {
           icon={<UploadCloud size={18} />}
           endpoint="/api/admin/sync/users"
           color="var(--isp-accent)"
-          buildPayload={() => ({
-            users: vouchers.filter(v => !v.used).map(v => ({
-              username:  v.code,
-              password:  v.code,
-              type:      "voucher",
-              plan_name: v.plan_name,
-              comment:   `${companyName} voucher · ${v.plan_name}`,
-            })),
+          buildPayload={router => ({
+            users: vouchers
+              .filter(v => !v.used && (v.router_id === router.id || (!v.router_id && v.router_name === router.name)))
+              .map(v => {
+                const plan = plans.find(candidate =>
+                  candidate.name === v.plan_name && candidate.router_id === router.id,
+                );
+                return {
+                  username: v.code,
+                  password: v.code,
+                  type: "voucher",
+                  plan_id: plan?.id,
+                  router_id: router.id,
+                  plan_name: v.plan_name,
+                  comment: `${companyName} voucher · ${v.plan_name}`,
+                };
+              }),
           })}
         />
 

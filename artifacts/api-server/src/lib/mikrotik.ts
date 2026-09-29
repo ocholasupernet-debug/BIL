@@ -2210,6 +2210,7 @@ export interface VlanCustomerQueueLiveData {
 
 export interface RouterLiveData {
   hotspotUsers: ActiveHotspotUser[];
+  hotspotUserCounters: Array<{ name: string; bytesIn: number; bytesOut: number }> | null;
   pppoeUsers: ActivePPPoESession[];
   vlanCustomerQueues: VlanCustomerQueueLiveData[];
   vlanQueueStatsAvailable: boolean;
@@ -3012,11 +3013,14 @@ export async function connectHotspotUser(
 
 export function hotspotActiveSessionMatchesDevice(
   sessions: ReadonlyArray<Record<string, string>>,
-  opts: { user: string; macAddress: string },
+  opts: { user: string; macAddress: string; ip?: string },
 ): boolean {
   const targetMac = validRouterMac(opts.macAddress);
+  const targetIp = opts.ip?.trim().split("/")[0] ?? "";
   return !!targetMac && sessions.some((session) =>
-    session.user === opts.user && validRouterMac(session["mac-address"]) === targetMac,
+    session.user === opts.user
+    && validRouterMac(session["mac-address"]) === targetMac
+    && (!targetIp || session.address?.trim().split("/")[0] === targetIp),
   );
 }
 
@@ -4231,6 +4235,19 @@ export async function fetchRouterLiveData(
       requestMs
     ).catch(e => { logger.warn({ err: e.message }, "hotspot fetch failed"); return [] as Record<string, string>[]; });
 
+    /* Hotspot active rows are per-session; user rows retain package totals
+       across reconnects and are the quota/accounting source. */
+    const hotspotUserCounterRows = await withTimeout(
+      conn.write([
+        "/ip/hotspot/user/print",
+        "=.proplist=name,bytes-in,bytes-out",
+      ]),
+      requestMs,
+    ).catch(e => {
+      logger.warn({ err: e.message }, "hotspot user counter fetch failed");
+      return null;
+    });
+
     /* PPPoE sessions */
     const pppoeRows = await withTimeout(
       conn.write(["/ppp/active/print"]),
@@ -4304,6 +4321,13 @@ export async function fetchRouterLiveData(
         bytesOut:   parseBytes(r["bytes-out"]),
         server:     r.server         ?? "",
       })),
+      hotspotUserCounters: Array.isArray(hotspotUserCounterRows)
+        ? hotspotUserCounterRows.map(r => ({
+          name: r.name ?? "",
+          bytesIn: parseBytes(r["bytes-in"]),
+          bytesOut: parseBytes(r["bytes-out"]),
+        }))
+        : null,
       pppoeUsers: (Array.isArray(pppoeRows) ? pppoeRows : []).map(r => ({
         id:       r[".id"]        ?? "",
         name:     r.name          ?? "",

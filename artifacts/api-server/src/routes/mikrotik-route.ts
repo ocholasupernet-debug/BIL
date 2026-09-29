@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { randomBytes } from "crypto";
+import { preserveCumulativeUsage } from "../lib/prepaid-usage.js";
 import {
   fetchHotspotUsers,
   fetchPPPoEActive,
@@ -459,6 +460,13 @@ async function persistPrepaidLiveState(
   if (customers.length === 0) return data.vlanQueueStatsAvailable ? 0 : null;
 
   const usage = prepaidLiveUsage(data);
+  const hotspotUsage = data.hotspotUserCounters === null
+    ? null
+    : new Map<string, number>();
+  data.hotspotUserCounters?.forEach(user => {
+    const key = normalizePrepaidIdentity(user.name);
+    if (key) hotspotUsage?.set(key, Math.max(0, user.bytesIn) + Math.max(0, user.bytesOut));
+  });
   const observedAt = data.fetchedAt || new Date().toISOString();
   const observedAtMs = Date.parse(observedAt);
   let onlineVlanUsers = 0;
@@ -477,15 +485,24 @@ async function persistPrepaidLiveState(
       )
       : null;
     if (vlanPresence && !vlanPresence.statsAvailable) continue;
-    let sessionBytes = prepaidIdentityKeys(customer)
+    const sessionBytes = prepaidIdentityKeys(customer)
       .map(identity => usage.get(identity))
       .find(value => value !== undefined);
+    const isHotspotCustomer = ["hotspot", "voucher"].includes(String(customer.type ?? "").toLowerCase());
+    const hotspotAccountBytes = isHotspotCustomer
+      ? prepaidIdentityKeys(customer)
+        .map(identity => hotspotUsage?.get(identity))
+        .find(value => value !== undefined)
+      : undefined;
+    let usageBytes = isHotspotCustomer
+      ? hotspotAccountBytes
+      : sessionBytes;
     const expiresAtMs = customer.expires_at ? Date.parse(customer.expires_at) : Number.NaN;
     const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= observedAtMs;
     let online = sessionBytes !== undefined && !expired;
     if (vlanPresence) {
       const queue = vlanPresence.queue;
-      sessionBytes = queue?.statsAvailable && queue.bytesIn !== null && queue.bytesOut !== null
+      usageBytes = queue?.statsAvailable && queue.bytesIn !== null && queue.bytesOut !== null
         ? queue.bytesIn + queue.bytesOut
         : undefined;
       online = vlanPresence.online;
@@ -495,9 +512,16 @@ async function persistPrepaidLiveState(
       service_online: online,
     };
 
-    if (sessionBytes !== undefined) {
-      payload.data_used_bytes = Math.max(0, Math.floor(sessionBytes));
-      payload.data_used_mb = Math.max(0, sessionBytes / 1_000_000);
+    if (usageBytes !== undefined) {
+      if (!isHotspotCustomer) {
+        usageBytes = preserveCumulativeUsage(
+          usageBytes,
+          customer.data_used_bytes,
+          customer.data_used_mb,
+        );
+      }
+      payload.data_used_bytes = Math.max(0, Math.floor(usageBytes));
+      payload.data_used_mb = Math.max(0, usageBytes / 1_000_000);
     }
 
     if (online) {

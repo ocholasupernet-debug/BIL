@@ -130,7 +130,6 @@ function customerUsageBytes(user: Customer, liveUsage: Map<string, number>) {
     .map(normalizeLiveIdentity)
     .map(identity => liveUsage.get(identity))
     .find(value => value !== undefined);
-  if (live !== undefined) return live;
   if (isVlan && !user.last_seen) return null;
   if (isVlan) {
     const rawBytes = user.data_used_bytes;
@@ -140,10 +139,14 @@ function customerUsageBytes(user: Customer, liveUsage: Map<string, number>) {
     const vlanMb = Number(user.data_used_mb);
     return Number.isFinite(vlanMb) ? Math.max(0, vlanMb * 1_000_000) : null;
   }
-  const persisted = Number(user.data_used_bytes);
-  if (Number.isFinite(persisted)) return persisted;
-  const mb = Number(user.data_used_mb);
-  return Number.isFinite(mb) ? mb * 1_000_000 : null;
+  const rawPersisted = user.data_used_bytes;
+  const persisted = rawPersisted === null || rawPersisted === undefined || rawPersisted === ""
+    ? Number.NaN
+    : Number(rawPersisted);
+  if (Number.isFinite(persisted)) return Math.max(0, persisted, live ?? 0);
+  const mb = Number.isFinite(user.data_used_mb) ? Number(user.data_used_mb) : Number.NaN;
+  if (Number.isFinite(mb)) return Math.max(0, mb * 1_000_000, live ?? 0);
+  return live ?? null;
 }
 function customerIsOnline(user: Customer, onlineUsers: Set<string>) {
   if (isExpired(user.expires_at)) return false;
@@ -284,6 +287,8 @@ async function syncUsersToRouter(
     adminId: ADMIN_ID,
     routerId: router.id,
     users: users.map(u => ({
+      customer_id:  u.id,
+      router_id:    u.router_id ?? (u.plan_id ? planMap[u.plan_id]?.router_id : undefined),
       username:     u.type === "hotspot" ? purchaseUsername(u) : (u.pppoe_username || u.username || ""),
       password:     u.password || "",
       type:         u.type || "hotspot",
@@ -846,7 +851,14 @@ export default function PrepaidUsers() {
     const logs: string[] = [];
     const log = (m: string) => { logs.push(m); setSyncLogs([...logs]); };
     log("Starting user sync…");
-    const ok = await syncUsersToRouter(router, customers.filter(c => c.type !== "vlan" && ((c as any).router_id === router.id || true)), plans, log);
+    const ok = await syncUsersToRouter(
+      router,
+      customers.filter(c => c.type !== "vlan" && Number(
+        c.router_id ?? (c.plan_id ? planMap[c.plan_id]?.router_id : null),
+      ) === router.id),
+      plans,
+      log,
+    );
     log(ok ? "\n✅ Sync complete." : "\n⚠ Sync finished with errors.");
     setSyncOk(ok);
     setSyncing(false);

@@ -13,16 +13,16 @@
  */
 
 import { Router, type IRouter, type Request, type Response } from "express";
-import crypto from "crypto";
 import { autoProvision }  from "../lib/auto-provision";
 import { sbSelect, sbInsert, sbRpc } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
+import { secretMatches, verifyStripeSignature } from "../lib/webhook-auth.js";
 
 const router: IRouter = Router();
 
 /* ── Webhook secret (set WEBHOOK_SECRET env var on the VPS) ─────────────── */
-const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET ?? "changeme_secret";
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET?.trim() ?? "";
 
 /* ── Optional admin_id header for multi-tenant routing ─────────────────── */
 function adminIdFromReq(req: Request): number | undefined {
@@ -137,50 +137,10 @@ async function settlePendingPaybillRegistration(
  * Configure in Daraja portal: CallBackURL = https://VPS_IP:8080/api/webhooks/mpesa
  * ══════════════════════════════════════════════════════════════════════════ */
 router.post("/webhooks/mpesa", async (req: Request, res: Response): Promise<void> => {
-  /* Safaricom expects a 200 immediately — always respond first */
   res.json({ ResultCode: 0, ResultDesc: "Accepted" });
-
-  try {
-    const callback = req.body?.Body?.stkCallback;
-    if (!callback) { await logRaw("mpesa_stk", "ignored", { reason: "no stkCallback", body: req.body }); return; }
-
-    const { ResultCode, MerchantRequestID, CheckoutRequestID } = callback;
-
-    if (ResultCode !== 0) {
-      logger.info({ ResultCode, CheckoutRequestID }, "[webhook/mpesa] STK push failed/cancelled by user");
-      await logRaw("mpesa_stk", "ignored", { ResultCode, CheckoutRequestID, reason: "user cancelled or failed" });
-      return;
-    }
-
-    /* Extract metadata from CallbackMetadata.Item array */
-    const items: { Name: string; Value: unknown }[] = callback.CallbackMetadata?.Item ?? [];
-    const get = (name: string) => items.find(i => i.Name === name)?.Value;
-
-    const amount    = Number(get("Amount")             ?? 0);
-    const reference = String(get("MpesaReceiptNumber") ?? MerchantRequestID ?? CheckoutRequestID ?? "");
-    const rawPhone  = String(get("PhoneNumber")        ?? "");
-
-    if (!rawPhone || amount <= 0) {
-      await logRaw("mpesa_stk", "error", { reason: "missing phone or amount", items });
-      return;
-    }
-
-    await logRaw("mpesa_stk", "received", { reference, amount, phone: rawPhone });
-
-    const result = await autoProvision({
-      phone:         rawPhone,
-      amount,
-      reference,
-      paymentMethod: "mpesa",
-      gateway:       "mpesa_stk",
-      adminId:       adminIdFromReq(req),
-    });
-
-    logger.info({ result }, "[webhook/mpesa] STK provision result");
-    await logRaw("mpesa_stk", result.ok ? "processed" : "error", { reference, result });
-  } catch (err) {
-    logger.error({ err }, "[webhook/mpesa] Unexpected error");
-  }
+  await logRaw("mpesa_stk", "ignored", {
+    reason: "Legacy callback is not payment-verified; use the verified /api/mpesa/callback flow.",
+  });
 });
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -224,16 +184,12 @@ router.post("/webhooks/mpesa/c2b/confirmation", async (req: Request, res: Respon
       return;
     }
 
-    const result = await autoProvision({
-      phone:         rawPhone,
-      amount,
+    await logRaw("mpesa_c2b", "ignored", {
       reference,
-      paymentMethod: "mpesa",
-      gateway:       "mpesa_c2b",
-      adminId:       adminIdFromReq(req),
+      amount,
+      phone: rawPhone,
+      reason: "Legacy C2B service provisioning is disabled; use a verified package checkout.",
     });
-
-    await logRaw("mpesa_c2b", result.ok ? "processed" : "error", { reference, result });
   } catch (err) {
     logger.error({ err }, "[webhook/mpesa/c2b] Error");
   }
@@ -249,20 +205,14 @@ router.post("/webhooks/mpesa/c2b/confirmation", async (req: Request, res: Respon
  * ══════════════════════════════════════════════════════════════════════════ */
 router.post("/webhooks/stripe", async (req: Request, res: Response): Promise<void> => {
   const STRIPE_SECRET = process.env.STRIPE_WEBHOOK_SECRET ?? "";
-
-  /* Verify Stripe signature if secret is configured */
-  if (STRIPE_SECRET) {
-    const sig  = req.headers["stripe-signature"] as string;
-    const body = JSON.stringify(req.body);
-    const ts   = sig?.match(/t=(\d+)/)?.[1] ?? "";
-    const expected = crypto
-      .createHmac("sha256", STRIPE_SECRET)
-      .update(`${ts}.${body}`)
-      .digest("hex");
-    const received = sig?.match(/v1=([a-f0-9]+)/)?.[1] ?? "";
-    if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(received.padEnd(expected.length, "0")))) {
-      fail(res, 400, "Invalid Stripe signature"); return;
-    }
+  if (!STRIPE_SECRET) {
+    fail(res, 503, "Stripe webhook signature verification is not configured");
+    return;
+  }
+  const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
+  if (!verifyStripeSignature(rawBody, String(req.headers["stripe-signature"] ?? ""), STRIPE_SECRET)) {
+    fail(res, 400, "Invalid or expired Stripe signature");
+    return;
   }
 
   const event = req.body;
@@ -318,7 +268,11 @@ router.post("/webhooks/stripe", async (req: Request, res: Response): Promise<voi
 router.post("/webhooks/flutterwave", async (req: Request, res: Response): Promise<void> => {
   const FLW_HASH = process.env.FLW_SECRET_HASH ?? "";
 
-  if (FLW_HASH && req.headers["verif-hash"] !== FLW_HASH) {
+  if (!FLW_HASH) {
+    fail(res, 503, "Flutterwave webhook signature verification is not configured");
+    return;
+  }
+  if (!secretMatches(String(req.headers["verif-hash"] ?? ""), FLW_HASH)) {
     fail(res, 401, "Invalid Flutterwave hash"); return;
   }
 
@@ -370,11 +324,18 @@ router.post("/webhooks/flutterwave", async (req: Request, res: Response): Promis
 router.post("/webhooks/generic", async (req: Request, res: Response): Promise<void> => {
   const { phone, amount, reference, method } = req.body ?? {};
 
-  if (!phone || !amount) {
-    fail(res, 400, "phone and amount are required"); return;
+  if (!WEBHOOK_SECRET) {
+    fail(res, 503, "Generic webhook authentication is not configured");
+    return;
   }
-
-  ok(res, { received: true });
+  const auth = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization ?? ""))?.[1]?.trim() ?? "";
+  if (!secretMatches(auth, WEBHOOK_SECRET)) {
+    fail(res, 401, "Unauthorized — invalid or missing webhook secret");
+    return;
+  }
+  if (!phone || !reference || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    fail(res, 400, "phone, a positive amount, and reference are required"); return;
+  }
 
   try {
     await logRaw("generic", "received", { phone, amount, reference });
@@ -382,7 +343,7 @@ router.post("/webhooks/generic", async (req: Request, res: Response): Promise<vo
     const result = await autoProvision({
       phone:         String(phone),
       amount:        Number(amount),
-      reference:     String(reference ?? `GEN-${Date.now()}`),
+      reference:     String(reference),
       paymentMethod: String(method ?? "manual"),
       gateway:       "generic",
       adminId:       adminIdFromReq(req),
@@ -405,22 +366,26 @@ router.post("/webhooks/generic", async (req: Request, res: Response): Promise<vo
  * URL: https://VPS_IP:8080/api/webhooks/provision
  * ══════════════════════════════════════════════════════════════════════════ */
 router.post("/webhooks/provision", async (req: Request, res: Response): Promise<void> => {
-  const auth   = (req.headers.authorization ?? "").replace("Bearer ", "").trim();
-  const qsKey  = String(req.query.secret ?? "");
-  const secret = auth || qsKey;
-
-  if (!secret || secret !== WEBHOOK_SECRET) {
+  const auth   = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization ?? ""))?.[1]?.trim() ?? "";
+  if (!WEBHOOK_SECRET) {
+    fail(res, 503, "Direct provisioning authentication is not configured");
+    return;
+  }
+  if (!secretMatches(auth, WEBHOOK_SECRET)) {
     fail(res, 401, "Unauthorized — invalid or missing webhook secret"); return;
   }
 
-  const { phone, amount = 0, reference, method = "manual" } = req.body ?? {};
-  if (!phone) { fail(res, 400, "phone is required"); return; }
+  const { phone, amount, reference, method = "manual" } = req.body ?? {};
+  if (!phone || !reference || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    fail(res, 400, "phone, a positive amount, and reference are required");
+    return;
+  }
 
   try {
     const result = await autoProvision({
       phone:         String(phone),
       amount:        Number(amount),
-      reference:     String(reference ?? `PROV-${Date.now()}`),
+      reference:     String(reference),
       paymentMethod: String(method),
       gateway:       "direct_provision",
       adminId:       adminIdFromReq(req),
@@ -456,7 +421,7 @@ router.get("/webhooks/events", async (req: Request, res: Response): Promise<void
 router.get("/webhooks/status", (_req: Request, res: Response) => {
   res.json({
     ok:      true,
-    secret:  WEBHOOK_SECRET === "changeme_secret" ? "⚠ default — set WEBHOOK_SECRET env var" : "✅ custom secret configured",
+    secret:  WEBHOOK_SECRET ? "✅ configured" : "⚠ not configured",
     stripe:  process.env.STRIPE_WEBHOOK_SECRET ? "✅ configured" : "⚠ not configured",
     flutterwave: process.env.FLW_SECRET_HASH   ? "✅ configured" : "⚠ not configured",
     endpoints: {

@@ -894,19 +894,31 @@ export default function Customers() {
           icon={<UploadCloud size={18} />}
           endpoint="/api/admin/sync/users"
           color="var(--isp-accent)"
-          buildPayload={() => ({
-            users: customers.filter(c => c.type !== "vlan").map(c => ({
-              username:      c.username ?? "",
-              password:      c.password ?? "",
-              type:          c.type ?? "hotspot",
-              plan_id:       c.plan_id ?? undefined,
-              plan_name:     c.plan_id ? (planMap[c.plan_id] ?? "default") : "default",
-              pppoe_username: c.pppoe_username ?? undefined,
-              mac_address:   c.mac_address ?? undefined,
-              ip_address:    c.ip_address ?? undefined,
-              comment:       `${companyName} customer #${c.id}`,
-            })),
-          })}
+          buildPayload={router => {
+            const plansById = new Map(plans.map(plan => [plan.id, plan]));
+            return {
+              users: customers.filter(c => {
+                if (c.type === "vlan") return false;
+                if (!c.plan_id) return true;
+                return Number(plansById.get(c.plan_id)?.router_id) === router.id;
+              }).map(c => {
+                const plan = c.plan_id ? plansById.get(c.plan_id) : undefined;
+                return {
+                  customer_id:   c.id,
+                  router_id:     plan?.router_id ?? undefined,
+                  username:      c.username ?? "",
+                  password:      c.password ?? "",
+                  type:          c.type ?? "hotspot",
+                  plan_id:       c.plan_id ?? undefined,
+                  plan_name:     c.plan_id ? (planMap[c.plan_id] ?? "default") : "default",
+                  pppoe_username: c.pppoe_username ?? undefined,
+                  mac_address:   c.mac_address ?? undefined,
+                  ip_address:    c.ip_address ?? undefined,
+                  comment:       `${companyName} customer #${c.id}`,
+                };
+              }),
+            };
+          }}
         />
 
         {/* ─── Table ─── */}

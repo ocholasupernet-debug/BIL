@@ -63,6 +63,7 @@ interface SbPlan {
   admin_id?: number;
   name: string;
   type: string;
+  price: number;
   validity: number | null;
   validity_unit: string | null;
   validity_days: number;
@@ -360,7 +361,7 @@ export interface ProvisionResult {
   ok: boolean;
   customerId?: number;
   customerName?: string;
-  action?: "created" | "renewed" | "enabled";
+  action?: "created" | "renewed" | "enabled" | "already_processed";
   planName?: string;
   routerName?: string;
   error?: string;
@@ -430,10 +431,16 @@ export async function autoProvision(opts: {
   adminId?:      number;
   customerId?:   number;
 }): Promise<ProvisionResult> {
-  const { phone, amount, reference, paymentMethod, gateway, adminId, customerId } = opts;
+  const { phone, amount, reference: rawReference, paymentMethod, gateway, adminId, customerId } = opts;
+  const reference = String(rawReference ?? "").trim();
   const phoneVariants = normalizePhone(phone);
 
   logger.info({ phone, phoneVariants, amount, reference, gateway }, "[provision] Starting auto-provision");
+  if (!reference) {
+    const msg = "A verified payment reference is required.";
+    await logEvent({ event: "provision_failed", gateway, phone, amount, error: msg });
+    return { ok: false, error: msg };
+  }
 
   /* ── 1. Find customer by phone ── */
   let customer: SbCustomer | null = null;
@@ -479,7 +486,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&admin_id=eq.${customer.admin_id}&is_active=is.true&select=id,admin_id,name,type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,active_ip_pool,expired_ip_pool&limit=1`
+    `id=eq.${customer.plan_id}&admin_id=eq.${customer.admin_id}&is_active=is.true&select=id,admin_id,name,type,price,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,active_ip_pool,expired_ip_pool&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -488,6 +495,57 @@ export async function autoProvision(opts: {
     return { ok: false, error: msg };
   }
 
+  const receivedAmount = Number(amount);
+  const expectedAmount = Number(plan.price);
+  if (
+    !Number.isFinite(receivedAmount)
+    || receivedAmount <= 0
+    || !Number.isFinite(expectedAmount)
+    || expectedAmount <= 0
+    || Math.round(receivedAmount * 100) !== Math.round(expectedAmount * 100)
+  ) {
+    const msg = "The verified payment amount does not match the assigned plan price.";
+    await logEvent({ event: "provision_failed", gateway, reference, customer_id: customer.id, plan_id: plan.id, amount, error: msg });
+    return { ok: false, error: msg };
+  }
+
+  const priorTransactions = await sbSelect<{
+    id: number;
+    customer_id: number | null;
+    plan_id: number | null;
+    status: string;
+    notes: string | null;
+  }>(
+    "isp_transactions",
+    `admin_id=eq.${customer.admin_id}&payment_method=eq.${encodeURIComponent(paymentMethod)}&reference=eq.${encodeURIComponent(reference)}&select=id,customer_id,plan_id,status,notes&limit=1`,
+  );
+  const priorTransaction = priorTransactions[0];
+  if (priorTransaction) {
+    if (priorTransaction.customer_id !== customer.id || priorTransaction.plan_id !== plan.id) {
+      const msg = "This payment reference has already been used for a different account or plan.";
+      await logEvent({ event: "provision_failed", gateway, reference, customer_id: customer.id, plan_id: plan.id, error: msg });
+      return { ok: false, error: msg };
+    }
+    if (priorTransaction.status === "completed" && priorTransaction.notes?.startsWith("Router provisioning pending:")) {
+      const msg = "Payment is already recorded, but router access is pending administrator action.";
+      await logEvent({ event: "provision_router_pending_duplicate", gateway, reference, customer_id: customer.id, plan_id: plan.id });
+      return { ok: false, customerId: customer.id, error: msg };
+    }
+    if (priorTransaction.status === "completed") {
+      return {
+        ok: true,
+        customerId: customer.id,
+        customerName: customer.name ?? "",
+        planName: plan.name,
+        action: "already_processed",
+      };
+    }
+    const msg = "This payment reference is already being processed.";
+    await logEvent({ event: "provision_failed", gateway, reference, customer_id: customer.id, plan_id: plan.id, error: msg });
+    return { ok: false, error: msg };
+  }
+
+  const expiresAt = calcExpiry(plan.validity, plan.validity_unit, plan.validity_days);
   const planType = normalizePlanServiceType(plan.type || "hotspot");
   if (planType === "vlan") {
     if (String(customer.type ?? "").toLowerCase() !== "vlan") {
@@ -517,16 +575,16 @@ export async function autoProvision(opts: {
 
   /* ── 3. Load router ── */
   if (!plan.router_id) {
-    if (planType === "vlan") {
-      const msg = "The VLAN plan is not assigned to a router.";
-      await logEvent({ event: "provision_failed", gateway, reference, customer_id: customer.id, error: msg });
-      return { ok: false, error: msg };
-    }
-    /* No router assigned — still record the transaction but skip router provisioning */
-    logger.warn({ planId: plan.id }, "[provision] Plan has no router_id — skipping router provisioning");
-    await recordTransaction(customer, amount, paymentMethod, reference, plan);
-    await activateCustomer(customer, plan);
-    return { ok: true, customerId: customer.id, customerName: customer.name ?? "", planName: plan.name, action: "renewed" };
+    const msg = "The selected plan is not assigned to a router; access was not activated.";
+    await recordTransaction(customer, amount, paymentMethod, reference, plan, `Router provisioning pending: ${msg}`);
+    await sbUpdate("isp_customers", `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`, {
+      status: "payment_cleared_router_pending",
+      plan_id: plan.id,
+      expires_at: expiresAt,
+      updated_at: new Date().toISOString(),
+    });
+    await logEvent({ event: "provision_router_error", gateway, reference, customer_id: customer.id, plan_id: plan.id, error: msg, amount });
+    return { ok: false, customerId: customer.id, error: msg };
   }
 
   const routers = await sbSelect<SbRouter & { name: string }>(
@@ -558,7 +616,6 @@ export async function autoProvision(opts: {
     : (customer.username || generatedHotspotUsername || (isPrepaidHotspotUsername(customer.username) ? customer.username! : `${customer.id}-00:00`));
   const password = customer.password || "changeme";
   const comment  = username;
-  const expiresAt = calcExpiry(plan.validity, plan.validity_unit, plan.validity_days);
   const profileName = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
   let action: "created" | "renewed" | "enabled" = "created";
 
@@ -660,10 +717,8 @@ export async function autoProvision(opts: {
           action = "renewed";
         }
       }
-      await resetHotspotUserCounters(creds, username).catch(error => {
-        logger.warn({ err: (error as Error).message, username }, "[provision] Hotspot counter reset failed");
-      });
-      await disconnectHotspotActiveUser(creds, username).catch(() => {});
+      await disconnectHotspotActiveUser(creds, username);
+      await resetHotspotUserCounters(creds, username);
       await scheduleHotspotUserExpiry(creds, {
         name: username,
         expiresInSeconds: Math.max(1, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000)),
@@ -690,16 +745,26 @@ export async function autoProvision(opts: {
     /* Router unreachable — still record the payment but flag the error */
     const msg = `Router provisioning failed: ${(routerErr as Error).message}`;
     logger.error({ err: routerErr }, "[provision] Router provisioning error");
-    await recordTransaction(customer, amount, paymentMethod, reference, plan);
-      if (planType === "vlan") {
-        await sbUpdate(
-          "isp_customers",
-          `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`,
-          { status: "payment_cleared_router_pending", updated_at: new Date().toISOString() },
-        );
-      } else {
-        await activateCustomer(customer, plan, username);
-      }
+    await recordTransaction(
+      customer,
+      amount,
+      paymentMethod,
+      reference,
+      plan,
+      `Router provisioning pending: ${msg}`,
+    );
+    if (planType === "hotspot") {
+      await updateHotspotUser(creds, username, { disabled: true }).catch(() => {});
+      await disconnectHotspotActiveUser(creds, username).catch(() => {});
+    }
+    await sbUpdate("isp_customers", `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`, {
+      status: "payment_cleared_router_pending",
+      plan_id: plan.id,
+      expires_at: expiresAt,
+      ...((planType !== "pppoe" && planType !== "vlan") ? { username } : {}),
+      ...(planType === "vlan" ? { router_id: plan.router_id, port_id: plan.port_id } : {}),
+      updated_at: new Date().toISOString(),
+    });
     await logEvent({
       event: "provision_router_error", gateway, reference,
       customer_id: customer.id, plan_id: plan.id, router_id: router.id,
@@ -714,6 +779,7 @@ export async function autoProvision(opts: {
     plan,
     planType !== "pppoe" && planType !== "vlan" ? username : undefined,
     expiresAt,
+    planType === "hotspot",
   );
 
   /* ── 6. Record transaction ── */
@@ -742,6 +808,7 @@ async function activateCustomer(
   plan: SbPlan,
   username?: string,
   expiresAt?: string,
+  resetHotspotUsage = false,
 ): Promise<void> {
   const planType = normalizePlanServiceType(plan.type);
   await sbUpdate("isp_customers", `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`, {
@@ -750,6 +817,7 @@ async function activateCustomer(
     expires_at: expiresAt ?? calcExpiry(plan.validity, plan.validity_unit, plan.validity_days),
     ...(username && planType !== "pppoe" && planType !== "vlan" ? { username } : {}),
     ...(planType === "vlan" ? { router_id: plan.router_id, port_id: plan.port_id } : {}),
+    ...(resetHotspotUsage ? { data_used_bytes: 0, data_used_mb: 0 } : {}),
     updated_at: new Date().toISOString(),
   });
 }
@@ -760,6 +828,7 @@ async function recordTransaction(
   paymentMethod: string,
   reference: string,
   plan: SbPlan,
+  notes = `Auto-provisioned via webhook — Plan: ${plan.name}`,
 ): Promise<void> {
   await sbInsert("isp_transactions", {
     admin_id:       customer.admin_id,
@@ -770,7 +839,7 @@ async function recordTransaction(
     ...(paymentMethod.toLowerCase().includes("mpesa") ? { mpesa_receipt: reference } : {}),
     reference,
     status:         "completed",
-    notes:          `Auto-provisioned via webhook — Plan: ${plan.name}`,
+    notes,
     created_at:     new Date().toISOString(),
   });
 }

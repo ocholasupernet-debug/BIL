@@ -2738,7 +2738,16 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       });
     }
     if (!isSameCheckoutRetry) {
-      await resetHotspotUserCounters(credentials, hotspotUsername).catch(() => {});
+      await disconnectHotspotActiveUser(credentials, hotspotUsername);
+      await resetHotspotUserCounters(credentials, hotspotUsername);
+      const usageRows = await sbUpdateStrict(
+        "isp_customers",
+        `id=eq.${customer.id}&admin_id=eq.${customerAdminId}`,
+        { data_used_bytes: 0, data_used_mb: 0 },
+      );
+      if (!usageRows.length) {
+        throw new Error("The new package usage baseline could not be saved.");
+      }
     }
     await scheduleHotspotUserExpiry(credentials, {
       name: hotspotUsername,

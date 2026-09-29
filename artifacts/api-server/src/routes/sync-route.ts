@@ -767,6 +767,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
       mac_address?: string;
       ip_address?: string;
       comment?: string;
+      router_id?: number | null;
     }>;
   };
 
@@ -779,6 +780,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
     res.status(403).json({ ok: false, error: "A valid signed-in account is required." });
     return;
   }
+  let assignedResellerPortIds: Set<number> | null = null;
   if (routerId !== undefined) {
     const id = Number(routerId);
     const tenantId = account.parent_id ?? account.id;
@@ -804,6 +806,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         res.status(403).json({ ok: false, error: "Only routers assigned to your approved VLAN service can be synced." });
         return;
       }
+      assignedResellerPortIds = new Set(assignedPorts.map(port => Number(port.id)));
     }
     host = routerRow.host || "";
     /* bridge_ip is the router LAN/hotspot gateway. Use only the dedicated
@@ -831,6 +834,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         type: string;
         router_id: number | null;
         port_id: number | null;
+        owner_reseller_id: number | null;
         data_limit_mb: number | null;
         data_cap_mode: string | null;
         fup_speed_down: number | null;
@@ -841,7 +845,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         speed_up_unit: string | null;
       }>(
         "isp_plans",
-        `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${planIds.join(",")})&select=id,name,type,router_id,port_id,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit&limit=1000`,
+        `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${planIds.join(",")})&is_active=is.true&select=id,name,type,router_id,port_id,owner_reseller_id,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit&limit=1000`,
       )
     : [];
   const plansById = new Map(planRows.map(plan => [Number(plan.id), plan]));
@@ -866,6 +870,17 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
 
     for (const u of users) {
       const plan = u.plan_id ? plansById.get(Number(u.plan_id)) : undefined;
+      const isHotspotUser = u.type === "hotspot" || u.type === "voucher";
+      if (u.router_id !== undefined && routerId !== undefined && Number(u.router_id) !== Number(routerId)) {
+        log(`  — Skipping '${u.username}': assigned to a different router`);
+        skipped++;
+        continue;
+      }
+      if (isHotspotUser && !u.plan_id) {
+        log(`  ❌ Hotspot user '${u.username}' has no assigned plan; refusing request-supplied access`);
+        skipped++;
+        continue;
+      }
       const profileName = plan
         ? hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id)
         : u.plan_name
@@ -888,6 +903,31 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         log(`  ❌ Stored plan ${u.plan_id} was not found; refusing request-supplied data cap`);
         skipped++;
         continue;
+      }
+      if (isHotspotUser && plan) {
+        const planType = String(plan.type).toLowerCase();
+        if (planType !== "hotspot" && planType !== "trial") {
+          log(`  ❌ Plan '${plan.name}' is not a hotspot plan; refusing to provision '${u.username}'`);
+          skipped++;
+          continue;
+        }
+        if (routerId !== undefined && Number(plan.router_id) !== Number(routerId)) {
+          log(`  — Skipping '${u.username}': assigned plan belongs to a different router`);
+          skipped++;
+          continue;
+        }
+        if (
+          account.role === "reseller"
+          && (
+            Number(plan.owner_reseller_id) !== account.id
+            || !plan.port_id
+            || !assignedResellerPortIds?.has(Number(plan.port_id))
+          )
+        ) {
+          log(`  ❌ Plan '${plan.name}' is not assigned to your approved service port`);
+          skipped++;
+          continue;
+        }
       }
       if (u.plan_id && plan) {
         const parsedCapMb = plan.data_limit_mb === null || plan.data_limit_mb === undefined
@@ -961,20 +1001,32 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
           };
           if (u.mac_address) props["mac-address"] = u.mac_address;
           if (u.ip_address) props.address = u.ip_address;
-          const action = await upsertByFilter(conn, "/ip/hotspot/user", "name", u.username, props);
-          const userRows = await conn.write([
+          const previousRows = await conn.write([
             "/ip/hotspot/user/print",
+            "=.proplist=.id,name,password,profile,disabled,limit-bytes-total,mac-address,address",
             `?name=${u.username}`,
           ]) as Record<string, string>[];
-          for (const userRow of Array.isArray(userRows) ? userRows : []) {
-            if (userRow[".id"]) {
-              await conn.write(["/ip/hotspot/user/reset-counters", `=.id=${userRow[".id"]}`]);
-            }
-          }
-          const activeRows = await conn.write(["/ip/hotspot/active/print", `?user=${u.username}`]) as Record<string, string>[];
-          for (const active of Array.isArray(activeRows) ? activeRows : []) {
-            if (active[".id"]) {
-              await conn.write(["/ip/hotspot/active/remove", `=.id=${active[".id"]}`]);
+          const previous = Array.isArray(previousRows) ? previousRows[0] : undefined;
+          const previousLimitRaw = previous?.["limit-bytes-total"];
+          const previousLimit = Number(previousLimitRaw ?? 0);
+          const desiredLimit = Number(limitBytesTotal);
+          const previousDisabled = previous?.disabled === undefined
+            ? undefined
+            : ["true", "yes", "1"].includes(String(previous.disabled).toLowerCase());
+          const accessChanged = !!previous && (
+            (previous.profile !== undefined && previous.profile !== profileName)
+            || (previousDisabled !== undefined && previousDisabled === enabled)
+            || (previousLimitRaw !== undefined && previousLimit !== desiredLimit)
+            || (u.mac_address !== undefined && previous["mac-address"] !== u.mac_address)
+            || (u.ip_address !== undefined && previous.address !== u.ip_address)
+          );
+          const action = await upsertByFilter(conn, "/ip/hotspot/user", "name", u.username, props);
+          if (!enabled || accessChanged) {
+            const activeRows = await conn.write(["/ip/hotspot/active/print", `?user=${u.username}`]) as Record<string, string>[];
+            for (const active of Array.isArray(activeRows) ? activeRows : []) {
+              if (active[".id"]) {
+                await conn.write(["/ip/hotspot/active/remove", `=.id=${active[".id"]}`]);
+              }
             }
           }
           if (u.plan_id && planFup?.mode === "throttle" && planFup.capBytes !== null

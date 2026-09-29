@@ -69,7 +69,7 @@
 - [Onboarding deployment modes](onboarding-deployment-modes.md) — Greenfield, Brownfield, and Zero-Touch need separate safety boundaries with legacy aliases normalized centrally.
 - [Unified script compiler migration](unified-script-compiler-migration.md) — Introduce a new RouterOS compiler behind existing installer boundaries; retire old families only after hardware validation.
 - [Self Install script scope](self-install-script-scope.md) — Use a one-time bootstrap to fetch/import mainhotspot.rsc; keep the management .ovpn recovery download separate.
-- [Prepaid session enforcement](prepaid-session-enforcement.md) — RouterOS prepaid policy changes require active-session disconnects; schedulers are needed for wall-clock expiry.
+- [Prepaid session enforcement](prepaid-session-enforcement.md) — Separate routine counter reads from renewal resets; use persistent RouterOS counters and expiry schedulers.
 - [Hotspot FUP enforcement](hotspot-fup-enforcement.md) — Throttle policies must suppress hard byte caps and RADIUS Max-Data, while keeping router-local FUP enforcement and expiry separate.
 - [Multi-port service isolation](multi-port-service-isolation.md) — Separate Hotspot pages per physical port require one bridge, subnet, and uniquely named server/profile per port.
 - [ISP-owned port services](isp-owned-port-services.md) — Legacy port rows require reseller_id; ISP-owned multiport rows use the tenant owner while assigned_reseller_id stays empty.
