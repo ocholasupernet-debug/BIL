@@ -8,6 +8,8 @@ const read = path => readFile(fileURLToPath(new URL(path, import.meta.url)), "ut
 test("WhatsApp database migration is included in the external VPS deployment runner", async () => {
   const runner = await read("../scripts/apply-deployment-migrations.mjs");
   assert.match(runner, /2026_whatsapp_integration\.sql/);
+  assert.match(runner, /2026_whatsapp_secure_credentials\.sql/);
+  assert.match(runner, /2026_whatsapp_security_events\.sql/);
 });
 
 test("payment notices remain isolated from payment settlement failures", async () => {
@@ -47,4 +49,64 @@ test("optional public auth config fails closed without breaking existing login s
   assert.match(publicConfig, /loginEnabled:\s*false/);
   assert.match(publicConfig, /registrationVerificationEnabled:\s*false/);
   assert.match(publicConfig, /passwordRecoveryEnabled:\s*false/);
+});
+
+test("gateway reads and changes require an OTP grant bound to the active session", async () => {
+  const migration = await read("../migrations/2026_whatsapp_secure_credentials.sql");
+  const settingsRoute = await read("../src/routes/settings-route.ts");
+  const resellerRoute = await read("../src/routes/reseller-route.ts");
+  const whatsappRoute = await read("../src/routes/whatsapp-route.ts");
+  const settingsPage = await read("../../ochola-supernet/src/pages/admin/AdminSettings.tsx");
+  assert.match(migration, /whatsapp_gateway_settings_grants/i);
+  assert.match(migration, /session_binding_hash/i);
+  assert.match(migration, /auth_request_id/i);
+  assert.match(settingsRoute, /hasWhatsAppGatewaySettingsGrant/);
+  assert.match(resellerRoute, /hasWhatsAppGatewaySettingsGrant/);
+  assert.match(whatsappRoute, /gateway-settings\/request-otp/);
+  assert.match(whatsappRoute, /gateway-settings\/verify-otp/);
+  assert.match(settingsPage, /gatewayOtp\.headers\(\)/);
+});
+
+test("welcome, account-status and password-change notices use verified accounts without passwords", async () => {
+  const migration = await read("../migrations/2026_whatsapp_security_events.sql");
+  const service = await read("../src/services/whatsapp/whatsapp-service.ts");
+  const welcome = migration.match(/create or replace function enqueue_whatsapp_isp_welcome\(\)([\s\S]*?)\$\$;/i)?.[1];
+  const lifecycle = migration.match(/create or replace function enqueue_whatsapp_customer_lifecycle\(\)([\s\S]*?)\$\$;/i)?.[1];
+  const adminPasswordNotice = migration.match(/create or replace function enqueue_whatsapp_admin_password_change\(\)([\s\S]*?)\$\$;/i)?.[1];
+  const customerPasswordNotice = migration.match(/create or replace function enqueue_whatsapp_customer_password_change\(\)([\s\S]*?)\$\$;/i)?.[1];
+  assert.ok(welcome, "account welcome producer should exist");
+  assert.ok(lifecycle, "customer lifecycle producer should exist");
+  assert.ok(adminPasswordNotice, "admin password-change producer should exist");
+  assert.ok(customerPasswordNotice, "customer password-change producer should exist");
+  assert.match(welcome, /phone_verified/i);
+  assert.match(welcome, /ispNotifications/i);
+  assert.match(welcome, /resellerNotifications/i);
+  assert.match(welcome, /must_change_password/i);
+  assert.match(lifecycle, /customerNotifications/i);
+  assert.match(lifecycle, /account_reactivated/i);
+  for (const producer of [adminPasswordNotice, customerPasswordNotice]) {
+    assert.match(producer, /securityNotifications/i);
+    assert.match(producer, /phone_verified/i);
+    assert.match(producer, /jsonb_build_object\('changed_at', now\(\)\)/i);
+    assert.doesNotMatch(producer, /jsonb_build_object\([^)]*password/i);
+  }
+  assert.match(service, /settings\.templates\.welcome/);
+  assert.match(service, /settings\.templates\.accountStatus/);
+  assert.match(service, /settings\.templates\.security/);
+  assert.match(service, /createWhatsAppWelcomeSetupUrl/);
+});
+
+test("failed webhooks are retryable, completed events remain deduplicated, and failures return 500", async () => {
+  const migration = await read("../migrations/2026_whatsapp_security_events.sql");
+  const route = await read("../src/routes/whatsapp-route.ts");
+  const claim = migration.match(/create function claim_whatsapp_webhook_event\([\s\S]*?\$\$;/i)?.[0];
+  assert.ok(claim, "webhook claim function should exist");
+  assert.match(claim, /processing_status = 'failed'[\s\S]*?attempts < 5/i);
+  assert.match(claim, /processing_status = 'processing'[\s\S]*?interval '5 minutes'/i);
+  assert.match(migration, /processing_status = 'processed'/i);
+  assert.match(route, /claimWhatsAppWebhookEvent/);
+  assert.match(route, /claim\.processingStatus === "processing"/);
+  assert.match(route, /completeWhatsAppWebhookEvent/);
+  assert.match(route, /failWhatsAppWebhookEvent/);
+  assert.match(route, /res\.sendStatus\(500\)/);
 });

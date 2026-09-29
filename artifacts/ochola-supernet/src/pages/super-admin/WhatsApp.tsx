@@ -10,6 +10,7 @@ type FeatureKey =
   | "ispNotifications"
   | "resellerNotifications"
   | "customerNotifications"
+  | "securityNotifications"
   | "selfService";
 
 interface WhatsAppSettings {
@@ -28,6 +29,9 @@ interface WhatsAppSettings {
     expiry: string;
     ispSubscription: string;
     reseller: string;
+    welcome: string;
+    accountStatus: string;
+    security: string;
     test: string;
   };
 }
@@ -38,6 +42,9 @@ interface PageState {
     accessTokenConfigured: boolean;
     webhookVerifyTokenConfigured: boolean;
     appSecretConfigured: boolean;
+    accessTokenSource: "super-admin" | "environment" | "missing";
+    webhookVerifyTokenSource: "super-admin" | "environment" | "missing";
+    appSecretSource: "super-admin" | "environment" | "missing";
   };
   connection: {
     status: "CONNECTED" | "NOT CONFIGURED" | "ERROR";
@@ -57,6 +64,7 @@ const FEATURES: { key: FeatureKey; label: string; description: string }[] = [
   { key: "ispNotifications", label: "ISP subscription notifications", description: "Control future ISP subscription messages." },
   { key: "resellerNotifications", label: "Reseller notifications", description: "Control reseller account and service messages." },
   { key: "customerNotifications", label: "Customer notifications", description: "Master switch for customer payment and package messages." },
+  { key: "securityNotifications", label: "Security notifications", description: "Send account password-change alerts to verified account phones." },
   { key: "selfService", label: "Customer self-service", description: "Respond to WhatsApp menu requests from a single phone-verified customer account." },
 ];
 
@@ -72,6 +80,7 @@ function emptySettings(): WhatsAppSettings {
       ispNotifications: false,
       resellerNotifications: false,
       customerNotifications: false,
+      securityNotifications: false,
       selfService: false,
     },
     businessAccountId: "",
@@ -87,6 +96,9 @@ function emptySettings(): WhatsAppSettings {
       expiry: "",
       ispSubscription: "",
       reseller: "",
+      welcome: "",
+      accountStatus: "",
+      security: "",
       test: "",
     },
   };
@@ -111,12 +123,21 @@ export default function SuperAdminWhatsApp() {
     accessTokenConfigured: false,
     webhookVerifyTokenConfigured: false,
     appSecretConfigured: false,
+    accessTokenSource: "missing",
+    webhookVerifyTokenSource: "missing",
+    appSecretSource: "missing",
+  });
+  const [credentials, setCredentials] = useState({
+    accessToken: "",
+    webhookVerifyToken: "",
+    appSecret: "",
   });
   const [connection, setConnection] = useState<PageState["connection"]>({ status: "NOT CONFIGURED" });
   const [stats, setStats] = useState<PageState["stats"]>({});
   const [testPhone, setTestPhone] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingCredentials, setSavingCredentials] = useState(false);
   const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -176,6 +197,50 @@ export default function SuperAdminWhatsApp() {
     }
   };
 
+  const saveCredentials = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSavingCredentials(true);
+    setNotice("");
+    setError("");
+    try {
+      const response = await fetch("/api/super-admin/whatsapp/credentials", {
+        method: "PUT",
+        headers: authHeaders(true),
+        body: JSON.stringify({ credentials }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save WhatsApp credentials.");
+      setCredentials({ accessToken: "", webhookVerifyToken: "", appSecret: "" });
+      setSecrets(data.secrets);
+      setNotice("WhatsApp credentials encrypted and saved. Values are not returned to this page.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save WhatsApp credentials.");
+    } finally {
+      setSavingCredentials(false);
+    }
+  };
+
+  const clearCredentials = async () => {
+    if (!window.confirm("Clear the WhatsApp credentials stored in Super Admin? Environment fallback credentials, if configured, will remain active.")) return;
+    setSavingCredentials(true);
+    setNotice("");
+    setError("");
+    try {
+      const response = await fetch("/api/super-admin/whatsapp/credentials", {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not clear WhatsApp credentials.");
+      setSecrets(data.secrets);
+      setNotice("Super Admin-stored WhatsApp credentials cleared.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not clear WhatsApp credentials.");
+    } finally {
+      setSavingCredentials(false);
+    }
+  };
+
   const sendTest = async () => {
     setTesting(true);
     setNotice("");
@@ -224,20 +289,42 @@ export default function SuperAdminWhatsApp() {
 
       <section className={cardClass}>
         <div className="mb-4 flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-emerald-400" /><h2 className="font-semibold text-white">Server credentials</h2></div>
-        <p className="mb-4 text-sm text-slate-400">Credentials are read only by the API server and are never sent to this page. Set these in the server environment on the VPS and in Replit Secrets for development.</p>
+        <p className="mb-4 text-sm text-slate-400">Enter Meta credentials here to encrypt and store them for the API server. Existing environment credentials remain a fallback. Saved values are never sent back to this page.</p>
         <div className="grid gap-3 sm:grid-cols-3">
           {[
-            ["Cloud API access token", secrets.accessTokenConfigured],
-            ["Webhook verify token", secrets.webhookVerifyTokenConfigured],
-            ["Meta app secret", secrets.appSecretConfigured],
-          ].map(([label, configured]) => (
+            ["Cloud API access token", secrets.accessTokenConfigured, secrets.accessTokenSource],
+            ["Webhook verify token", secrets.webhookVerifyTokenConfigured, secrets.webhookVerifyTokenSource],
+            ["Meta app secret", secrets.appSecretConfigured, secrets.appSecretSource],
+          ].map(([label, configured, source]) => (
             <div key={String(label)} className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/60 px-3 py-3 text-sm">
               <span className="text-slate-300">{label}</span>
-              <span className={configured ? "text-emerald-400" : "text-amber-300"}>{configured ? "Set" : "Missing"}</span>
+              <span className={configured ? "text-emerald-400" : "text-amber-300"}>
+                {configured ? source === "super-admin" ? "Encrypted in database" : "Environment fallback" : "Missing"}
+              </span>
             </div>
           ))}
         </div>
-        <p className="mt-3 text-xs text-slate-500">Required variables: <code>WHATSAPP_ACCESS_TOKEN</code>, <code>WHATSAPP_WEBHOOK_VERIFY_TOKEN</code>, and <code>WHATSAPP_APP_SECRET</code>.</p>
+        <form onSubmit={saveCredentials} className="mt-5 space-y-3">
+          <div className="grid gap-4 md:grid-cols-3">
+            <label className="text-sm text-slate-300">Cloud API access token
+              <input type="password" autoComplete="new-password" className={fieldClass} value={credentials.accessToken} onChange={event => setCredentials(current => ({ ...current, accessToken: event.target.value }))} maxLength={4096} />
+            </label>
+            <label className="text-sm text-slate-300">Webhook verify token
+              <input type="password" autoComplete="new-password" className={fieldClass} value={credentials.webhookVerifyToken} onChange={event => setCredentials(current => ({ ...current, webhookVerifyToken: event.target.value }))} maxLength={1024} />
+            </label>
+            <label className="text-sm text-slate-300">Meta app secret
+              <input type="password" autoComplete="new-password" className={fieldClass} value={credentials.appSecret} onChange={event => setCredentials(current => ({ ...current, appSecret: event.target.value }))} maxLength={1024} />
+            </label>
+          </div>
+          <p className="text-xs text-slate-500">Leave a field blank to keep its saved value. Credentials are encrypted with a WhatsApp-specific key derived from SESSION_SECRET.</p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={clearCredentials} disabled={savingCredentials} className="rounded-xl border border-white/15 px-4 py-2.5 text-sm text-slate-300 disabled:opacity-50">Clear stored credentials</button>
+            <button type="submit" disabled={savingCredentials} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
+              {savingCredentials ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              Save credentials
+            </button>
+          </div>
+        </form>
       </section>
 
       <form onSubmit={save} className="space-y-6">
@@ -270,6 +357,9 @@ export default function SuperAdminWhatsApp() {
               ["expiry", "Package expiry"],
               ["ispSubscription", "ISP subscription reminder"],
               ["reseller", "Reseller notification"],
+              ["welcome", "Account welcome and setup link"],
+              ["accountStatus", "Customer account status"],
+              ["security", "Password changed"],
               ["test", "Test message"],
             ] as [keyof WhatsAppSettings["templates"], string][]).map(([key, label]) => (
               <label key={key} className="text-sm text-slate-300">{label}<input className={fieldClass} value={settings.templates[key]} onChange={event => updateTemplate(key, event.target.value)} maxLength={100} /></label>
