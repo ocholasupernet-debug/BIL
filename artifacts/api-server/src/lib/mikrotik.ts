@@ -811,24 +811,30 @@ export async function executeManagedReset(
 /** Run a caller-supplied RouterOS command through the existing connection path.
  * This deliberately exports no connection object, so callers cannot retain or
  * accidentally reuse an authenticated connection. */
+async function runRouterCommandOnConnection(
+  conn: RouterOSAPI,
+  creds: RouterCredentials,
+  command: string[],
+): Promise<Record<string, string>[]> {
+  const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+  try {
+    return await withTimeout(conn.write(command), ms) as Record<string, string>[];
+  } catch (error) {
+    const path = command[0] || "(empty command)";
+    const parameters = command
+      .slice(1)
+      .map((value) => value.replace(/=.+=.*/, (match) => `${match.split("=")[1]}=<value>`))
+      .join(", ");
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`RouterOS command ${path} failed [${parameters}]: ${message}`, { cause: error });
+  }
+}
+
 export async function runRouterCommand(
   creds: RouterCredentials,
   command: string[]
 ): Promise<Record<string, string>[]> {
-  return withConn(creds, async (conn) => {
-    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-    try {
-      return await withTimeout(conn.write(command), ms) as Record<string, string>[];
-    } catch (error) {
-      const path = command[0] || "(empty command)";
-      const parameters = command
-        .slice(1)
-        .map((value) => value.replace(/=.+=.*/, (match) => `${match.split("=")[1]}=<value>`))
-        .join(", ");
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`RouterOS command ${path} failed [${parameters}]: ${message}`, { cause: error });
-    }
-  });
+  return withConn(creds, (conn) => runRouterCommandOnConnection(conn, creds, command));
 }
 
 /**
@@ -840,38 +846,40 @@ export async function ensureHotspotServerAddressPool(
   creds: RouterCredentials,
   opts: { serverName: string; poolName: string; poolRanges: string; comment?: string },
 ): Promise<void> {
-  const poolRows = await runRouterCommand(creds, [
-    "/ip/pool/print",
-    "=.proplist=.id,name,ranges",
-    `?name=${opts.poolName}`,
-  ]);
-  const pool = (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === opts.poolName);
-  const existingRanges = String(pool?.ranges ?? "").trim();
-  if (!existingRanges) {
-    const poolCommand = pool?.[".id"]
-      ? ["/ip/pool/set", `=.id=${pool[".id"]}`]
-      : ["/ip/pool/add", `=name=${opts.poolName}`];
-    poolCommand.push(`=ranges=${opts.poolRanges}`);
-    if (opts.comment) poolCommand.push(`=comment=${opts.comment}`);
-    await runRouterCommand(creds, poolCommand);
-  }
-
-  const serverRows = await runRouterCommand(creds, [
-    "/ip/hotspot/print",
-    "=.proplist=.id,name,address-pool",
-    `?name=${opts.serverName}`,
-  ]);
-  const server = (Array.isArray(serverRows) ? serverRows : []).find(row => row.name === opts.serverName);
-  if (!server?.[".id"]) {
-    throw new Error(`Hotspot server "${opts.serverName}" is not deployed on the router.`);
-  }
-  if (server["address-pool"] !== opts.poolName) {
-    await runRouterCommand(creds, [
-      "/ip/hotspot/set",
-      `=.id=${server[".id"]}`,
-      `=address-pool=${opts.poolName}`,
+  return withConn(creds, async (conn) => {
+    const poolRows = await runRouterCommandOnConnection(conn, creds, [
+      "/ip/pool/print",
+      "=.proplist=.id,name,ranges",
+      `?name=${opts.poolName}`,
     ]);
-  }
+    const pool = (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === opts.poolName);
+    const existingRanges = String(pool?.ranges ?? "").trim();
+    if (!existingRanges) {
+      const poolCommand = pool?.[".id"]
+        ? ["/ip/pool/set", `=.id=${pool[".id"]}`]
+        : ["/ip/pool/add", `=name=${opts.poolName}`];
+      poolCommand.push(`=ranges=${opts.poolRanges}`);
+      if (opts.comment) poolCommand.push(`=comment=${opts.comment}`);
+      await runRouterCommandOnConnection(conn, creds, poolCommand);
+    }
+
+    const serverRows = await runRouterCommandOnConnection(conn, creds, [
+      "/ip/hotspot/print",
+      "=.proplist=.id,name,address-pool",
+      `?name=${opts.serverName}`,
+    ]);
+    const server = (Array.isArray(serverRows) ? serverRows : []).find(row => row.name === opts.serverName);
+    if (!server?.[".id"]) {
+      throw new Error(`Hotspot server "${opts.serverName}" is not deployed on the router.`);
+    }
+    if (server["address-pool"] !== opts.poolName) {
+      await runRouterCommandOnConnection(conn, creds, [
+        "/ip/hotspot/set",
+        `=.id=${server[".id"]}`,
+        `=address-pool=${opts.poolName}`,
+      ]);
+    }
+  });
 }
 
 /**
@@ -2919,6 +2927,44 @@ export async function updateHotspotUser(
     if (fields.address         !== undefined) params.push(`=address=${fields.address}`);
     if (fields.limitUptime     !== undefined) params.push(`=limit-uptime=${fields.limitUptime}`);
     if (fields.limitBytesTotal !== undefined) params.push(`=limit-bytes-total=${fields.limitBytesTotal}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+/**
+ * Create or update a paid Hotspot user without opening a second RouterOS
+ * connection when a new account is being created.
+ */
+export async function upsertHotspotUser(
+  creds: RouterCredentials,
+  opts: {
+    name: string; password: string; profile?: string; disabled?: boolean; comment?: string;
+    server?: string; email?: string; address?: string; limitUptime?: string; limitBytesTotal?: string;
+  },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write(["/ip/hotspot/user/print", `?name=${opts.name}`]),
+      ms,
+    )) as Record<string, string>[];
+    const existing = Array.isArray(rows) ? rows[0] : undefined;
+    const params: string[] = existing?.[".id"]
+      ? ["/ip/hotspot/user/set", `=.id=${existing[".id"]}`]
+      : [
+          "/ip/hotspot/user/add",
+          `=name=${opts.name}`,
+          `=profile=${opts.profile ?? "default"}`,
+        ];
+    params.push(`=password=${opts.password}`);
+    if (existing && opts.profile !== undefined) params.push(`=profile=${opts.profile}`);
+    if (opts.disabled !== undefined) params.push(`=disabled=${opts.disabled ? "yes" : "no"}`);
+    if (opts.comment) params.push(`=comment=${opts.comment}`);
+    if (opts.server) params.push(`=server=${opts.server}`);
+    if (opts.email) params.push(`=email=${opts.email}`);
+    if (opts.address) params.push(`=address=${opts.address}`);
+    if (opts.limitUptime) params.push(`=limit-uptime=${opts.limitUptime}`);
+    if (opts.limitBytesTotal) params.push(`=limit-bytes-total=${opts.limitBytesTotal}`);
     await withTimeout(conn.write(params), ms);
   });
 }

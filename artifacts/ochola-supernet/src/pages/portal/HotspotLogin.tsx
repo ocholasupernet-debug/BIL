@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
   Wifi, Phone, Lock, Zap, CheckCircle2, Ticket,
-  AlertCircle, User, Loader2, Shield, Clock,
+  AlertCircle, User, Loader2, Shield, Clock, X,
   ArrowRight, ArrowUpRight, CreditCard, Tv, Sparkles, Database,
 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
@@ -432,8 +433,10 @@ export default function HotspotLogin() {
   const [loginSuccess, setLoginSuccess] = useState(false);
   const [loggedInName, setLoggedInName] = useState("");
   const [loginSession, setLoginSession] = useState<HotspotSession | null>(null);
+  const [troubleshootDialogOpen, setTroubleshootDialogOpen] = useState(false);
   const [troubleshootLoading, setTroubleshootLoading] = useState(false);
   const [troubleshootMessage, setTroubleshootMessage] = useState("");
+  const [troubleshootError, setTroubleshootError] = useState("");
   const [troubleshootAction, setTroubleshootAction] = useState<"check" | "login" | null>(null);
   const troubleshootInFlight = useRef(false);
   const autoTroubleshootKey = useRef("");
@@ -859,7 +862,7 @@ export default function HotspotLogin() {
 
   const requestHotspotTroubleshoot = async (action: "check" | "login"): Promise<TroubleshootResult | null> => {
     if (!adminId || !portalContext.mac) {
-      setLoginError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
+      setTroubleshootError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
       return null;
     }
     try {
@@ -885,7 +888,7 @@ export default function HotspotLogin() {
         customer?: { name?: string | null };
       };
       if (!res.ok && !data.status) {
-        setLoginError(data.error ?? "Could not verify the latest hotspot purchase.");
+        setTroubleshootError(data.error ?? "Could not verify the latest hotspot purchase.");
         return null;
       }
       const result: TroubleshootResult = {
@@ -910,6 +913,7 @@ export default function HotspotLogin() {
       });
       setLoggedInName(result.name);
       setLoginError("");
+      setTroubleshootError("");
       setTroubleshootMessage(
         result.status === "active" || result.status === "depleted" || result.status === "unavailable"
           ? result.error ?? ""
@@ -921,7 +925,7 @@ export default function HotspotLogin() {
       }
       return result;
     } catch {
-      setLoginError("Could not reach the server. Please try again.");
+      setTroubleshootError("Could not reach the server. Please try again.");
       return null;
     }
   };
@@ -1025,9 +1029,12 @@ export default function HotspotLogin() {
 
   const handleTroubleshoot = async () => {
     if (troubleshootInFlight.current) return;
+    setTroubleshootDialogOpen(true);
     troubleshootInFlight.current = true;
     setTroubleshootLoading(true);
+    setLoginSession(null);
     setTroubleshootMessage("");
+    setTroubleshootError("");
     setLoginError("");
     setTroubleshootAction("check");
     try {
@@ -1044,12 +1051,14 @@ export default function HotspotLogin() {
     troubleshootInFlight.current = true;
     setTroubleshootLoading(true);
     setTroubleshootAction("login");
+    setTroubleshootError("");
     setLoginError("");
     try {
       const result = await requestHotspotTroubleshoot("login");
       if (result && result.status === "active" && !result.connected && !result.error) {
         setTroubleshootMessage("The router did not confirm the login. Tap Login now to retry.");
       }
+      if (result?.connected) setTroubleshootDialogOpen(false);
     } finally {
       troubleshootInFlight.current = false;
       setTroubleshootLoading(false);
@@ -1174,6 +1183,37 @@ export default function HotspotLogin() {
   const isTvMode = paymentMode === "tv";
   const voucherPlanName = voucherInfo?.plan_name == null ? "" : String(voucherInfo.plan_name);
   const voucherDuration = voucherInfo?.duration == null ? "" : String(voucherInfo.duration);
+  const troubleshootStatus = loginSession
+    ? {
+        active: {
+          label: "Plan active",
+          detail: loginSession.expiresAt
+            ? `Your plan is active and expires ${formatSessionExpiry(loginSession.expiresAt)}.`
+            : "Your plan is active. No expiry time is recorded.",
+        },
+        expired: {
+          label: "Plan expired",
+          detail: `Your plan expired${loginSession.expiresAt ? ` on ${formatSessionExpiry(loginSession.expiresAt)}` : ""}. Renew a package to reconnect.`,
+        },
+        depleted: {
+          label: "Data allowance used",
+          detail: "Your package data allowance has been used. Purchase a new package to reconnect.",
+        },
+        not_found: {
+          label: "No package found",
+          detail: "No successfully purchased hotspot package matches this device MAC address.",
+        },
+        unavailable: {
+          label: "Purchase needs help",
+          detail: "A purchase was found, but its hotspot account could not be confirmed. Contact support.",
+        },
+      }[loginSession.status]
+    : null;
+  const troubleshootStatusTone = loginSession?.status === "active"
+    ? "active"
+    : loginSession?.status === "expired" || loginSession?.status === "depleted"
+      ? "warning"
+      : "help";
 
   return (
     <>
@@ -1407,6 +1447,203 @@ export default function HotspotLogin() {
            background: linear-gradient(145deg, #0b1a29, #07111d);
            box-shadow: 0 30px 90px rgba(0,0,0,.5); color: #fff;
          }
+          @keyframes hp-troubleshoot-drift {
+            0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+            50% { transform: translate3d(-10px, 12px, 0) scale(1.08); }
+          }
+          @keyframes hp-troubleshoot-sheen {
+            0%, 48%, 100% { transform: translateX(-180%) rotate(18deg); }
+            70% { transform: translateX(440%) rotate(18deg); }
+          }
+          @keyframes hp-troubleshoot-modal-in {
+            from { opacity: 0; transform: translate(-50%, -46%) scale(.96); }
+            to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+          }
+          @keyframes hp-troubleshoot-modal-out {
+            from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+            to { opacity: 0; transform: translate(-50%, -46%) scale(.96); }
+          }
+          @keyframes hp-troubleshoot-overlay-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+          }
+          .hp-troubleshoot-card {
+            position: relative; isolation: isolate; overflow: hidden;
+            display: flex; align-items: center; justify-content: space-between; gap: 18px;
+            padding: 20px; margin-top: 14px;
+            border: 1px solid var(--isp-accent-border);
+            border-radius: 28px 15px 28px 15px;
+            background: linear-gradient(125deg, rgba(9,31,48,.96), rgba(7,17,29,.96) 60%, rgba(9,29,34,.96));
+            box-shadow: 0 20px 48px rgba(0,0,0,.22), inset 0 1px rgba(255,255,255,.05);
+          }
+          .hp-troubleshoot-card::before {
+            content: ""; position: absolute; z-index: -1; inset: -55%;
+            pointer-events: none; opacity: .58;
+            background:
+              radial-gradient(ellipse at 25% 38%, var(--isp-accent-glow), transparent 42%),
+              radial-gradient(ellipse at 72% 65%, rgba(52,211,153,.13), transparent 38%);
+            animation: hp-troubleshoot-drift 9s ease-in-out infinite;
+          }
+          .hp-troubleshoot-card::after {
+            content: ""; position: absolute; z-index: 0; top: -70%; bottom: -70%; left: 0;
+            width: 28%; pointer-events: none;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent);
+            animation: hp-troubleshoot-sheen 9s ease-in-out infinite;
+          }
+          .hp-troubleshoot-card-copy {
+            position: relative; z-index: 1; display: flex; align-items: center; gap: 14px; min-width: 0;
+          }
+          .hp-troubleshoot-card-icon {
+            display: grid; place-items: center; flex: 0 0 46px; width: 46px; height: 46px;
+            border: 1px solid var(--isp-accent-border);
+            border-radius: 16px 9px 16px 9px;
+            color: var(--isp-accent); background: rgba(255,255,255,.07);
+            box-shadow: 0 8px 24px var(--isp-accent-glow);
+          }
+          .hp-troubleshoot-eyebrow {
+            margin-bottom: 4px; color: var(--isp-accent); font-size: 9px; font-weight: 900;
+            letter-spacing: .16em; text-transform: uppercase;
+          }
+          .hp-troubleshoot-card h3 { margin: 0 0 5px; color: #fff; font-size: 14px; font-weight: 800; }
+          .hp-troubleshoot-card p { max-width: 340px; margin: 0; color: rgba(255,255,255,.53); font-size: 11px; line-height: 1.55; }
+          .hp-troubleshoot-card-action {
+            position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center;
+            flex: 0 0 auto; gap: 8px; min-height: 42px; padding: 0 15px;
+            border: 1px solid rgba(255,255,255,.14); border-radius: 13px 8px 13px 8px;
+            color: #fff; background: linear-gradient(135deg, var(--isp-accent), rgba(14,165,233,.76));
+            box-shadow: 0 8px 22px var(--isp-accent-glow);
+            font: 800 11px 'Plus Jakarta Sans', sans-serif; cursor: pointer;
+            transition: transform .2s ease, filter .2s ease, box-shadow .2s ease;
+          }
+          .hp-troubleshoot-card-action:hover:not(:disabled) {
+            transform: translateY(-2px); filter: brightness(1.08);
+            box-shadow: 0 12px 26px var(--isp-accent-glow);
+          }
+          .hp-troubleshoot-card-action:focus-visible,
+          .hp-troubleshoot-modal-action:focus-visible,
+          .hp-troubleshoot-close:focus-visible {
+            outline: 2px solid #fff; outline-offset: 3px;
+          }
+          .hp-troubleshoot-card-action:disabled { opacity: .55; cursor: not-allowed; }
+          .hp-troubleshoot-overlay {
+            position: fixed; inset: 0; z-index: 200;
+            background: rgba(0,5,12,.76); backdrop-filter: blur(13px);
+            animation: hp-troubleshoot-overlay-in .22s ease-out both;
+          }
+          .hp-troubleshoot-dialog {
+            position: fixed; top: 50%; left: 50%; z-index: 201;
+            width: min(520px, calc(100vw - 32px)); max-height: min(780px, calc(100dvh - 32px));
+            overflow: hidden; outline: none; color: #fff;
+            border: 1px solid rgba(255,255,255,.13);
+            border-radius: 30px 17px 30px 17px;
+            background: linear-gradient(145deg, #0c1c2a 0%, #07111d 58%, #0a191b 100%);
+            box-shadow: 0 34px 110px rgba(0,0,0,.64), 0 0 50px var(--isp-accent-glow);
+            transform: translate(-50%, -50%);
+          }
+          .hp-troubleshoot-dialog[data-state="open"] { animation: hp-troubleshoot-modal-in .28s cubic-bezier(.2,.8,.2,1) both; }
+          .hp-troubleshoot-dialog[data-state="closed"] { animation: hp-troubleshoot-modal-out .18s ease-in both; }
+          .hp-troubleshoot-dialog-ambient {
+            position: absolute; z-index: 0; top: -110px; right: -95px; width: 290px; height: 290px;
+            border-radius: 42% 58% 63% 37% / 45% 42% 58% 55%;
+            background:
+              radial-gradient(ellipse at 35% 35%, var(--isp-accent-glow), transparent 66%),
+              radial-gradient(ellipse at 70% 70%, rgba(52,211,153,.15), transparent 54%);
+            filter: blur(5px); pointer-events: none;
+            animation: hp-troubleshoot-drift 8s ease-in-out infinite;
+          }
+          .hp-troubleshoot-dialog-inner {
+            position: relative; z-index: 1; max-height: min(780px, calc(100dvh - 32px));
+            overflow-y: auto; overscroll-behavior: contain; padding: 27px;
+          }
+          .hp-troubleshoot-dialog-head {
+            display: flex; align-items: flex-start; gap: 13px; padding-right: 36px; margin-bottom: 19px;
+          }
+          .hp-troubleshoot-dialog-icon {
+            display: grid; place-items: center; flex: 0 0 46px; width: 46px; height: 46px;
+            border: 1px solid var(--isp-accent-border); border-radius: 17px 10px 17px 10px;
+            color: var(--isp-accent); background: var(--isp-accent-glow);
+          }
+          .hp-troubleshoot-dialog-kicker {
+            margin: 1px 0 5px; color: var(--isp-accent); font-size: 9px; font-weight: 900;
+            letter-spacing: .17em; text-transform: uppercase;
+          }
+          .hp-troubleshoot-dialog-title { margin: 0 0 6px; color: #fff; font-size: 20px; font-weight: 850; letter-spacing: -.02em; }
+          .hp-troubleshoot-dialog-description { max-width: 380px; color: rgba(255,255,255,.5); font-size: 11px; line-height: 1.55; }
+          .hp-troubleshoot-close {
+            position: absolute; z-index: 2; top: 16px; right: 16px;
+            display: grid; place-items: center; width: 34px; height: 34px;
+            border: 1px solid rgba(255,255,255,.1); border-radius: 12px 7px 12px 7px;
+            color: rgba(255,255,255,.7); background: rgba(255,255,255,.055); cursor: pointer;
+            transition: color .2s ease, background .2s ease;
+          }
+          .hp-troubleshoot-close:hover { color: #fff; background: rgba(255,255,255,.12); }
+          .hp-troubleshoot-device {
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            padding: 10px 12px; margin-bottom: 14px;
+            border: 1px solid rgba(255,255,255,.075); border-radius: 12px 8px 12px 8px;
+            background: rgba(255,255,255,.035);
+          }
+          .hp-troubleshoot-device-label { color: rgba(255,255,255,.4); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+          .hp-troubleshoot-device strong { overflow: hidden; color: rgba(255,255,255,.83); font: 700 11px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+          .hp-troubleshoot-status {
+            padding: 16px; border: 1px solid rgba(255,255,255,.1);
+            border-radius: 20px 11px 20px 11px; background: rgba(255,255,255,.035);
+          }
+          .hp-troubleshoot-status[data-tone="active"] { border-color: rgba(52,211,153,.24); background: linear-gradient(145deg, rgba(16,185,129,.1), rgba(255,255,255,.025)); }
+          .hp-troubleshoot-status[data-tone="warning"] { border-color: rgba(245,158,11,.22); background: linear-gradient(145deg, rgba(245,158,11,.09), rgba(255,255,255,.025)); }
+          .hp-troubleshoot-status[data-tone="help"] { border-color: rgba(248,113,113,.2); background: linear-gradient(145deg, rgba(239,68,68,.08), rgba(255,255,255,.025)); }
+          .hp-troubleshoot-status-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+          .hp-troubleshoot-status-heading strong { color: #fff; font-size: 13px; font-weight: 850; }
+          .hp-troubleshoot-status-mark {
+            display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px;
+            border-radius: 11px 7px 11px 7px; color: #fca5a5; background: rgba(239,68,68,.1);
+          }
+          .hp-troubleshoot-status[data-tone="active"] .hp-troubleshoot-status-mark { color: #6ee7b7; background: rgba(52,211,153,.11); }
+          .hp-troubleshoot-status[data-tone="warning"] .hp-troubleshoot-status-mark { color: #fcd34d; background: rgba(245,158,11,.11); }
+          .hp-troubleshoot-status-copy { margin: 0; color: rgba(255,255,255,.6); font-size: 11px; line-height: 1.6; }
+          .hp-troubleshoot-session-meta {
+            display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 13px;
+          }
+          .hp-troubleshoot-session-meta > div {
+            min-width: 0; padding: 10px 11px; border: 1px solid rgba(255,255,255,.07);
+            border-radius: 12px 8px 12px 8px; background: rgba(255,255,255,.035);
+          }
+          .hp-troubleshoot-session-meta span { display: block; margin-bottom: 5px; color: rgba(255,255,255,.35); font-size: 8px; font-weight: 900; letter-spacing: .11em; text-transform: uppercase; }
+          .hp-troubleshoot-session-meta strong { display: block; overflow: hidden; color: rgba(255,255,255,.8); font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+          .hp-troubleshoot-note {
+            padding: 10px 12px; margin-top: 10px; border: 1px solid rgba(255,255,255,.07);
+            border-radius: 11px 7px 11px 7px; color: rgba(255,255,255,.56);
+            background: rgba(255,255,255,.035); font-size: 10px; line-height: 1.55;
+          }
+          .hp-troubleshoot-error {
+            display: flex; align-items: flex-start; gap: 9px; padding: 13px;
+            border: 1px solid rgba(248,113,113,.2); border-radius: 14px 9px 14px 9px;
+            color: #fecaca; background: rgba(239,68,68,.08); font-size: 11px; line-height: 1.55;
+          }
+          .hp-troubleshoot-loading {
+            display: grid; justify-items: center; gap: 12px; padding: 27px 14px;
+            border: 1px solid rgba(255,255,255,.08); border-radius: 20px 11px 20px 11px;
+            color: rgba(255,255,255,.62); background: rgba(255,255,255,.035); font-size: 11px;
+          }
+          .hp-troubleshoot-loading-icon {
+            display: grid; place-items: center; width: 48px; height: 48px;
+            border: 1px solid var(--isp-accent-border); border-radius: 17px 10px 17px 10px;
+            color: var(--isp-accent); background: var(--isp-accent-glow);
+          }
+          .hp-troubleshoot-modal-actions { display: flex; gap: 9px; margin-top: 15px; }
+          .hp-troubleshoot-modal-action {
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            min-height: 42px; padding: 0 14px; border: 1px solid rgba(255,255,255,.12);
+            border-radius: 13px 8px 13px 8px; color: #fff; background: rgba(255,255,255,.06);
+            font: 800 11px 'Plus Jakarta Sans', sans-serif; cursor: pointer; transition: transform .2s ease, background .2s ease;
+          }
+          .hp-troubleshoot-modal-action:hover:not(:disabled) { transform: translateY(-1px); background: rgba(255,255,255,.11); }
+          .hp-troubleshoot-modal-action:disabled { opacity: .55; cursor: not-allowed; }
+          .hp-troubleshoot-modal-action.primary {
+            flex: 1; border-color: var(--isp-accent-border);
+            background: linear-gradient(135deg, var(--isp-accent), rgba(14,165,233,.76));
+          }
+          .hp-troubleshoot-modal-footnote { margin-top: 13px; color: rgba(255,255,255,.34); font-size: 9px; line-height: 1.55; text-align: center; }
          .hp-tv-modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:22px 22px 16px; border-bottom:1px solid rgba(255,255,255,.07); }
          .hp-tv-modal-head h3 { font-size:18px; font-weight:850; margin-bottom:5px; }
          .hp-tv-modal-head p { color:rgba(255,255,255,.46); font-size:12px; line-height:1.5; }
@@ -1682,7 +1919,21 @@ export default function HotspotLogin() {
            .hp-purchase-icon { width: 48px; height: 48px; flex-basis: 48px; border-radius: 15px; }
            .hp-trust-row { grid-template-columns: 1fr; }
             .hp-device-state { display: none; }
+            .hp-troubleshoot-card { align-items: stretch; flex-direction: column; }
+            .hp-troubleshoot-card-action { width: 100%; }
+            .hp-troubleshoot-dialog-inner { padding: 23px 18px 20px; }
+            .hp-troubleshoot-modal-actions { flex-direction: column; }
+            .hp-troubleshoot-modal-action { width: 100%; }
          }
+          @media (prefers-reduced-motion: reduce) {
+            .hp-troubleshoot-card::before, .hp-troubleshoot-card::after,
+            .hp-troubleshoot-dialog-ambient { animation: none !important; }
+            .hp-troubleshoot-dialog[data-state="open"],
+            .hp-troubleshoot-dialog[data-state="closed"],
+            .hp-troubleshoot-overlay { animation: none !important; }
+            .hp-troubleshoot-card-action:hover:not(:disabled),
+            .hp-troubleshoot-modal-action:hover:not(:disabled) { transform: none; }
+          }
       `}</style>
 
       <div className="hp-root">
@@ -2091,82 +2342,6 @@ export default function HotspotLogin() {
                     </div>
                   ) : (
                     <>
-                      {loginSession && (
-                        <div
-                          role="status"
-                          style={{
-                            padding: 14,
-                            marginBottom: 16,
-                            borderRadius: 12,
-                            background: loginSession.status === "active"
-                              ? "rgba(34,197,94,0.08)"
-                              : loginSession.status === "expired" || loginSession.status === "depleted"
-                                ? "rgba(245,158,11,0.08)"
-                                : "rgba(239,68,68,0.08)",
-                            border: `1px solid ${loginSession.status === "active"
-                              ? "rgba(34,197,94,0.2)"
-                              : loginSession.status === "expired" || loginSession.status === "depleted"
-                                ? "rgba(245,158,11,0.2)"
-                                : "rgba(239,68,68,0.2)"}`,
-                          }}
-                        >
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
-                            {loginSession.status === "active"
-                              ? <CheckCircle2 size={16} color="#4ade80" />
-                              : <AlertCircle size={16} color={loginSession.status === "expired" || loginSession.status === "depleted" ? "#fbbf24" : "#fca5a5"} />}
-                            <strong style={{
-                              color: loginSession.status === "active" ? "#86efac" : loginSession.status === "expired" || loginSession.status === "depleted" ? "#fbbf24" : "#fca5a5",
-                              fontSize: 13,
-                            }}>
-                              {loginSession.status === "active"
-                                ? "Plan active"
-                                 : loginSession.status === "expired"
-                                  ? "Plan expired"
-                                   : loginSession.status === "depleted"
-                                     ? "Data allowance depleted"
-                                  : loginSession.status === "not_found"
-                                    ? "No purchased plan found"
-                                    : "Purchase needs help"}
-                            </strong>
-                          </div>
-                          {loginSession.planName && (
-                            <p style={{ margin: "0 0 5px", color: "rgba(255,255,255,0.72)", fontSize: 12 }}>
-                              Plan: <strong>{loginSession.planName}</strong>
-                            </p>
-                          )}
-                          {loginSession.username && (
-                            <p style={{ margin: "0 0 5px", color: "rgba(255,255,255,0.58)", fontSize: 12 }}>
-                              Username: <strong>{loginSession.username}</strong>
-                            </p>
-                          )}
-                          <p style={{ margin: 0, color: "rgba(255,255,255,0.58)", fontSize: 12, lineHeight: 1.5 }}>
-                            {loginSession.status === "expired"
-                              ? `Your plan expired${loginSession.expiresAt ? ` on ${formatSessionExpiry(loginSession.expiresAt)}` : ""}. Renew a package to reconnect.`
-                              : loginSession.status === "depleted"
-                                ? "Your package data allowance has been used. Purchase a new package to reconnect."
-                              : loginSession.status === "active"
-                                ? loginSession.expiresAt
-                                  ? `Your plan is active and expires ${formatSessionExpiry(loginSession.expiresAt)}.`
-                                  : "Your plan is active. No expiry time is recorded."
-                                : loginSession.status === "not_found"
-                                  ? "No successfully purchased hotspot package matches this device MAC address."
-                                  : "A purchase was found, but its hotspot account could not be confirmed. Contact support."}
-                          </p>
-                          {loginSession.status === "active" && (
-                            <button
-                              type="button"
-                              className="hp-btn"
-                              style={{ marginTop: 12, background: "linear-gradient(135deg,#16a34a,#059669)", color: "#fff", boxShadow: "0 4px 15px rgba(22,163,74,.25)" }}
-                              onClick={handlePlanLogin}
-                              disabled={troubleshootLoading}
-                            >
-                              {troubleshootLoading
-                                ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> {troubleshootAction === "login" ? "Logging in…" : "Checking purchase…"}</>
-                                : <><Wifi size={15} /> Login now</>}
-                            </button>
-                          )}
-                        </div>
-                      )}
                       <form onSubmit={handleLogin}>
                         {loginError && (
                           <div className="hp-error">
@@ -2210,28 +2385,6 @@ export default function HotspotLogin() {
                           )}
                         </button>
                       </form>
-                      <div style={{ marginTop: 12 }}>
-                        <button
-                          type="button"
-                          disabled={troubleshootLoading || loginLoading}
-                          className="hp-btn hp-btn-ghost"
-                          onClick={handleTroubleshoot}
-                        >
-                          {troubleshootLoading ? (
-                            <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> {troubleshootAction === "login" ? "Logging in…" : "Checking latest purchase…"}</>
-                          ) : (
-                            <><AlertCircle size={16} /> Troubleshoot connection</>
-                          )}
-                        </button>
-                        <p style={{ margin: "8px 0 0", color: "rgba(255,255,255,0.32)", fontSize: 11, lineHeight: 1.45 }}>
-                          This checks the latest successful hotspot purchase linked to this device MAC. If it is active, you can log in without entering a password.
-                        </p>
-                        {troubleshootMessage && (
-                          <p role="status" style={{ margin: "8px 0 0", color: "rgba(255,255,255,0.48)", fontSize: 11, lineHeight: 1.45 }}>
-                            {troubleshootMessage}
-                          </p>
-                        )}
-                      </div>
                       <div style={{ marginTop: 24, paddingTop: 22, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                           <Shield size={15} color="var(--isp-accent)" />
@@ -2273,6 +2426,28 @@ export default function HotspotLogin() {
                   )}
                 </div>
               </div>
+              <aside className="hp-troubleshoot-card" aria-labelledby="hp-troubleshoot-card-title">
+                <div className="hp-troubleshoot-card-copy">
+                  <div className="hp-troubleshoot-card-icon" aria-hidden="true">
+                    <Wifi size={20} />
+                  </div>
+                  <div>
+                    <div className="hp-troubleshoot-eyebrow">Network help</div>
+                    <h3 id="hp-troubleshoot-card-title">Troubleshoot connection</h3>
+                    <p>Check the latest package linked to this device and see whether the router has confirmed access.</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="hp-troubleshoot-card-action"
+                  disabled={troubleshootLoading || loginLoading}
+                  onClick={handleTroubleshoot}
+                >
+                  {troubleshootLoading
+                    ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Checking…</>
+                    : <>Run connection check <ArrowRight size={15} /></>}
+                </button>
+              </aside>
             </div>
           )}
 
@@ -2347,6 +2522,149 @@ export default function HotspotLogin() {
               </div>
             </div>
           )}
+
+          <DialogPrimitive.Root open={troubleshootDialogOpen} onOpenChange={setTroubleshootDialogOpen}>
+            <DialogPrimitive.Portal>
+              <DialogPrimitive.Overlay className="hp-troubleshoot-overlay" />
+              <DialogPrimitive.Content className="hp-troubleshoot-dialog" aria-describedby="hp-troubleshoot-dialog-description">
+                <div className="hp-troubleshoot-dialog-ambient" aria-hidden="true" />
+                <DialogPrimitive.Close className="hp-troubleshoot-close" aria-label="Close connection check">
+                  <X size={17} />
+                </DialogPrimitive.Close>
+                <div className="hp-troubleshoot-dialog-inner">
+                  <div className="hp-troubleshoot-dialog-head">
+                    <div className="hp-troubleshoot-dialog-icon" aria-hidden="true"><Wifi size={21} /></div>
+                    <div>
+                      <div className="hp-troubleshoot-dialog-kicker">Connection assistant</div>
+                      <DialogPrimitive.Title className="hp-troubleshoot-dialog-title">
+                        Your connection check
+                      </DialogPrimitive.Title>
+                      <DialogPrimitive.Description id="hp-troubleshoot-dialog-description" className="hp-troubleshoot-dialog-description">
+                        We’ll verify the latest successful package for this device and check whether the router confirmed its session.
+                      </DialogPrimitive.Description>
+                    </div>
+                  </div>
+
+                  <div className="hp-troubleshoot-device">
+                    <span className="hp-troubleshoot-device-label">Checking this device</span>
+                    <strong>{portalContext.mac || "Device MAC unavailable"}</strong>
+                  </div>
+
+                  {troubleshootLoading ? (
+                    <div className="hp-troubleshoot-loading" role="status" aria-live="polite">
+                      <span className="hp-troubleshoot-loading-icon">
+                        <Loader2 size={21} style={{ animation: "spin 1s linear infinite" }} />
+                      </span>
+                      <span>{troubleshootAction === "login" ? "Asking the router to log in…" : "Checking your package and router…"}</span>
+                    </div>
+                  ) : troubleshootError ? (
+                    <>
+                      <div className="hp-troubleshoot-error" role="alert">
+                        <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                        <span>{troubleshootError}</span>
+                      </div>
+                      <div className="hp-troubleshoot-modal-actions">
+                        <button
+                          type="button"
+                          className="hp-troubleshoot-modal-action primary"
+                          onClick={handleTroubleshoot}
+                          disabled={troubleshootLoading}
+                        >
+                          <ArrowRight size={15} /> Check again
+                        </button>
+                        <DialogPrimitive.Close className="hp-troubleshoot-modal-action">
+                          Close
+                        </DialogPrimitive.Close>
+                      </div>
+                    </>
+                  ) : troubleshootStatus && loginSession ? (
+                    <div className="hp-troubleshoot-result" role="status" aria-live="polite">
+                      <div className="hp-troubleshoot-status" data-tone={troubleshootStatusTone}>
+                        <div className="hp-troubleshoot-status-heading">
+                          <span className="hp-troubleshoot-status-mark" aria-hidden="true">
+                            {loginSession.status === "active"
+                              ? <CheckCircle2 size={17} />
+                              : <AlertCircle size={17} />}
+                          </span>
+                          <strong>{troubleshootStatus.label}</strong>
+                        </div>
+                        {loginSession.planName && (
+                          <p className="hp-troubleshoot-status-copy" style={{ marginBottom: 4 }}>
+                            Package: <strong>{loginSession.planName}</strong>
+                          </p>
+                        )}
+                        <p className="hp-troubleshoot-status-copy">{troubleshootStatus.detail}</p>
+                        {loginSession.status === "active" && (
+                          <div className="hp-troubleshoot-session-meta">
+                            {loginSession.username && (
+                              <div>
+                                <span>Hotspot account</span>
+                                <strong>{loginSession.username}</strong>
+                              </div>
+                            )}
+                            <div>
+                              <span>Router session</span>
+                              <strong>{loginSession.connected ? "Confirmed" : "Login required"}</strong>
+                            </div>
+                          </div>
+                        )}
+                        {troubleshootMessage && (
+                          <div className="hp-troubleshoot-note">{troubleshootMessage}</div>
+                        )}
+                      </div>
+
+                      <div className="hp-troubleshoot-modal-actions">
+                        {loginSession.status === "active" && !loginSession.connected && (
+                          <button
+                            type="button"
+                            className="hp-troubleshoot-modal-action primary"
+                            onClick={handlePlanLogin}
+                            disabled={troubleshootLoading}
+                          >
+                            {troubleshootLoading
+                              ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Logging in…</>
+                              : <><Wifi size={15} /> Login now</>}
+                          </button>
+                        )}
+                        {(loginSession.status === "expired" || loginSession.status === "depleted" || loginSession.status === "not_found") && (
+                          <button
+                            type="button"
+                            className="hp-troubleshoot-modal-action primary"
+                            onClick={() => {
+                              setTroubleshootDialogOpen(false);
+                              handleTabChange(isTvMode ? "tv" : "plans");
+                            }}
+                          >
+                            <CreditCard size={15} /> Browse packages
+                          </button>
+                        )}
+                        {loginSession.status === "unavailable" && (
+                          <button
+                            type="button"
+                            className="hp-troubleshoot-modal-action primary"
+                            onClick={handleTroubleshoot}
+                            disabled={troubleshootLoading}
+                          >
+                            <ArrowRight size={15} /> Check again
+                          </button>
+                        )}
+                        <DialogPrimitive.Close className="hp-troubleshoot-modal-action">
+                          Close
+                        </DialogPrimitive.Close>
+                      </div>
+                      <p className="hp-troubleshoot-modal-footnote">
+                        Package details are matched to this device’s MAC address.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="hp-troubleshoot-note" role="status">
+                      Run a connection check to see the latest package and router status for this device.
+                    </div>
+                  )}
+                </div>
+              </DialogPrimitive.Content>
+            </DialogPrimitive.Portal>
+          </DialogPrimitive.Root>
 
           {tvDialogOpen && (
             <div className="hp-modal-backdrop" role="presentation">

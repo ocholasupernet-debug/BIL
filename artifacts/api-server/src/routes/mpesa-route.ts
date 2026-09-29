@@ -35,6 +35,7 @@ import {
   resetHotspotUserCounters,
   ensureHotspotUserRateQueue,
   updateHotspotUser,
+  upsertHotspotUser,
   fetchHotspotConnectedDevices,
   resolveHotspotClientIpByMac,
   classifyRouterConnectionFailure,
@@ -93,6 +94,7 @@ export const hotspotPaymentOperations = {
   scheduleHotspotUserExpiry,
   syncRadiusCustomer,
   updateHotspotUser,
+  upsertHotspotUser,
 };
 
 const PAYMENT_GATEWAY_LABELS: Record<string, string> = {
@@ -2472,6 +2474,9 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     port_id: number | null;
     speed_down: number | null;
     speed_up: number | null;
+    validity: number | null;
+    validity_unit: string | null;
+    validity_days: number | null;
     speed_down_unit: string | null;
     speed_up_unit: string | null;
     data_limit_mb: number | null;
@@ -2484,7 +2489,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-        `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}` : ""}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}` : ""}&select=id,name,type,router_id,port_id,speed_down,speed_up,validity,validity_unit,validity_days,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, checkoutId, planId: transaction.plan_id }, "[mpesa/hotspot-mac-access] plan schema lookup failed");
@@ -2513,17 +2518,8 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     return;
   }
 
-  const planRow = await sbSelect<{
-    validity: number | null;
-    validity_unit: string | null;
-    validity_days: number | null;
-  }>(
-    "isp_plans",
-    `id=eq.${plan.id}&admin_id=eq.${adminId}&select=validity,validity_unit,validity_days&limit=1`,
-  );
-  const planValidity = planRow[0];
-  const configuredValidity = Number(planValidity?.validity ?? planValidity?.validity_days ?? 0);
-  const expiresInSeconds = planValiditySeconds(configuredValidity, planValidity?.validity_unit);
+  const configuredValidity = Number(plan.validity ?? plan.validity_days ?? 0);
+  const expiresInSeconds = planValiditySeconds(configuredValidity, plan.validity_unit);
   if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
     res.status(409).json({ ok: false, error: "The hotspot plan has no valid access duration configured." });
     return;
@@ -2607,6 +2603,10 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     });
     return;
   }
+  const routerAddressPromise = hotspotPaymentOperations.resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
+    logger.warn({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] target device address lookup failed");
+    return null;
+  });
   let hotspotServer: string | undefined;
   if (plan.port_id) {
     let port: HotspotPortContext | null;
@@ -2741,10 +2741,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   }
   const hotspotPassword = "12345";
   const isSameCheckoutRetry = !!reusableCustomer && transaction.customer_id === reusableCustomer.id;
-  const routerAddress = await hotspotPaymentOperations.resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
-    logger.warn({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] target device address lookup failed");
-    return null;
-  }) ?? "";
+  const routerAddress = (await routerAddressPromise) ?? "";
   const existingExpiry = reusableCustomer?.expires_at ? Date.parse(reusableCustomer.expires_at) : 0;
   const expiresAt = isSameCheckoutRetry
     ? new Date(existingExpiry)
@@ -2797,46 +2794,38 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     const hotspotProfile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
     const rateLimit = hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit);
     const sharedUsers = Math.max(1, Math.floor(Number(plan.shared_users ?? 1)));
-    await hotspotPaymentOperations.syncRadiusCustomer({
-      username: hotspotUsername,
-      password: hotspotPassword,
-      planId: plan.id,
-      planType: "hotspot",
-      enabled: true,
-      sharedUsers,
-      fullname: requestedDeviceName || `Hotspot ${paymentPhone}`,
-      rateDown: plan.speed_down,
-      rateDownUnit: plan.speed_down_unit,
-      rateUp: plan.speed_up,
-      rateUpUnit: plan.speed_up_unit,
-      dataLimitMb,
-      dataCapMode,
-      expiresAt: expiresAt.toISOString(),
-    });
-    await hotspotPaymentOperations.requireHotspotUserProfile(credentials, hotspotProfile);
+    await Promise.all([
+      hotspotPaymentOperations.syncRadiusCustomer({
+        username: hotspotUsername,
+        password: hotspotPassword,
+        planId: plan.id,
+        planType: "hotspot",
+        enabled: true,
+        sharedUsers,
+        fullname: requestedDeviceName || `Hotspot ${paymentPhone}`,
+        rateDown: plan.speed_down,
+        rateDownUnit: plan.speed_down_unit,
+        rateUp: plan.speed_up,
+        rateUpUnit: plan.speed_up_unit,
+        dataLimitMb,
+        dataCapMode,
+        expiresAt: expiresAt.toISOString(),
+      }),
+      hotspotPaymentOperations.requireHotspotUserProfile(credentials, hotspotProfile),
+    ]);
     if (reusableCustomer?.username && reusableCustomer.username !== hotspotUsername) {
       await disconnectHotspotActiveUser(credentials, reusableCustomer.username).catch(() => {});
       await removeHotspotUser(credentials, reusableCustomer.username).catch(() => {});
     }
-    try {
-      await hotspotPaymentOperations.updateHotspotUser(credentials, hotspotUsername, {
-        password: hotspotPassword,
-        profile: hotspotProfile,
-        disabled: false,
-        comment: hotspotUsername,
-        server: hotspotServer,
-        limitBytesTotal,
-      });
-    } catch {
-      await hotspotPaymentOperations.addHotspotUser(credentials, {
-        name: hotspotUsername,
-        password: hotspotPassword,
-        profile: hotspotProfile,
-        comment: hotspotUsername,
-        server: hotspotServer,
-        limitBytesTotal,
-      });
-    }
+    await hotspotPaymentOperations.upsertHotspotUser(credentials, {
+      name: hotspotUsername,
+      password: hotspotPassword,
+      profile: hotspotProfile,
+      disabled: false,
+      comment: hotspotUsername,
+      server: hotspotServer,
+      limitBytesTotal,
+    });
     if (!isSameCheckoutRetry) {
       await hotspotPaymentOperations.disconnectHotspotActiveUser(credentials, hotspotUsername);
       await hotspotPaymentOperations.resetHotspotUserCounters(credentials, hotspotUsername);
@@ -2849,20 +2838,21 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         throw new Error("The new package usage baseline could not be saved.");
       }
     }
-    await hotspotPaymentOperations.scheduleHotspotUserExpiry(credentials, {
-      name: hotspotUsername,
-      expiresInSeconds: remainingExpirySeconds,
-    });
-    if (dataCapMode === "throttle" && fupSpeedDown !== null && fupSpeedUp !== null && capForPolicy !== null) {
-      await hotspotPaymentOperations.scheduleHotspotUserFup(credentials, {
-        username: hotspotUsername,
-        thresholdBytes: dataLimitMegabytesToBytes(capForPolicy),
-        speedDownMbps: fupSpeedDown,
-        speedUpMbps: fupSpeedUp,
-      });
-    } else {
-      await hotspotPaymentOperations.removeHotspotUserFup(credentials, hotspotUsername);
-    }
+    const fupSchedule = dataCapMode === "throttle" && fupSpeedDown !== null && fupSpeedUp !== null && capForPolicy !== null
+      ? hotspotPaymentOperations.scheduleHotspotUserFup(credentials, {
+          username: hotspotUsername,
+          thresholdBytes: dataLimitMegabytesToBytes(capForPolicy),
+          speedDownMbps: fupSpeedDown,
+          speedUpMbps: fupSpeedUp,
+        })
+      : hotspotPaymentOperations.removeHotspotUserFup(credentials, hotspotUsername);
+    await Promise.all([
+      hotspotPaymentOperations.scheduleHotspotUserExpiry(credentials, {
+        name: hotspotUsername,
+        expiresInSeconds: remainingExpirySeconds,
+      }),
+      fupSchedule,
+    ]);
 
     let paidBindingApplied = false;
     try {

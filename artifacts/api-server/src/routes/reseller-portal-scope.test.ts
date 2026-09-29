@@ -222,6 +222,9 @@ test("signed reseller portal requests stay within their assigned service", async
   hotspotPaymentOperations.addHotspotUser = async (_credentials, options) => {
     recordRouterOperation("addUser", { username: options.name, server: options.server });
   };
+  hotspotPaymentOperations.upsertHotspotUser = async (_credentials, options) => {
+    recordRouterOperation("upsertUser", { username: options.name, server: options.server });
+  };
   hotspotPaymentOperations.scheduleHotspotUserExpiry = async (_credentials, options) => {
     recordRouterOperation("scheduleExpiry", { username: options.name });
   };
@@ -345,6 +348,7 @@ test("signed reseller portal requests stay within their assigned service", async
       "radiusUser",
       "updateUser",
       "addUser",
+      "upsertUser",
       "scheduleExpiry",
       "scheduleFup",
       "removeFup",
@@ -360,6 +364,7 @@ test("signed reseller portal requests stay within their assigned service", async
     const serverCalls = routerOperations.filter(row => [
       "updateUser",
       "addUser",
+      "upsertUser",
       "connectUser",
     ].includes(row.name));
     assert.ok(serverCalls.length > 0, "the assigned user must target a named Hotspot server");

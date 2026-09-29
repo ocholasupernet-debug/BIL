@@ -7,6 +7,7 @@ import {
   connectHotspotUser,
   ensureHotspotServerAddressPool,
   ensureRouterFileDirectory,
+  upsertHotspotUser,
   resolveHotspotClientIpByMac,
   fetchBridgePortLayout,
   pingRouter,
@@ -403,7 +404,7 @@ test("managed reset planning retries empty access inventory with the management 
   });
 });
 
-test("a failed RouterOS mutation is not replayed with the alternate account", async () => {
+test("a failed pool mutation is not replayed and keeps the RouterOS connection", async () => {
   await withMockRouterApi((username, command) => {
     if (command[0] === "/ip/pool/print") {
       return [{ ".id": "*1", name: "customer-pool", ranges: "" }];
@@ -422,11 +423,54 @@ test("a failed RouterOS mutation is not replayed with the alternate account", as
       /connection lost after the router applied the update/,
     );
 
-    assert.deepEqual(connectedUsers, [savedAccount, savedAccount]);
+    assert.deepEqual(connectedUsers, [savedAccount]);
     assert.equal(
       commands.filter(({ command }) => command[0] === "/ip/pool/set").length,
       1,
     );
+  });
+});
+
+test("paid hotspot user upsert creates or updates through one RouterOS connection", async () => {
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/user/print") return [];
+    return [];
+  }, async ({ port, connectedUsers, commands }) => {
+    await upsertHotspotUser(routerCredentials(port), {
+      name: "paid-tv-account",
+      password: "12345",
+      profile: "tv-package",
+      disabled: false,
+      comment: "paid-tv-account",
+      limitBytesTotal: "0",
+    });
+    assert.deepEqual(connectedUsers, [savedAccount]);
+    assert.deepEqual(commands.map(({ command }) => command[0]), [
+      "/ip/hotspot/user/print",
+      "/ip/hotspot/user/add",
+    ]);
+    assert.ok(commands[1]?.command.includes("=disabled=no"));
+    assert.ok(commands[1]?.command.includes("=limit-bytes-total=0"));
+  });
+
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/user/print") {
+      return [{ ".id": "*7", name: "paid-tv-account" }];
+    }
+    return [];
+  }, async ({ port, connectedUsers, commands }) => {
+    await upsertHotspotUser(routerCredentials(port), {
+      name: "paid-tv-account",
+      password: "12345",
+      profile: "tv-package",
+      disabled: false,
+    });
+    assert.deepEqual(connectedUsers, [savedAccount]);
+    assert.deepEqual(commands.map(({ command }) => command[0]), [
+      "/ip/hotspot/user/print",
+      "/ip/hotspot/user/set",
+    ]);
+    assert.ok(commands[1]?.command.includes("=.id=*7"));
   });
 });
 
