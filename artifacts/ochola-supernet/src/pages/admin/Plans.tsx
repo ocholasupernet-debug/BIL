@@ -133,7 +133,9 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
   const [status,        setStatus]        = useState<"enable"|"disable">(initialData ? (initialData.is_active ? "enable" : "disable") : "enable");
   const [canBuy,        setCanBuy]        = useState<"yes"|"no">(initialData ? (initialData.client_can_purchase ? "yes" : "no") : "yes");
   const [name,          setName]          = useState(initialData?.name ?? "");
-  const [planKind,      setPlanKind]      = useState<"unlimited"|"limited">(initialData?.plan_type === "limited" ? "limited" : "unlimited");
+  const [planKind,      setPlanKind]      = useState<"unlimited"|"limited">(
+    Number(initialData?.data_limit_mb ?? 0) > 0 ? "limited" : "unlimited",
+  );
   const [bandwidthId,   setBandwidthId]   = useState(initialData?.bandwidth_id?.toString() ?? "");
   const [price,         setPrice]         = useState(initialData?.price?.toString() ?? "");
   /* Sharing: if shared_users > 1 on edit, sharing was enabled */
@@ -182,6 +184,9 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
   })();
   const [dataLimitVal,  setDataLimitVal]  = useState(initDataVal);
   const [dataLimitUnit, setDataLimitUnit] = useState<"MB"|"GB"|"TB">(initDataUnit as "MB"|"GB"|"TB");
+  const [dataCapMode, setDataCapMode] = useState<"disconnect"|"throttle">(initialData?.data_cap_mode === "throttle" ? "throttle" : "disconnect");
+  const [fupSpeedDown, setFupSpeedDown] = useState(initialData?.fup_speed_down?.toString() ?? "");
+  const [fupSpeedUp, setFupSpeedUp] = useState(initialData?.fup_speed_up?.toString() ?? "");
 
   const units: { value: PlanValidityUnit; label: string }[] = [
     { value: "mins", label: "Mins" },
@@ -205,6 +210,14 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
       const bw = bandwidthId ? bandwidths.find(b => b.id === parseInt(bandwidthId)) : null;
       const speedDown = bw?.speed_down ?? 0;
       const speedUp   = bw?.speed_up   ?? 0;
+      const speedDownUnit = bw?.speed_down_unit ?? initialData?.speed_down_unit ?? "Mbps";
+      const speedUpUnit = bw?.speed_up_unit ?? initialData?.speed_up_unit ?? "Mbps";
+      const speedInMbps = (value: number, unit: string) => {
+        const normalized = unit.trim().toLowerCase();
+        if (normalized.startsWith("kb") || normalized.startsWith("kbit")) return value / 1_000;
+        if (normalized.startsWith("gb") || normalized.startsWith("gbit")) return value * 1_000;
+        return value;
+      };
       /* Convert data limit to MB for storage */
       const dataLimitMb = planKind === "limited" && dataLimitVal
         ? (() => {
@@ -214,6 +227,23 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
             return Math.round(v); // MB
           })()
         : null;
+      if (planKind === "limited" && (!Number.isFinite(dataLimitMb) || Number(dataLimitMb) <= 0)) {
+        throw new Error("Enter a positive data cap for this limited plan.");
+      }
+      if (planKind === "limited" && dataCapMode === "throttle" && (
+        !Number.isFinite(Number(fupSpeedDown)) || Number(fupSpeedDown) <= 0
+        || !Number.isFinite(Number(fupSpeedUp)) || Number(fupSpeedUp) <= 0
+      )) {
+        throw new Error("Enter positive reduced download and upload speeds for throttle mode.");
+      }
+      if (planKind === "limited" && isHotspot && dataCapMode === "throttle" && (
+        speedInMbps(speedDown, speedDownUnit) <= 0
+        || speedInMbps(speedUp, speedUpUnit) <= 0
+        || Number(fupSpeedDown) >= speedInMbps(speedDown, speedDownUnit)
+        || Number(fupSpeedUp) >= speedInMbps(speedUp, speedUpUnit)
+      )) {
+        throw new Error("FUP download and upload speeds must each be below the plan's normal speed.");
+      }
       if (isEdit && initialData) {
         const response = await fetch(`/api/plans/${initialData.id}`, {
           method: "PATCH",
@@ -223,6 +253,8 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
             type: planType,
             speedDown,
             speedUp,
+            speedDownUnit,
+            speedUpUnit,
             price: parseFloat(price) || 0,
             validity: parseInt(validity) || 1,
             validityUnit: valUnit,
@@ -231,6 +263,9 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
             routerId: parseInt(routerId),
             portId: portId ? parseInt(portId) : null,
             dataLimitMb,
+              dataCapMode: planKind === "limited" && isHotspot ? dataCapMode : "disconnect",
+              fupSpeedDown: planKind === "limited" && isHotspot && dataCapMode === "throttle" ? Number(fupSpeedDown) : null,
+              fupSpeedUp: planKind === "limited" && isHotspot && dataCapMode === "throttle" ? Number(fupSpeedUp) : null,
             isActive: status === "enable",
             clientCanPurchase: canBuy === "yes",
           }),
@@ -255,6 +290,8 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
             type: planType,
             speedDown,
             speedUp,
+            speedDownUnit,
+            speedUpUnit,
             price: parseFloat(price) || 0,
             validity: parseInt(validity) || 1,
              validityUnit: valUnit,
@@ -263,6 +300,9 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
             routerId: routerId ? parseInt(routerId) : null,
             portId: portId ? parseInt(portId) : null,
             dataLimitMb,
+            dataCapMode: planKind === "limited" && isHotspot ? dataCapMode : "disconnect",
+            fupSpeedDown: planKind === "limited" && isHotspot && dataCapMode === "throttle" ? Number(fupSpeedDown) : null,
+            fupSpeedUp: planKind === "limited" && isHotspot && dataCapMode === "throttle" ? Number(fupSpeedUp) : null,
             isActive: status === "enable",
           }),
         });
@@ -367,9 +407,25 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
                   </span>
                 )}
               </div>
-              <p style={HINT}>
-                When a customer's data usage reaches this limit, their session will be cut off or moved to the expired pool.
-              </p>
+              {isHotspot ? (
+                <>
+                  <p style={HINT}>Choose whether reaching the cap disconnects the customer or keeps them online at reduced speed until time expiry.</p>
+                  <div style={{ display: "flex", gap: "1.25rem", paddingTop: "0.55rem" }}>
+                    <Radio name="dataCapMode" value="disconnect" checked={dataCapMode === "disconnect"} onChange={() => setDataCapMode("disconnect")} label="Disconnect at cap" />
+                    <Radio name="dataCapMode" value="throttle" checked={dataCapMode === "throttle"} onChange={() => setDataCapMode("throttle")} label="Throttle after cap" />
+                  </div>
+                  {dataCapMode === "throttle" && (
+                    <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.6rem", alignItems: "center" }}>
+                      <input type="number" min="0.01" step="0.01" style={{ ...INPUT, maxWidth: 140 }} value={fupSpeedDown} onChange={e => setFupSpeedDown(e.target.value)} placeholder="FUP down Mbps" required />
+                      <span style={{ color: "var(--isp-text-muted)" }}>/</span>
+                      <input type="number" min="0.01" step="0.01" style={{ ...INPUT, maxWidth: 140 }} value={fupSpeedUp} onChange={e => setFupSpeedUp(e.target.value)} placeholder="FUP up Mbps" required />
+                      <span style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)" }}>Mbps (can be below 1)</span>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p style={HINT}>VLAN customer data caps disconnect access when the allowance is used.</p>
+              )}
             </div>
           </div>
         )}
