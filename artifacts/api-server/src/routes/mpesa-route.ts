@@ -25,8 +25,11 @@ import {
   requireHotspotUserProfile,
   ensureHotspotServerAddressPool,
   resolveHotspotClientMac,
+  fetchHotspotUserUsage,
   connectHotspotUser,
   scheduleHotspotUserExpiry,
+  scheduleHotspotUserFup,
+  removeHotspotUserFup,
   disconnectHotspotActiveUser,
   removeHotspotUser,
   resetHotspotUserCounters,
@@ -54,6 +57,7 @@ import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
+import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
 import {
@@ -2390,13 +2394,16 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     speed_down_unit: string | null;
     speed_up_unit: string | null;
     data_limit_mb: number | null;
+    data_cap_mode: string | null;
+    fup_speed_down: number | null;
+    fup_speed_up: number | null;
     shared_users: number | null;
     owner_reseller_id: number | null;
   }>;
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,owner_reseller_id&limit=1`,
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, checkoutId, planId: transaction.plan_id }, "[mpesa/hotspot-mac-access] plan schema lookup failed");
@@ -2430,9 +2437,35 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     return;
   }
   const dataLimitMb = Number(plan.data_limit_mb);
-  const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
-    ? String(Math.floor(dataLimitMb * 1_000_000))
-    : "0";
+  const capForPolicy = Number.isFinite(dataLimitMb) && dataLimitMb > 0 ? dataLimitMb : null;
+  let dataCapMode: "disconnect" | "throttle";
+  let fupSpeedDown: number | null;
+  let fupSpeedUp: number | null;
+  try {
+    const policy = validateFupPolicy(
+      plan.type,
+      capForPolicy,
+      plan.data_cap_mode ?? "disconnect",
+      plan.fup_speed_down,
+      plan.fup_speed_up,
+      plan.speed_down,
+      plan.speed_up,
+      plan.speed_down_unit,
+      plan.speed_up_unit,
+    );
+    dataCapMode = policy.dataCapMode;
+    fupSpeedDown = policy.fupSpeedDown;
+    fupSpeedUp = policy.fupSpeedUp;
+  } catch (error) {
+    res.status(409).json({
+      ok: false,
+      error: error instanceof Error ? `The selected package has an invalid data policy: ${error.message}` : "The selected package has an invalid data policy.",
+    });
+    return;
+  }
+  const limitBytesTotal = dataCapMode === "throttle" || capForPolicy === null
+    ? "0"
+    : String(dataLimitMegabytesToBytes(capForPolicy));
 
   const routers = await sbSelect<{
     id: number;
@@ -2538,15 +2571,30 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     mac_address: string | null;
     ip_address: string | null;
     status: string;
+     depletion_reason: string | null;
     expires_at: string | null;
   }>(
     "isp_customers",
-     `id=eq.${transaction.customer_id}&admin_id=eq.${customerAdminId}&type=eq.hotspot&select=id,username,password,mac_address,ip_address,status,expires_at&limit=1`,
+      `id=eq.${transaction.customer_id}&admin_id=eq.${customerAdminId}&type=eq.hotspot&select=id,username,password,mac_address,ip_address,status,depletion_reason,expires_at&limit=1`,
    )
      : [];
   const now = Date.now();
   const linkedCustomer = linkedCustomers[0];
   const linkedExpiry = linkedCustomer?.expires_at ? Date.parse(linkedCustomer.expires_at) : 0;
+   if (linkedCustomer && linkedCustomer.depletion_reason === "data_limit") {
+     res.status(409).json({
+       ok: false,
+       error: "The data allowance on this paid package has been used. Purchase a new package to reconnect.",
+     });
+     return;
+   }
+   if (linkedCustomer && linkedCustomer.status === "expired") {
+     res.status(409).json({
+       ok: false,
+       error: "The package from this paid checkout has expired. Purchase a new package to reconnect.",
+     });
+     return;
+   }
   if (linkedCustomer && (!Number.isFinite(linkedExpiry) || linkedExpiry <= now)) {
     res.status(409).json({
       ok: false,
@@ -2614,6 +2662,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     mac_address: mac,
     ip_address: routerAddress || null,
     status: "active",
+     depletion_reason: null,
     expires_at: expiresAt.toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -2661,6 +2710,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       rateUp: plan.speed_up,
       rateUpUnit: plan.speed_up_unit,
       dataLimitMb,
+       dataCapMode,
       expiresAt: expiresAt.toISOString(),
     });
     await requireHotspotUserProfile(credentials, hotspotProfile);
@@ -2693,9 +2743,17 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     await scheduleHotspotUserExpiry(credentials, {
       name: hotspotUsername,
       expiresInSeconds: remainingExpirySeconds,
-    }).catch((error) => {
-      logger.warn({ err: error, router: routerRow.name, username: hotspotUsername }, "[mpesa/hotspot-mac-access] expiry scheduling deferred");
     });
+    if (dataCapMode === "throttle" && fupSpeedDown !== null && fupSpeedUp !== null && capForPolicy !== null) {
+      await scheduleHotspotUserFup(credentials, {
+        username: hotspotUsername,
+        thresholdBytes: dataLimitMegabytesToBytes(capForPolicy),
+        speedDownMbps: fupSpeedDown,
+        speedUpMbps: fupSpeedUp,
+      });
+    } else {
+      await removeHotspotUserFup(credentials, hotspotUsername);
+    }
 
     let paidBindingApplied = false;
     try {
@@ -2706,15 +2764,15 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         expiresInSeconds: remainingExpirySeconds,
         bindingType: "regular",
       });
-      if (paidBindingApplied) {
-        await ensureHotspotUserRateQueue(credentials, {
-          username: hotspotUsername,
-          address: routerAddress || undefined,
-          maxLimit: rateLimit,
-        });
-      }
     } catch (error) {
       logger.warn({ err: error, router: routerRow.name, username: hotspotUsername, mac }, "[mpesa/hotspot-mac-access] device binding deferred; credentials remain available");
+    }
+    if (paidBindingApplied) {
+      await ensureHotspotUserRateQueue(credentials, {
+        username: hotspotUsername,
+        address: routerAddress || undefined,
+        maxLimit: rateLimit,
+      });
     }
     let routerConnected = false;
     if (routerAddress) {
@@ -2846,10 +2904,12 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     mac_address: string | null;
     ip_address: string | null;
     status: string;
+    depletion_reason: string | null;
+    fup_limit_mb: number | null;
     expires_at: string | null;
   }>(
     "isp_customers",
-    `id=eq.${transaction.customer_id}&admin_id=eq.${adminId}&type=eq.hotspot&select=id,username,password,name,phone,mac_address,ip_address,status,expires_at&limit=1`,
+    `id=eq.${transaction.customer_id}&admin_id=eq.${adminId}&type=eq.hotspot&select=id,username,password,name,phone,mac_address,ip_address,status,depletion_reason,fup_limit_mb,expires_at&limit=1`,
   );
   const customer = customers[0];
   if (!customer?.username || !customer.password) {
@@ -2867,6 +2927,14 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     return;
   }
   const expiresAtMs = customer.expires_at ? Date.parse(customer.expires_at) : 0;
+  if (customer.depletion_reason === "data_limit") {
+    res.status(409).json({
+      ok: false,
+      status: "depleted",
+      error: "The data allowance on this package has been used. Purchase a new package to reconnect.",
+    });
+    return;
+  }
   if (
     (customer.status !== "active" && customer.status !== "payment_cleared_router_pending")
     || !Number.isFinite(expiresAtMs)
@@ -2887,12 +2955,15 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     speed_down_unit: string | null;
     speed_up_unit: string | null;
     data_limit_mb: number | null;
+    data_cap_mode: string | null;
+    fup_speed_down: number | null;
+    fup_speed_up: number | null;
     shared_users: number | null;
   }>;
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, receipt, planId: transaction.plan_id }, "[mpesa/verify] plan schema lookup failed");
@@ -3011,10 +3082,59 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     return null;
   }) ?? "";
   const hotspotProfile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
-  const dataLimitMb = Number(plan.data_limit_mb);
-  const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
-    ? String(Math.floor(dataLimitMb * 1_000_000))
-    : "0";
+  const rawDataLimitMb = Number(customer.fup_limit_mb ?? plan.data_limit_mb);
+  const dataLimitMb = Number.isFinite(rawDataLimitMb) && rawDataLimitMb > 0 ? rawDataLimitMb : null;
+  let dataCapMode: "disconnect" | "throttle";
+  let fupSpeedDown: number | null;
+  let fupSpeedUp: number | null;
+  try {
+    const policy = validateFupPolicy(
+      plan.type,
+      dataLimitMb,
+      plan.data_cap_mode ?? "disconnect",
+      plan.fup_speed_down,
+      plan.fup_speed_up,
+      plan.speed_down,
+      plan.speed_up,
+      plan.speed_down_unit,
+      plan.speed_up_unit,
+    );
+    dataCapMode = policy.dataCapMode;
+    fupSpeedDown = policy.fupSpeedDown;
+    fupSpeedUp = policy.fupSpeedUp;
+  } catch (error) {
+    res.status(409).json({
+      ok: false,
+      error: error instanceof Error ? `The selected package has an invalid data policy: ${error.message}` : "The selected package has an invalid data policy.",
+    });
+    return;
+  }
+  const limitBytesTotal = dataCapMode === "throttle" || dataLimitMb === null
+    ? "0"
+    : String(dataLimitMegabytesToBytes(dataLimitMb));
+  if (dataCapMode === "disconnect" && dataLimitMb !== null) {
+    let usage: Awaited<ReturnType<typeof fetchHotspotUserUsage>>;
+    try {
+      usage = await fetchHotspotUserUsage(credentials, customer.username);
+    } catch (error) {
+      logger.warn({ err: error, receipt, routerId: routerRow.id, username: customer.username }, "[mpesa/verify] data quota verification failed");
+      res.status(503).json({ ok: false, error: "The router could not verify this package's remaining data. Try reconnecting again shortly." });
+      return;
+    }
+    if (usage && usage.bytesIn + usage.bytesOut >= dataLimitMegabytesToBytes(dataLimitMb)) {
+      await sbUpdateStrict("isp_customers", `id=eq.${customer.id}&admin_id=eq.${adminId}`, {
+        status: "expired",
+        depletion_reason: "data_limit",
+        updated_at: new Date().toISOString(),
+      });
+      res.status(409).json({
+        ok: false,
+        status: "depleted",
+        error: "The data allowance on this package has been used. Purchase a new package to reconnect.",
+      });
+      return;
+    }
+  }
   try {
     const sharedUsers = Math.max(1, Math.floor(Number(plan.shared_users ?? 1)));
     await syncRadiusCustomer({
@@ -3030,6 +3150,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
       rateUp: plan.speed_up,
       rateUpUnit: plan.speed_up_unit,
       dataLimitMb,
+      dataCapMode,
       expiresAt: customer.expires_at,
     });
     await requireHotspotUserProfile(credentials, hotspotProfile);
@@ -3072,6 +3193,16 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
       name: customer.username,
       expiresInSeconds,
     });
+    if (dataCapMode === "throttle" && fupSpeedDown !== null && fupSpeedUp !== null && dataLimitMb !== null) {
+      await scheduleHotspotUserFup(credentials, {
+        username: customer.username,
+        thresholdBytes: dataLimitMegabytesToBytes(dataLimitMb),
+        speedDownMbps: fupSpeedDown,
+        speedUpMbps: fupSpeedUp,
+      });
+    } else {
+      await removeHotspotUserFup(credentials, customer.username);
+    }
     let routerConnected = false;
     if (routerAddress) {
       routerConnected = await connectHotspotUser(credentials, {
@@ -3088,7 +3219,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     await sbUpdateStrict(
       "isp_customers",
       `id=eq.${customer.id}&admin_id=eq.${adminId}`,
-      { status: "active", ip_address: routerAddress || null, updated_at: new Date().toISOString() },
+      { status: "active", depletion_reason: null, ip_address: routerAddress || null, updated_at: new Date().toISOString() },
     );
     res.json({
       ok: true,
