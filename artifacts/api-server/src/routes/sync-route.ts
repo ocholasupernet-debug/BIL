@@ -17,6 +17,10 @@ import {
   scheduleHotspotUserFup,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
+import {
+  guardRouterOSConnection,
+  RouterOSConnectionLostError,
+} from "../lib/routeros-connection";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 
 const router: IRouter = Router();
@@ -136,7 +140,14 @@ async function cleanupLegacyPlanProfiles(
 
 /* ─── Connect helper ─── */
 function makeConn(host: string, username: string, password: string): RouterOSAPI {
-  return new RouterOSAPI({ host, port: 8728, user: username || "admin", password: password || "", timeout: 6, keepalive: false });
+  return guardRouterOSConnection(new RouterOSAPI({
+    host,
+    port: 8728,
+    user: username || "admin",
+    password: password || "",
+    timeout: 6,
+    keepalive: false,
+  }));
 }
 
 async function verifyManagementApi(host: string, username: string, password: string): Promise<void> {
@@ -983,6 +994,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
         } catch (e) {
+          if (e instanceof RouterOSConnectionLostError) throw e;
           log(`  ❌ ${e instanceof Error ? e.message : String(e)}`);
           skipped++;
         }
@@ -1045,6 +1057,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
         } catch (e) {
+          if (e instanceof RouterOSConnectionLostError) throw e;
           log(`  ❌ ${e instanceof Error ? e.message : String(e)}`);
           skipped++;
         }
