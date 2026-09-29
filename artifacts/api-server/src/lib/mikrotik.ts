@@ -31,6 +31,7 @@ import {
   parseVlanQueueCounters,
   vlanCustomerQueueIdentity,
 } from "./vlan-customer-queue.js";
+import { fupRateLimitFromMbps } from "./fup-policy.js";
 
 /* ─── Credential types ───────────────────────────────────────────────────── */
 
@@ -2301,6 +2302,8 @@ export interface HotspotUser {
   disabled: boolean;
   limitUptime: string;
   limitBytesTotal: number;
+  bytesIn: number;
+  bytesOut: number;
 }
 
 export async function fetchHotspotUserList(creds: RouterCredentials): Promise<HotspotUser[]> {
@@ -2316,7 +2319,34 @@ export async function fetchHotspotUserList(creds: RouterCredentials): Promise<Ho
       disabled:        parseBool(r.disabled),
       limitUptime:     r["limit-uptime"]   ?? "",
       limitBytesTotal: parseBytes(r["limit-bytes-total"]),
+      bytesIn:         parseBytes(r["bytes-in"]),
+      bytesOut:        parseBytes(r["bytes-out"]),
     }));
+  });
+}
+
+export async function fetchHotspotUserUsage(
+  creds: RouterCredentials,
+  name: string,
+): Promise<{ bytesIn: number; bytesOut: number; disabled: boolean } | null> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write([
+        "/ip/hotspot/user/print",
+        "=.proplist=.id,name,disabled,bytes-in,bytes-out",
+        `?name=${name}`,
+      ]),
+      ms,
+    )) as Record<string, string>[];
+    const matches = (Array.isArray(rows) ? rows : []).filter((row) => row.name === name);
+    if (matches.length === 0) return null;
+    if (matches.length !== 1) throw new Error("RouterOS returned duplicate hotspot users for this account.");
+    return {
+      bytesIn: parseBytes(matches[0]["bytes-in"]),
+      bytesOut: parseBytes(matches[0]["bytes-out"]),
+      disabled: parseBool(matches[0].disabled),
+    };
   });
 }
 
@@ -2353,6 +2383,10 @@ export async function addHotspotUser(
  */
 function hotspotExpirySchedulerName(name: string): string {
   return `ochola-user-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+
+function hotspotFupSchedulerName(name: string): string {
+  return `ochola-fup-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
 }
 
 function hotspotPaidExpirySchedulerName(name: string): string {
@@ -2493,11 +2527,13 @@ export async function scheduleHotspotUserExpiry(
 
     const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1000);
     const schedulerName = hotspotExpirySchedulerName(opts.name);
+    const fupSchedulerName = hotspotFupSchedulerName(opts.name);
     const expiryScript =
       `:foreach id in=[/ip hotspot active find where user="${opts.name}"] do={/ip hotspot active remove $id}; ` +
       `:foreach id in=[/ip hotspot user find where name="${opts.name}"] do={/ip hotspot user set $id disabled=yes}; ` +
       `:foreach id in=[/ip hotspot ip-binding find where comment="${opts.name}"] do={/ip hotspot ip-binding remove $id}; ` +
       `:foreach id in=[/queue simple find where name="${hotspotRateQueueName(opts.name)}"] do={/queue simple remove $id}; ` +
+      `/system scheduler remove [find where name="${fupSchedulerName}"]; ` +
       `/system scheduler remove [find where name="${schedulerName}"]`;
     const schedulers = (await withTimeout(
       conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
@@ -2513,6 +2549,110 @@ export async function scheduleHotspotUserExpiry(
       "=disabled=no",
       `=on-event=${expiryScript}`,
       "=comment=OcholaSupernet hotspot user expiry",
+    );
+    await withTimeout(conn.write(schedulerCommand), ms);
+  });
+}
+
+export async function removeHotspotUserFup(
+  creds: RouterCredentials,
+  username: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const schedulerName = hotspotFupSchedulerName(username);
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+      if (scheduler[".id"]) {
+        await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), ms);
+      }
+    }
+  });
+}
+
+/**
+ * A router-local recurring check enforces FUP even while the app server is
+ * unavailable. It samples each paid account every five seconds and applies a
+ * simple queue to all active addresses for that account after its byte cap.
+ */
+export async function scheduleHotspotUserFup(
+  creds: RouterCredentials,
+  opts: {
+    username: string;
+    thresholdBytes: number;
+    speedDownMbps: number;
+    speedUpMbps: number;
+  },
+): Promise<void> {
+  const username = String(opts.username ?? "").trim();
+  if (!/^[A-Za-z0-9_.@-]{1,64}$/.test(username)) {
+    throw new Error("The hotspot username is invalid for FUP scheduling.");
+  }
+  if (!Number.isSafeInteger(opts.thresholdBytes) || opts.thresholdBytes < 1) {
+    throw new Error("A positive byte threshold is required for FUP scheduling.");
+  }
+  const rateLimit = fupRateLimitFromMbps(opts.speedDownMbps, opts.speedUpMbps);
+  if (!isValidSimpleQueueRateLimit(rateLimit)) {
+    throw new Error("The FUP rate limit is not supported by RouterOS.");
+  }
+
+  const schedulerName = hotspotFupSchedulerName(username);
+  const queueName = hotspotRateQueueName(username);
+  const queueComment = hotspotRateQueueComment(username);
+  const userLiteral = routerOsString(username);
+  const queueLiteral = routerOsString(queueName);
+  const queueCommentLiteral = routerOsString(queueComment);
+  const legacyCommentLiteral = routerOsString(username);
+  const rateLiteral = routerOsString(rateLimit);
+  const script = [
+    `:local userIds [/ip hotspot user find where name=${userLiteral}];`,
+    `:if ([:len $userIds] > 0) do={`,
+    `:local userId [:pick $userIds 0];`,
+    `:local usedBytes (([/ip hotspot user get $userId bytes-in]) + ([/ip hotspot user get $userId bytes-out]));`,
+    `:if ($usedBytes >= ${opts.thresholdBytes}) do={`,
+    `:local activeIds [/ip hotspot active find where user=${userLiteral}];`,
+    `:local target "";`,
+    `:foreach activeId in=$activeIds do={`,
+    `:local address [/ip hotspot active get $activeId address];`,
+    `:if ([:len $address] > 0) do={`,
+    `:if ([:len $target] = 0) do={ :set target ($address . "/32"); } else={ :set target ($target . "," . $address . "/32"); }`,
+    `}`,
+    `};`,
+    `:if ([:len $target] > 0) do={`,
+    `:local queueIds [/queue simple find where name=${queueLiteral}];`,
+    `:if ([:len $queueIds] = 0) do={`,
+    `/queue simple add name=${queueLiteral} target=$target max-limit=${rateLiteral} comment=${queueCommentLiteral} disabled=no;`,
+    `} else={`,
+    `:local queueId [:pick $queueIds 0];`,
+    `:if (([/queue simple get $queueId comment] = ${legacyCommentLiteral}) || ([/queue simple get $queueId comment] = ${queueCommentLiteral})) do={`,
+    `:if (([/queue simple get $queueId max-limit] != ${rateLiteral}) || ([/queue simple get $queueId target] != $target) || ([/queue simple get $queueId disabled] = true)) do={`,
+    `/queue simple set $queueId target=$target max-limit=${rateLiteral} comment=${queueCommentLiteral} disabled=no;`,
+    `}`,
+    `}`,
+    `}`,
+    `}`,
+    `}`,
+    `}`,
+  ].join(" ");
+
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    const schedulerCommand = schedulers[0]?.[".id"]
+      ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`]
+      : ["/system/scheduler/add", `=name=${schedulerName}`];
+    schedulerCommand.push(
+      "=start-time=startup",
+      "=interval=00:00:05",
+      "=disabled=no",
+      `=on-event=${script}`,
+      "=comment=OcholaSupernet hotspot FUP enforcement",
     );
     await withTimeout(conn.write(schedulerCommand), ms);
   });
@@ -2536,6 +2676,10 @@ export async function reconcileHotspotUserAccess(
     address?: string | null;
     macAddress?: string | null;
     rateLimit?: string;
+    dataCapMode?: "disconnect" | "throttle";
+    fupLimitBytes?: number;
+    fupSpeedDownMbps?: number;
+    fupSpeedUpMbps?: number;
     sharedUsers?: number;
     resetCounters?: boolean;
   },
@@ -2592,6 +2736,23 @@ export async function reconcileHotspotUserAccess(
     });
   } else if (opts.address !== undefined) {
     await removeHotspotUserRateQueue(creds, opts.name);
+  }
+
+  if (
+    opts.dataCapMode === "throttle"
+    && Number.isSafeInteger(opts.fupLimitBytes)
+    && Number(opts.fupLimitBytes) > 0
+    && Number(opts.fupSpeedDownMbps) > 0
+    && Number(opts.fupSpeedUpMbps) > 0
+  ) {
+    await scheduleHotspotUserFup(creds, {
+      username: opts.name,
+      thresholdBytes: Number(opts.fupLimitBytes),
+      speedDownMbps: Number(opts.fupSpeedDownMbps),
+      speedUpMbps: Number(opts.fupSpeedUpMbps),
+    });
+  } else {
+    await removeHotspotUserFup(creds, opts.name);
   }
 
   /* Force RouterOS to recreate the active queue with the current profile. */
@@ -2962,6 +3123,10 @@ function hotspotRateQueueName(username: string): string {
   return `ochola-rate-${username.replace(/[^A-Za-z0-9_-]/g, "-").slice(-52)}`;
 }
 
+function hotspotRateQueueComment(username: string): string {
+  return `OcholaSupernet hotspot user:${username}`;
+}
+
 function vlanCustomerExpirySchedulerName(adminId: number, customerId: number): string {
   return `ochola-vlan-exp-${adminId}-${customerId}`;
 }
@@ -3148,13 +3313,20 @@ export async function ensureHotspotUserRateQueue(
       ms,
     )) as Record<string, string>[];
     const existing = Array.isArray(rows) ? rows[0] : undefined;
+    if (
+      existing
+      && existing.comment !== opts.username
+      && existing.comment !== hotspotRateQueueComment(opts.username)
+    ) {
+      throw new Error("A simple queue with this generated hotspot name belongs to another resource.");
+    }
     const command = existing?.[".id"]
       ? ["/queue/simple/set", `=.id=${existing[".id"]}`]
       : ["/queue/simple/add", `=name=${name}`];
     command.push(
       `=target=${target}`,
       `=max-limit=${opts.maxLimit}`,
-      `=comment=${opts.username}`,
+      `=comment=${hotspotRateQueueComment(opts.username)}`,
       "=disabled=no",
     );
     await withTimeout(conn.write(command), ms);
@@ -3173,8 +3345,21 @@ export async function removeHotspotUserRateQueue(
       ms,
     )) as Record<string, string>[];
     for (const row of Array.isArray(rows) ? rows : []) {
-      if (row[".id"]) {
+      if (
+        row[".id"]
+        && (row.comment === username || row.comment === hotspotRateQueueComment(username))
+      ) {
         await withTimeout(conn.write(["/queue/simple/remove", `=.id=${row[".id"]}`]), ms);
+      }
+    }
+    const schedulerName = hotspotFupSchedulerName(username);
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+      if (scheduler[".id"]) {
+        await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), ms);
       }
     }
   });
