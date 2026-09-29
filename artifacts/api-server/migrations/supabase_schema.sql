@@ -134,6 +134,11 @@ create table if not exists isp_plans (
   validity       integer not null default 30,
   validity_unit  text not null default 'days',
   validity_days  integer not null default 30,
+  data_limit_mb  numeric(14,2),
+  data_cap_mode  text not null default 'disconnect'
+    check (data_cap_mode in ('disconnect', 'throttle')),
+  fup_speed_down numeric(10,2),
+  fup_speed_up   numeric(10,2),
   shared_users   integer not null default 1,
   description    text,
   is_active      boolean not null default true,
@@ -180,6 +185,7 @@ create table if not exists isp_customers (
   pppoe_username  text,
   status          text not null default 'active',   -- active | suspended | expired
   expires_at      timestamptz,
+  depletion_reason text,
   wallet_balance  numeric(12,2) not null default 0,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
