@@ -1,13 +1,14 @@
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import type { Request, Response, NextFunction } from "express";
-import { sbSelect } from "./supabase-client.js";
+import { sbSelect, sbSelectStrict } from "./supabase-client.js";
 import { getTenantSubdomainFromRequest } from "./tenant-host.js";
 
 declare global {
   namespace Express {
     interface Request {
       authUser?: ApiTokenPayload;
-    tenantSubdomain?: string | null;
+      tenantSubdomain?: string | null;
+      hotspotPortalContext?: VlanHotspotPortalContext;
     }
   }
 }
@@ -19,6 +20,7 @@ const MAX_CLOCK_SKEW_S = 300;
 const PAYMENT_INTENT_TTL_MS = 5 * 60 * 1000;
 export const PPPOE_PORTAL_REFERENCE_TTL_MS = 10 * 60 * 1000;
 const PPPOE_PORTAL_REFERENCE_PURPOSE = "pppoe-expired-portal";
+const VLAN_HOTSPOT_PORTAL_PURPOSE = "vlan-hotspot-portal";
 
 export type ApiTokenType = "a" | "c" | "p";
 
@@ -48,6 +50,16 @@ export interface PppoePortalReferencePayload {
   customerId: number;
   adminId: number;
   routerId: number;
+  issuedAt: number;
+  nonce: string;
+}
+
+export interface VlanHotspotPortalContext {
+  purpose: typeof VLAN_HOTSPOT_PORTAL_PURPOSE;
+  adminId: number;
+  resellerId: number;
+  routerId: number;
+  portId: number;
   issuedAt: number;
   nonce: string;
 }
@@ -191,6 +203,152 @@ export function validatePppoePortalReference(token: string): PppoePortalReferenc
     return payload as PppoePortalReferencePayload;
   } catch {
     return null;
+  }
+}
+
+/**
+ * A VLAN portal context is public scope metadata, not an authentication
+ * credential. Its signature prevents the browser from changing the assigned
+ * ISP, reseller, router, or port. The API re-checks the live assignment on
+ * every request, so disabled or reassigned ports invalidate old portal files.
+ */
+export function generateVlanHotspotPortalContextToken(
+  scope: Omit<VlanHotspotPortalContext, "purpose" | "issuedAt" | "nonce">,
+): string {
+  if (!TOKEN_SIGNING_SECRET) throw new Error("Server token signing is not configured.");
+  if (
+    !Number.isSafeInteger(scope.adminId) || scope.adminId < 1
+    || !Number.isSafeInteger(scope.resellerId) || scope.resellerId < 1
+    || !Number.isSafeInteger(scope.routerId) || scope.routerId < 1
+    || !Number.isSafeInteger(scope.portId) || scope.portId < 1
+  ) throw new Error("A complete reseller VLAN portal scope is required.");
+  const body: VlanHotspotPortalContext = {
+    purpose: VLAN_HOTSPOT_PORTAL_PURPOSE,
+    ...scope,
+    issuedAt: Date.now(),
+    nonce: randomBytes(16).toString("base64url"),
+  };
+  const encoded = Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
+  const signature = createHmac("sha256", TOKEN_SIGNING_SECRET).update(encoded).digest("hex");
+  return `${encoded}.${signature}`;
+}
+
+export function validateVlanHotspotPortalContextToken(token: string): VlanHotspotPortalContext | null {
+  if (!TOKEN_SIGNING_SECRET || !token) return null;
+  const [encoded, signature, ...extra] = token.split(".");
+  if (!encoded || !signature || extra.length > 0) return null;
+
+  const expected = createHmac("sha256", TOKEN_SIGNING_SECRET).update(encoded).digest("hex");
+  const receivedBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (
+    receivedBuffer.length !== expectedBuffer.length
+    || !timingSafeEqual(receivedBuffer, expectedBuffer)
+  ) return null;
+
+  try {
+    const payload = JSON.parse(
+      Buffer.from(encoded, "base64url").toString("utf8"),
+    ) as Partial<VlanHotspotPortalContext>;
+    if (
+      payload.purpose !== VLAN_HOTSPOT_PORTAL_PURPOSE
+      || !payload.nonce
+      || !Number.isFinite(payload.issuedAt)
+      || !Number.isSafeInteger(payload.adminId)
+      || Number(payload.adminId) < 1
+      || !Number.isSafeInteger(payload.resellerId)
+      || Number(payload.resellerId) < 1
+      || !Number.isSafeInteger(payload.routerId)
+      || Number(payload.routerId) < 1
+      || !Number.isSafeInteger(payload.portId)
+      || Number(payload.portId) < 1
+    ) return null;
+    return payload as VlanHotspotPortalContext;
+  } catch {
+    return null;
+  }
+}
+
+function applyPortalScopeIds(
+  target: Record<string, unknown>,
+  aliases: string[],
+  value: number,
+): boolean {
+  for (const alias of aliases) {
+    const supplied = target[alias];
+    if (supplied !== undefined && supplied !== null && supplied !== "" && Number(supplied) !== value) {
+      return false;
+    }
+  }
+  for (const alias of aliases) {
+    target[alias] = value;
+  }
+  return true;
+}
+
+/**
+ * Verify the signed VLAN portal context against the current reseller-port
+ * assignment. When present, the signed scope becomes authoritative for the
+ * common public request ID fields, and conflicting browser values are denied.
+ */
+export async function resolveVlanHotspotPortalRequest(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const token = String(req.get("x-hotspot-portal-context") ?? "").trim();
+  if (!token) {
+    next();
+    return;
+  }
+
+  const payload = validateVlanHotspotPortalContextToken(token);
+  if (!payload) {
+    res.status(403).json({ ok: false, error: "This Hotspot portal scope is invalid." });
+    return;
+  }
+
+  try {
+    const [ports, resellers, parentAdmins] = await Promise.all([
+      sbSelectStrict<{ id: number }>(
+        "isp_reseller_ports",
+        `id=eq.${payload.portId}&admin_id=eq.${payload.adminId}&router_id=eq.${payload.routerId}&assigned_reseller_id=eq.${payload.resellerId}&handoff_mode=eq.vlan_services&status=eq.active&link_status=eq.active&hotspot_enabled=is.true&select=id&limit=1`,
+      ),
+      sbSelectStrict<{ id: number }>(
+        "isp_admins",
+        `id=eq.${payload.resellerId}&parent_id=eq.${payload.adminId}&role=eq.reseller&is_active=is.true&select=id&limit=1`,
+      ),
+      sbSelectStrict<{ id: number }>(
+        "isp_admins",
+        `id=eq.${payload.adminId}&parent_id=is.null&is_active=is.true&select=id&limit=1`,
+      ),
+    ]);
+    if (!ports[0] || !resellers[0] || !parentAdmins[0]) {
+      res.status(403).json({ ok: false, error: "This reseller Hotspot portal assignment is no longer active." });
+      return;
+    }
+
+    const query = req.query as Record<string, unknown>;
+    const body = req.body && typeof req.body === "object" && !Array.isArray(req.body)
+      ? req.body as Record<string, unknown>
+      : null;
+    const scopes: Array<[string[], number]> = [
+      [["adminId", "ispId"], payload.adminId],
+      [["routerId", "router_id"], payload.routerId],
+      [["portId", "port_id"], payload.portId],
+      [["resellerId", "reseller_id"], payload.resellerId],
+    ];
+    for (const [aliases, value] of scopes) {
+      if (!applyPortalScopeIds(query, aliases, value) || (body && !applyPortalScopeIds(body, aliases, value))) {
+        res.status(403).json({ ok: false, error: "The requested service does not match this Hotspot portal." });
+        return;
+      }
+    }
+
+    req.hotspotPortalContext = payload;
+    next();
+  } catch {
+    res.status(503).json({ ok: false, error: "The Hotspot portal assignment could not be verified." });
   }
 }
 

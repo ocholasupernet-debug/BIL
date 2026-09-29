@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { randomBytes } from "node:crypto";
 import {
   sbSelect,
   sbSelectStrict,
@@ -42,7 +43,12 @@ import {
 import { hotspotPlanProfileName, prepaidHotspotUsernameForEdit, routerRateLimit } from "../lib/prepaid-identifiers.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
-import { authenticatedAccount, authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
+import {
+  authenticatedAccount,
+  authenticatedAdminId,
+  requireAdmin,
+  type VlanHotspotPortalContext,
+} from "../lib/api-auth.js";
 import { planOwnerFilter } from "../lib/plan-ownership.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
@@ -114,6 +120,8 @@ type VlanPortRow = {
   vlan_tag: string | null;
   subnet_range: string | null;
   status: string;
+  hotspot_enabled?: boolean;
+  link_status?: string | null;
 };
 
 async function loadScopedCustomerPlan(
@@ -172,7 +180,7 @@ async function loadVlanCustomerContext(
 
   const ports = await sbSelectStrict<VlanPortRow>(
     "isp_reseller_ports",
-    `id=eq.${plan.port_id}&admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status&limit=1`,
+    `id=eq.${plan.port_id}&admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status,hotspot_enabled,link_status&limit=1`,
   );
   const port = ports[0];
   if (
@@ -282,7 +290,7 @@ async function reconcileCustomerAccess(
       ? currentName
       : updates[current.type === "pppoe" ? "pppoe_username" : "username"] ?? "",
   ).trim();
-  const nextPassword = String(updates.password === undefined ? current.password ?? "" : updates.password ?? "");
+  let nextPassword = String(updates.password === undefined ? current.password ?? "" : updates.password ?? "");
   const nextType = String(updates.type ?? current.type ?? "hotspot").toLowerCase();
   const nextPlanId = updates.plan_id !== undefined
     ? (updates.plan_id === null || updates.plan_id === "" ? null : Number(updates.plan_id))
@@ -323,6 +331,12 @@ async function reconcileCustomerAccess(
       throw new Error("The PPPoE username must use only letters, digits, dots, underscores, @ or hyphens.");
     }
     updates.pppoe_username = nextName;
+  } else if (planType === "vlan") {
+    if (nextName && !/^[A-Za-z0-9_.:@-]{3,64}$/.test(nextName)) {
+      throw new Error("The VLAN Hotspot username must use 3–64 safe characters.");
+    }
+    updates.username = nextName || null;
+    updates.password = nextPassword || null;
   }
   if (planType === "hotspot" && !/^[A-Za-z0-9_.:@-]{1,64}$/.test(nextName)) {
     throw new Error("The hotspot username contains characters that are unsafe for MikroTik scripts.");
@@ -418,6 +432,20 @@ async function reconcileCustomerAccess(
         updates.ip_address === undefined ? current.ip_address : updates.ip_address,
         vlanContext.port,
       );
+      if (vlanContext.port.hotspot_enabled) {
+        if (!nextName) nextName = `vlan_${randomBytes(10).toString("hex")}`;
+        if (!nextPassword) nextPassword = randomBytes(18).toString("base64url");
+        if (!/^[A-Za-z0-9_.:@-]{3,64}$/.test(nextName)) {
+          throw new Error("The VLAN Hotspot username must use 3–64 safe characters.");
+        }
+        const duplicateVlanLogin = await sbSelectStrict<{ id: number }>(
+          "isp_customers",
+          `router_id=eq.${plan.router_id}&username=eq.${encodeURIComponent(nextName)}&id=neq.${current.id}&select=id&limit=1`,
+        );
+        if (duplicateVlanLogin[0]) throw new Error("Another customer already has this VLAN Hotspot username.");
+        updates.username = nextName;
+        updates.password = nextPassword;
+      }
       const assignedAddresses = await sbSelectStrict<{ id: number }>(
         "isp_customers",
         `admin_id=eq.${adminId}&router_id=eq.${plan.router_id}&port_id=eq.${plan.port_id}&ip_address=eq.${encodeURIComponent(address)}&id=neq.${current.id}&select=id&limit=1`,
@@ -434,6 +462,28 @@ async function reconcileCustomerAccess(
         enabled,
         expiresAt: nextExpiry,
       });
+      if (vlanContext.port.hotspot_enabled) {
+        const resources = portServiceResourceNames(vlanContext.port);
+        await options.onRouterMutation?.();
+        await reconcileHotspotUserAccess(creds, {
+          name: nextName,
+          password: nextPassword,
+          profile: resources.hotspotProfile,
+          server: resources.hotspotServer,
+          comment: `OcholaSupernet VLAN customer ${adminId}:${current.id}`,
+          expiresAt: nextExpiry,
+          enabled,
+          address,
+          macAddress: String(updates.mac_address ?? current.mac_address ?? "").trim() || null,
+          resetCounters: false,
+        });
+        if (currentName && currentName !== nextName) {
+          await options.assertLock?.();
+          await removeHotspotUser(creds, currentName);
+          await removeHotspotUserExpiry(creds, currentName);
+          await removeHotspotUserRateQueue(creds, currentName);
+        }
+      }
       const previousAddress = String(current.ip_address ?? "").trim();
       if (previousAddress && previousAddress !== address && isValidIpv4(previousAddress)) {
         await options.assertLock?.();
@@ -556,7 +606,7 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
 router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
   const {
     adminId, ispId, name, phone, email, planId, type, ipAddress, macAddress,
-    status, expiryDate, pppoeUsername, routerId, portId,
+    status, expiryDate, pppoeUsername, routerId, portId, username: requestedUsername, password: requestedPassword,
   } = req.body;
   if (!name || !phone) {
     res.status(400).json({ error: "name and phone are required" });
@@ -627,6 +677,31 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
     const requestedStatus = String(status ?? "active").trim().toLowerCase();
     const enabled = requestedStatus === "active" &&
       (!expiresAt || Date.parse(expiresAt) > Date.now());
+    const needsHotspotLogin = Boolean(vlanContext.port.hotspot_enabled);
+    const vlanUsername = needsHotspotLogin
+      ? (String(requestedUsername ?? "").trim() || `vlan_${randomBytes(10).toString("hex")}`)
+      : null;
+    const vlanPassword = needsHotspotLogin
+      ? (String(requestedPassword ?? "") || randomBytes(18).toString("base64url"))
+      : null;
+    if (vlanUsername && !/^[A-Za-z0-9_.:@-]{3,64}$/.test(vlanUsername)) {
+      res.status(400).json({ error: "The VLAN Hotspot username must use 3–64 safe characters." });
+      return;
+    }
+    if (vlanPassword && vlanPassword.length < 8) {
+      res.status(400).json({ error: "The VLAN Hotspot password must be at least 8 characters." });
+      return;
+    }
+    if (vlanUsername) {
+      const duplicateUsernames = await sbSelectStrict<{ id: number }>(
+        "isp_customers",
+        `router_id=eq.${plan.router_id}&username=eq.${encodeURIComponent(vlanUsername)}&select=id&limit=1`,
+      );
+      if (duplicateUsernames[0]) {
+        res.status(409).json({ error: "That Hotspot username is already assigned. Choose a different username." });
+        return;
+      }
+    }
     const creds = routerCredentials(vlanContext.router);
     const [pending] = await sbInsertStrict<CustomerRow>("isp_customers", {
       admin_id: effectiveAdminId,
@@ -635,6 +710,8 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
       email: email ?? null,
       plan_id: plan.id,
       type: "vlan",
+      username: vlanUsername,
+      password: vlanPassword,
       router_id: plan.router_id,
       port_id: plan.port_id,
       ip_address: address,
@@ -642,7 +719,6 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
       status: "provisioning",
       expires_at: expiresAt,
       pppoe_username: null,
-      username: null,
     });
     if (!pending?.id) {
       res.status(500).json({ error: "The VLAN customer account could not be reserved." });
@@ -664,6 +740,21 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
         enabled,
         expiresAt,
       });
+      if (needsHotspotLogin && vlanUsername && vlanPassword) {
+        const resources = portServiceResourceNames(vlanContext.port);
+        await reconcileHotspotUserAccess(creds, {
+          name: vlanUsername,
+          password: vlanPassword,
+          profile: resources.hotspotProfile,
+          server: resources.hotspotServer,
+          comment: `OcholaSupernet VLAN customer ${effectiveAdminId}:${pending.id}`,
+          expiresAt,
+          enabled,
+          address,
+          macAddress: String(macAddress ?? "").trim() || null,
+          resetCounters: false,
+        });
+      }
       const [row] = await sbUpdateStrict<CustomerRow>(
         "isp_customers",
         `id=eq.${pending.id}&admin_id=eq.${effectiveAdminId}`,
@@ -688,6 +779,11 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
       }).catch(cleanupError => cleanupErrors.push(
         cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
       ));
+      if (vlanUsername && needsHotspotLogin) {
+        await removeHotspotUser(creds, vlanUsername).catch(cleanupError => cleanupErrors.push(
+          cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        ));
+      }
       await sbDeleteStrict("isp_customers", `id=eq.${pending.id}&admin_id=eq.${effectiveAdminId}`)
         .catch(cleanupError => cleanupErrors.push(
           cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
@@ -939,11 +1035,32 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     res.status(400).json({ error: "username and password are required" });
     return;
   }
-  const rows = await sbSelect<Record<string, unknown>>(
-    "isp_customers",
-    `admin_id=eq.${adminId}&type=eq.hotspot&username=eq.${encodeURIComponent(username)}&select=*&limit=1`,
-  );
-  const customer = rows[0];
+  const portalScope = req.hotspotPortalContext;
+  let customer: Record<string, unknown> | undefined;
+  if (portalScope) {
+    const [vlanRows, resellerRows] = await Promise.all([
+      sbSelectStrict<Record<string, unknown>>(
+        "isp_customers",
+        `admin_id=eq.${portalScope.adminId}&type=eq.vlan&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&username=eq.${encodeURIComponent(username)}&select=*&limit=2`,
+      ),
+      sbSelectStrict<Record<string, unknown>>(
+        "isp_customers",
+        `admin_id=eq.${portalScope.resellerId}&type=eq.hotspot&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&username=eq.${encodeURIComponent(username)}&select=*&limit=2`,
+      ),
+    ]);
+    const scopedCustomers = [...vlanRows, ...resellerRows];
+    if (scopedCustomers.length > 1) {
+      res.status(409).json({ error: "This username is ambiguous on the assigned Hotspot service. Contact support." });
+      return;
+    }
+    customer = scopedCustomers[0];
+  } else {
+    const rows = await sbSelect<Record<string, unknown>>(
+      "isp_customers",
+      `admin_id=eq.${adminId}&type=eq.hotspot&username=eq.${encodeURIComponent(username)}&select=*&limit=1`,
+    );
+    customer = rows[0];
+  }
   if (!customer) {
     res.status(401).json({ error: "Invalid username or password" });
     return;
@@ -966,13 +1083,30 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   }
 
   const customerRow = customer as Partial<CustomerRow>;
+  const planAdminId = portalScope?.adminId ?? adminId;
   const plan = customerRow.plan_id
-    ? (await sbSelect<PlanRow>(
+    ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
-        `id=eq.${customerRow.plan_id}&admin_id=eq.${adminId}&select=id,router_id&limit=1`,
+        `id=eq.${customerRow.plan_id}&admin_id=eq.${planAdminId}&select=id,router_id,port_id,owner_reseller_id,type,plan_type&limit=1`,
       ))[0]
     : undefined;
-  const routerId = customerRow.router_id ?? plan?.router_id ?? null;
+  if (
+    portalScope
+    && (
+      customerRow.router_id !== portalScope.routerId
+      || customerRow.port_id !== portalScope.portId
+      || (customerRow.admin_id !== portalScope.adminId && customerRow.admin_id !== portalScope.resellerId)
+      || !plan
+      || plan.router_id !== portalScope.routerId
+      || plan.port_id !== portalScope.portId
+      || (plan.owner_reseller_id != null && plan.owner_reseller_id !== portalScope.resellerId)
+      || (customerRow.admin_id === portalScope.resellerId && plan.owner_reseller_id !== portalScope.resellerId)
+    )
+  ) {
+    res.status(401).json({ error: "Invalid username or password" });
+    return;
+  }
+  const routerId = portalScope?.routerId ?? customerRow.router_id ?? plan?.router_id ?? null;
   if (!routerId) {
     res.status(409).json({ error: "Your active plan is not linked to a hotspot router yet." });
     return;
@@ -980,7 +1114,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
 
   const routerRow = (await sbSelect<RouterRow>(
     "isp_routers",
-    `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    `id=eq.${routerId}&admin_id=eq.${planAdminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
   ))[0];
   if (!routerRow) {
     res.status(409).json({ error: "Your active plan's hotspot router could not be found." });
@@ -995,6 +1129,27 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
       error: error instanceof Error ? error.message : "The hotspot router is not ready.",
     });
     return;
+  }
+
+  let hotspotServer: string | undefined;
+  if (portalScope) {
+    const servicePorts = await sbSelectStrict<VlanPortRow>(
+      "isp_reseller_ports",
+      `id=eq.${portalScope.portId}&admin_id=eq.${portalScope.adminId}&router_id=eq.${portalScope.routerId}&assigned_reseller_id=eq.${portalScope.resellerId}&handoff_mode=eq.vlan_services&status=eq.active&hotspot_enabled=is.true&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status,hotspot_enabled,link_status&limit=1`,
+    );
+    const servicePort = servicePorts[0];
+    if (!servicePort) {
+      res.status(409).json({ error: "The assigned Hotspot service is not active." });
+      return;
+    }
+    hotspotServer = portServiceResourceNames(servicePort).hotspotServer;
+    if (
+      customerRow.type === "vlan"
+      && (!isValidIpv4(customerRow.ip_address) || !ipv4InSubnet(customerRow.ip_address, servicePort.subnet_range))
+    ) {
+      res.status(409).json({ error: "This VLAN account does not have a valid IP on the assigned service." });
+      return;
+    }
   }
 
   const customerMac = normalisePortalMac(customerRow.mac_address);
@@ -1018,19 +1173,24 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     user.user === username && !!targetMac && normalisePortalMac(user.macAddress) === targetMac,
   );
   if (!connected) {
-    const ip = targetMac ? await resolveHotspotClientIpByMac(creds, targetMac).catch(() => null) : null;
-    if (!ip || !targetMac) {
+    const discoveredIp = targetMac ? await resolveHotspotClientIpByMac(creds, targetMac).catch(() => null) : null;
+    if (!discoveredIp || !targetMac) {
       res.status(409).json({
         error: "Credentials are valid, but the router cannot find this device on the hotspot Wi-Fi yet. Connect the device to Wi-Fi and try again.",
       });
+      return;
+    }
+    if (portalScope && customerRow.type === "vlan" && discoveredIp !== customerRow.ip_address) {
+      res.status(409).json({ error: "This device is not using the static IP assigned to its VLAN account." });
       return;
     }
     try {
       const loginAccepted = await connectHotspotUser(creds, {
         user: username,
         password,
-        ip,
+        ip: customerRow.type === "vlan" ? String(customerRow.ip_address) : discoveredIp,
         macAddress: targetMac,
+        ...(hotspotServer ? { server: hotspotServer } : {}),
       });
       if (!loginAccepted) {
         res.status(503).json({
@@ -1077,7 +1237,9 @@ type HotspotPurchaseTransaction = {
 
 type HotspotTroubleshootCustomer = Pick<
   CustomerRow,
-  "id" | "admin_id" | "name" | "mac_address" | "username" | "password" | "plan_id" | "router_id" | "ip_address" | "status" | "expires_at" | "fup_limit_mb" | "depletion_reason"
+  "id" | "admin_id" | "name" | "mac_address" | "username" | "password" | "type"
+    | "plan_id" | "router_id" | "port_id" | "ip_address" | "status" | "expires_at"
+    | "fup_limit_mb" | "depletion_reason"
 >;
 
 type HotspotTroubleshootStatus = "active" | "depleted" | "expired" | "not_found" | "unavailable";
@@ -1093,17 +1255,32 @@ type HotspotPurchaseLookup = {
   plan?: PlanRow;
 };
 
-async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string): Promise<HotspotPurchaseLookup> {
+async function lookupLatestHotspotPurchase(
+  adminId: number,
+  requestedMac: string,
+  portalScope?: VlanHotspotPortalContext,
+): Promise<HotspotPurchaseLookup> {
   const macCandidates = Array.from(new Set([requestedMac, requestedMac.replace(/:/g, "")]));
   const [directTransactions, macBoundCustomers] = await Promise.all([
     Promise.all(macCandidates.map(mac => sbSelectStrict<HotspotPurchaseTransaction>(
       "isp_transactions",
       `admin_id=eq.${adminId}&mac_address=eq.${encodeURIComponent(mac)}&status=in.(completed,paid,success)&select=id,customer_id,plan_id,mac_address,status,created_at&order=created_at.desc.nullslast,id.desc&limit=25`,
     ))).then(rows => rows.flat()),
-    Promise.all(macCandidates.map(mac => sbSelectStrict<{ id: number }>(
-      "isp_customers",
-      `admin_id=eq.${adminId}&type=eq.hotspot&mac_address=eq.${encodeURIComponent(mac)}&select=id&limit=100`,
-    ))).then(rows => rows.flat()),
+    portalScope
+      ? Promise.all(macCandidates.flatMap(mac => [
+          sbSelectStrict<{ id: number }>(
+            "isp_customers",
+            `admin_id=eq.${portalScope.adminId}&type=eq.vlan&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&mac_address=eq.${encodeURIComponent(mac)}&select=id&limit=100`,
+          ),
+          sbSelectStrict<{ id: number }>(
+            "isp_customers",
+            `admin_id=eq.${portalScope.resellerId}&type=eq.hotspot&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&mac_address=eq.${encodeURIComponent(mac)}&select=id&limit=100`,
+          ),
+        ])).then(rows => rows.flat())
+      : Promise.all(macCandidates.map(mac => sbSelectStrict<{ id: number }>(
+          "isp_customers",
+          `admin_id=eq.${adminId}&type=eq.hotspot&mac_address=eq.${encodeURIComponent(mac)}&select=id&limit=100`,
+        ))).then(rows => rows.flat()),
   ]);
 
   const customerIds = Array.from(new Set(macBoundCustomers.map(customer => customer.id).filter(id => Number.isSafeInteger(id) && id > 0)));
@@ -1114,11 +1291,30 @@ async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string
       )
     : [];
 
+  let scopedPlanIds: Set<number> | undefined;
+  if (portalScope) {
+    const candidatePlanIds = Array.from(new Set(
+      [...directTransactions, ...linkedTransactions]
+        .map(transaction => Number(transaction.plan_id))
+        .filter(id => Number.isSafeInteger(id) && id > 0),
+    ));
+    const scopedPlans = candidatePlanIds.length
+      ? await sbSelectStrict<PlanRow>(
+          "isp_plans",
+          `id=in.(${candidatePlanIds.join(",")})&admin_id=eq.${portalScope.adminId}&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&select=id,owner_reseller_id,type,plan_type&limit=100`,
+        )
+      : [];
+    scopedPlanIds = new Set(scopedPlans
+      .filter(plan => plan.owner_reseller_id == null || plan.owner_reseller_id === portalScope.resellerId)
+      .map(plan => plan.id));
+  }
+
   const seenTransactions = new Map<number, HotspotPurchaseTransaction>();
   for (const transaction of [...directTransactions, ...linkedTransactions]) {
     const rawMac = String(transaction.mac_address ?? "").trim();
     const transactionMac = normalisePortalMac(rawMac);
     if ((rawMac && transactionMac !== requestedMac) || (!rawMac && !customerIds.includes(Number(transaction.customer_id)))) continue;
+    if (portalScope && (!transaction.plan_id || !scopedPlanIds?.has(transaction.plan_id))) continue;
     seenTransactions.set(transaction.id, transaction);
   }
   const latestTransaction = Array.from(seenTransactions.values()).sort((left, right) => {
@@ -1142,10 +1338,15 @@ async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string
   const plan = latestTransaction.plan_id
     ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
-        `id=eq.${latestTransaction.plan_id}&admin_id=eq.${adminId}&select=id,name,type,router_id,port_id,owner_reseller_id,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit&limit=1`,
+        `id=eq.${latestTransaction.plan_id}&admin_id=eq.${adminId}${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}` : ""}&select=id,name,type,router_id,port_id,owner_reseller_id,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit&limit=1`,
       ))[0]
     : undefined;
-  if (plan && normalizePlanServiceType(plan.type) !== "hotspot") {
+  const planServiceType = plan ? normalizePlanServiceType(plan.type) : "";
+  if (
+    plan
+    && planServiceType !== "hotspot"
+    && !(portalScope && planServiceType === "vlan")
+  ) {
     return {
       found: false,
       status: "not_found",
@@ -1165,6 +1366,24 @@ async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string
       error: "The confirmed purchase was found, but its package details are unavailable. Contact support.",
     };
   }
+  if (
+    portalScope
+    && (
+      plan.router_id !== portalScope.routerId
+      || plan.port_id !== portalScope.portId
+      || (plan.owner_reseller_id != null && plan.owner_reseller_id !== portalScope.resellerId)
+      || (planServiceType === "hotspot" && plan.owner_reseller_id !== portalScope.resellerId)
+    )
+  ) {
+    return {
+      found: false,
+      status: "not_found",
+      expiresAt: null,
+      planName: null,
+      username: null,
+      error: "No successfully purchased hotspot package was found for this device.",
+    };
+  }
   if (!latestTransaction.customer_id) {
     return {
       found: true,
@@ -1177,10 +1396,13 @@ async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string
     };
   }
 
-  const customerAdminId = plan.owner_reseller_id ?? adminId;
+  const customerType = planServiceType === "vlan" ? "vlan" : "hotspot";
+  const customerAdminId = customerType === "vlan"
+    ? adminId
+    : (portalScope?.resellerId ?? plan.owner_reseller_id ?? adminId);
   const customer = (await sbSelectStrict<HotspotTroubleshootCustomer>(
     "isp_customers",
-    `id=eq.${latestTransaction.customer_id}&admin_id=eq.${customerAdminId}&type=eq.hotspot&select=id,admin_id,name,mac_address,username,password,plan_id,router_id,ip_address,status,expires_at,fup_limit_mb,depletion_reason&limit=1`,
+    `id=eq.${latestTransaction.customer_id}&admin_id=eq.${customerAdminId}&type=eq.${customerType}&select=id,admin_id,name,mac_address,username,password,type,plan_id,router_id,port_id,ip_address,status,expires_at,fup_limit_mb,depletion_reason&limit=1`,
   ))[0];
   if (!customer) {
     return {
@@ -1191,6 +1413,25 @@ async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string
       username: null,
       error: "The confirmed purchase has no saved hotspot account. Contact support.",
       plan,
+    };
+  }
+  if (
+    portalScope
+    && (
+      customer.plan_id !== plan.id
+      || customer.router_id !== portalScope.routerId
+      || customer.port_id !== portalScope.portId
+      || (customerType === "vlan" && customer.admin_id !== portalScope.adminId)
+      || (customerType === "hotspot" && customer.admin_id !== portalScope.resellerId)
+    )
+  ) {
+    return {
+      found: false,
+      status: "not_found",
+      expiresAt: null,
+      planName: null,
+      username: null,
+      error: "No successfully purchased hotspot package was found for this device.",
     };
   }
 
@@ -1309,7 +1550,8 @@ async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string
  * saved RouterOS credentials; the password is never sent to the portal.
  */
 router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> => {
-  const adminId = Number(req.body?.adminId);
+  const portalScope = req.hotspotPortalContext;
+  const adminId = portalScope?.adminId ?? Number(req.body?.adminId);
   const requestedMac = normalisePortalMac(req.body?.mac_address);
   const action = req.body?.action === "login" ? "login" : "check";
 
@@ -1320,7 +1562,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
 
   let lookup: HotspotPurchaseLookup;
   try {
-    lookup = await lookupLatestHotspotPurchase(adminId, requestedMac);
+    lookup = await lookupLatestHotspotPurchase(adminId, requestedMac, portalScope);
   } catch (error) {
     logger.error({ err: error, adminId, macAddress: requestedMac }, "[customers/hotspot-troubleshoot] purchase lookup failed");
     res.status(503).json({ ok: false, error: "Could not verify the latest hotspot purchase. Please try again." });
@@ -1380,7 +1622,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
 
   const username = String(customer.username ?? "").trim();
   const password = String(customer.password ?? "");
-  const routerId = customer.router_id ?? plan.router_id ?? null;
+  const routerId = portalScope?.routerId ?? customer.router_id ?? plan.router_id ?? null;
   if (!routerId) {
     res.status(409).json({ ...response, ok: false, error: "Your active plan is not linked to a hotspot router yet." });
     return;
@@ -1406,6 +1648,27 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
     return;
   }
 
+  let hotspotServer: string | undefined;
+  if (portalScope) {
+    const servicePorts = await sbSelectStrict<VlanPortRow>(
+      "isp_reseller_ports",
+      `id=eq.${portalScope.portId}&admin_id=eq.${portalScope.adminId}&router_id=eq.${portalScope.routerId}&assigned_reseller_id=eq.${portalScope.resellerId}&handoff_mode=eq.vlan_services&status=eq.active&hotspot_enabled=is.true&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status,hotspot_enabled,link_status&limit=1`,
+    );
+    const servicePort = servicePorts[0];
+    if (!servicePort) {
+      res.status(409).json({ ...response, ok: false, error: "The assigned Hotspot service is not active." });
+      return;
+    }
+    hotspotServer = portServiceResourceNames(servicePort).hotspotServer;
+    if (
+      customer.type === "vlan"
+      && (!isValidIpv4(customer.ip_address) || !ipv4InSubnet(customer.ip_address, servicePort.subnet_range))
+    ) {
+      res.status(409).json({ ...response, ok: false, error: "This VLAN account does not have a valid IP on the assigned service." });
+      return;
+    }
+  }
+
   try {
     const activeUsers = await fetchHotspotUsers(creds);
     const connected = activeUsers.some(user =>
@@ -1416,8 +1679,8 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       return;
     }
 
-    const ip = await resolveHotspotClientIpByMac(creds, requestedMac);
-    if (!ip) {
+    const discoveredIp = await resolveHotspotClientIpByMac(creds, requestedMac);
+    if (!discoveredIp) {
       res.status(409).json({
         ...response,
         ok: false,
@@ -1425,12 +1688,21 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       });
       return;
     }
+    if (portalScope && customer.type === "vlan" && discoveredIp !== customer.ip_address) {
+      res.status(409).json({
+        ...response,
+        ok: false,
+        error: "This device is not using the static IP assigned to its VLAN account.",
+      });
+      return;
+    }
 
     const loginAccepted = await connectHotspotUser(creds, {
       user: username,
       password,
-      ip,
+      ip: customer.type === "vlan" ? String(customer.ip_address) : discoveredIp,
       macAddress: requestedMac,
+      ...(hotspotServer ? { server: hotspotServer } : {}),
     });
     if (!loginAccepted) {
       res.status(503).json({

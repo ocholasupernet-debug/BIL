@@ -6,7 +6,9 @@ process.env.SESSION_SECRET = "router-api-config-auth-test-secret";
 const {
   authenticatedAdminId,
   generateToken,
+  generateVlanHotspotPortalContextToken,
   requireAdmin,
+  validateVlanHotspotPortalContextToken,
 } = await import("./api-auth.js");
 
 type FakeRequest = {
@@ -76,4 +78,32 @@ test("superadmin impersonation selects only the validated tenant", async () => {
   assert.equal(authenticatedAdminId(req as never, 42), 42);
   assert.equal(authenticatedAdminId(req as never, 43), 0);
   assert.equal(output.statusCode, 200);
+});
+
+test("VLAN Hotspot portal context tokens are signed and purpose-bound", () => {
+  const scope = { adminId: 7, resellerId: 19, routerId: 31, portId: 43 };
+  const token = generateVlanHotspotPortalContextToken(scope);
+  const validated = validateVlanHotspotPortalContextToken(token);
+
+  assert.deepEqual(
+    {
+      adminId: validated?.adminId,
+      resellerId: validated?.resellerId,
+      routerId: validated?.routerId,
+      portId: validated?.portId,
+      purpose: validated?.purpose,
+    },
+    { ...scope, purpose: "vlan-hotspot-portal" },
+  );
+
+  const [encoded, signature] = token.split(".");
+  const tamperedToken = `${encoded}.${signature.slice(0, -1)}${signature.endsWith("0") ? "1" : "0"}`;
+  assert.equal(validateVlanHotspotPortalContextToken(tamperedToken), null);
+});
+
+test("VLAN Hotspot portal contexts require positive safe IDs", () => {
+  assert.throws(
+    () => generateVlanHotspotPortalContextToken({ adminId: 0, resellerId: 19, routerId: 31, portId: 43 }),
+    /complete reseller VLAN portal scope/i,
+  );
 });

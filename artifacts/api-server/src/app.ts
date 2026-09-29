@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { existsSync, readFileSync } from "fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { resolveVlanHotspotPortalRequest } from "./lib/api-auth.js";
 
 const app: Express = express();
 
@@ -49,6 +50,7 @@ app.use(cors());
 app.use("/api/whatsapp/webhook", express.raw({ type: "application/json", limit: "1mb" }));
 app.use(express.json({ limit: "8mb" }));
 app.use(express.urlencoded({ extended: true }));
+app.use(resolveVlanHotspotPortalRequest);
 
 app.use("/api", router);
 

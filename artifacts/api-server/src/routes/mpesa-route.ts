@@ -58,7 +58,7 @@ import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js"
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
-import { portServiceResourceNames } from "../lib/port-service-resources.js";
+import { portServiceResourceNames, type PortServiceResourceInput } from "../lib/port-service-resources.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
 import {
   bankBusinessNumberFor,
@@ -71,6 +71,28 @@ import {
 } from "../lib/reseller-payment-gateway.js";
 
 const router: IRouter = Router();
+
+/**
+ * Keep paid Hotspot activation/reconnect operations behind one seam so route
+ * tests can verify the exact RouterOS targets without opening router or RADIUS
+ * connections. Production uses the real integrations by default.
+ */
+export const hotspotPaymentOperations = {
+  addHotspotIpBinding,
+  addHotspotUser,
+  connectHotspotUser,
+  ensureHotspotServerAddressPool,
+  ensureHotspotUserRateQueue,
+  fetchHotspotUserUsage,
+  requireHotspotUserProfile,
+  removeHotspotUserFup,
+  resetHotspotUserCounters,
+  resolveHotspotClientIpByMac,
+  scheduleHotspotUserFup,
+  scheduleHotspotUserExpiry,
+  syncRadiusCustomer,
+  updateHotspotUser,
+};
 
 const PAYMENT_GATEWAY_LABELS: Record<string, string> = {
   mpesa_paybill: "M-Pesa PayBill",
@@ -654,28 +676,45 @@ function hotspotPoolRanges(subnetRange: string | null | undefined, portId: numbe
   return `${octets[0]}.${octets[1]}.${octets[2]}.10-${octets[0]}.${octets[1]}.${octets[2]}.254`;
 }
 
-type HotspotPortContext = {
-  id: number;
-  router_id: number;
-  interface_name: string;
+type HotspotPortContext = Pick<
+  PortServiceResourceInput,
+  "id" | "router_id" | "interface_name" | "bridge_name" | "handoff_mode"
+    | "reseller_id" | "assigned_reseller_id" | "vlan_tag"
+> & {
   hotspot_enabled: boolean;
   subnet_range: string | null;
   status: string;
+  link_status: string | null;
 };
 
-async function loadHotspotPortContext(
+export async function loadHotspotPortContext(
   adminId: number,
   routerId: number,
   portId: number | null,
+  expectedResellerId?: number,
 ): Promise<HotspotPortContext | null> {
   if (!portId) return null;
-  const rows = await sbSelect<HotspotPortContext>(
+  const assignedResellerFilter = expectedResellerId === undefined
+    ? ""
+    : `&assigned_reseller_id=eq.${expectedResellerId}&handoff_mode=eq.vlan_services&status=eq.active&link_status=eq.active&hotspot_enabled=is.true`;
+  const rows = await sbSelectStrict<HotspotPortContext>(
     "isp_reseller_ports",
-    `id=eq.${portId}&admin_id=eq.${adminId}&router_id=eq.${routerId}&select=id,router_id,interface_name,hotspot_enabled,subnet_range,status&limit=1`,
+    `id=eq.${portId}&admin_id=eq.${adminId}&router_id=eq.${routerId}${assignedResellerFilter}&select=id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,hotspot_enabled,subnet_range,status,link_status&limit=1`,
   );
   const port = rows[0];
+  if (!port && expectedResellerId !== undefined) {
+    throw new Error("The reseller Hotspot port assignment changed before activation.");
+  }
   if (!port || port.status === "disabled" || !port.hotspot_enabled) {
     throw new Error("The selected Hotspot port is not deployed or enabled.");
+  }
+  if (expectedResellerId !== undefined && (
+    port.assigned_reseller_id !== expectedResellerId
+    || port.handoff_mode !== "vlan_services"
+    || port.status !== "active"
+    || port.link_status !== "active"
+  )) {
+    throw new Error("The reseller Hotspot port assignment changed before activation.");
   }
   return port;
 }
@@ -715,7 +754,7 @@ async function loadTenantCompanyName(adminId: number): Promise<string | null> {
   return rows[0]?.name ?? null;
 }
 
-function hotspotPortResources(
+export function hotspotPortResources(
   port: HotspotPortContext,
   options: { companyName?: string | null; routerName?: string | null } = {},
 ): {
@@ -1481,8 +1520,9 @@ router.post("/mpesa/reseller-test", async (req: Request, res: Response): Promise
  * identity data needed to choose a TV or streaming device.
  */
 router.get("/mpesa/hotspot-devices", async (req: Request, res: Response): Promise<void> => {
-  const adminId = await resolvePortalAdminId(req, req.query.adminId);
-  const requestedRouterId = Number(req.query.routerId);
+  const portalScope = req.hotspotPortalContext;
+  const adminId = portalScope?.adminId ?? await resolvePortalAdminId(req, req.query.adminId);
+  const requestedRouterId = portalScope?.routerId ?? Number(req.query.routerId);
   const hasRouterFilter = Number.isSafeInteger(requestedRouterId) && requestedRouterId > 0;
   if (adminId === null || !Number.isSafeInteger(adminId) || adminId < 1) {
     res.status(400).json({ ok: false, error: "Open this portal from the ISP's assigned hostname or provide its ISP account." });
@@ -1495,6 +1535,22 @@ router.get("/mpesa/hotspot-devices", async (req: Request, res: Response): Promis
   if (!await isActiveIspAdmin(adminId)) {
     res.status(404).json({ ok: false, error: "This ISP account is not available." });
     return;
+  }
+
+  let serviceSubnet: string | null = null;
+  if (portalScope) {
+    const ports = await sbSelectStrict<{
+      id: number;
+      subnet_range: string | null;
+    }>(
+      "isp_reseller_ports",
+      `id=eq.${portalScope.portId}&admin_id=eq.${portalScope.adminId}&router_id=eq.${portalScope.routerId}&assigned_reseller_id=eq.${portalScope.resellerId}&handoff_mode=eq.vlan_services&status=eq.active&link_status=eq.active&hotspot_enabled=is.true&select=id,subnet_range&limit=1`,
+    );
+    serviceSubnet = ports[0]?.subnet_range ?? null;
+    if (!serviceSubnet) {
+      res.status(409).json({ ok: false, error: "The assigned Hotspot service subnet is unavailable." });
+      return;
+    }
   }
 
   const routers = await sbSelect<HotspotRouterRow & { id: number; name: string }>(
@@ -1513,6 +1569,7 @@ router.get("/mpesa/hotspot-devices", async (req: Request, res: Response): Promis
     try {
       const connected = await fetchHotspotConnectedDevices(hotspotRouterCredentials(row));
       for (const device of connected) {
+        if (serviceSubnet && (!isValidIpv4(device.address) || !ipv4InSubnet(device.address, serviceSubnet))) continue;
         devices.push({
           name: device.name,
           macAddress: device.macAddress,
@@ -2294,15 +2351,37 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
     return;
   }
 
-  const rows = await sbSelect<{ id: number; status: string; reference: string; notes: string | null; admin_id: number | null; payment_method: string }>(
+  const portalScope = req.hotspotPortalContext;
+  const rows = await sbSelect<{
+    id: number;
+    status: string;
+    reference: string;
+    notes: string | null;
+    admin_id: number | null;
+    plan_id: number | null;
+    payment_method: string;
+  }>(
     "isp_transactions",
-    `reference=eq.${encodeURIComponent(checkoutId)}&select=id,status,reference,notes,admin_id,payment_method&limit=1`,
+    `reference=eq.${encodeURIComponent(checkoutId)}${portalScope ? `&admin_id=eq.${portalScope.adminId}` : ""}&select=id,status,reference,notes,admin_id,plan_id,payment_method&limit=1`,
   );
 
   const tx = rows[0];
   if (!tx) {
     res.json({ ok: true, paid: false, status: "pending" });
     return;
+  }
+
+  if (portalScope) {
+    const scopedPlans = tx.plan_id
+      ? await sbSelectStrict<{ id: number }>(
+          "isp_plans",
+          `id=eq.${tx.plan_id}&admin_id=eq.${portalScope.adminId}&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}&select=id&limit=1`,
+        )
+      : [];
+    if (!scopedPlans[0]) {
+      res.status(404).json({ ok: false, paid: false, error: "This payment is not part of the assigned reseller service." });
+      return;
+    }
   }
 
   const paid = tx.status === "completed" || tx.status === "success" || tx.status === "paid";
@@ -2341,7 +2420,8 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
 router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Promise<void> => {
   const checkoutId = String(req.body?.checkout_id ?? "").trim();
   const forceRouterRetry = req.body?.retry === true;
-  const adminId = await resolvePortalAdminId(req, req.body?.adminId);
+  const portalScope = req.hotspotPortalContext;
+  const adminId = portalScope?.adminId ?? await resolvePortalAdminId(req, req.body?.adminId);
   const requestedMac = readMacAddress(req.body?.mac_address);
   const requestedDeviceName = readDeviceName(req.body?.device_name);
 
@@ -2403,7 +2483,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
+        `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}` : ""}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, checkoutId, planId: transaction.plan_id }, "[mpesa/hotspot-mac-access] plan schema lookup failed");
@@ -2413,6 +2493,17 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   const plan = plans[0];
   if (!plan || normalizePlanServiceType(plan.type) !== "hotspot") {
     res.status(409).json({ ok: false, error: "The paid plan is not configured as a hotspot plan." });
+    return;
+  }
+  if (
+    portalScope
+    && (
+      plan.router_id !== portalScope.routerId
+      || plan.port_id !== portalScope.portId
+      || plan.owner_reseller_id !== portalScope.resellerId
+    )
+  ) {
+    res.status(409).json({ ok: false, error: "This payment is not part of the assigned reseller service." });
     return;
   }
   const customerAdminId = plan.owner_reseller_id ?? adminId;
@@ -2519,7 +2610,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   if (plan.port_id) {
     let port: HotspotPortContext | null;
     try {
-      port = await loadHotspotPortContext(adminId, plan.router_id, plan.port_id);
+      port = await loadHotspotPortContext(adminId, plan.router_id, plan.port_id, portalScope?.resellerId);
     } catch (error) {
       logger.warn({ err: error, checkoutId, planId: plan.id, portId: plan.port_id }, "[mpesa/hotspot-mac-access] hotspot port unavailable");
       res.status(409).json({ ok: false, error: "The selected package's Hotspot port is not deployed or enabled yet." });
@@ -2529,12 +2620,20 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       res.status(409).json({ ok: false, error: "The selected package's Hotspot port could not be found." });
       return;
     }
-    const resources = hotspotPortResources(port, {
-      companyName: await loadTenantCompanyName(adminId),
+    const companyName = await loadTenantCompanyName(adminId);
+    const livePort = portalScope
+      ? await loadHotspotPortContext(adminId, plan.router_id, plan.port_id, portalScope.resellerId)
+      : port;
+    if (!livePort) {
+      res.status(409).json({ ok: false, error: "The reseller Hotspot port assignment changed before activation." });
+      return;
+    }
+    const resources = hotspotPortResources(livePort, {
+      companyName,
       routerName: routerRow.name,
     });
     try {
-      await ensureHotspotServerAddressPool(credentials, {
+      await hotspotPaymentOperations.ensureHotspotServerAddressPool(credentials, {
         serverName: resources.serverName,
         poolName: resources.poolName,
         poolRanges: resources.poolRanges,
@@ -2575,7 +2674,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     expires_at: string | null;
   }>(
     "isp_customers",
-      `id=eq.${transaction.customer_id}&admin_id=eq.${customerAdminId}&type=eq.hotspot&select=id,username,password,mac_address,ip_address,status,depletion_reason,expires_at&limit=1`,
+      `id=eq.${transaction.customer_id}&admin_id=eq.${customerAdminId}&type=eq.hotspot${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}` : ""}&select=id,username,password,mac_address,ip_address,status,depletion_reason,expires_at&limit=1`,
    )
      : [];
   const now = Date.now();
@@ -2641,7 +2740,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   }
   const hotspotPassword = "12345";
   const isSameCheckoutRetry = !!reusableCustomer && transaction.customer_id === reusableCustomer.id;
-  const routerAddress = await resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
+  const routerAddress = await hotspotPaymentOperations.resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
     logger.warn({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] target device address lookup failed");
     return null;
   }) ?? "";
@@ -2697,7 +2796,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     const hotspotProfile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
     const rateLimit = hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit);
     const sharedUsers = Math.max(1, Math.floor(Number(plan.shared_users ?? 1)));
-    await syncRadiusCustomer({
+    await hotspotPaymentOperations.syncRadiusCustomer({
       username: hotspotUsername,
       password: hotspotPassword,
       planId: plan.id,
@@ -2710,16 +2809,16 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       rateUp: plan.speed_up,
       rateUpUnit: plan.speed_up_unit,
       dataLimitMb,
-       dataCapMode,
+      dataCapMode,
       expiresAt: expiresAt.toISOString(),
     });
-    await requireHotspotUserProfile(credentials, hotspotProfile);
+    await hotspotPaymentOperations.requireHotspotUserProfile(credentials, hotspotProfile);
     if (reusableCustomer?.username && reusableCustomer.username !== hotspotUsername) {
       await disconnectHotspotActiveUser(credentials, reusableCustomer.username).catch(() => {});
       await removeHotspotUser(credentials, reusableCustomer.username).catch(() => {});
     }
     try {
-      await updateHotspotUser(credentials, hotspotUsername, {
+      await hotspotPaymentOperations.updateHotspotUser(credentials, hotspotUsername, {
         password: hotspotPassword,
         profile: hotspotProfile,
         disabled: false,
@@ -2728,7 +2827,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         limitBytesTotal,
       });
     } catch {
-      await addHotspotUser(credentials, {
+      await hotspotPaymentOperations.addHotspotUser(credentials, {
         name: hotspotUsername,
         password: hotspotPassword,
         profile: hotspotProfile,
@@ -2738,26 +2837,26 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       });
     }
     if (!isSameCheckoutRetry) {
-      await resetHotspotUserCounters(credentials, hotspotUsername).catch(() => {});
+      await hotspotPaymentOperations.resetHotspotUserCounters(credentials, hotspotUsername).catch(() => {});
     }
-    await scheduleHotspotUserExpiry(credentials, {
+    await hotspotPaymentOperations.scheduleHotspotUserExpiry(credentials, {
       name: hotspotUsername,
       expiresInSeconds: remainingExpirySeconds,
     });
     if (dataCapMode === "throttle" && fupSpeedDown !== null && fupSpeedUp !== null && capForPolicy !== null) {
-      await scheduleHotspotUserFup(credentials, {
+      await hotspotPaymentOperations.scheduleHotspotUserFup(credentials, {
         username: hotspotUsername,
         thresholdBytes: dataLimitMegabytesToBytes(capForPolicy),
         speedDownMbps: fupSpeedDown,
         speedUpMbps: fupSpeedUp,
       });
     } else {
-      await removeHotspotUserFup(credentials, hotspotUsername);
+      await hotspotPaymentOperations.removeHotspotUserFup(credentials, hotspotUsername);
     }
 
     let paidBindingApplied = false;
     try {
-      paidBindingApplied = await addHotspotIpBinding(credentials, {
+      paidBindingApplied = await hotspotPaymentOperations.addHotspotIpBinding(credentials, {
         macAddress: mac,
         ipAddress: routerAddress || undefined,
         comment: hotspotUsername,
@@ -2768,7 +2867,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       logger.warn({ err: error, router: routerRow.name, username: hotspotUsername, mac }, "[mpesa/hotspot-mac-access] device binding deferred; credentials remain available");
     }
     if (paidBindingApplied) {
-      await ensureHotspotUserRateQueue(credentials, {
+      await hotspotPaymentOperations.ensureHotspotUserRateQueue(credentials, {
         username: hotspotUsername,
         address: routerAddress || undefined,
         maxLimit: rateLimit,
@@ -2776,7 +2875,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     }
     let routerConnected = false;
     if (routerAddress) {
-      routerConnected = await connectHotspotUser(credentials, {
+      routerConnected = await hotspotPaymentOperations.connectHotspotUser(credentials, {
         user: hotspotUsername,
         password: hotspotPassword,
         ip: routerAddress,
@@ -2895,8 +2994,16 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     return;
   }
 
+  const portalScope = req.hotspotPortalContext;
+  const customerOwnerFilter = portalScope
+    ? `admin_id=in.(${adminId},${portalScope.resellerId})`
+    : `admin_id=eq.${adminId}`;
   const customers = await sbSelect<{
     id: number;
+    admin_id: number;
+    plan_id: number | null;
+    router_id: number | null;
+    port_id: number | null;
     username: string | null;
     password: string | null;
     name: string | null;
@@ -2909,7 +3016,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     expires_at: string | null;
   }>(
     "isp_customers",
-    `id=eq.${transaction.customer_id}&admin_id=eq.${adminId}&type=eq.hotspot&select=id,username,password,name,phone,mac_address,ip_address,status,depletion_reason,fup_limit_mb,expires_at&limit=1`,
+    `id=eq.${transaction.customer_id}&${customerOwnerFilter}&type=eq.hotspot${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}` : ""}&select=id,admin_id,plan_id,router_id,port_id,username,password,name,phone,mac_address,ip_address,status,depletion_reason,fup_limit_mb,expires_at&limit=1`,
   );
   const customer = customers[0];
   if (!customer?.username || !customer.password) {
@@ -2959,11 +3066,12 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     fup_speed_down: number | null;
     fup_speed_up: number | null;
     shared_users: number | null;
+    owner_reseller_id: number | null;
   }>;
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users&limit=1`,
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}` : ""}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, receipt, planId: transaction.plan_id }, "[mpesa/verify] plan schema lookup failed");
@@ -2973,6 +3081,21 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   const plan = plans[0];
   if (!plan || normalizePlanServiceType(plan.type) !== "hotspot" || !plan.router_id) {
     res.status(409).json({ ok: false, error: "The verified payment is not attached to an active hotspot package." });
+    return;
+  }
+  if (
+    portalScope
+    && (
+      customer.plan_id !== plan.id
+      || plan.router_id !== portalScope.routerId
+      || plan.port_id !== portalScope.portId
+      || plan.owner_reseller_id !== portalScope.resellerId
+      || customer.router_id !== portalScope.routerId
+      || customer.port_id !== portalScope.portId
+      || (customer.admin_id !== adminId && customer.admin_id !== portalScope.resellerId)
+    )
+  ) {
+    res.status(404).json({ ok: false, error: "That payment is not part of the assigned reseller service." });
     return;
   }
 
@@ -3033,13 +3156,18 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   let hotspotServer: string | undefined;
   if (plan.port_id) {
     try {
-      const port = await loadHotspotPortContext(adminId, plan.router_id, plan.port_id);
+      const port = await loadHotspotPortContext(adminId, plan.router_id, plan.port_id, portalScope?.resellerId);
       if (!port) throw new Error("Hotspot port could not be found.");
-      const resources = hotspotPortResources(port, {
-        companyName: await loadTenantCompanyName(adminId),
+      const companyName = await loadTenantCompanyName(adminId);
+      const livePort = portalScope
+        ? await loadHotspotPortContext(adminId, plan.router_id, plan.port_id, portalScope.resellerId)
+        : port;
+      if (!livePort) throw new Error("The reseller Hotspot port assignment changed before activation.");
+      const resources = hotspotPortResources(livePort, {
+        companyName,
         routerName: routerRow.name,
       });
-      await ensureHotspotServerAddressPool(credentials, {
+      await hotspotPaymentOperations.ensureHotspotServerAddressPool(credentials, {
         serverName: resources.serverName,
         poolName: resources.poolName,
         poolRanges: resources.poolRanges,
@@ -3047,6 +3175,22 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
       });
       hotspotServer = resources.serverName;
     } catch (error) {
+      if (error instanceof Error && error.message.includes("reseller Hotspot port assignment changed")) {
+        await markPaymentClearedRouterPending({
+          transactionId: transaction.id,
+          adminId,
+          customerId: customer.id,
+          routerName: routerRow.name,
+          failureMessage: error.message,
+        }).catch(stateError => {
+          logger.error({ err: stateError, receipt, transactionId: transaction.id, customerId: customer.id }, "[mpesa/verify] Could not persist changed-assignment payment status");
+        });
+        res.status(409).json({
+          ok: false,
+          error: "The reseller service assignment changed after payment. No access was activated; ask the ISP to review the assignment.",
+        });
+        return;
+      }
       const diagnosis = logRouterConnectionFailure(
         error,
         { receipt, routerId: routerRow.id, router: routerRow.name, portId: plan.port_id, retry: true },
@@ -3077,7 +3221,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   }
 
   const expiresInSeconds = Math.max(1, Math.ceil((expiresAtMs - Date.now()) / 1000));
-  const routerAddress = await resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
+  const routerAddress = await hotspotPaymentOperations.resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
     logger.warn({ err: error, receipt, routerId: routerRow.id, mac }, "[mpesa/verify] target device address lookup failed");
     return null;
   }) ?? "";
@@ -3115,7 +3259,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   if (dataCapMode === "disconnect" && dataLimitMb !== null) {
     let usage: Awaited<ReturnType<typeof fetchHotspotUserUsage>>;
     try {
-      usage = await fetchHotspotUserUsage(credentials, customer.username);
+      usage = await hotspotPaymentOperations.fetchHotspotUserUsage(credentials, customer.username);
     } catch (error) {
       logger.warn({ err: error, receipt, routerId: routerRow.id, username: customer.username }, "[mpesa/verify] data quota verification failed");
       res.status(503).json({ ok: false, error: "The router could not verify this package's remaining data. Try reconnecting again shortly." });
@@ -3137,7 +3281,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   }
   try {
     const sharedUsers = Math.max(1, Math.floor(Number(plan.shared_users ?? 1)));
-    await syncRadiusCustomer({
+    await hotspotPaymentOperations.syncRadiusCustomer({
       username: customer.username,
       password: customer.password,
       planId: plan.id,
@@ -3153,8 +3297,8 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
       dataCapMode,
       expiresAt: customer.expires_at,
     });
-    await requireHotspotUserProfile(credentials, hotspotProfile);
-    const paidBindingApplied = await addHotspotIpBinding(credentials, {
+    await hotspotPaymentOperations.requireHotspotUserProfile(credentials, hotspotProfile);
+    const paidBindingApplied = await hotspotPaymentOperations.addHotspotIpBinding(credentials, {
       macAddress: mac,
       ipAddress: routerAddress || undefined,
       comment: customer.username,
@@ -3162,14 +3306,14 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
       bindingType: "regular",
     });
     if (paidBindingApplied) {
-      await ensureHotspotUserRateQueue(credentials, {
+      await hotspotPaymentOperations.ensureHotspotUserRateQueue(credentials, {
         username: customer.username,
         address: routerAddress || undefined,
         maxLimit: hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit),
       });
     }
     try {
-      await updateHotspotUser(credentials, customer.username, {
+      await hotspotPaymentOperations.updateHotspotUser(credentials, customer.username, {
         password: customer.password,
         profile: hotspotProfile,
         disabled: false,
@@ -3179,7 +3323,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         limitBytesTotal,
       });
     } catch {
-      await addHotspotUser(credentials, {
+      await hotspotPaymentOperations.addHotspotUser(credentials, {
         name: customer.username,
         password: customer.password,
         profile: hotspotProfile,
@@ -3189,23 +3333,23 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         limitBytesTotal,
       });
     }
-    await scheduleHotspotUserExpiry(credentials, {
+    await hotspotPaymentOperations.scheduleHotspotUserExpiry(credentials, {
       name: customer.username,
       expiresInSeconds,
     });
     if (dataCapMode === "throttle" && fupSpeedDown !== null && fupSpeedUp !== null && dataLimitMb !== null) {
-      await scheduleHotspotUserFup(credentials, {
+      await hotspotPaymentOperations.scheduleHotspotUserFup(credentials, {
         username: customer.username,
         thresholdBytes: dataLimitMegabytesToBytes(dataLimitMb),
         speedDownMbps: fupSpeedDown,
         speedUpMbps: fupSpeedUp,
       });
     } else {
-      await removeHotspotUserFup(credentials, customer.username);
+      await hotspotPaymentOperations.removeHotspotUserFup(credentials, customer.username);
     }
     let routerConnected = false;
     if (routerAddress) {
-      routerConnected = await connectHotspotUser(credentials, {
+      routerConnected = await hotspotPaymentOperations.connectHotspotUser(credentials, {
         user: customer.username,
         password: customer.password,
         ip: routerAddress,
@@ -3218,7 +3362,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     }
     await sbUpdateStrict(
       "isp_customers",
-      `id=eq.${customer.id}&admin_id=eq.${adminId}`,
+      `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`,
       { status: "active", depletion_reason: null, ip_address: routerAddress || null, updated_at: new Date().toISOString() },
     );
     res.json({

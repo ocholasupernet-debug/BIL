@@ -93,7 +93,7 @@ router.put("/admin/hotspot-branding", requireAdmin(), async (req: Request, res: 
 });
 
 router.get("/public/hotspot-branding", async (req: Request, res: Response): Promise<void> => {
-  const id = Number(req.query.adminId);
+  const id = req.hotspotPortalContext?.resellerId ?? Number(req.query.adminId);
   if (!Number.isSafeInteger(id) || id < 1) {
     res.status(400).json({ ok: false, error: "A valid ISP context is required." });
     return;

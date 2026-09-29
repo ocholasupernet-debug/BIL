@@ -1,6 +1,10 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { randomBytes } from "node:crypto";
-import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
+import {
+  authenticatedAccount,
+  generateVlanHotspotPortalContextToken,
+  requireAdmin,
+} from "../lib/api-auth.js";
 import {
   sbDeleteStrict,
   sbInsertStrict,
@@ -309,6 +313,7 @@ async function deployDefaultResellerPortalFile(
   destinationPath: string,
   scope?: {
     adminId: number;
+    resellerId: number;
     routerId: number;
     portId: number;
     plans: Array<{
@@ -332,6 +337,12 @@ async function deployDefaultResellerPortalFile(
     const config = JSON.stringify({
       apiBase: apiOrigin,
       adminId: scope.adminId,
+      portalContextToken: generateVlanHotspotPortalContextToken({
+        adminId: scope.adminId,
+        resellerId: scope.resellerId,
+        routerId: scope.routerId,
+        portId: scope.portId,
+      }),
       routerId: scope.routerId,
       portId: scope.portId,
       plans: scope.plans,
@@ -790,6 +801,7 @@ async function provisionVlanResellerServices(
       sourceName === "login.html"
         ? {
           adminId: port.admin_id,
+          resellerId: Number(port.assigned_reseller_id),
           routerId: port.router_id,
           portId: port.id,
           plans: (await sbSelectStrict<{
@@ -2556,6 +2568,7 @@ router.post("/admin/reseller-handoffs/:portId/portal", requireAdmin(), async (re
 
     const portalScope = {
       adminId: port.admin_id,
+      resellerId: assignedResellerId,
       routerId: port.router_id,
       portId: port.id,
       plans: plans.map(plan => ({ ...plan, price: Number(plan.price) })),
@@ -3444,6 +3457,7 @@ router.post("/reseller/hotspot-clients", requireAdmin(), async (req, res): Promi
       name: username,
       password,
       profile,
+      server: portServiceResourceNames(port).hotspotServer,
       comment: `Reseller ${account.id} · ${name}`,
       expiresAt,
       enabled: true,

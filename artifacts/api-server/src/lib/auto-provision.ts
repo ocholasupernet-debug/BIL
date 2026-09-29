@@ -12,7 +12,8 @@
  *   7. Log the event in isp_webhook_events (best-effort)
  */
 
-import { sbSelect, sbInsert, sbUpdate } from "./supabase-client";
+import { randomBytes } from "node:crypto";
+import { sbSelect, sbSelectStrict, sbInsert, sbUpdate, sbUpdateStrict } from "./supabase-client";
 import {
   addPPPSecret,
   fetchPPPSecrets,
@@ -28,6 +29,7 @@ import {
   removeHotspotUserFup,
   schedulePppUserExpiry,
   reconcileVlanCustomerQueue,
+  reconcileHotspotUserAccess,
   classifyRouterConnectionFailure,
 } from "./mikrotik";
 import { logger } from "./logger";
@@ -77,6 +79,7 @@ interface SbPlan {
   data_cap_mode: string | null;
   fup_speed_down: number | null;
   fup_speed_up: number | null;
+  shared_users?: number | null;
   active_ip_pool: string | null;
   expired_ip_pool: string | null;
 }
@@ -103,6 +106,25 @@ interface SbVlanPort {
   vlan_tag: string | null;
   subnet_range: string | null;
   status: string;
+  hotspot_enabled?: boolean;
+}
+
+async function ensureVlanHotspotCredentials(customer: SbCustomer): Promise<{ username: string; password: string }> {
+  const username = String(customer.username ?? "").trim() || `vlan_${randomBytes(10).toString("hex")}`;
+  const password = String(customer.password ?? "") || randomBytes(18).toString("base64url");
+  if (customer.username !== username || customer.password !== password) {
+    const saved = await sbUpdateStrict<SbCustomer>(
+      "isp_customers",
+      `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`,
+      { username, password, updated_at: new Date().toISOString() },
+    );
+    if (saved[0]?.username !== username || saved[0]?.password !== password) {
+      throw new Error("The VLAN Hotspot login could not be saved before router activation.");
+    }
+    customer.username = username;
+    customer.password = password;
+  }
+  return { username, password };
 }
 
 export interface PppoeRenewalAccessResult {
@@ -252,7 +274,7 @@ export async function reactivateVlanAccess(opts: {
 }): Promise<PppoeRenewalAccessResult> {
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,owner_reseller_id&limit=1`,
+    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
   );
   const plan = plans[0];
   if (!plan || normalizePlanServiceType(plan.type) !== "vlan") {
@@ -264,7 +286,7 @@ export async function reactivateVlanAccess(opts: {
 
   const customers = await sbSelect<SbCustomer>(
     "isp_customers",
-    `id=eq.${opts.customerId}&admin_id=eq.${plan.owner_reseller_id ?? opts.adminId}&type=eq.vlan&select=id,admin_id,type,ip_address,router_id,port_id,status,expires_at&limit=1`,
+    `id=eq.${opts.customerId}&admin_id=eq.${plan.owner_reseller_id ?? opts.adminId}&type=eq.vlan&select=id,admin_id,name,username,password,mac_address,type,ip_address,router_id,port_id,status,expires_at&limit=1`,
   );
   const customer = customers[0];
   if (!customer || !isValidIpv4(customer.ip_address)) {
@@ -279,7 +301,7 @@ export async function reactivateVlanAccess(opts: {
 
   const ports = await sbSelect<SbVlanPort>(
     "isp_reseller_ports",
-    `id=eq.${plan.port_id}&admin_id=eq.${opts.adminId}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status&limit=1`,
+    `id=eq.${plan.port_id}&admin_id=eq.${opts.adminId}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status,hotspot_enabled&limit=1`,
   );
   const port = ports[0];
   const ownerId = port?.assigned_reseller_id ?? port?.reseller_id;
@@ -313,11 +335,54 @@ export async function reactivateVlanAccess(opts: {
     connectTimeoutMs: 10_000,
     requestTimeoutMs: 12_000,
   };
+  let hotspotLogin: { username: string; password: string } | undefined;
+  if (port.hotspot_enabled) {
+    try {
+      hotspotLogin = await ensureVlanHotspotCredentials(customer);
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : "The VLAN Hotspot login could not be prepared.",
+      };
+    }
+  }
   const expiresAt = calcExpiry(plan.validity, plan.validity_unit, plan.validity_days);
   const wasEnabled = customer.status === "active" &&
     (!customer.expires_at || Date.parse(customer.expires_at) > Date.now());
   const oldExpiry = customer.expires_at;
   const maxLimit = hotspotRateLimit(plan) ?? "0/0";
+  const limitBytesTotal = Number(plan.data_limit_mb) > 0
+    ? String(Math.floor(Number(plan.data_limit_mb) * 1_000_000))
+    : undefined;
+  const restoreAccess = async (): Promise<void> => {
+    const restoreEnabled = wasEnabled && (!oldExpiry || Date.parse(oldExpiry) > Date.now());
+    const errors: string[] = [];
+    await reconcileVlanCustomerQueue(credentials, {
+      adminId: opts.adminId,
+      customerId: customer.id,
+      ipAddress: customer.ip_address!,
+      parentQueue: resources.parentQueue,
+      parentComment: `${resources.commentPrefix}_parent_queue`,
+      maxLimit,
+      enabled: restoreEnabled,
+      expiresAt: oldExpiry,
+    }).catch(error => errors.push(error instanceof Error ? error.message : String(error)));
+    if (hotspotLogin) await reconcileHotspotUserAccess(credentials, {
+      name: hotspotLogin.username,
+      password: hotspotLogin.password,
+      profile: resources.hotspotProfile,
+      server: resources.hotspotServer,
+      comment: `OcholaSupernet VLAN customer ${opts.adminId}:${customer.id}`,
+      expiresAt: oldExpiry,
+      enabled: restoreEnabled,
+      address: customer.ip_address,
+      macAddress: customer.mac_address,
+      limitBytesTotal,
+      resetCounters: false,
+      preserveActiveSession: true,
+    }).catch(error => errors.push(error instanceof Error ? error.message : String(error)));
+    if (errors.length) throw new Error(errors.join("; "));
+  };
 
   try {
     await reconcileVlanCustomerQueue(credentials, {
@@ -330,28 +395,42 @@ export async function reactivateVlanAccess(opts: {
       enabled: true,
       expiresAt,
     });
+    if (hotspotLogin) await reconcileHotspotUserAccess(credentials, {
+      name: hotspotLogin.username,
+      password: hotspotLogin.password,
+      profile: resources.hotspotProfile,
+      server: resources.hotspotServer,
+      comment: `OcholaSupernet VLAN customer ${opts.adminId}:${customer.id}`,
+      expiresAt,
+      enabled: true,
+      address: customer.ip_address,
+      macAddress: customer.mac_address,
+      limitBytesTotal,
+      sharedUsers: Number(plan.shared_users) || 1,
+      resetCounters: false,
+      preserveActiveSession: true,
+    });
     const rollback = async (): Promise<void> => {
-      const restoreEnabled = wasEnabled && (!oldExpiry || Date.parse(oldExpiry) > Date.now());
-      await reconcileVlanCustomerQueue(credentials, {
-        adminId: opts.adminId,
-        customerId: customer.id,
-        ipAddress: customer.ip_address!,
-        parentQueue: resources.parentQueue,
-        parentComment: `${resources.commentPrefix}_parent_queue`,
-        maxLimit,
-        enabled: restoreEnabled,
-        expiresAt: oldExpiry,
-      });
+      await restoreAccess();
     };
     return { ok: true, routerName: router.name, routerId: router.id, portId: plan.port_id, expiresAt, rollback };
   } catch (error) {
+    const recoveryErrors: string[] = [];
+    await restoreAccess().catch(restoreError => recoveryErrors.push(
+      restoreError instanceof Error ? restoreError.message : String(restoreError),
+    ));
     const message = error instanceof Error ? error.message : String(error);
     const diagnosis = classifyRouterConnectionFailure(error);
     logger.warn(
-      { err: message, failureProfile: diagnosis.profile, customerId: opts.customerId, planId: opts.planId },
+      { err: message, failureProfile: diagnosis.profile, customerId: opts.customerId, planId: opts.planId, recoveryErrors },
       "[provision] VLAN renewal access restore failed",
     );
-    return { ok: false, error: `Router VLAN access could not be restored: ${message}` };
+    return {
+      ok: false,
+      error: `Router VLAN Hotspot access could not be restored: ${message}${
+        recoveryErrors.length ? ` Recovery requires administrator attention: ${recoveryErrors.join("; ")}` : ""
+      }`,
+    };
   }
 }
 
@@ -479,7 +558,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&admin_id=eq.${customer.admin_id}&is_active=is.true&select=id,admin_id,name,type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,active_ip_pool,expired_ip_pool&limit=1`
+    `id=eq.${customer.plan_id}&admin_id=eq.${customer.admin_id}&is_active=is.true&select=id,admin_id,name,type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,active_ip_pool,expired_ip_pool&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -561,12 +640,14 @@ export async function autoProvision(opts: {
   const expiresAt = calcExpiry(plan.validity, plan.validity_unit, plan.validity_days);
   const profileName = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
   let action: "created" | "renewed" | "enabled" = "created";
+  let vlanRollback: (() => Promise<void>) | undefined;
+  let vlanMutationAttempted = false;
 
   try {
     if (planType === "vlan") {
       const ports = await sbSelect<SbVlanPort>(
         "isp_reseller_ports",
-        `id=eq.${plan.port_id}&admin_id=eq.${customer.admin_id}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status&limit=1`,
+        `id=eq.${plan.port_id}&admin_id=eq.${customer.admin_id}&router_id=eq.${plan.router_id}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status,hotspot_enabled&limit=1`,
       );
       const port = ports[0];
       const ownerId = port?.assigned_reseller_id ?? port?.reseller_id;
@@ -580,15 +661,70 @@ export async function autoProvision(opts: {
         throw new Error("The VLAN service port, VLAN tag, or assigned customer IP is no longer valid.");
       }
       const resources = portServiceResourceNames(port);
+      const hotspotLogin = port.hotspot_enabled
+        ? await ensureVlanHotspotCredentials(customer)
+        : undefined;
+      const wasEnabled = customer.status === "active" &&
+        (!customer.expires_at || Date.parse(customer.expires_at) > Date.now());
+      const oldExpiry = customer.expires_at;
+      const maxLimit = hotspotRateLimit(plan) ?? "0/0";
+      const limitBytesTotal = Number(plan.data_limit_mb) > 0
+        ? String(Math.floor(Number(plan.data_limit_mb) * 1_000_000))
+        : undefined;
+      vlanRollback = async () => {
+        const restoreEnabled = wasEnabled && (!oldExpiry || Date.parse(oldExpiry) > Date.now());
+        const errors: string[] = [];
+        await reconcileVlanCustomerQueue(creds, {
+          adminId: customer.admin_id,
+          customerId: customer.id,
+          ipAddress: customer.ip_address!,
+          parentQueue: resources.parentQueue,
+          parentComment: `${resources.commentPrefix}_parent_queue`,
+          maxLimit,
+          enabled: restoreEnabled,
+          expiresAt: oldExpiry,
+        }).catch(error => errors.push(error instanceof Error ? error.message : String(error)));
+        if (hotspotLogin) await reconcileHotspotUserAccess(creds, {
+          name: hotspotLogin.username,
+          password: hotspotLogin.password,
+          profile: resources.hotspotProfile,
+          server: resources.hotspotServer,
+          comment: `OcholaSupernet VLAN customer ${customer.admin_id}:${customer.id}`,
+          expiresAt: oldExpiry,
+          enabled: restoreEnabled,
+          address: customer.ip_address,
+          macAddress: customer.mac_address,
+          limitBytesTotal,
+          resetCounters: false,
+          preserveActiveSession: true,
+        }).catch(error => errors.push(error instanceof Error ? error.message : String(error)));
+        if (errors.length) throw new Error(errors.join("; "));
+      };
+      vlanMutationAttempted = true;
       await reconcileVlanCustomerQueue(creds, {
         adminId: customer.admin_id,
         customerId: customer.id,
         ipAddress: customer.ip_address!,
         parentQueue: resources.parentQueue,
         parentComment: `${resources.commentPrefix}_parent_queue`,
-        maxLimit: hotspotRateLimit(plan) ?? "0/0",
+        maxLimit,
         enabled: true,
         expiresAt,
+      });
+      if (hotspotLogin) await reconcileHotspotUserAccess(creds, {
+        name: hotspotLogin.username,
+        password: hotspotLogin.password,
+        profile: resources.hotspotProfile,
+        server: resources.hotspotServer,
+        comment: `OcholaSupernet VLAN customer ${customer.admin_id}:${customer.id}`,
+        expiresAt,
+        enabled: true,
+        address: customer.ip_address,
+        macAddress: customer.mac_address,
+        limitBytesTotal,
+        sharedUsers: Number(plan.shared_users) || 1,
+        resetCounters: false,
+        preserveActiveSession: true,
       });
       action = "renewed";
     } else if (planType === "pppoe") {
@@ -688,7 +824,13 @@ export async function autoProvision(opts: {
     logger.info({ username, planType, action, router: router.name }, "[provision] Router account provisioned");
   } catch (routerErr) {
     /* Router unreachable — still record the payment but flag the error */
-    const msg = `Router provisioning failed: ${(routerErr as Error).message}`;
+    const rollbackErrors: string[] = [];
+    if (vlanMutationAttempted && vlanRollback) {
+      await vlanRollback().catch(error => rollbackErrors.push(error instanceof Error ? error.message : String(error)));
+    }
+    const msg = `Router provisioning failed: ${(routerErr as Error).message}${
+      rollbackErrors.length ? ` VLAN recovery requires administrator attention: ${rollbackErrors.join("; ")}` : ""
+    }`;
     logger.error({ err: routerErr }, "[provision] Router provisioning error");
     await recordTransaction(customer, amount, paymentMethod, reference, plan);
       if (planType === "vlan") {

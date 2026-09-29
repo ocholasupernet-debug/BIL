@@ -262,8 +262,11 @@ function planWritePayload(
  */
 
 router.get("/plans", async (req, res): Promise<void> => {
-  const requestedAdminId = req.query.adminId ?? req.query.ispId;
-  let adminId = typeof requestedAdminId === "string" ? requestedAdminId : undefined;
+  const portalScope = req.hotspotPortalContext;
+  const requestedAdminId = portalScope?.adminId ?? req.query.adminId ?? req.query.ispId;
+  let adminId = requestedAdminId === undefined || requestedAdminId === null
+    ? undefined
+    : String(requestedAdminId);
   if (!adminId) {
     const subdomain = getTenantSubdomainFromRequest(req);
     if (subdomain) {
@@ -283,8 +286,8 @@ router.get("/plans", async (req, res): Promise<void> => {
       : requestedType.toLowerCase() === "vlan"
         ? "&type=eq.vlan"
     : "";
-  const requestedRouterId = parseOptionalId(req.query.routerId);
-  const requestedPortId = parseOptionalId(req.query.portId);
+  const requestedRouterId = portalScope?.routerId ?? parseOptionalId(req.query.routerId);
+  const requestedPortId = portalScope?.portId ?? parseOptionalId(req.query.portId);
   let scopedRouterId = requestedRouterId;
   /*
    * Customer portals are always tied to one RouterOS service. Do not return
