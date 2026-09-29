@@ -330,6 +330,7 @@ export interface RadiusCustomerSyncOpts {
   rateDownUnit?: string | null;
   burst?: string | null;
   dataLimitMb?: number | null;
+  dataCapMode?: "disconnect" | "throttle";
   expiresAt?: string | null;
 }
 
@@ -374,7 +375,12 @@ export async function syncRadiusCustomer(opts: RadiusCustomerSyncOpts): Promise<
   }
 
   const dataLimitMb = Number(opts.dataLimitMb);
-  if (opts.planType === "hotspot" && Number.isFinite(dataLimitMb) && dataLimitMb > 0) {
+  if (
+    opts.planType === "hotspot"
+    && opts.dataCapMode !== "throttle"
+    && Number.isFinite(dataLimitMb)
+    && dataLimitMb > 0
+  ) {
     await upsertRadCheck(opts.username, "Max-Data", String(Math.floor(dataLimitMb * 1_000_000)));
   }
 
@@ -496,7 +502,12 @@ export async function syncRadiusCustomerStrict(opts: RadiusCustomerSyncOpts): Pr
   }
 
   const dataLimitMb = Number(opts.dataLimitMb);
-  if (opts.planType === "hotspot" && Number.isFinite(dataLimitMb) && dataLimitMb > 0) {
+  if (
+    opts.planType === "hotspot"
+    && opts.dataCapMode !== "throttle"
+    && Number.isFinite(dataLimitMb)
+    && dataLimitMb > 0
+  ) {
     await strictUpsertRadCheck(
       opts.username,
       "Max-Data",
