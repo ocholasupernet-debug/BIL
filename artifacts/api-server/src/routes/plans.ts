@@ -16,6 +16,7 @@ import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
 import { isSupportedPlanType, normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { isValidVlanTag } from "../lib/vlan-customer-queue.js";
 import { planBelongsToOwner, planOwnerFilter } from "../lib/plan-ownership.js";
+import { validateFupPolicy } from "../lib/fup-policy.js";
 import {
   planServicePoolName,
   portServiceResourceNames,
@@ -213,12 +214,27 @@ function planWritePayload(
   const sharedUsers = Number(input.sharedUsers ?? 1);
   const speedDown = Number(input.speedDown ?? input.speed ?? 10);
   const speedUp = Number(input.speedUp ?? input.speed ?? 10);
+  const speedDownUnit = String(input.speedDownUnit ?? input.speed_down_unit ?? "Mbps");
+  const speedUpUnit = String(input.speedUpUnit ?? input.speed_up_unit ?? "Mbps");
   const validityUnit = normalizePlanValidityUnit(input.validityUnit ?? input.validity_unit);
+  const fup = validateFupPolicy(
+    input.type,
+    input.dataLimitMb,
+    input.dataCapMode,
+    input.fupSpeedDown,
+    input.fupSpeedUp,
+    speedDown,
+    speedUp,
+    speedDownUnit,
+    speedUpUnit,
+  );
   return {
     name: String(input.name ?? "").trim(),
     type: input.type ?? "hotspot",
     speed_down: Number.isFinite(speedDown) ? speedDown : 10,
     speed_up: Number.isFinite(speedUp) ? speedUp : 10,
+    speed_down_unit: speedDownUnit,
+    speed_up_unit: speedUpUnit,
     price: Number(input.price),
     validity: Number.isFinite(validity) ? validity : 30,
     validity_unit: validityUnit,
@@ -229,6 +245,9 @@ function planWritePayload(
     active_ip_pool: pools.activeIpPool,
     expired_ip_pool: pools.expiredIpPool,
     data_limit_mb: input.dataLimitMb ?? null,
+    data_cap_mode: fup.dataCapMode,
+    fup_speed_down: fup.fupSpeedDown,
+    fup_speed_up: fup.fupSpeedUp,
     is_active: input.isActive ?? true,
     client_can_purchase: input.clientCanPurchase ?? true,
     description: input.description ?? null,
@@ -591,6 +610,8 @@ router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
     speed,
     speedDown,
     speedUp,
+    speedDownUnit,
+    speedUpUnit,
     price,
     durationDays,
     validity,
@@ -615,6 +636,22 @@ router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
   }
   if (!Number.isFinite(Number(price)) || Number(price) < 0) {
     res.status(400).json({ error: "price must be a non-negative number" });
+    return;
+  }
+  try {
+    validateFupPolicy(
+      normalizedType,
+      dataLimitMb,
+      req.body.dataCapMode,
+      req.body.fupSpeedDown,
+      req.body.fupSpeedUp,
+      speedDown ?? speed,
+      speedUp ?? speed,
+      speedDownUnit,
+      speedUpUnit,
+    );
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid FUP policy." });
     return;
   }
   let context: PlanContext;
@@ -650,8 +687,10 @@ router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
     admin_id:     effectiveAdminId,
     owner_reseller_id: context.account.role === "reseller" ? context.account.id : null,
     ...planWritePayload({
-       name, type: normalizedType, speed, speedDown, speedUp, price, durationDays, validity, validityUnit, validity_unit,
-      description, sharedUsers, dataLimitMb, isActive, clientCanPurchase,
+       name, type: normalizedType, speed, speedDown, speedUp, speedDownUnit, speedUpUnit, price, durationDays, validity, validityUnit, validity_unit,
+       description, sharedUsers, dataLimitMb, dataCapMode: req.body.dataCapMode,
+       fupSpeedDown: req.body.fupSpeedDown, fupSpeedUp: req.body.fupSpeedUp,
+       isActive, clientCanPurchase,
      }, scope, pools),
   });
   if (!row) { res.status(500).json({ error: "Failed to create plan" }); return; }
@@ -676,9 +715,17 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
     router_id: number | null;
     port_id: number | null;
     expired_ip_pool: string | null;
+    data_limit_mb: number | null;
+    data_cap_mode: string | null;
+    fup_speed_down: number | null;
+    fup_speed_up: number | null;
+    speed_down: number | null;
+    speed_up: number | null;
+    speed_down_unit: string | null;
+    speed_up_unit: string | null;
   }>(
     "isp_plans",
-    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}&select=id,name,type,router_id,port_id,expired_ip_pool&limit=1`,
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}&select=id,name,type,router_id,port_id,expired_ip_pool,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit&limit=1`,
   );
   const source = sourceRows[0];
   if (!source) { res.status(404).json({ error: "Plan not found" }); return; }
@@ -705,6 +752,34 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
     res.status(400).json({ error: "Choose a router, or choose a port belonging to that router. Universal plans are not supported." });
     return;
   }
+  const fupInput = {
+    ...req.body,
+    type: normalizedType,
+    dataLimitMb: Object.prototype.hasOwnProperty.call(req.body, "dataLimitMb") ? req.body.dataLimitMb : source.data_limit_mb,
+    dataCapMode: Object.prototype.hasOwnProperty.call(req.body, "dataCapMode") ? req.body.dataCapMode : (source.data_cap_mode ?? "disconnect"),
+    fupSpeedDown: Object.prototype.hasOwnProperty.call(req.body, "fupSpeedDown") ? req.body.fupSpeedDown : source.fup_speed_down,
+    fupSpeedUp: Object.prototype.hasOwnProperty.call(req.body, "fupSpeedUp") ? req.body.fupSpeedUp : source.fup_speed_up,
+    speedDown: req.body.speedDown ?? req.body.speed ?? source.speed_down,
+    speedUp: req.body.speedUp ?? req.body.speed ?? source.speed_up,
+    speedDownUnit: req.body.speedDownUnit ?? req.body.speed_down_unit ?? source.speed_down_unit ?? "Mbps",
+    speedUpUnit: req.body.speedUpUnit ?? req.body.speed_up_unit ?? source.speed_up_unit ?? "Mbps",
+  };
+  try {
+    validateFupPolicy(
+      normalizedType,
+      fupInput.dataLimitMb,
+      fupInput.dataCapMode,
+      fupInput.fupSpeedDown,
+      fupInput.fupSpeedUp,
+      fupInput.speedDown,
+      fupInput.speedUp,
+      fupInput.speedDownUnit,
+      fupInput.speedUpUnit,
+    );
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid FUP policy." });
+    return;
+  }
   const pools = await planPoolAssignment(
     effectiveAdminId,
     scope,
@@ -713,7 +788,7 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
   );
 
   const updates: Record<string, unknown> = {
-    ...planWritePayload(req.body, scope, pools),
+    ...planWritePayload(fupInput, scope, pools),
     updated_at: new Date().toISOString(),
   };
   if (req.body.name === undefined) delete updates.name;
@@ -721,6 +796,8 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
   if (req.body.speedDown === undefined && req.body.speedUp === undefined && req.body.speed === undefined) {
     delete updates.speed_down;
     delete updates.speed_up;
+    delete updates.speed_down_unit;
+    delete updates.speed_up_unit;
   }
   if (req.body.price === undefined) delete updates.price;
   if (req.body.durationDays === undefined && req.body.validity === undefined) {
@@ -794,6 +871,8 @@ router.post("/plans/:id/copy", requireAdmin(), async (req, res): Promise<void> =
     type: source.type ?? "hotspot",
     speed_down: source.speed_down ?? 10,
     speed_up: source.speed_up ?? 10,
+    speed_down_unit: source.speed_down_unit ?? "Mbps",
+    speed_up_unit: source.speed_up_unit ?? "Mbps",
     price: source.price ?? 0,
     validity: source.validity ?? 30,
     validity_unit: source.validity_unit ?? "days",
@@ -804,6 +883,9 @@ router.post("/plans/:id/copy", requireAdmin(), async (req, res): Promise<void> =
     active_ip_pool: pools.activeIpPool,
     expired_ip_pool: null,
     data_limit_mb: source.data_limit_mb ?? null,
+    data_cap_mode: source.data_cap_mode ?? "disconnect",
+    fup_speed_down: source.fup_speed_down ?? null,
+    fup_speed_up: source.fup_speed_up ?? null,
     is_active: source.is_active ?? true,
     client_can_purchase: source.client_can_purchase ?? true,
     description: source.description ?? null,
