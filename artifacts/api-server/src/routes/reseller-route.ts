@@ -16,6 +16,7 @@ import { deployRouterFile } from "../lib/mikrotik.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
 import { logger } from "../lib/logger.js";
 import { planOwnerFilter } from "../lib/plan-ownership.js";
+import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 import { routerResourceSetFields } from "../lib/routeros-resource-reconciliation.js";
 import {
   changeVlanIngressMode,
@@ -1341,6 +1342,9 @@ type ResellerCustomerPlan = {
   speed_down_unit: string | null;
   shared_users: number | null;
   data_limit_mb: number | string | null;
+  data_cap_mode: string | null;
+  fup_speed_down: number | string | null;
+  fup_speed_up: number | string | null;
   validity: number | null;
   validity_unit: string | null;
 };
@@ -1348,7 +1352,7 @@ type ResellerCustomerPlan = {
 async function ownedResellerPlan(account: { id: number; parent_id: number | null }, planId: number, port: ResellerPortRow, type: "hotspot" | "pppoe"): Promise<ResellerCustomerPlan> {
   const rows = await sbSelectStrict<ResellerCustomerPlan>(
     "isp_plans",
-    `id=eq.${planId}&admin_id=eq.${port.admin_id}&owner_reseller_id=eq.${account.id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&type=eq.${type}&is_active=is.true&select=id,name,type,router_id,port_id,speed_up,speed_down,speed_up_unit,speed_down_unit,shared_users,data_limit_mb,validity,validity_unit&limit=1`,
+    `id=eq.${planId}&admin_id=eq.${port.admin_id}&owner_reseller_id=eq.${account.id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&type=eq.${type}&is_active=is.true&select=id,name,type,router_id,port_id,speed_up,speed_down,speed_up_unit,speed_down_unit,shared_users,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,validity,validity_unit&limit=1`,
   );
   if (!rows[0]) throw new Error("Choose an active package owned by your reseller account and assigned to this VLAN service.");
   return rows[0];
@@ -3423,6 +3427,19 @@ router.post("/reseller/hotspot-clients", requireAdmin(), async (req, res): Promi
     const resources = vlanServiceResources(port);
     const profile = `HS_PROFILE_${vlanServiceSegment(port)}`;
     provisionedCredentials = routerCredentials(target);
+    const rawDataLimitMb = Number(plan.data_limit_mb);
+    const dataLimitMb = Number.isFinite(rawDataLimitMb) && rawDataLimitMb > 0 ? rawDataLimitMb : null;
+    const dataPolicy = validateFupPolicy(
+      plan.type,
+      dataLimitMb,
+      plan.data_cap_mode ?? "disconnect",
+      plan.fup_speed_down,
+      plan.fup_speed_up,
+      plan.speed_down,
+      plan.speed_up,
+      plan.speed_down_unit,
+      plan.speed_up_unit,
+    );
     await reconcileHotspotUserAccess(provisionedCredentials, {
       name: username,
       password,
@@ -3431,7 +3448,15 @@ router.post("/reseller/hotspot-clients", requireAdmin(), async (req, res): Promi
       expiresAt,
       enabled: true,
       sharedUsers: Number(plan.shared_users) || 1,
-      limitBytesTotal: Number(plan.data_limit_mb) > 0 ? String(Math.floor(Number(plan.data_limit_mb) * 1_000_000)) : undefined,
+      limitBytesTotal: dataPolicy.dataCapMode === "throttle" || dataLimitMb === null
+        ? "0"
+        : String(dataLimitMegabytesToBytes(dataLimitMb)),
+      dataCapMode: dataPolicy.dataCapMode,
+      fupLimitBytes: dataPolicy.dataCapMode === "throttle" && dataLimitMb !== null
+        ? dataLimitMegabytesToBytes(dataLimitMb)
+        : undefined,
+      fupSpeedDownMbps: dataPolicy.fupSpeedDown ?? undefined,
+      fupSpeedUpMbps: dataPolicy.fupSpeedUp ?? undefined,
     });
     await syncRadiusCustomer({
       username,
@@ -3445,7 +3470,8 @@ router.post("/reseller/hotspot-clients", requireAdmin(), async (req, res): Promi
       rateUpUnit: plan.speed_up_unit ?? "Mbps",
       rateDown: Number(plan.speed_down),
       rateDownUnit: plan.speed_down_unit ?? "Mbps",
-      dataLimitMb: Number(plan.data_limit_mb) || null,
+      dataLimitMb,
+      dataCapMode: dataPolicy.dataCapMode,
       expiresAt,
     });
     const [row] = await sbUpdateStrict<Record<string, unknown>>(
