@@ -797,9 +797,12 @@ async function provisionVlanResellerServices(
             price: number | string;
             validity: number;
             validity_unit: string;
+            speed_down: number | string | null;
+            speed_up: number | string | null;
+            data_limit_mb: number | string | null;
           }>(
             "isp_plans",
-            `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&${planOwnerFilter(port.assigned_reseller_id ?? null)}&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit&order=price.asc,name.asc`,
+            `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&${planOwnerFilter(port.assigned_reseller_id ?? null)}&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit,speed_down,speed_up,data_limit_mb&order=price.asc,name.asc`,
           )).map(plan => ({
             ...plan,
             price: Number(plan.price),

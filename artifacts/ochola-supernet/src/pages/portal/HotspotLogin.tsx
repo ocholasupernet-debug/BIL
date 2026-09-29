@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Wifi, Phone, Lock, Zap, CheckCircle2, Ticket,
   AlertCircle, User, Loader2, Shield, Clock,
-  ArrowRight, ArrowUpRight, CreditCard, Tv, Sparkles,
+  ArrowRight, ArrowUpRight, CreditCard, Tv, Sparkles, Database,
 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
 import { getCurrencySymbol } from "@/lib/utils";
@@ -11,6 +11,7 @@ interface Plan {
   id: number; name: string; price: number;
   validity: number; validity_unit: string; validity_days: number;
   speed_down: number; speed_up: number;
+  data_limit_mb?: number | null;
   description: string | null; plan_type?: string; type?: string;
   router_id?: number | null; port_id?: number | null;
 }
@@ -55,6 +56,9 @@ function normalizeRuntimePlan(value: unknown): Plan | null {
   const id = positivePortalId(row.id);
   const name = typeof row.name === "string" ? row.name.trim() : "";
   if (!id || !name) return null;
+  const dataLimitMb = row.data_limit_mb === null || row.data_limit_mb === undefined
+    ? null
+    : Number(row.data_limit_mb);
   return {
     id,
     name,
@@ -64,6 +68,9 @@ function normalizeRuntimePlan(value: unknown): Plan | null {
     validity_days: Number(row.validity_days ?? row.validity) || 0,
     speed_down: Number(row.speed_down) || 0,
     speed_up: Number(row.speed_up) || 0,
+    data_limit_mb: dataLimitMb !== null && Number.isFinite(dataLimitMb) && dataLimitMb > 0
+      ? dataLimitMb
+      : null,
     description: typeof row.description === "string" ? row.description : null,
     plan_type: typeof row.plan_type === "string" ? row.plan_type : undefined,
     type: typeof row.type === "string" ? row.type : undefined,
@@ -108,20 +115,36 @@ type PortalBranding = {
 
 function formatValidity(plan: Plan): string {
   const days = plan.validity_days ?? plan.validity ?? 0;
-  const unit = plan.validity_unit ?? "days";
-  if (unit === "hours" || days === 0) return `${plan.validity ?? 1} Hrs`;
-  if (days < 1) return `${Math.round(days * 24)} Hrs`;
-  if (days === 1) return "1 Day";
-  if (days < 7) return `${days} Days`;
+  const unit = (plan.validity_unit ?? "days").toLowerCase();
+  if (unit === "hours" || unit === "hour") {
+    const hours = Number(plan.validity) || 1;
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  if (days === 0) return `${plan.validity ?? 1} hours`;
+  if (days < 1) {
+    const hours = Math.round(days * 24);
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  if (days === 1) return "1 day";
+  if (days < 7) return `${days} days`;
   if (days === 7) return "1 Week";
   if (days === 30 || days === 31) return "1 Month";
   if (days === 365) return "1 Year";
-  return `${days} Days`;
+  return `${days} days`;
 }
 
 function formatSpeed(mbps: number): string {
-  if (mbps >= 1000) return `${mbps / 1000}Gbps`;
-  return `${mbps}Mbps`;
+  if (mbps >= 1000) return `${mbps / 1000} Gbps`;
+  return `${mbps} Mbps`;
+}
+
+function formatDataLimit(plan: Plan): string | null {
+  const limitMb = Number(plan.data_limit_mb);
+  if (!Number.isFinite(limitMb) || limitMb <= 0) return null;
+  const limit = limitMb >= 1000
+    ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(limitMb / 1000)} GB`
+    : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(limitMb)} MB`;
+  return `${limit} FUP data cap`;
 }
 
 function formatSessionExpiry(value: string | null): string {
@@ -1717,6 +1740,7 @@ export default function HotspotLogin() {
                         const grad = PLAN_GRADIENTS[i % PLAN_GRADIENTS.length];
                         const isExpanded = selectedPlan?.id === plan.id;
                         const isCollapsed = selectedPlan && !isExpanded;
+                        const dataLimitLabel = formatDataLimit(plan);
                         return (
                           <div key={plan.id}
                             className={`hp-plan${isExpanded ? " expanded" : ""}${isCollapsed ? " collapsed" : ""}`}
@@ -1741,6 +1765,11 @@ export default function HotspotLogin() {
                                   <div className="hp-plan-meta-row">
                                     <Clock size={12} color={grad.light} /> {formatValidity(plan)}
                                   </div>
+                                  {dataLimitLabel && (
+                                    <div className="hp-plan-meta-row">
+                                      <Database size={12} color={grad.light} /> {dataLimitLabel}
+                                    </div>
+                                  )}
                                   {plan.speed_down > 0 && (
                                     <div className="hp-plan-meta-row">
                                       <Zap size={12} color={grad.light} /> {formatSpeed(plan.speed_down)}
@@ -1850,6 +1879,11 @@ export default function HotspotLogin() {
                                   <div className="hp-plan-meta-row">
                                     <Clock size={12} color={grad.light} /> {formatValidity(plan)}
                                   </div>
+                                  {dataLimitLabel && (
+                                    <div className="hp-plan-meta-row">
+                                      <Database size={12} color={grad.light} /> {dataLimitLabel}
+                                    </div>
+                                  )}
                                   {plan.speed_down > 0 && (
                                     <div className="hp-plan-meta-row">
                                       <Zap size={12} color={grad.light} /> {formatSpeed(plan.speed_down)}
