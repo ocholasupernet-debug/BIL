@@ -19,6 +19,7 @@ import {
   reconcilePppoeUserAccess,
   disconnectHotspotActiveUser,
   fetchHotspotUsers,
+  fetchHotspotUserUsage,
   resolveHotspotClientIpByMac,
   connectHotspotUser,
   removeHotspotIpBinding,
@@ -43,6 +44,7 @@ import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { authenticatedAccount, authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 import { planOwnerFilter } from "../lib/plan-ownership.js";
+import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
@@ -68,6 +70,7 @@ type CustomerRow = {
   status: string;
   expires_at: string | null;
   fup_limit_mb: number | null;
+  depletion_reason: string | null;
 };
 
 type PlanRow = {
@@ -82,6 +85,9 @@ type PlanRow = {
   speed_down_unit: string | null;
   speed_up_unit: string | null;
   data_limit_mb: number | null;
+  data_cap_mode: string | null;
+  fup_speed_down: number | null;
+  fup_speed_up: number | null;
   shared_users: number | null;
   owner_reseller_id?: number | null;
 };
@@ -126,7 +132,7 @@ async function loadScopedCustomerPlan(
   const portFilter = Number.isSafeInteger(Number(portId)) && Number(portId) > 0 ? `&port_id=eq.${Number(portId)}` : "";
   const rows = await sbSelectStrict<PlanRow>(
     "isp_plans",
-    `id=eq.${planId}&admin_id=eq.${tenantId}&${planOwnerFilter(ownerId)}&${allowInactive ? "" : "is_active=is.true&"}${typeFilter}${routerFilter}${portFilter}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active,owner_reseller_id&limit=1`,
+    `id=eq.${planId}&admin_id=eq.${tenantId}&${planOwnerFilter(ownerId)}&${allowInactive ? "" : "is_active=is.true&"}${typeFilter}${routerFilter}${portFilter}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,is_active,owner_reseller_id&limit=1`,
   );
   const plan = rows[0];
   if (!plan) return undefined;
@@ -291,7 +297,7 @@ async function reconcileCustomerAccess(
   const plan = nextPlanId
     ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
-        `id=eq.${nextPlanId}&admin_id=eq.${adminId}&${options.allowInactivePlan ? "" : "is_active=is.true&"}select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users&limit=1`,
+        `id=eq.${nextPlanId}&admin_id=eq.${adminId}&${options.allowInactivePlan ? "" : "is_active=is.true&"}select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users&limit=1`,
       ))[0]
     : undefined;
   const planType = normalizePlanServiceType(plan?.type || nextType);
@@ -343,6 +349,7 @@ async function reconcileCustomerAccess(
   let routerSynced = false;
   let syncedRouterId: number | null = null;
   let syncedRouterName: string | null = null;
+  let dataPolicy: ReturnType<typeof validateFupPolicy> | null = null;
   if (plan && (nextName || planType === "vlan")) {
     const routerId = nextRouterId ?? plan.router_id;
     if (!routerId) throw new Error("Assign this prepaid user to a router before saving changes");
@@ -355,10 +362,23 @@ async function reconcileCustomerAccess(
     ))[0];
     if (!router) throw new Error("The selected router was not found for this ISP account");
     const creds = routerCredentials(router);
-    const dataLimitMb = Number(updates.fup_limit_mb ?? current.fup_limit_mb ?? plan.data_limit_mb);
-    const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
-      ? String(Math.floor(dataLimitMb * 1_000_000))
-      : "0";
+    const rawDataLimitMb = Number(updates.fup_limit_mb ?? current.fup_limit_mb ?? plan.data_limit_mb);
+    const dataLimitMb = Number.isFinite(rawDataLimitMb) && rawDataLimitMb > 0 ? rawDataLimitMb : null;
+    const planDataPolicy = validateFupPolicy(
+      plan.type,
+      dataLimitMb,
+      plan.data_cap_mode ?? "disconnect",
+      plan.fup_speed_down,
+      plan.fup_speed_up,
+      plan.speed_down,
+      plan.speed_up,
+      plan.speed_down_unit,
+      plan.speed_up_unit,
+    );
+    dataPolicy = planDataPolicy;
+    const limitBytesTotal = planDataPolicy.dataCapMode === "throttle" || dataLimitMb === null
+      ? "0"
+      : String(dataLimitMegabytesToBytes(dataLimitMb));
     const address = String(
       updates.ip_address === undefined ? current.ip_address ?? "" : updates.ip_address ?? "",
     ).trim();
@@ -456,6 +476,12 @@ async function reconcileCustomerAccess(
         address: address || null,
         macAddress: String(updates.mac_address ?? current.mac_address ?? "").trim() || null,
         rateLimit,
+        dataCapMode: planDataPolicy.dataCapMode,
+        fupLimitBytes: planDataPolicy.dataCapMode === "throttle" && dataLimitMb !== null
+          ? dataLimitMegabytesToBytes(dataLimitMb)
+          : undefined,
+        fupSpeedDownMbps: planDataPolicy.fupSpeedDown ?? undefined,
+        fupSpeedUpMbps: planDataPolicy.fupSpeedUp ?? undefined,
         sharedUsers: plan.shared_users ?? 1,
         resetCounters: false,
       });
@@ -505,6 +531,7 @@ async function reconcileCustomerAccess(
       rateDown: plan.speed_down,
       rateDownUnit: plan.speed_down_unit,
       dataLimitMb: Number(updates.fup_limit_mb ?? current.fup_limit_mb ?? plan.data_limit_mb),
+      dataCapMode: dataPolicy?.dataCapMode ?? "disconnect",
       expiresAt: nextExpiry,
     });
   }
@@ -556,7 +583,7 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
   let plan: PlanRow | undefined;
   if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
     const planFilter =
-      `id=eq.${requestedPlanId}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(null)}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,shared_users,is_active,owner_reseller_id&limit=1`;
+      `id=eq.${requestedPlanId}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(null)}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,is_active,owner_reseller_id&limit=1`;
     const planRows = needsVlanPlanCheck
       ? await sbSelectStrict<PlanRow>("isp_plans", planFilter)
       : await sbSelect<PlanRow>("isp_plans", planFilter);
@@ -1050,10 +1077,10 @@ type HotspotPurchaseTransaction = {
 
 type HotspotTroubleshootCustomer = Pick<
   CustomerRow,
-  "id" | "admin_id" | "name" | "mac_address" | "username" | "password" | "plan_id" | "router_id" | "ip_address" | "status" | "expires_at"
+  "id" | "admin_id" | "name" | "mac_address" | "username" | "password" | "plan_id" | "router_id" | "ip_address" | "status" | "expires_at" | "fup_limit_mb" | "depletion_reason"
 >;
 
-type HotspotTroubleshootStatus = "active" | "expired" | "not_found" | "unavailable";
+type HotspotTroubleshootStatus = "active" | "depleted" | "expired" | "not_found" | "unavailable";
 
 type HotspotPurchaseLookup = {
   found: boolean;
@@ -1115,7 +1142,7 @@ async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string
   const plan = latestTransaction.plan_id
     ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
-        `id=eq.${latestTransaction.plan_id}&admin_id=eq.${adminId}&select=id,name,type,router_id,port_id,owner_reseller_id&limit=1`,
+        `id=eq.${latestTransaction.plan_id}&admin_id=eq.${adminId}&select=id,name,type,router_id,port_id,owner_reseller_id,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit&limit=1`,
       ))[0]
     : undefined;
   if (plan && normalizePlanServiceType(plan.type) !== "hotspot") {
@@ -1153,7 +1180,7 @@ async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string
   const customerAdminId = plan.owner_reseller_id ?? adminId;
   const customer = (await sbSelectStrict<HotspotTroubleshootCustomer>(
     "isp_customers",
-    `id=eq.${latestTransaction.customer_id}&admin_id=eq.${customerAdminId}&type=eq.hotspot&select=id,admin_id,name,mac_address,username,password,plan_id,router_id,ip_address,status,expires_at&limit=1`,
+    `id=eq.${latestTransaction.customer_id}&admin_id=eq.${customerAdminId}&type=eq.hotspot&select=id,admin_id,name,mac_address,username,password,plan_id,router_id,ip_address,status,expires_at,fup_limit_mb,depletion_reason&limit=1`,
   ))[0];
   if (!customer) {
     return {
@@ -1200,14 +1227,38 @@ async function lookupLatestHotspotPurchase(adminId: number, requestedMac: string
 
   const expiresAt = customer.expires_at;
   const expiresAtMs = expiresAt ? Date.parse(expiresAt) : NaN;
-  if (customer.status === "expired" || (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now())) {
+  if (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now()) {
     return {
       found: true,
       status: "expired",
       expiresAt,
       planName: plan.name,
       username: customer.username,
-      error: "This hotspot package has expired.",
+      error: "This hotspot package has expired. Purchase a new package to reconnect.",
+      customer,
+      plan,
+    };
+  }
+  if (customer.depletion_reason === "data_limit") {
+    return {
+      found: true,
+      status: "depleted",
+      expiresAt,
+      planName: plan.name,
+      username: customer.username,
+      error: "Your package data allowance has been used. Purchase a new package to reconnect.",
+      customer,
+      plan,
+    };
+  }
+  if (customer.status === "expired") {
+    return {
+      found: true,
+      status: "expired",
+      expiresAt,
+      planName: plan.name,
+      username: customer.username,
+      error: "This hotspot package has expired. Purchase a new package to reconnect.",
       customer,
       plan,
     };
@@ -1278,6 +1329,38 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
 
   const customer = lookup.customer;
   const plan = lookup.plan;
+  if (lookup.status === "active" && customer && plan && plan.data_cap_mode !== "throttle") {
+    const rawLimitMb = Number(customer.fup_limit_mb ?? plan.data_limit_mb);
+    if (Number.isFinite(rawLimitMb) && rawLimitMb > 0) {
+      const routerId = customer.router_id ?? plan.router_id ?? null;
+      try {
+        if (!routerId) throw new Error("The package has no assigned hotspot router.");
+        const routerRow = (await sbSelectStrict<RouterRow>(
+          "isp_routers",
+          `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+        ))[0];
+        if (!routerRow) throw new Error("The assigned hotspot router could not be found.");
+        const usage = await fetchHotspotUserUsage(routerCredentials(routerRow), String(customer.username ?? ""));
+        if (usage && usage.bytesIn + usage.bytesOut >= dataLimitMegabytesToBytes(rawLimitMb)) {
+          lookup.status = "depleted";
+          lookup.error = "Your package data allowance has been used. Purchase a new package to reconnect.";
+          customer.status = "expired";
+          customer.depletion_reason = "data_limit";
+          await sbUpdateStrict(
+            "isp_customers",
+            `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`,
+            { status: "expired", depletion_reason: "data_limit", updated_at: new Date().toISOString() },
+          ).catch((error) => {
+            logger.error({ err: error, customerId: customer.id }, "[customers/hotspot-troubleshoot] could not save data-depleted status");
+          });
+        }
+      } catch (error) {
+        logger.warn({ err: error, customerId: customer.id, routerId }, "[customers/hotspot-troubleshoot] hard-cap quota check failed");
+        lookup.status = "unavailable";
+        lookup.error = "The router could not verify this package's remaining data. Please try again shortly.";
+      }
+    }
+  }
   const response = {
     ok: true,
     found: lookup.found,
