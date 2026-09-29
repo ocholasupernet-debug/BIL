@@ -329,7 +329,7 @@ export function PPPoELogin({
     portId: number | null;
     phone: string;
   } | null>(null);
-  const [packages, setPackages] = useState<Array<{ id: number; name: string; price: number | string; validity_days?: number; validity?: number; type?: string; plan_type?: string }>>([]);
+  const [packages, setPackages] = useState<Array<{ id: number; name: string; price: number | string; validity_days?: number; validity?: number; type?: string }>>([]);
   const [packagesLoading, setPackagesLoading] = useState(false);
   const [purchasePlanId, setPurchasePlanId] = useState<number | null>(null);
   const [purchaseState, setPurchaseState] = useState<"idle" | "sending" | "pending" | "paid" | "failed">("idle");
@@ -420,7 +420,7 @@ export function PPPoELogin({
       ? `&routerId=${encodeURIComponent(String(customerContext.routerId))}${customerContext.portId ? `&portId=${encodeURIComponent(String(customerContext.portId))}` : ""}`
       : "";
     fetch(`/api/plans?adminId=${encodeURIComponent(String(customerContext.adminId))}&type=pppoe&activeOnly=true&purchasableOnly=true${scope}`)
-      .then(response => response.ok ? response.json() as Promise<Array<{ id: number; name: string; price: number | string; validity_days?: number; validity?: number; type?: string; plan_type?: string }>> : [])
+      .then(response => response.ok ? response.json() as Promise<Array<{ id: number; name: string; price: number | string; validity_days?: number; validity?: number; type?: string }>> : [])
       .then(rows => setPackages(rows.filter(plan => plan.id)))
       .catch(() => setPackages([]))
       .finally(() => setPackagesLoading(false));
