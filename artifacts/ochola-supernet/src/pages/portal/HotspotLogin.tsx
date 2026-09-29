@@ -6,13 +6,26 @@ import {
 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
 import { getCurrencySymbol } from "@/lib/utils";
+import {
+  forgetHotspotDevice,
+  hotspotSavedDevicesStorageKey,
+  readSavedHotspotDevices,
+  saveHotspotDevice,
+  type SavedHotspotDevice,
+} from "@/lib/saved-hotspot-devices";
 
 interface Plan {
   id: number; name: string; price: number;
   validity: number; validity_unit: string; validity_days: number;
   speed_down: number; speed_up: number;
   data_limit_mb?: number | null;
-  description: string | null; plan_type?: string; type?: string;
+  /** What the router should do after the data allowance is exhausted. */
+  fup_policy?: "hard_disconnect" | "throttle";
+  data_cap_mode?: "disconnect" | "throttle";
+  /** Reduced speeds used only when fup_policy is throttle. */
+  fup_speed_down?: number | null;
+  fup_speed_up?: number | null;
+  description: string | null; type?: string;
   router_id?: number | null; port_id?: number | null;
 }
 
@@ -29,7 +42,7 @@ interface HotspotCredentials {
   password: string;
 }
 interface HotspotSession {
-  status: "active" | "expired" | "not_found" | "unavailable";
+  status: "active" | "depleted" | "expired" | "not_found" | "unavailable";
   connected: boolean;
   expiresAt: string | null;
   found?: boolean;
@@ -59,6 +72,26 @@ function normalizeRuntimePlan(value: unknown): Plan | null {
   const dataLimitMb = row.data_limit_mb === null || row.data_limit_mb === undefined
     ? null
     : Number(row.data_limit_mb);
+  const rawPolicy = String(
+    row.data_cap_mode ?? row.dataCapMode ?? row.fup_policy ?? row.fup_mode
+      ?? row.data_cap_policy ?? row.exhaustion_policy ?? row.quota_policy ?? "",
+  ).trim().toLowerCase();
+  const fupPolicy: Plan["fup_policy"] = [
+    "throttle",
+    "reduced_speed",
+    "reduced-speed",
+    "safaricom",
+    "fair_use",
+    "fair-use",
+  ].includes(rawPolicy)
+    ? "throttle"
+    : "hard_disconnect";
+  const throttleDown = Number(
+    row.fup_speed_down ?? row.throttle_speed_down ?? row.speed_after_limit_down ?? row.reduced_speed_down,
+  );
+  const throttleUp = Number(
+    row.fup_speed_up ?? row.throttle_speed_up ?? row.speed_after_limit_up ?? row.reduced_speed_up,
+  );
   return {
     id,
     name,
@@ -71,8 +104,11 @@ function normalizeRuntimePlan(value: unknown): Plan | null {
     data_limit_mb: dataLimitMb !== null && Number.isFinite(dataLimitMb) && dataLimitMb > 0
       ? dataLimitMb
       : null,
+    fup_policy: fupPolicy,
+    data_cap_mode: fupPolicy === "throttle" ? "throttle" : "disconnect",
+    fup_speed_down: Number.isFinite(throttleDown) && throttleDown > 0 ? throttleDown : null,
+    fup_speed_up: Number.isFinite(throttleUp) && throttleUp > 0 ? throttleUp : null,
     description: typeof row.description === "string" ? row.description : null,
-    plan_type: typeof row.plan_type === "string" ? row.plan_type : undefined,
     type: typeof row.type === "string" ? row.type : undefined,
     router_id: positivePortalId(row.router_id),
     port_id: positivePortalId(row.port_id),
@@ -144,7 +180,12 @@ function formatDataLimit(plan: Plan): string | null {
   const limit = limitMb >= 1000
     ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(limitMb / 1000)} GB`
     : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(limitMb)} MB`;
-  return `${limit} FUP data cap`;
+  if (plan.fup_policy === "throttle" && (plan.fup_speed_down ?? 0) > 0) {
+    const down = formatSpeed(plan.fup_speed_down!);
+    const up = (plan.fup_speed_up ?? 0) > 0 ? ` / ${formatSpeed(plan.fup_speed_up!)}` : "";
+    return `${limit} FUP cap · then ${down}${up}`;
+  }
+  return `${limit} cap · disconnects when used`;
 }
 
 function formatSessionExpiry(value: string | null): string {
@@ -319,6 +360,12 @@ export default function HotspotLogin() {
     portalScope.routerId ? `routerId=${encodeURIComponent(String(portalScope.routerId))}` : "",
     portalScope.portId ? `portId=${encodeURIComponent(String(portalScope.portId))}` : "",
   ].filter(Boolean).map(value => `&${value}`).join("");
+  const savedTvDevicesStorageKey = hotspotSavedDevicesStorageKey(
+    typeof window !== "undefined" ? window.location.host : "portal",
+    adminId,
+    portalScope.routerId,
+    portalScope.portId,
+  );
 
   const [plans, setPlans] = useState<Plan[]>(HOTSPOT_RUNTIME_CONFIG.plans);
   const [plansLoading, setPlansLoading] = useState(
@@ -335,6 +382,11 @@ export default function HotspotLogin() {
   const [tvDeviceChoice, setTvDeviceChoice] = useState("");
   const [tvMacAddress, setTvMacAddress] = useState(portalContext.mac);
   const [tvDeviceName, setTvDeviceName] = useState("");
+  const [savedTvDevices, setSavedTvDevices] = useState<SavedHotspotDevice[]>(
+    () => readSavedHotspotDevices(savedTvDevicesStorageKey),
+  );
+  const [rememberTvDevice, setRememberTvDevice] = useState(false);
+  const [tvDeviceSaveNotice, setTvDeviceSaveNotice] = useState("");
   const [showTvSuccess, setShowTvSuccess] = useState(false);
   const [paidAccessExpiresAt, setPaidAccessExpiresAt] = useState<string | null>(null);
   const [tvPlanId, setTvPlanId] = useState("");
@@ -378,6 +430,10 @@ export default function HotspotLogin() {
   const [mpesaMessage, setMpesaMessage] = useState("");
   const [mpesaReconnectLoading, setMpesaReconnectLoading] = useState(false);
   const [mpesaReconnectError, setMpesaReconnectError] = useState("");
+
+  useEffect(() => {
+    setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
+  }, [savedTvDevicesStorageKey]);
 
   useEffect(() => {
     if (HOTSPOT_RUNTIME_CONFIG.previewOnly) {
@@ -485,6 +541,27 @@ export default function HotspotLogin() {
       setAccessReady(connected);
       setPaidAccessExpiresAt(accessData.expires_at ?? null);
       setShowTvSuccess(connected && paymentMode === "tv");
+      if (connected && paymentMode === "tv") {
+        const macAddress = normalizeMacAddress(deviceMacAddress);
+        const wasSaved = savedTvDevices.some(device => device.macAddress === macAddress);
+        let saved = wasSaved;
+        if (rememberTvDevice) {
+          saved = saveHotspotDevice(savedTvDevicesStorageKey, {
+            macAddress,
+            name: deviceName,
+          });
+          if (saved) setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
+        }
+        setTvDeviceSaveNotice(
+          saved
+            ? "This TV is saved in this browser for next time."
+            : rememberTvDevice
+              ? "The TV is connected, but this browser could not save it."
+              : "",
+        );
+      } else {
+        setTvDeviceSaveNotice("");
+      }
       setPaymentConfirmed(true);
       setPayError(connected
         ? null
@@ -500,7 +577,17 @@ export default function HotspotLogin() {
       setAccessRetrying(false);
       bindingInFlight.current = false;
     }
-  }, [adminId, deviceMacAddress, deviceName, loginCredentialsStorageKey, paymentMode, portalContext.ip]);
+  }, [
+    adminId,
+    deviceMacAddress,
+    deviceName,
+    loginCredentialsStorageKey,
+    paymentMode,
+    portalContext.ip,
+    rememberTvDevice,
+    savedTvDevices,
+    savedTvDevicesStorageKey,
+  ]);
 
   useEffect(() => {
     if (!checkoutId || paymentConfirmed || paymentFailed) return;
@@ -564,12 +651,23 @@ export default function HotspotLogin() {
     deviceNameValue?: string;
     deviceRouterId?: number;
     targetDevice?: boolean;
+    rememberDevice?: boolean;
   }) => {
-    const { plan, phoneValue, macValue, deviceNameValue = "", deviceRouterId, targetDevice = false } = options;
+    const {
+      plan,
+      phoneValue,
+      macValue,
+      deviceNameValue = "",
+      deviceRouterId,
+      targetDevice = false,
+      rememberDevice = false,
+    } = options;
     const macAddress = normalizeMacAddress(macValue);
     const normalizedDeviceName = deviceNameValue.trim().replace(/\s+/g, " ").slice(0, 64);
     setSelectedPlan(plan);
     setPaymentMode(targetDevice ? "tv" : "data");
+    setRememberTvDevice(rememberDevice);
+    setTvDeviceSaveNotice("");
     setPhone(phoneValue);
     setDeviceMacAddress(macAddress);
     setDeviceName(normalizedDeviceName);
@@ -637,22 +735,50 @@ export default function HotspotLogin() {
   const openTvDialog = () => {
     setTvDialogOpen(true);
     setTvDialogError("");
-    setTvDeviceChoice("");
-    setTvMacAddress("");
-    setTvDeviceName("");
+    const preferredDevice = savedTvDevices[0];
+    setTvDeviceChoice(preferredDevice?.macAddress ?? "");
+    setTvMacAddress(preferredDevice?.macAddress ?? "");
+    setTvDeviceName(preferredDevice?.name ?? "");
+    setRememberTvDevice(Boolean(preferredDevice));
+    setTvDeviceSaveNotice("");
     setTvPlanId(selectedPlan ? String(selectedPlan.id) : plans[0] ? String(plans[0].id) : "");
     setTvPhone("");
   };
 
   const handleTvDeviceChoice = (value: string) => {
     setTvDeviceChoice(value);
-    const device = tvDevices.find(item => item.macAddress === value);
+    const device = savedTvDevices.find(item => item.macAddress === value)
+      ?? tvDevices.find(item => item.macAddress === value);
     if (device) {
       setTvMacAddress(device.macAddress);
       setTvDeviceName(device.name);
+      setRememberTvDevice(savedTvDevices.some(item => item.macAddress === value));
     } else {
       setTvMacAddress("");
       setTvDeviceName("");
+      setRememberTvDevice(false);
+    }
+  };
+
+  const handleUseSavedTvDevice = (device: SavedHotspotDevice) => {
+    setTvDeviceChoice(device.macAddress);
+    setTvMacAddress(device.macAddress);
+    setTvDeviceName(device.name);
+    setRememberTvDevice(true);
+    setTvDialogError("");
+  };
+
+  const handleForgetSavedTvDevice = (device: SavedHotspotDevice) => {
+    if (!forgetHotspotDevice(savedTvDevicesStorageKey, device.macAddress)) {
+      setTvDialogError("This browser could not remove the saved TV. Check its storage settings and try again.");
+      return;
+    }
+    setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
+    if (normalizeMacAddress(tvMacAddress) === normalizeMacAddress(device.macAddress)) {
+      setTvDeviceChoice("");
+      setTvMacAddress("");
+      setTvDeviceName("");
+      setRememberTvDevice(false);
     }
   };
 
@@ -686,6 +812,7 @@ export default function HotspotLogin() {
       deviceNameValue: tvDeviceName,
       deviceRouterId: tvDevices.find(item => item.macAddress === macAddress)?.routerId,
       targetDevice: true,
+      rememberDevice: rememberTvDevice,
     });
   };
 
@@ -711,7 +838,7 @@ export default function HotspotLogin() {
 
   type TroubleshootResult = {
     found: boolean;
-    status: "active" | "expired" | "not_found" | "unavailable";
+    status: "active" | "depleted" | "expired" | "not_found" | "unavailable";
     connected: boolean;
     expiresAt: string | null;
     planName: string | null;
@@ -739,7 +866,7 @@ export default function HotspotLogin() {
       const data = await res.json() as {
         ok?: boolean;
         found?: boolean;
-        status?: "active" | "expired" | "not_found" | "unavailable";
+        status?: "active" | "depleted" | "expired" | "not_found" | "unavailable";
         connected?: boolean;
         expiresAt?: string | null;
         planName?: string | null;
@@ -754,7 +881,7 @@ export default function HotspotLogin() {
       const result: TroubleshootResult = {
         found: data.found === true,
         connected: data.connected === true,
-        status: data.status === "active" || data.status === "expired" || data.status === "not_found"
+        status: data.status === "active" || data.status === "depleted" || data.status === "expired" || data.status === "not_found"
           ? data.status
           : "unavailable",
         expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
@@ -774,7 +901,7 @@ export default function HotspotLogin() {
       setLoggedInName(result.name);
       setLoginError("");
       setTroubleshootMessage(
-        result.status === "active" || result.status === "unavailable"
+        result.status === "active" || result.status === "depleted" || result.status === "unavailable"
           ? result.error ?? ""
           : "",
       );
@@ -805,7 +932,7 @@ export default function HotspotLogin() {
         });
         const data = await res.json() as {
           found?: boolean;
-          status?: "active" | "expired" | "not_found" | "unavailable";
+          status?: "active" | "depleted" | "expired" | "not_found" | "unavailable";
           expiresAt?: string | null;
           planName?: string | null;
           username?: string | null;
@@ -814,7 +941,7 @@ export default function HotspotLogin() {
         if (
           cancelled ||
           data.found !== true ||
-          (data.status !== "active" && data.status !== "expired")
+          (data.status !== "active" && data.status !== "depleted" && data.status !== "expired")
         ) return;
         setLoginSession({
           found: true,
@@ -1285,6 +1412,14 @@ export default function HotspotLogin() {
          .hp-tv-device-row { display:flex; align-items:center; gap:10px; padding:9px 11px; border-radius:10px; background:rgba(52,211,153,.06); border:1px solid rgba(52,211,153,.14); }
          .hp-tv-device-row strong { display:block; font-size:11px; color:#fff; }
          .hp-tv-device-row span { display:block; margin-top:2px; color:rgba(255,255,255,.42); font:10px monospace; }
+         .hp-tv-device-actions { margin-left:auto; display:flex; gap:6px; }
+         .hp-tv-device-action { border:1px solid rgba(255,255,255,.14); border-radius:7px; padding:5px 8px; color:rgba(255,255,255,.76); background:rgba(255,255,255,.06); font:600 10px 'Plus Jakarta Sans',sans-serif; cursor:pointer; }
+         .hp-tv-device-action:hover { background:rgba(255,255,255,.12); }
+         .hp-tv-save-device { display:flex; align-items:flex-start; gap:9px; padding:11px 12px; border-radius:10px; background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.08); cursor:pointer; }
+         .hp-tv-save-device input { margin:2px 0 0; accent-color:#34d399; }
+         .hp-tv-save-device strong { display:block; color:rgba(255,255,255,.82); font-size:11px; }
+         .hp-tv-save-device span { color:rgba(255,255,255,.42); font-size:10px; line-height:1.45; }
+         .hp-tv-saved-notice { color:#a7f3d0 !important; font-size:12px !important; margin-top:10px !important; }
          .hp-tv-actions { display:flex; gap:9px; margin-top:20px; }
          .hp-tv-actions .hp-btn { flex:1; }
          .hp-tv-cancel { background:rgba(255,255,255,.06); color:rgba(255,255,255,.65); border:1px solid rgba(255,255,255,.1); box-shadow:none; }
@@ -1553,6 +1688,7 @@ export default function HotspotLogin() {
               {paidAccessExpiresAt && (
                 <p className="hp-tv-expiry">Access expires {formatSessionExpiry(paidAccessExpiresAt)}.</p>
               )}
+              {tvDeviceSaveNotice && <p className="hp-tv-saved-notice">{tvDeviceSaveNotice}</p>}
               <button className="hp-tv-dismiss" onClick={() => setShowTvSuccess(false)}>Done</button>
             </div>
           </div>
@@ -1954,12 +2090,12 @@ export default function HotspotLogin() {
                             borderRadius: 12,
                             background: loginSession.status === "active"
                               ? "rgba(34,197,94,0.08)"
-                              : loginSession.status === "expired"
+                              : loginSession.status === "expired" || loginSession.status === "depleted"
                                 ? "rgba(245,158,11,0.08)"
                                 : "rgba(239,68,68,0.08)",
                             border: `1px solid ${loginSession.status === "active"
                               ? "rgba(34,197,94,0.2)"
-                              : loginSession.status === "expired"
+                              : loginSession.status === "expired" || loginSession.status === "depleted"
                                 ? "rgba(245,158,11,0.2)"
                                 : "rgba(239,68,68,0.2)"}`,
                           }}
@@ -1967,15 +2103,17 @@ export default function HotspotLogin() {
                           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
                             {loginSession.status === "active"
                               ? <CheckCircle2 size={16} color="#4ade80" />
-                              : <AlertCircle size={16} color={loginSession.status === "expired" ? "#fbbf24" : "#fca5a5"} />}
+                              : <AlertCircle size={16} color={loginSession.status === "expired" || loginSession.status === "depleted" ? "#fbbf24" : "#fca5a5"} />}
                             <strong style={{
-                              color: loginSession.status === "active" ? "#86efac" : loginSession.status === "expired" ? "#fbbf24" : "#fca5a5",
+                              color: loginSession.status === "active" ? "#86efac" : loginSession.status === "expired" || loginSession.status === "depleted" ? "#fbbf24" : "#fca5a5",
                               fontSize: 13,
                             }}>
                               {loginSession.status === "active"
                                 ? "Plan active"
-                                : loginSession.status === "expired"
+                                 : loginSession.status === "expired"
                                   ? "Plan expired"
+                                   : loginSession.status === "depleted"
+                                     ? "Data allowance depleted"
                                   : loginSession.status === "not_found"
                                     ? "No purchased plan found"
                                     : "Purchase needs help"}
@@ -1994,6 +2132,8 @@ export default function HotspotLogin() {
                           <p style={{ margin: 0, color: "rgba(255,255,255,0.58)", fontSize: 12, lineHeight: 1.5 }}>
                             {loginSession.status === "expired"
                               ? `Your plan expired${loginSession.expiresAt ? ` on ${formatSessionExpiry(loginSession.expiresAt)}` : ""}. Renew a package to reconnect.`
+                              : loginSession.status === "depleted"
+                                ? "Your package data allowance has been used. Purchase a new package to reconnect."
                               : loginSession.status === "active"
                                 ? loginSession.expiresAt
                                   ? `Your plan is active and expires ${formatSessionExpiry(loginSession.expiresAt)}.`
@@ -2209,6 +2349,40 @@ export default function HotspotLogin() {
                   <button type="button" className="hp-tv-modal-close" onClick={() => setTvDialogOpen(false)} aria-label="Close">×</button>
                 </div>
                 <form className="hp-tv-modal-body" onSubmit={handleTvBindPay}>
+                  {savedTvDevices.length > 0 && (
+                    <div className="hp-tv-field">
+                      <label className="hp-tv-label">SAVED ON THIS BROWSER</label>
+                      <div className="hp-tv-device-list" aria-label="Saved devices on this browser">
+                        {savedTvDevices.map(device => (
+                          <div className="hp-tv-device-row" key={`saved-${device.macAddress}`}>
+                            <Tv size={14} color="#34d399" />
+                            <div>
+                              <strong>{device.name}</strong>
+                              <span>{device.macAddress}</span>
+                            </div>
+                            <div className="hp-tv-device-actions">
+                              <button
+                                type="button"
+                                className="hp-tv-device-action"
+                                onClick={() => handleUseSavedTvDevice(device)}
+                              >
+                                Use
+                              </button>
+                              <button
+                                type="button"
+                                className="hp-tv-device-action"
+                                onClick={() => handleForgetSavedTvDevice(device)}
+                              >
+                                Forget
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="hp-tv-help">Saved devices stay in this browser and can be removed here.</div>
+                    </div>
+                  )}
+
                   <div className="hp-tv-field">
                     <label className="hp-tv-label" htmlFor="tv-connected-device">CONNECTED DEVICES</label>
                     <select
@@ -2218,7 +2392,12 @@ export default function HotspotLogin() {
                       onChange={e => handleTvDeviceChoice(e.target.value)}
                     >
                       <option value="">Add a TV manually</option>
-                      {tvDevices.map(device => (
+                      {savedTvDevices.map(device => (
+                        <option key={`saved-option-${device.macAddress}`} value={device.macAddress}>
+                          {device.name} — {device.macAddress} · Saved
+                        </option>
+                      ))}
+                      {tvDevices.filter(device => !savedTvDevices.some(saved => saved.macAddress === device.macAddress)).map(device => (
                         <option key={`${device.routerId}-${device.macAddress}`} value={device.macAddress}>
                           {device.name} — {device.macAddress}{device.address ? ` · ${device.address}` : ""}
                         </option>
@@ -2252,7 +2431,16 @@ export default function HotspotLogin() {
                       id="tv-mac-address"
                       className="hp-tv-input"
                       value={tvMacAddress}
-                      onChange={e => setTvMacAddress(e.target.value.toUpperCase())}
+                      onChange={e => {
+                        const value = e.target.value.toUpperCase();
+                        const macAddress = normalizeMacAddress(value);
+                        setTvMacAddress(value);
+                        setTvDeviceChoice(savedTvDevices.some(device => device.macAddress === macAddress)
+                          || tvDevices.some(device => device.macAddress === macAddress)
+                          ? macAddress
+                          : "");
+                        setRememberTvDevice(savedTvDevices.some(device => device.macAddress === macAddress));
+                      }}
                       placeholder="AA:BB:CC:DD:EE:FF"
                       inputMode="text"
                       autoCapitalize="characters"
@@ -2271,6 +2459,20 @@ export default function HotspotLogin() {
                       maxLength={64}
                       required
                     />
+                  </div>
+
+                  <div className="hp-tv-field">
+                    <label className="hp-tv-save-device">
+                      <input
+                        type="checkbox"
+                        checked={rememberTvDevice}
+                        onChange={e => setRememberTvDevice(e.target.checked)}
+                      />
+                      <span>
+                        <strong>Remember this TV on this browser</strong>
+                        Saved devices stay on this browser only. You can remove them at any time.
+                      </span>
+                    </label>
                   </div>
 
                   <div className="hp-tv-field">
