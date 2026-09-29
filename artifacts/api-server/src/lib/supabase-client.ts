@@ -50,6 +50,7 @@ function normalizeSelectQuery(table: string, query = ""): string {
       : match;
   });
 }
+
 function url(table: string, query = ""): string {
   const normalizedQuery = normalizeSelectQuery(table, query);
   return `${SUPABASE_URL}/rest/v1/${table}${normalizedQuery ? `?${normalizedQuery}` : ""}`;
