@@ -12,6 +12,12 @@ import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-
 import { hotspotPlanProfileName } from "../lib/prepaid-identifiers.js";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
 import { planServicePoolName, portServiceResourceNames } from "../lib/port-service-resources.js";
+import {
+  removeHotspotUserFup,
+  scheduleHotspotUserFup,
+  type RouterCredentials,
+} from "../lib/mikrotik.js";
+import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 
 const router: IRouter = Router();
 
@@ -819,9 +825,23 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
     .map(user => Number(user.plan_id))
     .filter(id => Number.isSafeInteger(id) && id > 0))];
   const planRows = planIds.length
-    ? await sbSelect<{ id: number; name: string; router_id: number | null; port_id: number | null }>(
+    ? await sbSelect<{
+        id: number;
+        name: string;
+        type: string;
+        router_id: number | null;
+        port_id: number | null;
+        data_limit_mb: number | null;
+        data_cap_mode: string | null;
+        fup_speed_down: number | null;
+        fup_speed_up: number | null;
+        speed_down: number | null;
+        speed_up: number | null;
+        speed_down_unit: string | null;
+        speed_up_unit: string | null;
+      }>(
         "isp_plans",
-        `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${planIds.join(",")})&select=id,name,router_id,port_id&limit=1000`,
+        `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${planIds.join(",")})&select=id,name,type,router_id,port_id,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit&limit=1000`,
       )
     : [];
   const plansById = new Map(planRows.map(plan => [Number(plan.id), plan]));
@@ -831,7 +851,15 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
 
   let conn!: RouterOSAPI;
   try {
-    ({ conn } = await connectWithFallback(host, bridgeIp, username, password, log));
+    let connectedHost = host || bridgeIp || "";
+    ({ conn, via: connectedHost } = await connectWithFallback(host, bridgeIp, username, password, log));
+    const routerCredentials: RouterCredentials = {
+      host: connectedHost,
+      bridgeIp: bridgeIp || undefined,
+      port: 8728,
+      username: username || "admin",
+      password: password || "",
+    };
     log(`  pushing ${users.length} user(s)\n`);
 
     let created = 0, updated = 0, skipped = 0;
@@ -847,9 +875,54 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
       const expiresAt = u.expires_at ? Date.parse(u.expires_at) : NaN;
       const enabled = String(u.status ?? "active").toLowerCase() === "active" &&
         (!Number.isFinite(expiresAt) || expiresAt > Date.now());
-      const limitBytesTotal = Number(u.data_limit_mb) > 0
+      let limitBytesTotal = Number(u.data_limit_mb) > 0
         ? String(Math.floor(Number(u.data_limit_mb) * 1_000_000))
         : "0";
+      let planFup: {
+        mode: "disconnect" | "throttle";
+        capBytes: number | null;
+        speedDown: number | null;
+        speedUp: number | null;
+      } | null = null;
+      if (u.plan_id && !plan) {
+        log(`  ❌ Stored plan ${u.plan_id} was not found; refusing request-supplied data cap`);
+        skipped++;
+        continue;
+      }
+      if (u.plan_id && plan) {
+        const parsedCapMb = plan.data_limit_mb === null || plan.data_limit_mb === undefined
+          ? null
+          : Number(plan.data_limit_mb);
+        const capMb = parsedCapMb === 0 ? null : parsedCapMb;
+        let policy: ReturnType<typeof validateFupPolicy>;
+        try {
+          policy = validateFupPolicy(
+            plan.type,
+            capMb,
+            plan.data_cap_mode ?? "disconnect",
+            plan.fup_speed_down,
+            plan.fup_speed_up,
+            plan.speed_down,
+            plan.speed_up,
+            plan.speed_down_unit,
+            plan.speed_up_unit,
+          );
+        } catch (error) {
+          log(`  ❌ ${error instanceof Error ? error.message : String(error)}`);
+          skipped++;
+          continue;
+        }
+        planFup = {
+          mode: policy.dataCapMode,
+          capBytes: capMb === null ? null : dataLimitMegabytesToBytes(capMb),
+          speedDown: policy.fupSpeedDown,
+          speedUp: policy.fupSpeedUp,
+        };
+        /* The stored plan is authoritative; never use the request cap here. */
+        limitBytesTotal = planFup.mode === "disconnect" && planFup.capBytes !== null
+          ? String(planFup.capBytes)
+          : "0";
+      }
 
       if (u.type === "pppoe") {
         /* ── PPPoE secret ── */
@@ -903,6 +976,19 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
             if (active[".id"]) {
               await conn.write(["/ip/hotspot/active/remove", `=.id=${active[".id"]}`]);
             }
+          }
+          if (u.plan_id && planFup?.mode === "throttle" && planFup.capBytes !== null
+            && planFup.speedDown !== null && planFup.speedUp !== null) {
+            await scheduleHotspotUserFup(routerCredentials, {
+              username: u.username,
+              thresholdBytes: planFup.capBytes,
+              speedDownMbps: planFup.speedDown,
+              speedUpMbps: planFup.speedUp,
+            });
+          } else {
+            /* Disconnect, unlimited, and legacy request-only users must not
+             * retain a scheduler from an earlier throttle assignment. */
+            await removeHotspotUserFup(routerCredentials, u.username);
           }
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
