@@ -382,12 +382,6 @@ function AdminResellerManagement() {
     } finally { setIngressModeSaving(null); }
   };
   const deleteAssignment = async (port: Assignment) => {
-    const label = port.handoff_mode === "vlan_services"
-      ? `VLAN ${port.vlan_tag || "service"}`
-      : port.interface_name;
-    if (!window.confirm(`Delete ${label} for this reseller? RouterOS service resources will be removed. Recorded sales are retained and keep the database row disabled.`)) {
-      return;
-    }
     setLinkDeleting(port.id); setError(""); setSuccess("");
     try {
       const result = await apiJson<{ message?: string }>(`/api/admin/reseller-handoffs/${port.id}`, { method: "DELETE" });
@@ -465,8 +459,8 @@ function AdminResellerManagement() {
           <section style={{ ...cardStyle, borderColor: "rgba(37,99,235,.4)", background: "linear-gradient(135deg, rgba(37,99,235,.12), var(--isp-card) 65%)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--isp-accent)", fontWeight: 900 }}><RouterIcon size={18} /> Pending resellers ready for VLAN approval</div>
-                <div style={{ marginTop: 5, color: "var(--isp-text-muted)", fontSize: 13 }}>Assign and successfully provision the VLAN service to approve the connection.</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--isp-accent)", fontWeight: 900 }}><RouterIcon size={18} /> Pending reseller connections</div>
+                <div style={{ marginTop: 5, color: "var(--isp-text-muted)", fontSize: 13 }}>Approve the account link now, then assign and provision a port separately if needed.</div>
               </div>
               <span className="isp-badge isp-badge-amber">{pendingUnassignedRequests.length} ready</span>
             </div>
@@ -486,7 +480,7 @@ function AdminResellerManagement() {
         )}
         <section style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 14 }}>
-            <div><div style={{ fontWeight: 850, color: "var(--isp-text)" }}>Incoming reseller connection requests</div><div style={{ fontSize: 13, color: "var(--isp-text-muted)", marginTop: 4 }}>Reject requests immediately, or assign and provision a VLAN before approving the connection.</div></div>
+            <div><div style={{ fontWeight: 850, color: "var(--isp-text)" }}>Incoming reseller connection requests</div><div style={{ fontSize: 13, color: "var(--isp-text-muted)", marginTop: 4 }}>Approve or reject account links here. Port assignment and router provisioning are separate actions.</div></div>
             <span className="isp-badge isp-badge-amber">{connectionRequests.filter((request) => request.status === "pending").length} pending</span>
           </div>
           <div style={{ display: "grid", gap: 10 }}>
@@ -502,7 +496,11 @@ function AdminResellerManagement() {
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span className={`isp-badge ${request.status === "approved" ? "isp-badge-green" : request.status === "rejected" ? "isp-badge-red" : "isp-badge-amber"}`}>{request.status}</span>
-                  {request.status === "pending" && <><button type="button" disabled={busy || linkSaving === assignment?.id} onClick={() => assignment?.status === "failed" ? void retryVlanPush(assignment.id) : openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy || linkSaving === assignment?.id ? "Working…" : assignment?.status === "failed" ? "Push VLAN again" : "Assign VLAN / approve"}</button><button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "reject")} style={{ border: "1px solid rgba(220,38,38,.25)", borderRadius: 8, padding: "8px 10px", background: "rgba(239,68,68,.08)", color: "#b91c1c", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>Reject</button></>}
+                  {request.status === "pending" && <>
+                    <button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "approve")} style={{ border: "1px solid rgba(22,163,74,.25)", borderRadius: 8, padding: "8px 10px", background: "rgba(22,163,74,.09)", color: "#15803d", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy && requestBusy === request.id ? "Approving…" : "Approve connection"}</button>
+                    <button type="button" disabled={busy || linkSaving === assignment?.id} onClick={() => assignment?.status === "failed" ? void retryVlanPush(assignment.id) : openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy || linkSaving === assignment?.id ? "Working…" : assignment?.status === "failed" ? "Push VLAN again" : "Assign VLAN / approve"}</button>
+                    <button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "reject")} style={{ border: "1px solid rgba(220,38,38,.25)", borderRadius: 8, padding: "8px 10px", background: "rgba(239,68,68,.08)", color: "#b91c1c", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>Reject</button>
+                  </>}
                   {request.status === "approved" && <button type="button" onClick={() => openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: "pointer" }}>{assignment ? "Assign another VLAN" : "Assign VLAN / reseller"}</button>}
                 </div>
               </div>;
@@ -766,7 +764,7 @@ function AdminResellerManagement() {
                           onClick={() => void deleteAssignment(port)}
                           style={{ border: "1px solid rgba(220,38,38,.3)", borderRadius: 8, padding: "7px 9px", background: "rgba(239,68,68,.07)", color: "#b91c1c", cursor: busy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}
                         >
-                          {linkDeleting === port.id ? "Deleting…" : "Delete link"}
+                          {linkDeleting === port.id ? "Deleting…" : "Delete handoff"}
                         </button>
                       </div>
                     ) : "—"}

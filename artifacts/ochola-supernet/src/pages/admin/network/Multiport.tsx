@@ -398,10 +398,6 @@ export default function Multiport() {
       setError("Choose an assigned port before unassigning it.");
       return;
     }
-    const confirmed = window.confirm(
-      `Unassign ${selectedAssignment.interface_name}? This will remove its isolated RouterOS services, firewall/NAT rules, queues, bridge, portal files, and database assignment. Shared router services are not changed.`,
-    );
-    if (!confirmed) return;
     setError("");
     setSuccess("");
     setUnassigning(true);

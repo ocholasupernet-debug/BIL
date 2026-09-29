@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { existsSync, readFileSync } from "fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { resolveVlanHotspotPortalRequest } from "./lib/api-auth.js";
 
 const app: Express = express();
 
@@ -54,6 +55,7 @@ app.use(express.json({
   },
 }));
 app.use(express.urlencoded({ extended: true }));
+app.use(resolveVlanHotspotPortalRequest);
 
 app.use("/api", router);
 

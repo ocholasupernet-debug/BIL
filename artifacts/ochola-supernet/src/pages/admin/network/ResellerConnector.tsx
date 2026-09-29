@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Send,
   ShieldCheck,
+  Trash2,
   XCircle,
 } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
@@ -103,6 +104,7 @@ export default function ResellerConnector() {
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [disconnectingIspId, setDisconnectingIspId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -136,7 +138,10 @@ export default function ResellerConnector() {
     : data?.connectedIspId
       ? [data.connectedIspId]
       : [];
-  const currentConnections = connectedIspIds.map((id) => ispNames.get(id) || `ISP #${id}`);
+  const connectedIspConnections = [...new Set(connectedIspIds)].map((id) => ({
+    id,
+    name: ispNames.get(id) || `ISP #${id}`,
+  }));
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -163,6 +168,20 @@ export default function ResellerConnector() {
       setSending(false);
     }
   };
+  const deleteConnection = async (ispAdminId: number) => {
+    setDisconnectingIspId(ispAdminId);
+    setError("");
+    setSuccess("");
+    try {
+      const result = await apiJson<{ message?: string }>(`/api/reseller/connections/${ispAdminId}`, { method: "DELETE" });
+      setSuccess(result.message || "The ISP connection was deleted.");
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to delete the ISP connection.");
+    } finally {
+      setDisconnectingIspId(null);
+    }
+  };
 
   return (
     <AdminLayout>
@@ -187,11 +206,27 @@ export default function ResellerConnector() {
         {error && <div style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "11px 13px", borderRadius: 9, background: "rgba(239,68,68,.08)", border: "1px solid rgba(239,68,68,.22)", color: "#b91c1c", fontSize: 13 }}><AlertTriangle size={16} /> <span>{error}</span></div>}
         {success && <div style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "11px 13px", borderRadius: 9, background: "rgba(34,197,94,.08)", border: "1px solid rgba(34,197,94,.22)", color: "#15803d", fontSize: 13 }}><CheckCircle2 size={16} /> <span>{success}</span></div>}
 
-        {currentConnections.length > 0 && (
+        {connectedIspConnections.length > 0 && (
           <section style={{ ...cardStyle, padding: 18, borderColor: "rgba(34,197,94,.3)" }}>
             <div style={{ display: "flex", gap: 11, alignItems: "center", color: "#15803d", fontWeight: 850 }}><ShieldCheck size={19} /> Connected ISP accounts</div>
-            <p style={{ margin: "8px 0 0", color: "var(--isp-text-muted)", fontSize: 13 }}>
-              {currentConnections.join(", ")}. Ask each ISP administrator to assign and provision a wholesale port before serving customers.
+            <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+              {connectedIspConnections.map((connection) => (
+                <div key={connection.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", padding: "10px 12px", border: "1px solid var(--isp-border)", borderRadius: 9 }}>
+                  <div style={{ color: "var(--isp-text)", fontSize: 13, fontWeight: 750 }}>{connection.name}</div>
+                  <button
+                    type="button"
+                    disabled={disconnectingIspId !== null}
+                    onClick={() => void deleteConnection(connection.id)}
+                    title="Delete this approved ISP account connection"
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid rgba(220,38,38,.28)", borderRadius: 8, padding: "7px 9px", background: "rgba(239,68,68,.07)", color: "#b91c1c", cursor: disconnectingIspId !== null ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}
+                  >
+                    <Trash2 size={14} /> {disconnectingIspId === connection.id ? "Deleting…" : "Delete connection"}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <p style={{ margin: "10px 0 0", color: "var(--isp-text-muted)", fontSize: 12, lineHeight: 1.5 }}>
+              Delete the ISP connection only after its assigned handoffs are removed. This keeps your reseller account and data; it does not remove router services.
             </p>
           </section>
         )}

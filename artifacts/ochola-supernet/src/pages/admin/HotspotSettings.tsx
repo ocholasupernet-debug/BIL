@@ -995,10 +995,6 @@ export default function HotspotSettings() {
   };
 
   const deleteAssignedPort = async (port: AssignedHotspotPort) => {
-    const confirmed = window.confirm(
-      `Delete the ${port.interface_name} assignment? This will remove its isolated RouterOS services, firewall/NAT rules, queues, bridge, portal files, and database assignment. Shared router services are not changed.`,
-    );
-    if (!confirmed) return;
     setDeletingPortId(port.id);
     setNotice(null);
     try {

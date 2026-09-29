@@ -1,6 +1,10 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { randomBytes } from "node:crypto";
-import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
+import {
+  authenticatedAccount,
+  generateVlanHotspotPortalContextToken,
+  requireAdmin,
+} from "../lib/api-auth.js";
 import {
   sbDeleteStrict,
   sbInsertStrict,
@@ -309,6 +313,7 @@ async function deployDefaultResellerPortalFile(
   destinationPath: string,
   scope?: {
     adminId: number;
+    resellerId: number;
     routerId: number;
     portId: number;
     plans: Array<{
@@ -332,6 +337,12 @@ async function deployDefaultResellerPortalFile(
     const config = JSON.stringify({
       apiBase: apiOrigin,
       adminId: scope.adminId,
+      portalContextToken: generateVlanHotspotPortalContextToken({
+        adminId: scope.adminId,
+        resellerId: scope.resellerId,
+        routerId: scope.routerId,
+        portId: scope.portId,
+      }),
       routerId: scope.routerId,
       portId: scope.portId,
       plans: scope.plans,
@@ -790,6 +801,7 @@ async function provisionVlanResellerServices(
       sourceName === "login.html"
         ? {
           adminId: port.admin_id,
+          resellerId: Number(port.assigned_reseller_id),
           routerId: port.router_id,
           portId: port.id,
           plans: (await sbSelectStrict<{
@@ -1787,13 +1799,6 @@ router.post("/isp/reseller-connection-requests/:requestId", requireAdmin(), asyn
       res.status(400).json({ ok: false, error: "Provide a valid request and choose approve or reject." });
       return;
     }
-    if (action === "approved") {
-      res.status(409).json({
-        ok: false,
-        error: "Assign and successfully provision the reseller VLAN before approving this connection.",
-      });
-      return;
-    }
     const requestRows = await sbSelectStrict<ResellerConnectionRequestRow>(
       "isp_reseller_connection_requests",
       `id=eq.${requestId}&isp_admin_id=eq.${account.id}&status=eq.pending&select=id,reseller_id,isp_admin_id,note,status,responded_at,created_at,updated_at&limit=1`,
@@ -1812,9 +1817,10 @@ router.post("/isp/reseller-connection-requests/:requestId", requireAdmin(), asyn
       username: string;
       email: string | null;
       is_active: boolean;
+      status: string | null;
     }>(
       "isp_admins",
-      `id=eq.${request.reseller_id}&role=eq.reseller&select=id,parent_id,role,name,company_name,username,email,is_active&limit=1`,
+      `id=eq.${request.reseller_id}&role=eq.reseller&select=id,parent_id,role,name,company_name,username,email,is_active,status&limit=1`,
     );
     const reseller = resellerRows[0];
     if (!reseller) {
@@ -1822,19 +1828,152 @@ router.post("/isp/reseller-connection-requests/:requestId", requireAdmin(), asyn
       return;
     }
     const now = new Date().toISOString();
-    const updated = await sbUpdateStrict<ResellerConnectionRequestRow>(
-      "isp_reseller_connection_requests",
-      `id=eq.${request.id}&isp_admin_id=eq.${account.id}&status=eq.pending`,
-      { status: action, responded_at: now, updated_at: now },
-    );
+    const shouldLinkAccount = action === "approved";
+    if (shouldLinkAccount) {
+      const linked = await sbUpdateStrict(
+        "isp_admins",
+        `id=eq.${reseller.id}&role=eq.reseller`,
+        { parent_id: account.id, status: "active", updated_at: now },
+      );
+      if (!linked[0]) {
+        res.status(409).json({ ok: false, error: "The reseller account changed while this request was being approved. Refresh and try again." });
+        return;
+      }
+    }
+    let updated: ResellerConnectionRequestRow[];
+    try {
+      updated = await sbUpdateStrict<ResellerConnectionRequestRow>(
+        "isp_reseller_connection_requests",
+        `id=eq.${request.id}&isp_admin_id=eq.${account.id}&status=eq.pending`,
+        { status: action, responded_at: now, updated_at: now },
+      );
+    } catch (error) {
+      if (shouldLinkAccount) {
+        await sbUpdateStrict(
+          "isp_admins",
+          `id=eq.${reseller.id}&role=eq.reseller&parent_id=eq.${account.id}`,
+          {
+            parent_id: reseller.parent_id,
+            status: reseller.status ?? (reseller.parent_id ? "active" : "pending"),
+            updated_at: new Date().toISOString(),
+          },
+        ).catch(() => undefined);
+      }
+      throw error;
+    }
+    if (!updated[0]) {
+      if (shouldLinkAccount) {
+        await sbUpdateStrict(
+          "isp_admins",
+          `id=eq.${reseller.id}&role=eq.reseller&parent_id=eq.${account.id}`,
+          {
+            parent_id: reseller.parent_id,
+            status: reseller.status ?? (reseller.parent_id ? "active" : "pending"),
+            updated_at: new Date().toISOString(),
+          },
+        ).catch(() => undefined);
+      }
+      res.status(409).json({ ok: false, error: "This connection request was already updated. Refresh and try again." });
+      return;
+    }
     res.json({
       ok: true,
-      request: updated[0] ?? { ...request, status: action, responded_at: now, updated_at: now },
+      request: updated[0],
       reseller,
-      message: "Reseller connection request rejected.",
+      message: action === "approved"
+        ? "Reseller account connection approved. Port assignment and router provisioning can be completed separately."
+        : "Reseller connection request rejected.",
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to update the reseller connection request." });
+  }
+});
+
+router.delete("/reseller/connections/:ispAdminId", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role !== "reseller") {
+      res.status(403).json({ ok: false, error: "Only reseller accounts can remove their ISP connections." });
+      return;
+    }
+    const ispAdminId = Number(req.params.ispAdminId);
+    if (!Number.isSafeInteger(ispAdminId) || ispAdminId <= 0) {
+      res.status(400).json({ ok: false, error: "Choose a valid ISP connection." });
+      return;
+    }
+    const [ispRows, approvedRequests, assignments] = await Promise.all([
+      sbSelectStrict<{ id: number }>(
+        "isp_admins",
+        `id=eq.${ispAdminId}&role=eq.isp_admin&select=id&limit=1`,
+      ),
+      sbSelectStrict<{ id: number }>(
+        "isp_reseller_connection_requests",
+        `reseller_id=eq.${account.id}&isp_admin_id=eq.${ispAdminId}&status=eq.approved&select=id&limit=1000`,
+      ),
+      sbSelectStrict<{ id: number; status: string }>(
+        "isp_reseller_ports",
+        `admin_id=eq.${ispAdminId}&or=(assigned_reseller_id.eq.${account.id},reseller_id.eq.${account.id})&status=neq.disabled&select=id,status&limit=1`,
+      ),
+    ]);
+    if (!ispRows[0] || (!approvedRequests.length && account.parent_id !== ispAdminId)) {
+      res.status(404).json({ ok: false, error: "This approved ISP connection was not found." });
+      return;
+    }
+    if (assignments[0]) {
+      res.status(409).json({
+        ok: false,
+        error: "Delete this ISP's assigned handoffs first. A handoff cleanup failure must be resolved before disconnecting the account.",
+      });
+      return;
+    }
+
+    let nextParentId: number | null = null;
+    if (account.parent_id === ispAdminId) {
+      const otherApproved = await sbSelectStrict<{ isp_admin_id: number }>(
+        "isp_reseller_connection_requests",
+        `reseller_id=eq.${account.id}&isp_admin_id=neq.${ispAdminId}&status=eq.approved&select=isp_admin_id&order=updated_at.desc&limit=1`,
+      );
+      nextParentId = otherApproved[0]?.isp_admin_id ?? null;
+      const relinked = await sbUpdateStrict(
+        "isp_admins",
+        `id=eq.${account.id}&role=eq.reseller&parent_id=eq.${ispAdminId}`,
+        {
+          parent_id: nextParentId,
+          status: nextParentId ? "active" : "pending",
+          updated_at: new Date().toISOString(),
+        },
+      );
+      if (!relinked[0]) {
+        res.status(409).json({ ok: false, error: "This reseller account was linked elsewhere. Refresh and try again." });
+        return;
+      }
+    }
+    if (approvedRequests.length) {
+      try {
+        await sbDeleteStrict(
+          "isp_reseller_connection_requests",
+          `reseller_id=eq.${account.id}&isp_admin_id=eq.${ispAdminId}&status=eq.approved`,
+        );
+      } catch (error) {
+        if (account.parent_id === ispAdminId) {
+          const parentFilter = nextParentId === null
+            ? "parent_id=is.null"
+            : `parent_id=eq.${nextParentId}`;
+          await sbUpdateStrict(
+            "isp_admins",
+            `id=eq.${account.id}&role=eq.reseller&${parentFilter}`,
+            { parent_id: ispAdminId, status: "active", updated_at: new Date().toISOString() },
+          ).catch(() => undefined);
+        }
+        throw error;
+      }
+    }
+    res.json({
+      ok: true,
+      message: "The ISP account connection was deleted. The reseller account and its data were kept.",
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to delete the ISP connection." });
   }
 });
 
@@ -2556,6 +2695,7 @@ router.post("/admin/reseller-handoffs/:portId/portal", requireAdmin(), async (re
 
     const portalScope = {
       adminId: port.admin_id,
+      resellerId: assignedResellerId,
       routerId: port.router_id,
       portId: port.id,
       plans: plans.map(plan => ({ ...plan, price: Number(plan.price) })),
@@ -2778,24 +2918,6 @@ router.delete("/admin/reseller-handoffs/:portId", requireAdmin(), async (req, re
       );
     } else {
       await sbDeleteStrict("isp_reseller_ports", `id=eq.${port.id}&admin_id=eq.${account.id}`);
-    }
-
-    const otherAssignments = await sbSelectStrict<{ id: number }>(
-      "isp_reseller_ports",
-      `id=neq.${port.id}&admin_id=eq.${account.id}&assigned_reseller_id=eq.${port.assigned_reseller_id ?? port.reseller_id}&status=neq.disabled&select=id&limit=1`,
-    );
-    if (!otherAssignments[0]) {
-      const now = new Date().toISOString();
-      await sbUpdateStrict(
-        "isp_admins",
-        `id=eq.${port.assigned_reseller_id ?? port.reseller_id}&parent_id=eq.${account.id}&role=eq.reseller`,
-        { parent_id: null, status: "pending", updated_at: now },
-      );
-      await sbUpdateStrict(
-        "isp_reseller_connection_requests",
-        `reseller_id=eq.${port.assigned_reseller_id ?? port.reseller_id}&isp_admin_id=eq.${account.id}&status=eq.approved`,
-        { status: "pending", responded_at: null, updated_at: now },
-      );
     }
 
     res.json({
@@ -3444,6 +3566,7 @@ router.post("/reseller/hotspot-clients", requireAdmin(), async (req, res): Promi
       name: username,
       password,
       profile,
+      server: portServiceResourceNames(port).hotspotServer,
       comment: `Reseller ${account.id} · ${name}`,
       expiresAt,
       enabled: true,

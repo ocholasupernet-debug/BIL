@@ -2670,6 +2670,8 @@ export async function reconcileHotspotUserAccess(
     name: string;
     password: string;
     profile: string;
+    server?: string;
+    preserveActiveSession?: boolean;
     comment?: string;
     expiresAt?: string | null;
     enabled: boolean;
@@ -2692,6 +2694,7 @@ export async function reconcileHotspotUserAccess(
     password: opts.password,
     profile: opts.profile,
     disabled: !enabled,
+    ...(opts.server !== undefined ? { server: opts.server } : {}),
     ...(opts.address !== undefined ? { address: opts.address ?? "" } : {}),
     ...(opts.comment !== undefined ? { comment: opts.comment } : {}),
     ...(opts.limitBytesTotal !== undefined ? { limitBytesTotal: opts.limitBytesTotal } : {}),
@@ -2706,6 +2709,7 @@ export async function reconcileHotspotUserAccess(
       name: opts.name,
       password: opts.password,
       profile: opts.profile,
+      server: opts.server,
       comment: opts.comment,
       address: opts.address ?? undefined,
       limitBytesTotal: opts.limitBytesTotal,
@@ -2757,7 +2761,7 @@ export async function reconcileHotspotUserAccess(
   }
 
   /* Force RouterOS to recreate the active queue with the current profile. */
-  await disconnectHotspotActiveUser(creds, opts.name);
+  if (!opts.preserveActiveSession) await disconnectHotspotActiveUser(creds, opts.name);
   if (Number.isFinite(expiryMs)) {
     await scheduleHotspotUserExpiry(creds, {
       name: opts.name,

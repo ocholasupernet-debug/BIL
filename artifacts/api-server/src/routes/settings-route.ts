@@ -341,15 +341,17 @@ async function getAdminPaymentSettings(adminId: number | null, options: { useSha
 /* ── GET /api/settings/mpesa ── */
 router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void> => {
   const s = await getMpesaSettings();
-  const adminTest = req.query.adminTest === "true";
+  const portalScope = req.hotspotPortalContext;
+  const adminTest = !portalScope && req.query.adminTest === "true";
+  const paymentAdminId = portalScope?.adminId ?? await paymentAdminIdFromRequest(req);
   const { paymentGateway: adminPaymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill, paymentCollectionMode: collectionMode } =
-    await getAdminPaymentSettings(await paymentAdminIdFromRequest(req), { useSharedGateway: adminTest });
+    await getAdminPaymentSettings(paymentAdminId, { useSharedGateway: adminTest });
   const portalRoute = adminTest
     ? null
     : await resellerPortalPaymentStatus(
-        await portalPaymentAdminIdFromRequest(req),
-        positiveQueryId(req.query.routerId),
-        positiveQueryId(req.query.portId),
+        portalScope?.adminId ?? await portalPaymentAdminIdFromRequest(req),
+        portalScope?.routerId ?? positiveQueryId(req.query.routerId),
+        portalScope?.portId ?? positiveQueryId(req.query.portId),
       );
   const paymentGateway = portalRoute?.paymentGateway ?? adminPaymentGateway;
   const destinationConfigured = portalRoute?.destinationConfigured ?? (
