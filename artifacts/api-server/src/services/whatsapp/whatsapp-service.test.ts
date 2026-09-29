@@ -6,6 +6,7 @@ import {
   createWhatsAppWelcomeSetupUrl,
   hashWhatsAppOtp,
   normalizeWhatsAppPhone,
+  sanitizeWhatsAppSignInContext,
 } from "./whatsapp-service.js";
 
 process.env.SESSION_SECRET ??= "whatsapp-service-test-secret";
@@ -21,6 +22,11 @@ test("normalizes Kenyan local, international, and 00-prefixed numbers", () => {
 
 test("OTP hashes are challenge-bound and constant-time secret comparison is correct", () => {
   const hash = hashWhatsAppOtp("otp-challenge-a", "123456");
+
+  const context = sanitizeWhatsAppSignInContext(
+    "203.0.113.8\nforged",
+    `Mozilla/5.0\u0000${"x".repeat(220)}`,
+  );
   assert.equal(hashWhatsAppOtp("otp-challenge-a", "123456"), hash);
   assert.notEqual(hashWhatsAppOtp("otp-challenge-b", "123456"), hash);
   assert.notEqual(hashWhatsAppOtp("otp-challenge-a", "654321"), hash);

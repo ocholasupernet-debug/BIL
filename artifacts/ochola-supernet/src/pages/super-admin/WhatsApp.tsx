@@ -32,6 +32,7 @@ interface WhatsAppSettings {
     welcome: string;
     accountStatus: string;
     security: string;
+    suspiciousSignIn: string;
     test: string;
   };
 }
@@ -64,7 +65,7 @@ const FEATURES: { key: FeatureKey; label: string; description: string }[] = [
   { key: "ispNotifications", label: "ISP subscription notifications", description: "Control future ISP subscription messages." },
   { key: "resellerNotifications", label: "Reseller notifications", description: "Control reseller account and service messages." },
   { key: "customerNotifications", label: "Customer notifications", description: "Master switch for customer payment and package messages." },
-  { key: "securityNotifications", label: "Security notifications", description: "Send account password-change alerts to verified account phones." },
+  { key: "securityNotifications", label: "Security notifications", description: "Alert after 5 failed sign-ins for one account within 15 minutes; suppress repeats for 1 hour. Sends only to verified account phones." },
   { key: "selfService", label: "Customer self-service", description: "Respond to WhatsApp menu requests from a single phone-verified customer account." },
 ];
 
@@ -99,6 +100,7 @@ function emptySettings(): WhatsAppSettings {
       welcome: "",
       accountStatus: "",
       security: "",
+      suspiciousSignIn: "",
       test: "",
     },
   };
@@ -360,6 +362,7 @@ export default function SuperAdminWhatsApp() {
               ["welcome", "Account welcome and setup link"],
               ["accountStatus", "Customer account status"],
               ["security", "Password changed"],
+              ["suspiciousSignIn", "Suspicious sign-in (name, time, IP, device)"],
               ["test", "Test message"],
             ] as [keyof WhatsAppSettings["templates"], string][]).map(([key, label]) => (
               <label key={key} className="text-sm text-slate-300">{label}<input className={fieldClass} value={settings.templates[key]} onChange={event => updateTemplate(key, event.target.value)} maxLength={100} /></label>

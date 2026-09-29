@@ -22,6 +22,217 @@ begin
   end if;
 end $$;
 
+-- Keep only failed sign-in timestamps and the request context needed for the
+-- alert. The policy is account-scoped: 5 failures in 15 minutes, with a
+-- one-hour cooldown between queued alerts for the same account.
+create table if not exists whatsapp_login_attempts (
+  id bigint generated always as identity primary key,
+  account_type text not null check (account_type in ('admin', 'customer')),
+  account_id bigint not null,
+  attempted_at timestamptz not null default now(),
+  ip_address text,
+  user_agent text
+);
+
+create index if not exists whatsapp_login_attempts_account_recent_idx
+  on whatsapp_login_attempts(account_type, account_id, attempted_at desc);
+
+create table if not exists whatsapp_login_alert_cooldowns (
+  account_type text not null check (account_type in ('admin', 'customer')),
+  account_id bigint not null,
+  last_alert_at timestamptz not null,
+  primary key (account_type, account_id)
+);
+
+alter table whatsapp_login_attempts enable row level security;
+alter table whatsapp_login_alert_cooldowns enable row level security;
+
+create or replace function prune_whatsapp_login_attempts()
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_now timestamptz := clock_timestamp();
+begin
+  delete from whatsapp_login_attempts
+  where attempted_at < v_now - interval '15 minutes';
+  delete from whatsapp_login_alert_cooldowns
+  where last_alert_at < v_now - interval '1 day';
+end
+$$;
+
+create or replace function record_whatsapp_login_failure(
+  p_account_type text,
+  p_account_id bigint,
+  p_ip_address text,
+  p_user_agent text
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_phone text;
+  v_phone_verified boolean;
+  v_account_found boolean;
+  v_alerts_enabled boolean;
+  v_attempted_at timestamptz := clock_timestamp();
+  v_attempt_count integer;
+  v_last_alert_at timestamptz;
+  v_outbox_rows integer;
+  v_dedupe_key text;
+begin
+  if p_account_type is null
+     or p_account_type not in ('admin', 'customer')
+     or p_account_id is null
+     or p_account_id <= 0 then
+    return false;
+  end if;
+
+  select coalesce((config->>'enabled')::boolean, false)
+      and coalesce((config->'features'->>'securityNotifications')::boolean, false)
+    into v_alerts_enabled
+  from platform_whatsapp_settings
+  where id = 'global_whatsapp';
+  if not coalesce(v_alerts_enabled, false) then
+    return false;
+  end if;
+
+  if p_account_type = 'admin' then
+    select phone_e164, phone_verified
+      into v_phone, v_phone_verified
+    from isp_admins
+    where id = p_account_id
+    for share;
+  else
+    select phone_e164, phone_verified
+      into v_phone, v_phone_verified
+    from isp_customers
+    where id = p_account_id
+    for share;
+  end if;
+  v_account_found := found;
+
+  if not v_account_found
+     or v_phone_verified is distinct from true
+     or coalesce(v_phone, '') !~ '^\+[1-9][0-9]{7,14}$' then
+    return false;
+  end if;
+
+  -- Serialize concurrent failures for one account before counting and applying
+  -- the cooldown, while allowing unrelated accounts to proceed independently.
+  perform pg_advisory_xact_lock(
+    hashtextextended('whatsapp-login:' || p_account_type || ':' || p_account_id::text, 0)
+  );
+
+  perform prune_whatsapp_login_attempts();
+
+  insert into whatsapp_login_attempts(
+    account_type, account_id, attempted_at, ip_address, user_agent
+  ) values (
+    p_account_type,
+    p_account_id,
+    v_attempted_at,
+    nullif(left(regexp_replace(coalesce(p_ip_address, ''), '[[:cntrl:]]', '', 'g'), 64), ''),
+    nullif(left(regexp_replace(coalesce(p_user_agent, ''), '[[:cntrl:]]', ' ', 'g'), 180), '')
+  );
+
+  delete from whatsapp_login_attempts
+  where account_type = p_account_type
+    and account_id = p_account_id
+    and id not in (
+      select id
+      from whatsapp_login_attempts
+      where account_type = p_account_type
+        and account_id = p_account_id
+      order by attempted_at desc, id desc
+      limit 5
+    );
+
+  select count(*)::integer
+    into v_attempt_count
+  from whatsapp_login_attempts
+  where account_type = p_account_type
+    and account_id = p_account_id
+    and attempted_at >= v_attempted_at - interval '15 minutes';
+
+  if v_attempt_count < 5 then
+    return false;
+  end if;
+
+  select last_alert_at
+    into v_last_alert_at
+  from whatsapp_login_alert_cooldowns
+  where account_type = p_account_type
+    and account_id = p_account_id;
+
+  if v_last_alert_at is not null
+     and v_last_alert_at > v_attempted_at - interval '1 hour' then
+    return false;
+  end if;
+
+  v_dedupe_key := 'suspicious-sign-in:' || p_account_type || ':' ||
+    p_account_id::text || ':' ||
+    to_char(v_attempted_at at time zone 'UTC', 'YYYYMMDDHH24MISSUS');
+
+  insert into whatsapp_outbox(
+    id, dedupe_key, event_type, customer_id, admin_id, phone_e164, payload
+  ) values (
+    gen_random_uuid(),
+    v_dedupe_key,
+    'suspicious_sign_in',
+    case when p_account_type = 'customer' then p_account_id else null end,
+    case when p_account_type = 'admin' then p_account_id else null end,
+    v_phone,
+    jsonb_build_object(
+      'attempted_at', v_attempted_at,
+      'ip_address', nullif(left(regexp_replace(coalesce(p_ip_address, ''), '[[:cntrl:]]', '', 'g'), 64), ''),
+      'user_agent', nullif(left(regexp_replace(coalesce(p_user_agent, ''), '[[:cntrl:]]', ' ', 'g'), 180), '')
+    )
+  )
+  on conflict (dedupe_key) do nothing;
+
+  get diagnostics v_outbox_rows = row_count;
+  if v_outbox_rows = 0 then
+    return false;
+  end if;
+
+  insert into whatsapp_login_alert_cooldowns(account_type, account_id, last_alert_at)
+  values (p_account_type, p_account_id, v_attempted_at)
+  on conflict (account_type, account_id)
+  do update set last_alert_at = excluded.last_alert_at;
+
+  return true;
+end
+$$;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke all on table whatsapp_login_attempts from anon;
+    revoke all on table whatsapp_login_alert_cooldowns from anon;
+    revoke all on function record_whatsapp_login_failure(text, bigint, text, text) from anon;
+    revoke all on function prune_whatsapp_login_attempts() from anon;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    revoke all on table whatsapp_login_attempts from authenticated;
+    revoke all on table whatsapp_login_alert_cooldowns from authenticated;
+    revoke all on function record_whatsapp_login_failure(text, bigint, text, text) from authenticated;
+    revoke all on function prune_whatsapp_login_attempts() from authenticated;
+  end if;
+  revoke all on table whatsapp_login_attempts from public;
+  revoke all on table whatsapp_login_alert_cooldowns from public;
+  revoke all on function record_whatsapp_login_failure(text, bigint, text, text) from public;
+  revoke all on function prune_whatsapp_login_attempts() from public;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function record_whatsapp_login_failure(text, bigint, text, text) to service_role;
+    grant execute on function prune_whatsapp_login_attempts() to service_role;
+  end if;
+end $$;
+
 create index if not exists whatsapp_webhook_events_retry_idx
   on whatsapp_webhook_events(processing_status, updated_at)
   where processing_status in ('processing', 'failed');

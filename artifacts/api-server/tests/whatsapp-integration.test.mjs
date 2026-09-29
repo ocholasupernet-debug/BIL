@@ -96,6 +96,36 @@ test("welcome, account-status and password-change notices use verified accounts 
   assert.match(service, /createWhatsAppWelcomeSetupUrl/);
 });
 
+test("suspicious sign-in alerts use a verified-account threshold, cooldown, and bounded request context", async () => {
+  const migration = await read("../migrations/2026_whatsapp_security_events.sql");
+  const route = await read("../src/routes/api-auth-route.ts");
+  const service = await read("../src/services/whatsapp/whatsapp-service.ts");
+  const settingsPage = await read("../../ochola-supernet/src/pages/super-admin/WhatsApp.tsx");
+  const attemptsTable = migration.match(/create table if not exists whatsapp_login_attempts \(([\s\S]*?)\n\);/i)?.[1];
+  const recorder = migration.match(/create or replace function record_whatsapp_login_failure\([\s\S]*?\n\$\$;/i)?.[0];
+  assert.ok(attemptsTable, "recent failed sign-in table should exist");
+  assert.ok(recorder, "atomic sign-in threshold and queue function should exist");
+  assert.match(attemptsTable, /attempted_at/i);
+  assert.match(attemptsTable, /ip_address/i);
+  assert.match(attemptsTable, /user_agent/i);
+  assert.doesNotMatch(attemptsTable, /password|otp|credential|token/i);
+  assert.match(recorder, /securityNotifications/i);
+  assert.match(recorder, /phone_verified is distinct from true/i);
+  assert.match(recorder, /v_attempt_count < 5/i);
+  assert.match(recorder, /interval '15 minutes'/i);
+  assert.match(recorder, /interval '1 hour'/i);
+  assert.match(recorder, /suspicious_sign_in/i);
+  assert.match(recorder, /on conflict \(dedupe_key\) do nothing/i);
+  assert.doesNotMatch(recorder, /password|otp|credential|token/i);
+  assert.match(route, /recordFailedAccountSignIn\(req, "admin"/);
+  assert.match(route, /recordFailedAccountSignIn\(req, "customer"/);
+  assert.match(service, /"password_changed", "suspicious_sign_in"/);
+  assert.match(service, /settings\.templates\.suspiciousSignIn/);
+  assert.match(service, /WHATSAPP_SUSPICIOUS_SIGN_IN_TEMPLATE/);
+  assert.match(settingsPage, /suspiciousSignIn/);
+  assert.match(settingsPage, /name, time, IP, device/i);
+});
+
 test("failed webhooks are retryable, completed events remain deduplicated, and failures return 500", async () => {
   const migration = await read("../migrations/2026_whatsapp_security_events.sql");
   const route = await read("../src/routes/whatsapp-route.ts");

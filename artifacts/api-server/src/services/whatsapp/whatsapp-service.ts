@@ -11,6 +11,7 @@ import {
   sbSelectStrict,
   sbUpsertStrict,
   sbUpdate,
+  supabaseServiceRoleConfigured,
 } from "../../lib/supabase-client.js";
 import { generateToken } from "../../lib/api-auth.js";
 import { logger } from "../../lib/logger.js";
@@ -52,6 +53,7 @@ export interface WhatsAppSettings {
     welcome: string;
     accountStatus: string;
     security: string;
+    suspiciousSignIn: string;
     test: string;
   };
 }
@@ -143,6 +145,7 @@ const DEFAULT_SETTINGS: WhatsAppSettings = {
     welcome: "",
     accountStatus: "",
     security: "",
+    suspiciousSignIn: "",
     test: "",
   },
 };
@@ -188,6 +191,7 @@ function cleanSettings(value: unknown): WhatsAppSettings {
       welcome: cleanString(templates.welcome, 100),
       accountStatus: cleanString(templates.accountStatus, 100),
       security: cleanString(templates.security, 100),
+      suspiciousSignIn: cleanString(templates.suspiciousSignIn, 100),
       test: cleanString(templates.test, 100),
     },
   };
@@ -211,6 +215,7 @@ function environmentSettings(): Partial<WhatsAppSettings> {
       welcome: process.env.WHATSAPP_WELCOME_TEMPLATE ?? "",
       accountStatus: process.env.WHATSAPP_ACCOUNT_STATUS_TEMPLATE ?? "",
       security: process.env.WHATSAPP_SECURITY_TEMPLATE ?? "",
+      suspiciousSignIn: process.env.WHATSAPP_SUSPICIOUS_SIGN_IN_TEMPLATE ?? "",
       test: process.env.WHATSAPP_TEST_TEMPLATE ?? "",
     },
   };
@@ -647,6 +652,61 @@ export async function enqueueWhatsAppExpiryNotifications(): Promise<void> {
   await sbRpc("enqueue_whatsapp_expiry_notifications", {});
 }
 
+export type WhatsAppLoginAccountType = "admin" | "customer";
+
+export interface WhatsAppSignInRequestContext {
+  ipAddress: string | null;
+  userAgent: string | null;
+}
+
+function sanitizeSignInContextValue(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const sanitized = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+  return sanitized || null;
+}
+
+export function sanitizeWhatsAppSignInContext(
+  ipAddress: unknown,
+  userAgent: unknown,
+): WhatsAppSignInRequestContext {
+  return {
+    ipAddress: sanitizeSignInContextValue(ipAddress, 64),
+    userAgent: sanitizeSignInContextValue(userAgent, 180),
+  };
+}
+
+export async function recordWhatsAppSignInFailure(
+  accountType: WhatsAppLoginAccountType,
+  accountId: number,
+  ipAddress: unknown,
+  userAgent: unknown,
+): Promise<boolean> {
+  const context = sanitizeWhatsAppSignInContext(ipAddress, userAgent);
+  const result: unknown = await sbRpc<unknown>("record_whatsapp_login_failure", {
+    p_account_type: accountType,
+    p_account_id: accountId,
+    p_ip_address: context.ipAddress,
+    p_user_agent: context.userAgent,
+  });
+  const first = Array.isArray(result) ? result[0] : result;
+  return first === true ||
+    (first !== null && typeof first === "object" &&
+      (first as Record<string, unknown>).alert_queued === true);
+}
+
+let lastLoginAttemptPruneAt = 0;
+async function pruneWhatsAppLoginAttempts(): Promise<void> {
+  if (!supabaseServiceRoleConfigured || Date.now() - lastLoginAttemptPruneAt < 5 * 60 * 1000) return;
+  lastLoginAttemptPruneAt = Date.now();
+  await sbRpc("prune_whatsapp_login_attempts", {}).catch(error => {
+    logger.warn({ err: error }, "[whatsapp] sign-in attempt cleanup failed");
+  });
+}
+
 export function createWhatsAppWelcomeSetupUrl(
   adminId: number,
   subdomainValue: unknown,
@@ -669,6 +729,7 @@ export function createWhatsAppWelcomeSetupUrl(
 }
 
 export async function processWhatsAppOutboxBatch(limit = 10): Promise<number> {
+  await pruneWhatsAppLoginAttempts();
   const settings = await getWhatsAppSettings();
   if (!isWhatsAppEnabled(settings)) return 0;
   const customerNotifications = isWhatsAppFeatureEnabled(settings, "customerNotifications");
@@ -677,7 +738,7 @@ export async function processWhatsAppOutboxBatch(limit = 10): Promise<number> {
     ...(customerNotifications && isWhatsAppFeatureEnabled(settings, "paymentNotifications") ? ["payment"] : []),
     ...(customerNotifications && isWhatsAppFeatureEnabled(settings, "packageNotifications") ? ["renewal", "expiry"] : []),
     ...(customerNotifications ? ["account_activated", "account_suspended", "account_reactivated"] : []),
-    ...(securityNotifications ? ["password_changed"] : []),
+    ...(securityNotifications ? ["password_changed", "suspicious_sign_in"] : []),
     ...(isWhatsAppFeatureEnabled(settings, "ispNotifications") ? ["isp_subscription", "isp_welcome"] : []),
     ...(isWhatsAppFeatureEnabled(settings, "resellerNotifications") ? ["reseller_subscription", "reseller_welcome"] : []),
   ];
@@ -754,6 +815,8 @@ export async function processWhatsAppOutboxBatch(limit = 10): Promise<number> {
                     ? settings.templates.accountStatus
                     : item.event_type === "password_changed"
                       ? settings.templates.security
+                      : item.event_type === "suspicious_sign_in"
+                        ? settings.templates.suspiciousSignIn
                 : "";
       if (!templateName) throw new WhatsAppProviderError("The required approved notification template is not configured.");
       const payload = item.payload ?? {};
@@ -797,6 +860,13 @@ export async function processWhatsAppOutboxBatch(limit = 10): Promise<number> {
                     recipientName,
                     String(payload.changed_at ?? new Date().toISOString()),
                   ]
+                : item.event_type === "suspicious_sign_in"
+                  ? [
+                      recipientName,
+                      String(payload.attempted_at ?? new Date().toISOString()),
+                      String(payload.ip_address ?? "Unavailable"),
+                      String(payload.user_agent ?? "Unavailable"),
+                    ]
           : [
             String(payload.billing_period ?? ""),
             String(payload.amount ?? ""),
