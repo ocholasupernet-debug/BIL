@@ -24,6 +24,8 @@ import {
   disconnectHotspotActiveUser,
   requireHotspotUserProfile,
   scheduleHotspotUserExpiry,
+  scheduleHotspotUserFup,
+  removeHotspotUserFup,
   schedulePppUserExpiry,
   reconcileVlanCustomerQueue,
   classifyRouterConnectionFailure,
@@ -33,6 +35,7 @@ import { isRouterManagementVpnIp } from "./router-vpn-ip.js";
 import { hotspotPlanProfileName, prepaidHotspotUsername, routerRateLimit, isPrepaidHotspotUsername } from "./prepaid-identifiers.js";
 import { planValiditySeconds } from "./plan-validity.js";
 import { normalizePlanServiceType } from "./plan-service-type.js";
+import { dataLimitMegabytesToBytes, validateFupPolicy } from "./fup-policy.js";
 import { isValidIpv4, isValidVlanTag, ipv4InSubnet } from "./vlan-customer-queue.js";
 import { portServiceResourceNames } from "./port-service-resources.js";
 
@@ -71,6 +74,9 @@ interface SbPlan {
   owner_reseller_id?: number | null;
   speed_up_unit: string | null;
   data_limit_mb: number | null;
+  data_cap_mode: string | null;
+  fup_speed_down: number | null;
+  fup_speed_up: number | null;
   active_ip_pool: string | null;
   expired_ip_pool: string | null;
 }
@@ -140,7 +146,7 @@ export async function reactivatePppoeAccess(opts: {
     `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,router_id,port_id,owner_reseller_id&limit=1`,
   );
   const plan = plans[0];
-  const planType = String(plan?.type || "").toLowerCase();
+  const planType = String(plan?.type ?? "").toLowerCase();
   if (!plan || planType !== "pppoe") return { ok: true, skipped: true };
   if (!plan.router_id) {
     return { ok: false, error: "The PPPoE plan is not assigned to a router." };
@@ -473,7 +479,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&admin_id=eq.${customer.admin_id}&is_active=is.true&select=id,admin_id,name,type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,active_ip_pool,expired_ip_pool&limit=1`
+    `id=eq.${customer.plan_id}&admin_id=eq.${customer.admin_id}&is_active=is.true&select=id,admin_id,name,type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,active_ip_pool,expired_ip_pool&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -608,10 +614,22 @@ export async function autoProvision(opts: {
     } else {
       /* Hotspot */
       const profile = profileName;
-      const dataLimitMb = Number(plan.data_limit_mb);
-      const limitBytesTotal = Number.isFinite(dataLimitMb) && dataLimitMb > 0
-        ? String(Math.floor(dataLimitMb * 1_000_000))
-        : "0";
+      const rawDataLimitMb = Number(plan.data_limit_mb);
+      const dataLimitMb = Number.isFinite(rawDataLimitMb) && rawDataLimitMb > 0 ? rawDataLimitMb : null;
+      const dataPolicy = validateFupPolicy(
+        plan.type,
+        dataLimitMb,
+        plan.data_cap_mode ?? "disconnect",
+        plan.fup_speed_down,
+        plan.fup_speed_up,
+        plan.speed_down,
+        plan.speed_up,
+        plan.speed_down_unit,
+        plan.speed_up_unit,
+      );
+      const limitBytesTotal = dataPolicy.dataCapMode === "throttle" || dataLimitMb === null
+        ? "0"
+        : String(dataLimitMegabytesToBytes(dataLimitMb));
       await requireHotspotUserProfile(creds, profile);
       try {
         await updateHotspotUser(creds, username, {
@@ -650,6 +668,21 @@ export async function autoProvision(opts: {
         name: username,
         expiresInSeconds: Math.max(1, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000)),
       });
+      if (
+        dataPolicy.dataCapMode === "throttle"
+        && dataLimitMb !== null
+        && dataPolicy.fupSpeedDown !== null
+        && dataPolicy.fupSpeedUp !== null
+      ) {
+        await scheduleHotspotUserFup(creds, {
+          username,
+          thresholdBytes: dataLimitMegabytesToBytes(dataLimitMb),
+          speedDownMbps: dataPolicy.fupSpeedDown,
+          speedUpMbps: dataPolicy.fupSpeedUp,
+        });
+      } else {
+        await removeHotspotUserFup(creds, username);
+      }
     }
 
     logger.info({ username, planType, action, router: router.name }, "[provision] Router account provisioned");
@@ -713,6 +746,7 @@ async function activateCustomer(
   const planType = normalizePlanServiceType(plan.type);
   await sbUpdate("isp_customers", `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`, {
     status:     "active",
+    depletion_reason: null,
     expires_at: expiresAt ?? calcExpiry(plan.validity, plan.validity_unit, plan.validity_days),
     ...(username && planType !== "pppoe" && planType !== "vlan" ? { username } : {}),
     ...(planType === "vlan" ? { router_id: plan.router_id, port_id: plan.port_id } : {}),
