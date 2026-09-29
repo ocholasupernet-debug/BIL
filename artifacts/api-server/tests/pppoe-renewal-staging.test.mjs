@@ -92,11 +92,11 @@ function fixture(overrides = {}) {
   const state = {
     plans: [{
       id: 9, admin_id: 4, name: "PPPoE 20Mbps", type: "pppoe",
-      plan_type: "pppoe", router_id: 3, is_active: true,
+      router_id: 3, port_id: null, is_active: true,
     }],
     customers: [{
       id: 22, admin_id: 4, type: "pppoe", username: "renew-me",
-      pppoe_username: "renew-me", password: "secret",
+      pppoe_username: "renew-me", password: "secret", router_id: 3, port_id: null,
     }],
     routers: [{
       id: 3, admin_id: 4, name: "come1", host: "203.0.113.20",
@@ -229,7 +229,7 @@ test("non-PPPoE plans are skipped without touching router access", async () => {
   const { reactivatePppoeAccess } = await bundleRenewalHelper();
   const state = fixture({ plans: [{
     id: 9, admin_id: 4, name: "Hotspot Daily", type: "hotspot",
-    plan_type: "hotspot", router_id: 3, is_active: true,
+    router_id: 3, is_active: true,
   }] });
   const result = await reactivatePppoeAccess({
     adminId: 4, customerId: 22, planId: 9, reference: "ws_CO-125",
