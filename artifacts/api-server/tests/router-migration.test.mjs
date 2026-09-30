@@ -29,6 +29,34 @@ test("temporary migration provisioning requires the complete backup auth directi
   assert.doesNotMatch(script, /auth-user-pass-verify \/etc\/openvpn\/verify-router-pass\.sh/);
 });
 
+test("backup CCD scan is read-only and strictly parses occupied net30 pairs", () => {
+  const script = migrationVpn.buildRouterMigrationVpnCcdScanScript();
+  assert.match(script, /ochola-router-backup-ccd/);
+  assert.match(script, /auth-user-pass-verify \/etc\/openvpn\/verify-router-backup-pass\.sh via-env/);
+  assert.match(script, /PASSFILE="\/etc\/openvpn\/router-backup-passwd"/);
+  assert.match(script, /printf "PAIR=%d\\n", int\(host \/ 2\)/);
+  assert.match(script, /COUNT=%s/);
+  assert.doesNotMatch(script, /\b(?:systemd-run|flock|rm|mv|touch|restart)\b/);
+  assert.doesNotMatch(script, /\bsort\b/);
+
+  assert.deepEqual(
+    migrationVpn.parseRouterMigrationVpnCcdPairs("PAIR=6\nPAIR=6\nPAIR=7\nCOUNT=3\n"),
+    [6, 7],
+  );
+  assert.deepEqual(migrationVpn.parseRouterMigrationVpnCcdPairs("COUNT=0\n"), []);
+  for (const output of [
+    "",
+    "PAIR=6\n",
+    "PAIR=6\nCOUNT=2\n",
+    "PAIR=6\nPAIR=6\nCOUNT=1\n",
+    "PAIR=127\nCOUNT=1\n",
+    "unexpected\nCOUNT=0\n",
+    "COUNT=1\nextra\n",
+  ]) {
+    assert.throws(() => migrationVpn.parseRouterMigrationVpnCcdPairs(output));
+  }
+});
+
 test("one-shot OpenVPN setup keeps auth arguments valid and binds each helper to its own file", () => {
   for (const { vpnRole, routerTunnelIp, authFile } of [
     { vpnRole: "primary", routerTunnelIp: "10.8.5.42", authFile: "router-passwd" },
@@ -267,9 +295,10 @@ test("migration allocator collision fix is registered after copy flow", async ()
   const runner = await readFile("scripts/apply-deployment-migrations.mjs", "utf8");
   const copyFlow = runner.indexOf("2026_router_migration_copy_flow.sql");
   const collisionFix = runner.indexOf("2026_router_migration_tunnel_allocator_collision_fix.sql");
+  const ccdReservations = runner.indexOf("2026_router_migration_tunnel_ccd_reservations.sql");
   const sourceRegistration = runner.indexOf("2026_router_migration_source_registration.sql");
   assert.ok(copyFlow >= 0);
-  assert.ok(collisionFix > copyFlow && collisionFix < sourceRegistration);
+  assert.ok(collisionFix > copyFlow && ccdReservations > collisionFix && ccdReservations < sourceRegistration);
 });
 
 test("migration allocator globally locks and reserves failed address pairs", async () => {
@@ -287,5 +316,34 @@ test("migration allocator globally locks and reserves failed address pairs", asy
   assert.match(migration, /'server_unavailable'/);
   assert.match(migration, /status in \(\s*'issued', 'script_issued', 'connected', 'exported',\s*'server_unavailable'/s);
   assert.match(migration, /revoke all on function issue_router_migration_tunnel_lease/);
-  assert.match(migration, /grant execute on function issue_router_migration_tunnel_lease/);
+  assert.match(migration, /from public, service_role/);
+  assert.doesNotMatch(migration, /grant execute on function issue_router_migration_tunnel_lease/);
+});
+
+test("migration allocator requires and excludes live backup CCD pair reservations", async () => {
+  const migration = await readFile(
+    "migrations/2026_router_migration_tunnel_ccd_reservations.sql",
+    "utf8",
+  );
+  assert.match(migration, /p_backup_ccd_pairs integer\[\]/);
+  assert.match(migration, /Live backup CCD reservation scan is required/);
+  assert.match(migration, /host_no \/ 2 = any\(coalesce\(p_backup_ccd_pairs, '\{\}'::integer\[\]\)\)/);
+  assert.match(migration, /pg_advisory_xact_lock\(hashtextextended/);
+  assert.match(migration, /'server_unavailable'/);
+  assert.match(migration, /grant execute on function public\.issue_router_migration_tunnel_lease/);
+  assert.match(migration, /timestamptz,\s*integer\[\]\s*\)\s+to service_role/);
+  assert.match(migration, /notify pgrst, 'reload schema'/i);
+});
+
+test("migration job scans the live backup CCD before creating a source, job, or lease", async () => {
+  const route = await readFile("src/routes/router-migrations-route.ts", "utf8");
+  const registrationLookup = route.indexOf("await findRegistrationJob(adminId, registrationKeyHash)");
+  const ccdScan = route.indexOf("await readRouterMigrationVpnCcdPairs()");
+  const pendingSource = route.indexOf("source = await createPendingMigrationSource(adminId)");
+  const jobInsert = route.indexOf('sbInsertStrict<MigrationJob>("router_migration_jobs"');
+  const leaseRpc = route.indexOf('"issue_router_migration_tunnel_lease"');
+  assert.ok(registrationLookup >= 0 && registrationLookup < ccdScan);
+  assert.ok(ccdScan >= 0 && ccdScan < pendingSource);
+  assert.ok(ccdScan < jobInsert && ccdScan < leaseRpc);
+  assert.match(route, /p_backup_ccd_pairs:\s*backupCcdPairs/);
 });

@@ -32,6 +32,81 @@ function requireSafeAddress(value: string): string {
   return ip;
 }
 
+export function buildRouterMigrationVpnCcdScanScript(): string {
+  const profile = ROUTER_MANAGEMENT_VPN_BACKUP;
+  return `set -euo pipefail
+umask 077
+config=${JSON.stringify(profile.configPath)}
+auth=${JSON.stringify(profile.authFilePath)}
+auth_script=${JSON.stringify(profile.authScriptPath)}
+ccd=${JSON.stringify(profile.ccdPath)}
+sudo -n test -f "$config"
+sudo -n test -f "$auth"
+sudo -n test -f "$auth_script"
+sudo -n test -d "$ccd"
+sudo -n grep -Eq '^port[[:space:]]+${profile.port}$' "$config"
+sudo -n grep -Eq '^dev[[:space:]]+${profile.interfaceName}$' "$config"
+sudo -n grep -Eq '^server[[:space:]]+10\\.8\\.6\\.0[[:space:]]+255\\.255\\.255\\.0$' "$config"
+sudo -n grep -Eq '^topology[[:space:]]+net30$' "$config"
+sudo -n grep -Fqx 'client-config-dir ${profile.ccdPath}' "$config"
+sudo -n grep -Fqx 'ifconfig-pool-persist ${profile.ippPath}' "$config"
+sudo -n grep -Fqx 'auth-user-pass-verify ${profile.authScriptPath} via-env' "$config"
+sudo -n grep -Fqx 'PASSFILE="${profile.authFilePath}"' "$auth_script"
+pairs="$(sudo -n find "$ccd" -mindepth 1 -maxdepth 1 \\( -type f -o -type l \\) -exec awk '
+  $1 == "ifconfig-push" {
+    if (NF < 3) exit 41
+    for (i = 2; i <= 3; i++) {
+      if ($i !~ /^10[.]8[.]6[.][0-9]+$/) exit 42
+      split($i, octets, "[.]")
+      host = octets[4] + 0
+      if (host < 2 || host > 253 || sprintf("%d", host) != octets[4]) exit 43
+      printf "PAIR=%d\\n", int(host / 2)
+    }
+  }
+' {} +)" || exit 44
+if [ -n "$pairs" ]; then
+  printf '%s\\n' "$pairs"
+  count="$(printf '%s\\n' "$pairs" | wc -l | tr -d '[:space:]')"
+else
+  count=0
+fi
+printf 'COUNT=%s\\n' "$count"
+`;
+}
+
+export function parseRouterMigrationVpnCcdPairs(output: string): number[] {
+  const lines = String(output ?? "").replace(/\r\n/g, "\n").split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  const countLine = lines.pop();
+  const countMatch = /^COUNT=(0|[1-9]\d*)$/.exec(countLine ?? "");
+  if (!countMatch) throw new Error("Invalid isolated VPN reservation scan result.");
+  const expectedCount = Number(countMatch[1]);
+  if (!Number.isSafeInteger(expectedCount)) {
+    throw new Error("Invalid isolated VPN reservation scan result.");
+  }
+
+  const pairs = new Set<number>();
+  for (const line of lines) {
+    const match = /^PAIR=([1-9]\d*)$/.exec(line);
+    if (!match) throw new Error("Invalid isolated VPN reservation scan result.");
+    const pair = Number(match[1]);
+    if (!Number.isInteger(pair) || pair < 1 || pair > 126) {
+      throw new Error("Invalid isolated VPN reservation scan result.");
+    }
+    pairs.add(pair);
+  }
+  if (lines.length !== expectedCount) {
+    throw new Error("Incomplete isolated VPN reservation scan result.");
+  }
+  return [...pairs].sort((left, right) => left - right);
+}
+
+export async function readRouterMigrationVpnCcdPairs(): Promise<number[]> {
+  const result = await runVpsScript(buildRouterMigrationVpnCcdScanScript(), { timeoutMs: 30_000 });
+  if (!result.ok) throw new Error("The isolated VPN address reservations could not be verified.");
+  return parseRouterMigrationVpnCcdPairs(result.stdout);
+}
+
 export function buildRouterMigrationVpnProvisionScript(client: MigrationVpnClient): string {
   const username = requireSafeUsername(client.username);
   const password = requireSafePassword(client.password);

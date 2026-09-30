@@ -17,7 +17,11 @@ import {
 import { MANUAL, parseRouterOsExport } from "../lib/router-migration-exporter.js";
 import { READ_ONLY_ROUTER_EXPORT_SCRIPT, buildDomainRouterExportScript } from "../lib/router-migration-export-script.js";
 import { buildMigrationTunnelScript } from "../lib/migration-tunnel.js";
-import { provisionRouterMigrationVpnClient, revokeRouterMigrationVpnClient } from "../lib/router-migration-vpn.js";
+import {
+  provisionRouterMigrationVpnClient,
+  readRouterMigrationVpnCcdPairs,
+  revokeRouterMigrationVpnClient,
+} from "../lib/router-migration-vpn.js";
 import { ROUTER_MANAGEMENT_VPN_BACKUP, readRouterManagementCaCertificate } from "../lib/router-management-vpn.js";
 import { getRouterCreds } from "./mikrotik-route.js";
 
@@ -592,10 +596,22 @@ router.post("/router-migrations/jobs", async (req, res) => {
         await reuseRegistrationJob(adminId, existing, res);
         return;
       }
-      source = await createPendingMigrationSource(adminId);
-      pendingSourceRouterId = source.id;
     } else {
       source = await loadRouter(adminId, req.body?.sourceRouterId, res);
+      if (!source) return;
+    }
+    let backupCcdPairs: number[];
+    try {
+      backupCcdPairs = await readRouterMigrationVpnCcdPairs();
+    } catch {
+      res.status(503).json({
+        error: "The isolated management VPN address pool could not be verified; no new migration tunnel was created.",
+      });
+      return;
+    }
+    if (registeringSource) {
+      source = await createPendingMigrationSource(adminId);
+      pendingSourceRouterId = source.id;
     }
     if (!source) return;
     const initial = encryptJson({});
@@ -663,6 +679,7 @@ router.post("/router-migrations/jobs", async (req, res) => {
         p_ciphertext: encryptedPayload.ciphertext,
         p_iv: encryptedPayload.iv,
         p_auth_tag: encryptedPayload.auth_tag,
+        p_backup_ccd_pairs: backupCcdPairs,
         p_expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       },
     );

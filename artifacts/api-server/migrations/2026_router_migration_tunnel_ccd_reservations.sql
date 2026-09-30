@@ -1,8 +1,7 @@
--- Prevent temporary migration leases from reusing a pair occupied by a
--- persistent management address or by a previously failed provisioning
--- attempt.  The allocator is deliberately serialized globally because the
--- address pool is shared by every ISP account.
-create or replace function issue_router_migration_tunnel_lease(
+-- Include live backup OpenVPN CCD reservations in the shared migration pool.
+-- The API supplies only normalized net30 pair numbers from a read-only scan;
+-- the global SQL lock still serializes competing database allocations.
+create or replace function public.issue_router_migration_tunnel_lease(
   p_admin_id bigint,
   p_source_router_id bigint,
   p_migration_job_id bigint,
@@ -12,7 +11,8 @@ create or replace function issue_router_migration_tunnel_lease(
   p_ciphertext text,
   p_iv text,
   p_auth_tag text,
-  p_expires_at timestamptz
+  p_expires_at timestamptz,
+  p_backup_ccd_pairs integer[]
 ) returns table(lease_id bigint, assigned_ip inet)
 language plpgsql security definer set search_path = public
 as $$
@@ -20,12 +20,22 @@ declare
   candidate_host integer;
   candidate_ip inet;
 begin
-  -- 10.8.6.0/24 is shared across tenants, so tenant-scoped locks do not
-  -- protect two concurrent allocations from choosing the same pair.
   perform pg_advisory_xact_lock(hashtextextended(
     'router-migration-vpn-address-pool',
     0
   ));
+
+  if p_backup_ccd_pairs is null then
+    raise exception 'Live backup CCD reservation scan is required';
+  end if;
+
+  if exists (
+    select 1
+    from unnest(p_backup_ccd_pairs) as reserved(pair_no)
+    where pair_no is null or pair_no < 1 or pair_no > 126
+  ) then
+    raise exception 'Invalid live backup CCD reservation';
+  end if;
 
   if not exists (
     select 1 from isp_routers
@@ -53,6 +63,9 @@ begin
       and split_part(split_part(r.vpn_ip::text, '/', 1), '.', 4) ~ '^[0-9]+$'
       and split_part(split_part(r.vpn_ip::text, '/', 1), '.', 4)::integer / 2 = gs.host_no / 2
   )
+    and not (
+      gs.host_no / 2 = any(coalesce(p_backup_ccd_pairs, '{}'::integer[]))
+    )
     and not exists (
       select 1 from router_migration_tunnel_leases l
       where l.status in (
@@ -85,6 +98,14 @@ begin
 end;
 $$;
 
-revoke all on function issue_router_migration_tunnel_lease(
+revoke all on function public.issue_router_migration_tunnel_lease(
   bigint, bigint, bigint, text, text, text, text, text, text, timestamptz
 ) from public, service_role;
+revoke all on function public.issue_router_migration_tunnel_lease(
+  bigint, bigint, bigint, text, text, text, text, text, text, timestamptz, integer[]
+) from public;
+grant execute on function public.issue_router_migration_tunnel_lease(
+  bigint, bigint, bigint, text, text, text, text, text, text, timestamptz, integer[]
+) to service_role;
+
+notify pgrst, 'reload schema';
