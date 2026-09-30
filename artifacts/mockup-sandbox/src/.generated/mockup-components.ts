@@ -2,9 +2,9 @@
 type ModuleMap = Record<string, () => Promise<Record<string, unknown>>>;
 export const modules: ModuleMap = {
   "./components/mockups/hotspot-login/HotspotLoginVariants.tsx": () => import("../components/mockups/hotspot-login/HotspotLoginVariants.tsx"),
-  "./components/mockups/migration-page/MigrationPage.tsx": () => import("../components/mockups/migration-page/MigrationPage.tsx"),
   "./components/mockups/isp-dashboard/Current.tsx": () => import("../components/mockups/isp-dashboard/Current.tsx"),
   "./components/mockups/isp-dashboard/EmeraldFinance.tsx": () => import("../components/mockups/isp-dashboard/EmeraldFinance.tsx"),
   "./components/mockups/isp-dashboard/ExecutiveNavy.tsx": () => import("../components/mockups/isp-dashboard/ExecutiveNavy.tsx"),
-  "./components/mockups/isp-dashboard/SlateProfessional.tsx": () => import("../components/mockups/isp-dashboard/SlateProfessional.tsx")
+  "./components/mockups/isp-dashboard/SlateProfessional.tsx": () => import("../components/mockups/isp-dashboard/SlateProfessional.tsx"),
+  "./components/mockups/migration-page/MigrationPage.tsx": () => import("../components/mockups/migration-page/MigrationPage.tsx")
 };
