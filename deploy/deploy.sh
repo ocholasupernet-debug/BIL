@@ -138,8 +138,8 @@ if [ "${DEPLOY_FORCE_INSTALL:-0}" != "1" ] &&
   if api_runtime_dependencies_ready; then
     echo "      ✓ Reusing existing workspace dependencies"
   else
-    echo "      ! API runtime dependencies are incomplete; installing from the frozen lockfile..."
-    pnpm install --frozen-lockfile
+    echo "      ! API runtime dependencies are incomplete; installing workspace dependencies..."
+    pnpm install --no-frozen-lockfile
     api_runtime_dependencies_ready || {
       echo "      ✗ API runtime dependencies are still incomplete after installation." >&2
       exit 1
