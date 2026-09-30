@@ -1905,17 +1905,27 @@ function HotspotLoginView({ troubleshootingOnly = false }: { troubleshootingOnly
               <span className="hp-badge"><Zap size={12} /> Instant</span>
               <span className="hp-badge"><Clock size={12} /> 24/7</span>
             </div>
-            {!troubleshootingOnly && (
+          </div>
+
+          {!troubleshootingOnly && (
+            <div className="hp-troubleshoot-card" style={{ maxWidth: 840, margin: "14px auto 20px" }}>
+              <div className="hp-troubleshoot-card-copy">
+                <div className="hp-troubleshoot-card-icon" aria-hidden="true"><Wifi size={20} /></div>
+                <div>
+                  <div className="hp-troubleshoot-eyebrow">Connection support</div>
+                  <h3>Having trouble connecting?</h3>
+                  <p>Check your package and router session, then retry sign-in if needed.</p>
+                </div>
+              </div>
               <button
                 type="button"
                 className="hp-troubleshoot-card-action"
-                style={{ marginTop: 17 }}
                 onClick={() => window.location.assign(`/portal/troubleshoot${window.location.search}`)}
               >
                 <Wifi size={15} /> Troubleshoot connection <ArrowRight size={15} />
               </button>
-            )}
-          </div>
+            </div>
+          )}
 
           {!troubleshootingOnly && (loginSession?.status === "expired" || loginSession?.status === "depleted") && (
             <div
