@@ -39,22 +39,26 @@ test("domain collector uses HTTP POST data chunks instead of unsupported HTTP fi
 test("temporary tunnel script is address-bound and self-removing", () => {
   const script = tunnelScript.buildMigrationTunnelScript({
     endpoint: "vpn.example.test",
-    port: 1194,
+      port: 1197,
     username: "ochola-mig-1-abcd",
     password: "one-time-secret",
-    tunnelIp: "10.8.0.42",
+      tunnelIp: "10.8.6.42",
     interfaceName: "ochola-mig-1-abcd",
-    firewallComment: "ochola-migration:42",
+    firewallComment: "ochola-migration-42",
     schedulerName: "ochola-migration-expiry-42",
+    apiUsername: "ochola-mig-api-42",
+    apiPassword: "temporary-api-password-42",
   });
-  assert.match(script, /Expected router tunnel address: 10\.8\.0\.42/);
+  assert.match(script, /migrationExpectedTunnelIp "10\.8\.6\.42"/);
   assert.match(script, /:local migrationTunnelInterfaceName "ochola-mig-1-abcd"/);
   assert.match(script, /\/interface ovpn-client add name=\$migrationTunnelInterfaceName connect-to="vpn\.example\.test"/);
-  assert.match(script, /temporary migration tunnel interface was not created/);
+  assert.match(script, /Temporary migration VPN did not connect/);
   assert.match(script, /interval=1h/);
+  assert.match(script, /\/user add name="ochola-mig-api-42"/);
+  assert.match(script, /set migrationCleanup.*user remove/);
   assert.match(script, /\/interface ovpn-client remove/);
   assert.match(script, /\/ip firewall filter remove/);
-  assert.match(script, /dst-port=8728 src-address=10\.8\.0\.1 in-interface="ochola-mig-1-abcd"/);
+  assert.match(script, /dst-port=8728 src-address=10\.8\.6\.1 in-interface=\$migrationTunnelInterfaceName/);
   assert.doesNotMatch(script, /\/ip route add/);
 });
 test("collector export script stays separate from the connection script", () => {
@@ -182,8 +186,8 @@ test("authenticated migration access is tenant-scoped", async () => {
   const route = await readFile("src/routes/router-migrations-route.ts", "utf8");
   assert.match(route, /router\.use\("\/router-migrations", requireAuth\(\)\)/);
   assert.doesNotMatch(route, /router\.use\("\/router-migrations", requireAdmin\(\)\)/);
-  assert.match(route, /isp_routers", `id=eq\.\$\{id\}\$\{ownerFilter\}&select=/);
-  assert.match(route, /router_migration_jobs", `id=eq\.\$\{id\}\$\{ownerFilter\}&select=/);
+  assert.match(route, /"isp_routers",\s*`id=eq\.\$\{id\}\$\{ownerFilter\}&select=/);
+  assert.match(route, /"router_migration_jobs",\s*`id=eq\.\$\{id\}\$\{ownerFilter\}&select=/);
   assert.match(route, /admin_id=eq\.\$\{adminId\}/);
 });
 test("migration browser API uses the signed-in session without tenant headers", async () => {
@@ -194,7 +198,7 @@ test("migration browser API uses the signed-in session without tenant headers", 
 test("collector handoff requires the authenticated RouterOS preflight", async () => {
   const route = await readFile("src/routes/router-migrations-route.ts", "utf8");
   assert.equal((route.match(/if \(!tunnel \|\| tunnel\.status !== "connected"\)/g) || []).length, 2);
-  const page = await readFile("../ochola-supernet/src/pages/admin/network/migration/NetworkMigration.tsx", "utf8");
+  const page = await readFile("../ochola-supernet/src/pages/admin/network/NetworkMigration.tsx", "utf8");
   assert.match(page, /Verify RouterOS API/);
   assert.match(page, /Download both/);
   assert.match(page, /setCurrentStep\(2\)/);

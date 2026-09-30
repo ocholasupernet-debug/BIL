@@ -83,6 +83,32 @@ echo "  Dir:         $PROJECT_DIR"
 echo "  web root:    ${PUBLIC_HTML:-NOT FOUND}"
 echo "══════════════════════════════════════════"
 
+api_runtime_dependencies_ready() {
+  (
+    cd "$PROJECT_DIR/artifacts/api-server"
+    node --input-type=module <<'NODE'
+import { readFileSync } from "node:fs";
+
+const manifest = JSON.parse(readFileSync("./package.json", "utf8"));
+const runtimePackages = Object.keys(manifest.dependencies ?? {})
+  .filter((name) => !name.startsWith("@types/"));
+const missingPackages = runtimePackages.filter((name) => {
+  try {
+    import.meta.resolve(name);
+    return false;
+  } catch {
+    return true;
+  }
+});
+
+if (missingPackages.length > 0) {
+  console.error(`Missing API runtime dependencies: ${missingPackages.join(", ")}`);
+  process.exitCode = 1;
+}
+NODE
+  )
+}
+
 # 1. Use the release delivered by GitHub Actions, or pull latest code when
 #    this script is run manually on the VPS.
 if [ "${DEPLOY_FROM_ARCHIVE:-0}" = "1" ]; then
@@ -109,7 +135,17 @@ if [ "${DEPLOY_FORCE_INSTALL:-0}" != "1" ] &&
     echo "        Run pnpm install on the VPS or deploy with DEPLOY_FORCE_INSTALL=1." >&2
     exit 1
   fi
-  echo "      ✓ Reusing existing workspace dependencies"
+  if api_runtime_dependencies_ready; then
+    echo "      ✓ Reusing existing workspace dependencies"
+  else
+    echo "      ! API runtime dependencies are incomplete; installing workspace dependencies..."
+    pnpm install --no-frozen-lockfile
+    api_runtime_dependencies_ready || {
+      echo "      ✗ API runtime dependencies are still incomplete after installation." >&2
+      exit 1
+    }
+    echo "      ✓ API runtime dependencies repaired"
+  fi
 else
   pnpm install --no-frozen-lockfile
 fi

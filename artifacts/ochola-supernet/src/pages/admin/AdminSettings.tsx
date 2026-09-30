@@ -1424,9 +1424,6 @@ function BillingTab() {
 }
 
 function SmsEmailTab() {
-  const brand = useBrand();
-  const [smtpAuth, setSmtpAuth] = useState(true);
-
   return (
     <>
       <Card title="SMS Gateway" desc="The platform owner manages the Africa’s Talking connection and SMS feature switches">
@@ -1435,34 +1432,10 @@ function SmsEmailTab() {
         </p>
       </Card>
 
-      <Card title="Email / SMTP" desc="Outgoing email for invoices, welcome messages, and expiry alerts">
-        <Grid2>
-          <Field label="SMTP Host"><Input defaultValue="smtp.zoho.com" /></Field>
-          <Field label="SMTP Port"><Input defaultValue="587" type="number" /></Field>
-          <Field label="From Name"><Input defaultValue={brand.ispName} /></Field>
-          <Field label="From Email"><Input defaultValue={`noreply@${brand.domain}`} type="email" /></Field>
-          <Field label="SMTP Username"><Input defaultValue={`noreply@${brand.domain}`} /></Field>
-          <Field label="SMTP Password"><Input type="password" placeholder="••••••••••" /></Field>
-          <Field label="Encryption">
-            <Select defaultValue="tls">
-              <option value="none">None</option>
-              <option value="ssl">SSL</option>
-              <option value="tls">TLS (StartTLS)</option>
-            </Select>
-          </Field>
-          <Field label="SMTP Authentication">
-            <div style={{ display: "flex", alignItems: "center", gap: 8, paddingTop: 4 }}>
-              <Toggle on={smtpAuth} onChange={setSmtpAuth} />
-              <span style={{ fontSize: "0.8rem", color: C.muted }}>Require auth</span>
-            </div>
-          </Field>
-        </Grid2>
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16 }}>
-          <button style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${C.border}`, borderRadius: 8, color: C.muted, fontSize: "0.8rem", fontWeight: 600, padding: "0.45rem 1rem", cursor: "pointer" }}>
-            <Mail size={13} /> Send Test Email
-          </button>
-          <SaveBtn label="Save SMTP Settings" />
-        </div>
+      <Card title="Email / SMTP" desc="Managed centrally by the Super Admin">
+        <p style={{ color: C.muted, fontSize: "0.84rem", lineHeight: 1.6, margin: 0 }}>
+          SMTP credentials and delivery are configured in Super Admin → System Settings. The shared service currently sends account-registration confirmations and platform security alerts.
+        </p>
       </Card>
 
       <Card title="Test Messaging" desc="Send a test message through each configured channel to verify delivery">
@@ -1471,7 +1444,6 @@ function SmsEmailTab() {
             { label: "Test SMS", desc: "Send a test SMS via your configured gateway", icon: Smartphone, color: "var(--isp-accent)" },
             { label: "Test WhatsApp", desc: "Send a test WhatsApp message", icon: MessageCircle, color: "#25d366" },
             { label: "Test Telegram", desc: "Send a test message to your Telegram bot", icon: Send, color: "#0088cc" },
-            { label: "Test Email", desc: "Send a test email via SMTP", icon: Mail, color: "#f59e0b" },
           ].map((ch, i) => {
             const Icon = ch.icon;
             return (

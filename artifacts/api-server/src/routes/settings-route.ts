@@ -39,6 +39,10 @@ import {
   type ServicePaymentConfig,
 } from "../lib/payment-routing.js";
 import { resolveResellerGatewayRoute, resellerDestinationConfigured } from "../lib/reseller-payment-gateway.js";
+import {
+  sendPlatformSecurityNotice,
+  sendRegistrationConfirmationEmail,
+} from "../lib/platform-email.js";
 
 const router: IRouter = Router();
 const MPESA_CALLBACK_PATH = "/api/mpesa/callback";
@@ -429,6 +433,10 @@ router.post("/admin/payment-gateway", async (req: Request, res: Response): Promi
     res.status(404).json({ ok: false, error: "ISP admin was not found or the setting could not be saved." });
     return;
   }
+  void sendPlatformSecurityNotice(
+    "Payment gateway changed",
+    `ISP account #${adminId} changed its selected payment gateway to ${paymentGateway}.`,
+  );
   res.json({ ok: true, paymentGateway });
 });
 
@@ -647,9 +655,9 @@ router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): 
     return;
   }
 
-  const admins = await sbSelect<{ payment_gateway_config?: unknown }>(
+  const admins = await sbSelect<{ payment_gateway_config?: unknown; name?: string | null }>(
     "isp_admins",
-    `id=eq.${adminId}&select=payment_gateway_config&limit=1`,
+    `id=eq.${adminId}&select=payment_gateway_config,name&limit=1`,
   );
   if (admins.length === 0) {
     res.status(404).json({ ok: false, error: "ISP admin was not found." });
@@ -669,6 +677,10 @@ router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): 
     res.status(500).json({ ok: false, error: "Could not save the M-Pesa gateway settings." });
     return;
   }
+  void sendPlatformSecurityNotice(
+    "Payment gateway configuration changed",
+    `ISP account "${admins[0]?.name || `#${adminId}`}" saved settings for ${gatewayId}. Gateway credentials are not included in this notice.`,
+  );
   res.json({ ok: true, gatewayId, config });
 });
 
@@ -771,6 +783,12 @@ router.post("/super-admin/mpesa", async (req: Request, res: Response): Promise<v
 
   try {
     await saveMpesaSettings(next);
+    if (changingDarajaSettings) {
+      void sendPlatformSecurityNotice(
+        "Global M-Pesa gateway settings changed",
+        "Global Daraja settings were saved after successful Super Admin security re-authentication. No gateway credentials are included in this notice.",
+      );
+    }
     res.json({ ok: true, configured: isMpesaConfigured(next) });
   } catch (err) {
     const reason = err instanceof Error ? err.message : "The secure settings write could not be completed.";
@@ -831,6 +849,10 @@ router.post("/super-admin/payment-destinations", async (req: Request, res: Respo
     }
     const next = { ...current, registrationFee, registrationDestinationId, renewalDestinationId };
     savePaymentDestinations(next);
+    void sendPlatformSecurityNotice(
+      "Platform payment destinations changed",
+      "The Super Admin changed the selected platform payment destinations or registration fee.",
+    );
     res.json({ ok: true, ...next, registrationFee: { amount: next.registrationFee, currency: "KES" } });
     return;
   }
@@ -881,6 +903,10 @@ router.post("/super-admin/payment-destinations", async (req: Request, res: Respo
     instructions,
     active: source.active !== false,
   });
+  void sendPlatformSecurityNotice(
+    "Platform payment destination changed",
+    `The Super Admin added or updated a ${type} payment destination named "${name}". Payment account details are not included in this notice.`,
+  );
   res.json({ ok: true, ...next, registrationFee: { amount: next.registrationFee, currency: "KES" } });
 });
 
@@ -896,6 +922,10 @@ router.delete("/super-admin/payment-destinations/:id", (req: Request, res: Respo
     return;
   }
   const next = deletePaymentDestination(id);
+  void sendPlatformSecurityNotice(
+    "Platform payment destination removed",
+    "The Super Admin removed a platform payment destination.",
+  );
   res.json({ ok: true, ...next, registrationFee: { amount: next.registrationFee, currency: "KES" } });
 });
 
@@ -974,6 +1004,7 @@ router.post("/super-admin/manual-registration-payments/:id/verify", async (req: 
     void provisionTenantCertificateForAdmin(settlements[0].admin_id).catch(error => {
       console.error("[registration] immediate tenant certificate provisioning failed; timer will retry", error);
     });
+    void sendRegistrationConfirmationEmail(settlements[0].admin_id);
     res.json({ ok: true, adminId: settlements[0].admin_id });
   } catch {
     res.status(503).json({ ok: false, error: "Manual payment verification is unavailable. Apply the registration payments migration, then try again." });
