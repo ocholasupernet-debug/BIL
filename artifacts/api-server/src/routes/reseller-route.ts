@@ -6,6 +6,7 @@ import {
   extractToken,
   requireAdmin,
 } from "../lib/api-auth.js";
+import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { hasWhatsAppGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import {
   sbDeleteStrict,
@@ -3807,7 +3808,7 @@ async function resellerGatewayResources(account: { id: number; parent_id: number
   return { ports, routers };
 }
 
-router.get("/reseller/payment-gateways", requireAdmin(), async (req, res): Promise<void> => {
+router.get("/reseller/payment-gateways", requireAdmin(), requireTenantPermission("Manage Gateways"), async (req, res): Promise<void> => {
   try {
     const account = await currentAccount(req);
     if (account.role !== "reseller") {
@@ -3858,7 +3859,7 @@ router.get("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
   }
 });
 
-router.get("/reseller/payment-gateways/settings", requireAdmin(), async (req, res): Promise<void> => {
+router.get("/reseller/payment-gateways/settings", requireAdmin(), requireTenantPermission("Manage Gateways"), async (req, res): Promise<void> => {
   try {
     const account = await currentAccount(req);
     if (account.role !== "reseller") {
@@ -3909,7 +3910,7 @@ router.get("/reseller/payment-gateways/settings", requireAdmin(), async (req, re
   }
 });
 
-router.post("/reseller/payment-gateways/:routeId/test", requireAdmin(), async (req, res): Promise<void> => {
+router.post("/reseller/payment-gateways/:routeId/test", requireAdmin(), requireTenantPermission("Manage Gateways"), async (req, res): Promise<void> => {
   try {
     const account = await currentAccount(req);
     if (account.role !== "reseller") {
@@ -3951,7 +3952,7 @@ router.post("/reseller/payment-gateways/:routeId/test", requireAdmin(), async (r
   }
 });
 
-router.put("/reseller/payment-gateways", requireAdmin(), async (req, res): Promise<void> => {
+router.put("/reseller/payment-gateways", requireAdmin(), requireTenantPermission("Manage Gateways"), async (req, res): Promise<void> => {
   try {
     const account = await currentAccount(req);
     if (account.role !== "reseller") {
@@ -4040,7 +4041,7 @@ router.put("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
   }
 });
 
-router.delete("/reseller/payment-gateways/:routeId", requireAdmin(), async (req, res): Promise<void> => {
+router.delete("/reseller/payment-gateways/:routeId", requireAdmin(), requireTenantPermission("Manage Gateways"), async (req, res): Promise<void> => {
   try {
     const account = await currentAccount(req);
     if (account.role !== "reseller") {
@@ -4149,7 +4150,7 @@ async function saveResellerPaymentSettings(account: { id: number; parent_id: num
   ]);
 }
 
-router.get("/reseller/payment-settings", requireAdmin(), async (req, res): Promise<void> => {
+router.get("/reseller/payment-settings", requireAdmin(), requireTenantPermission("Manage Gateways"), async (req, res): Promise<void> => {
   try {
     const account = await currentAccount(req);
     if (account.role !== "reseller") {
@@ -4178,7 +4179,7 @@ router.get("/reseller/payment-settings", requireAdmin(), async (req, res): Promi
   }
 });
 
-router.put("/reseller/payment-settings", requireAdmin(), async (req, res): Promise<void> => {
+router.put("/reseller/payment-settings", requireAdmin(), requireTenantPermission("Manage Gateways"), async (req, res): Promise<void> => {
   try {
     const account = await currentAccount(req);
     if (account.role !== "reseller") {

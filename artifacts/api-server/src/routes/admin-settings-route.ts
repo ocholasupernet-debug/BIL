@@ -6,6 +6,7 @@ import { basename, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { requireAdmin, authenticatedAdminId } from "../lib/api-auth.js";
+import { requireTenantPermission } from "../lib/tenant-permission.js";
 import {
   DEFAULT_MESSAGE_TEMPLATES,
   type MessageChannel,
@@ -112,24 +113,23 @@ function requireSuperAdmin(req: Request, res: Response): string | null {
   return name;
 }
 
-function requireTenantPermission(permission: string) {
-  return async (req: Request, res: Response, next: () => void): Promise<void> => {
-    const adminId = authenticatedAdminId(req);
-    if (!adminId) {
-      res.status(403).json({ ok: false, error: "A valid signed-in ISP Admin session is required." });
-      return;
-    }
-    try {
-      if (!(await adminHasPermission(adminId, permission))) {
-        res.status(403).json({ ok: false, error: `Your role does not have the ${permission} permission.` });
-        return;
-      }
-      next();
-    } catch {
-      res.status(503).json({ ok: false, error: "Permissions could not be verified. Confirm the settings migration has been applied." });
-    }
-  };
-}
+router.get("/admin/permissions/me", requireAdmin(), async (req, res): Promise<void> => {
+  if (req.authUser?.type === "a" && req.authUser.uid === "superadmin") {
+    res.set("Cache-Control", "no-store").json({ ok: true, permissions: { manageGateways: true } });
+    return;
+  }
+  const adminId = authenticatedAdminId(req);
+  if (!adminId) {
+    res.status(403).json({ ok: false, error: "A valid signed-in ISP Admin session is required." });
+    return;
+  }
+  try {
+    const manageGateways = await adminHasPermission(adminId, "Manage Gateways");
+    res.set("Cache-Control", "no-store").json({ ok: true, permissions: { manageGateways } });
+  } catch {
+    res.status(503).json({ ok: false, error: "Permissions could not be verified. Confirm the settings migration has been applied." });
+  }
+});
 
 function validText(value: unknown, max: number): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= max;

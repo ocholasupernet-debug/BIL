@@ -22,6 +22,7 @@ import {
 import { sbRpc, sbSelect, sbUpdate } from "../lib/supabase-client.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { authenticatedAccount, extractToken, validateToken } from "../lib/api-auth.js";
+import { adminHasPermission } from "../lib/platform-permissions.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import { hasWhatsAppGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import {
@@ -96,6 +97,20 @@ async function requireAdminPaymentChange(req: Request, res: Response, adminId: n
     return false;
   }
   if (auth.uid !== "superadmin") {
+    const actorId = Number(auth.uid);
+    if (!Number.isSafeInteger(actorId) || actorId <= 0) {
+      res.status(403).json({ ok: false, error: "A valid signed-in account is required to manage payment gateways." });
+      return false;
+    }
+    try {
+      if (!(await adminHasPermission(actorId, "Manage Gateways"))) {
+        res.status(403).json({ ok: false, error: "Your role does not have the Manage Gateways permission." });
+        return false;
+      }
+    } catch {
+      res.status(503).json({ ok: false, error: "Permissions could not be verified. Confirm the settings migration has been applied." });
+      return false;
+    }
     const validGrant = await hasWhatsAppGatewaySettingsGrant({
       accountId: Number(auth.uid),
       requestId: String(req.headers["x-whatsapp-gateway-request-id"] ?? ""),

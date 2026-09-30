@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { Router, type IRouter, type Request } from "express";
 import { authenticatedAccount, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
+import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { encryptVpnSecret } from "../lib/vpn-crypto.js";
 import { deployRouterFile, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
@@ -1350,7 +1351,7 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
   }
 });
 
-router.get("/admin/payment-gateways", requireAdmin(), async (req, res): Promise<void> => {
+router.get("/admin/payment-gateways", requireAdmin(), requireTenantPermission("Manage Gateways"), async (req, res): Promise<void> => {
   try {
     const account = await authenticatedAccount(req);
     if (!account) {
@@ -1367,7 +1368,7 @@ router.get("/admin/payment-gateways", requireAdmin(), async (req, res): Promise<
   }
 });
 
-router.put("/admin/payment-gateways", requireAdmin(), async (req, res): Promise<void> => {
+router.put("/admin/payment-gateways", requireAdmin(), requireTenantPermission("Manage Gateways"), async (req, res): Promise<void> => {
   try {
     const account = await authenticatedAccount(req);
     const gatewayType = typeof req.body?.gatewayType === "string" ? req.body.gatewayType.trim().toLowerCase() : "";

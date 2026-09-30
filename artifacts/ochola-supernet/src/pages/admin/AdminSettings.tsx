@@ -756,7 +756,7 @@ function ResellerPaymentTestCard() {
     try {
       const response = await fetch("/api/mpesa/reseller-test", {
         method: "POST",
-        headers: adminApiHeaders(),
+        headers: await gatewayOtp.headers(),
         body: JSON.stringify({ routeId: selectedRoute.id, phone: phone.trim(), amount: numericAmount }),
       });
       const data = await response.json() as {
@@ -3239,15 +3239,58 @@ export default function AdminSettings() {
   const [location, setLocation] = useLocation();
   const requestedTab = new URLSearchParams(location.split("?")[1] ?? "").get("tab");
   const isReseller = getAdminRole() === "reseller";
-  const visibleTabs = TABS;
+  const [canManageGateways, setCanManageGateways] = useState(false);
+  const [gatewayPermissionLoading, setGatewayPermissionLoading] = useState(true);
+  const [gatewayPermissionError, setGatewayPermissionError] = useState("");
+  useEffect(() => {
+    let active = true;
+    const loadPermission = async () => {
+      try {
+        const response = await fetch("/api/admin/permissions/me", {
+          headers: adminApiHeaders(),
+          cache: "no-store",
+        });
+        const data = await response.json() as {
+          ok?: boolean;
+          error?: string;
+          permissions?: { manageGateways?: boolean };
+        };
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Gateway access could not be verified.");
+        }
+        if (active) setCanManageGateways(data.permissions?.manageGateways === true);
+      } catch (error) {
+        if (active) {
+          setCanManageGateways(false);
+          setGatewayPermissionError(error instanceof Error ? error.message : "Gateway access could not be verified.");
+        }
+      } finally {
+        if (active) setGatewayPermissionLoading(false);
+      }
+    };
+    void loadPermission();
+    return () => { active = false; };
+  }, []);
+  const visibleTabs = TABS.filter(item => item.id !== "gateways" || (canManageGateways && !gatewayPermissionLoading));
   const initialTab = visibleTabs.some(item => item.id === requestedTab) ? requestedTab! : "profile";
   const [tab, setTab] = useState(initialTab);
 
   useEffect(() => {
-    if (requestedTab && visibleTabs.some(item => item.id === requestedTab)) setTab(requestedTab);
-  }, [requestedTab, isReseller]);
+    if (requestedTab === "gateways" && gatewayPermissionLoading) return;
+    if (requestedTab === "gateways" && !canManageGateways) {
+      setTab("profile");
+      setLocation("/admin/settings?tab=profile");
+      return;
+    }
+    if (requestedTab && visibleTabs.some(item => item.id === requestedTab)) {
+      setTab(requestedTab);
+      return;
+    }
+    if (!visibleTabs.some(item => item.id === tab)) setTab("profile");
+  }, [requestedTab, canManageGateways, gatewayPermissionLoading, tab, setLocation, isReseller]);
 
   const selectTab = (nextTab: string) => {
+    if (nextTab === "gateways" && !canManageGateways) return;
     setTab(nextTab);
     setLocation(`/admin/settings?tab=${nextTab}`);
   };
@@ -3292,6 +3335,11 @@ export default function AdminSettings() {
               Manage your {TABS.find(t => t.id === tab)?.label.toLowerCase()} settings
             </p>
           </div>
+          {gatewayPermissionError && (
+            <p role="alert" style={{ color: "#f87171", fontSize: "0.75rem", margin: "0 0 14px" }}>
+              {gatewayPermissionError} The Payment Gateways section is hidden until access can be confirmed.
+            </p>
+          )}
           <div className="settings-mobile-nav">
             <Select value={tab} onChange={event => selectTab(event.target.value)} aria-label="Choose settings section">
               {visibleTabs.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}

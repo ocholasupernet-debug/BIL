@@ -17,7 +17,9 @@ import { logger } from "../lib/logger.js";
 import { sendRegistrationConfirmationEmail } from "../lib/platform-email.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
-import { extractToken, generatePaymentIntent, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
+import { extractToken, generatePaymentIntent, requireAdmin, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
+import { requireTenantPermission } from "../lib/tenant-permission.js";
+import { hasWhatsAppGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import { planBelongsToOwner } from "../lib/plan-ownership.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import {
@@ -1416,10 +1418,26 @@ async function resellerMpesaTestAccountFromRequest(req: Request): Promise<Resell
     : null;
 }
 
-router.post("/mpesa/reseller-test", async (req: Request, res: Response): Promise<void> => {
+router.post("/mpesa/reseller-test", requireAdmin(), requireTenantPermission("Manage Gateways"), async (req: Request, res: Response): Promise<void> => {
   const account = await resellerMpesaTestAccountFromRequest(req);
   if (!account) {
     res.status(401).json({ ok: false, error: "Sign in to a connected reseller account to test its payment gateway." });
+    return;
+  }
+  let hasGatewayGrant = false;
+  try {
+    hasGatewayGrant = await hasWhatsAppGatewaySettingsGrant({
+      accountId: account.id,
+      requestId: String(req.headers["x-whatsapp-gateway-request-id"] ?? ""),
+      grant: String(req.headers["x-whatsapp-gateway-grant"] ?? ""),
+      sessionToken: extractToken(req),
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Gateway verification is temporarily unavailable." });
+    return;
+  }
+  if (!hasGatewayGrant) {
+    res.status(403).json({ ok: false, error: "Verify the WhatsApp code to test reseller payment gateways." });
     return;
   }
 

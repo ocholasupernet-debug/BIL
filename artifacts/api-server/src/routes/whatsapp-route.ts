@@ -6,6 +6,7 @@ import {
   requireAdmin,
   validateToken,
 } from "../lib/api-auth.js";
+import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { logger } from "../lib/logger.js";
 import {
@@ -182,6 +183,7 @@ async function gatewaySettingsOtpActor(
 router.post(
   "/auth/whatsapp/gateway-settings/request-otp",
   requireAdmin(),
+  requireTenantPermission("Manage Gateways"),
   async (req, res): Promise<void> => {
     const actor = await gatewaySettingsOtpActor(req, res);
     if (!actor) return;
@@ -226,6 +228,7 @@ router.post(
 router.post(
   "/auth/whatsapp/gateway-settings/verify-otp",
   requireAdmin(),
+  requireTenantPermission("Manage Gateways"),
   async (req, res): Promise<void> => {
     const actor = await gatewaySettingsOtpActor(req, res);
     if (!actor) return;
