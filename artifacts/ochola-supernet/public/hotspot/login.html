@@ -164,24 +164,6 @@
   </div>
 </section>
 
-<section id="portalRecoveryCards" style="max-width:880px;margin:0 auto;padding:0 1.25rem 1rem">
-  <div class="sec-card" style="max-width:840px;margin:0 auto;background:rgba(255,255,255,.035)">
-    <div class="sec-head" style="background:linear-gradient(135deg,rgba(126,34,206,.24),rgba(37,99,235,.18))">
-      <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(216,180,254,.72);margin-bottom:.625rem">
-        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
-        Connection Support
-      </div>
-      <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Having trouble connecting?</h3>
-      <p style="color:rgba(216,180,254,.55);font-size:.875rem;margin-top:.375rem">Check your package and router session, then retry sign-in if needed.</p>
-    </div>
-    <div class="sec-body" style="padding-top:1.25rem;padding-bottom:1.25rem">
-      <button type="button" class="btn btn-full" onclick="openTroubleshootPage()" style="background:linear-gradient(135deg,#7c3aed,#4f46e5);border:1px solid rgba(216,180,254,.35);color:#fff">
-        Troubleshoot connection
-      </button>
-    </div>
-  </div>
-</section>
-
 <!-- Optional tenant announcement / maintenance message -->
 <section id="portalAnnouncement" style="display:none;max-width:1200px;margin:0 auto;padding:.25rem 1.25rem 1.25rem">
   <div id="portalAnnouncementText" style="border-radius:.875rem;padding:.875rem 1.25rem;background:rgba(217,105,53,.12);border:1px solid rgba(217,105,53,.28);color:rgba(255,237,213,.9);font-size:.8375rem;line-height:1.5;text-align:center"></div>
@@ -198,16 +180,6 @@
   </div>
 </section>
 
-<!-- M-Pesa Banner -->
-<div id="mpesaBanner" style="max-width:1200px;margin:0 auto;padding:.25rem 1.25rem 2rem">
-  <div style="border-radius:.875rem;padding:.875rem 1.5rem;display:flex;align-items:center;gap:.875rem;background:linear-gradient(90deg,rgba(5,150,105,.15),rgba(6,182,212,.08));border:1px solid rgba(5,150,105,.25)">
-    <div style="width:28px;height:28px;border-radius:.5rem;background:rgba(52,211,153,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-      <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#34d399" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-    </div>
-     <span id="mpesaMessage" style="color:rgba(110,231,183,.9);font-size:.8375rem;font-weight:500">M-Pesa STK Push is active — click any plan to pay instantly and get connected</span>
-  </div>
-</div>
-
 <!-- Pricing -->
 <section id="plansSection" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 5rem">
   <div style="text-align:center;margin-bottom:2.5rem">
@@ -216,8 +188,34 @@
     <p style="color:rgba(255,255,255,.4);font-size:.9375rem">All plans activate instantly after M-Pesa payment</p>
     <button type="button" onclick="openTvModal()" style="margin-top:1rem;padding:.7rem 1.15rem;border-radius:.7rem;border:1px solid var(--portal-accent-border);background:var(--portal-accent-soft);color:white;font-size:.75rem;font-weight:800;letter-spacing:.03em;cursor:pointer">Connect to TV</button>
   </div>
+  <div id="mpesaBanner" style="max-width:1200px;margin:0 auto 1.5rem">
+    <div style="border-radius:.875rem;padding:.875rem 1.5rem;display:flex;align-items:center;gap:.875rem;background:linear-gradient(90deg,rgba(5,150,105,.15),rgba(6,182,212,.08));border:1px solid rgba(5,150,105,.25)">
+      <div style="width:28px;height:28px;border-radius:.5rem;background:rgba(52,211,153,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#34d399" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      </div>
+      <span id="mpesaMessage" style="color:rgba(110,231,183,.9);font-size:.8375rem;font-weight:500">M-Pesa STK Push is active — click any plan to pay instantly and get connected</span>
+    </div>
+  </div>
   <div id="plansGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:1rem">
     <div style="grid-column:1/-1;text-align:center;padding:2rem;color:rgba(255,255,255,.3);font-size:.875rem">Loading plans…</div>
+  </div>
+</section>
+
+<section id="portalRecoveryCards" style="max-width:880px;margin:-2rem auto 0;padding:0 1.25rem 3rem">
+  <div class="sec-card" style="max-width:840px;margin:0 auto;background:rgba(255,255,255,.035)">
+    <div class="sec-head" style="background:linear-gradient(135deg,rgba(126,34,206,.24),rgba(37,99,235,.18))">
+      <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(216,180,254,.72);margin-bottom:.625rem">
+        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
+        Connection Support
+      </div>
+      <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Having trouble connecting?</h3>
+      <p style="color:rgba(216,180,254,.55);font-size:.875rem;margin-top:.375rem">Check your package and router session, then retry sign-in if needed.</p>
+    </div>
+    <div class="sec-body" style="padding-top:1.25rem;padding-bottom:1.25rem">
+      <button type="button" class="btn btn-full" onclick="openTroubleshootModule()" style="background:linear-gradient(135deg,#7c3aed,#4f46e5);border:1px solid rgba(216,180,254,.35);color:#fff">
+        Troubleshoot connection
+      </button>
+    </div>
   </div>
 </section>
 
@@ -285,11 +283,11 @@
 </section>
 
 <!-- Voucher Section -->
-<section id="troubleshootPage" role="region" aria-labelledby="troubleshootTitle" style="display:none;position:fixed;inset:0;z-index:1000;overflow:auto;background:radial-gradient(ellipse 120% 80% at 50% -10%,#37104d 0%,#0d0415 55%);padding:1.5rem 1rem 3rem">
-  <div style="width:min(100%,560px);margin:0 auto">
-    <button type="button" onclick="closeTroubleshootPage()" class="btn" style="margin-bottom:1.5rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:#fff">← Back to packages</button>
-    <p style="font-size:.7rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:rgba(216,180,254,.7);margin:0 0 .5rem">Connection assistant</p>
-    <h1 id="troubleshootTitle" style="font-size:1.65rem;font-weight:850;color:#fff;margin:0 0 .5rem">Troubleshoot connection</h1>
+<div id="troubleshootModule" role="dialog" aria-modal="true" aria-labelledby="troubleshootTitle" aria-hidden="true" onclick="closeTroubleshootModuleFromBackdrop(event)" style="display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center;padding:1rem;background:rgba(4,7,18,.78);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)">
+  <div id="troubleshootDialog" tabindex="-1" style="position:relative;width:min(100%,560px);max-height:calc(100vh - 2rem);max-height:calc(100dvh - 2rem);overflow:auto;padding:1.5rem;border-radius:1.25rem;background:linear-gradient(145deg,#1a0f2e,#10091d);border:1px solid rgba(255,255,255,.14);box-shadow:0 32px 90px rgba(0,0,0,.65)">
+    <button type="button" id="troubleshootClose" onclick="closeTroubleshootModule()" aria-label="Close troubleshooting" style="position:absolute;top:.875rem;right:.875rem;width:36px;height:36px;border-radius:.65rem;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:rgba(255,255,255,.82);font:700 1.25rem/1 inherit;cursor:pointer">×</button>
+    <p style="font-size:.7rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:rgba(216,180,254,.7);margin:0 2.5rem .5rem 0">Connection assistant</p>
+    <h2 id="troubleshootTitle" style="font-size:1.4rem;font-weight:850;color:#fff;margin:0 2.5rem .5rem 0">Troubleshoot connection</h2>
     <p style="font-size:.9rem;line-height:1.55;color:rgba(255,255,255,.55);margin:0 0 1.25rem">Check the latest package linked to this device and see whether the router confirmed access.</p>
     <div style="padding:1.15rem;border-radius:1rem;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.12);box-shadow:0 18px 50px rgba(0,0,0,.25)">
       <div style="font-size:.65rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.42);margin-bottom:.4rem">This device</div>
@@ -297,9 +295,8 @@
       <div id="troubleshootResult" role="status" aria-live="polite" style="min-height:4rem;margin-top:1rem;padding:.9rem;border-radius:.75rem;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.72);font-size:.82rem;line-height:1.55">The check result will appear here.</div>
       <button type="button" id="troubleshootBtn" class="btn btn-full" onclick="troubleshootConnection()" style="margin-top:1rem;background:linear-gradient(135deg,#7c3aed,#4f46e5);border:1px solid rgba(216,180,254,.35);color:#fff">Check connection</button>
     </div>
-    <div id="troubleshootMpesaSlot"></div>
   </div>
-</section>
+</div>
 
 <section id="voucherSection" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 4rem">
   <div class="sec-card" style="background:rgba(255,255,255,.035)">
@@ -1128,54 +1125,70 @@ function bindPlanButtons(){
 window.openModal=openModal;
 window.sendStk=sendStk;
 
-function openTroubleshootPage(){
-  var page=document.getElementById("troubleshootPage");
+var troubleshootReturnFocus=null;
+var troubleshootPreviousOverflow="";
+function openTroubleshootModule(){
+  var module=document.getElementById("troubleshootModule");
   var device=document.getElementById("troubleshootDevice");
   var result=document.getElementById("troubleshootResult");
-  var reconnect=document.getElementById("mpesaReconnectSection");
-  var reconnectSlot=document.getElementById("troubleshootMpesaSlot");
-  if(!page)return;
-  page.style.display="block";
+  if(!module)return;
+  if(module.style.display!=="flex"){
+    troubleshootReturnFocus=document.activeElement;
+    troubleshootPreviousOverflow=document.body.style.overflow;
+  }
+  module.style.display="flex";
+  module.setAttribute("aria-hidden","false");
   document.body.style.overflow="hidden";
   if(device)device.textContent=DEVICE_MAC||"Device MAC unavailable";
-  if(reconnect&&reconnectSlot){
-    if(reconnect.parentNode!==reconnectSlot)reconnectSlot.appendChild(reconnect);
-    reconnect.hidden=false;
-  }
-  try{
-    var url=new URL(window.location.href);
-    if(url.searchParams.get("page")!=="troubleshoot"){
-      url.searchParams.set("page","troubleshoot");
-      window.history.pushState({portalPage:"troubleshoot"},"",url.pathname+url.search+url.hash);
-    }
-  }catch(e){}
   if(result&&!portalTroubleshootBusy)result.textContent="Checking your package and router session…";
+  document.addEventListener("keydown",handleTroubleshootModuleKeydown);
+  var closeButton=document.getElementById("troubleshootClose");
+  if(closeButton)closeButton.focus();
   troubleshootConnection();
 }
-function restoreMpesaReconnectSection(){
-  var reconnect=document.getElementById("mpesaReconnectSection");
-  var home=document.getElementById("portalRecoveryCards");
-  if(reconnect&&home&&reconnect.parentNode!==home)home.appendChild(reconnect);
+function closeTroubleshootModuleFromBackdrop(event){
+  if(event&&event.target===event.currentTarget)closeTroubleshootModule();
 }
-function closeTroubleshootPage(){
-  var page=document.getElementById("troubleshootPage");
-  if(page)page.style.display="none";
-  document.body.style.overflow="";
-  restoreMpesaReconnectSection();
+function handleTroubleshootModuleKeydown(event){
+  var module=document.getElementById("troubleshootModule");
+  if(!module||module.style.display==="none")return;
+  if(event.key==="Escape"){
+    event.preventDefault();
+    closeTroubleshootModule();
+    return;
+  }
+  if(event.key!=="Tab")return;
+  var focusable=module.querySelectorAll('button:not([disabled]),[href],input:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])');
+  if(!focusable.length){
+    event.preventDefault();
+    return;
+  }
+  var first=focusable[0];
+  var last=focusable[focusable.length-1];
+  if(event.shiftKey&&document.activeElement===first){
+    event.preventDefault();
+    last.focus();
+  }else if(!event.shiftKey&&document.activeElement===last){
+    event.preventDefault();
+    first.focus();
+  }
+}
+function closeTroubleshootModule(){
+  var module=document.getElementById("troubleshootModule");
+  if(module){
+    module.style.display="none";
+    module.setAttribute("aria-hidden","true");
+  }
+  document.removeEventListener("keydown",handleTroubleshootModuleKeydown);
+  document.body.style.overflow=troubleshootPreviousOverflow;
   try{
     var url=new URL(window.location.href);
     url.searchParams.delete("page");
     window.history.replaceState({},"",url.pathname+url.search+url.hash);
   }catch(e){}
+  if(troubleshootReturnFocus&&typeof troubleshootReturnFocus.focus==="function")troubleshootReturnFocus.focus();
+  troubleshootReturnFocus=null;
 }
-window.addEventListener("popstate",function(){
-  var visible=new URLSearchParams(window.location.search).get("page")==="troubleshoot";
-  var page=document.getElementById("troubleshootPage");
-  if(page)page.style.display=visible?"block":"none";
-  document.body.style.overflow=visible?"hidden":"";
-  if(!visible)restoreMpesaReconnectSection();
-  if(visible&&!portalTroubleshootBusy)troubleshootConnection();
-});
 function toggleLoginPass(){var i=document.getElementById("loginPass");i.type=i.type==="password"?"text":"password";}
 function formatPortalExpiry(value){
   if(!value)return "No expiry time recorded";
@@ -1374,7 +1387,7 @@ bindPlanButtons();
 loadPortalTypography(loadPlans);
 renderPortalDeviceMac();
 applyCredentialsFromHash();
-if(PORTAL_QUERY.get("page")==="troubleshoot")openTroubleshootPage();
+if(PORTAL_QUERY.get("page")==="troubleshoot")openTroubleshootModule();
 else checkPortalExpiryOnLanding();
 </script>
 </body>

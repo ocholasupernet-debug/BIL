@@ -278,14 +278,20 @@ function checkoutPaymentLabel(paymentGateway: string): string {
 }
 
 export function HotspotTroubleshootPage() {
-  return <HotspotLoginView troubleshootingOnly />;
+  return <HotspotLoginView initialTroubleshootOpen />;
 }
 
 export default function HotspotLogin() {
   return <HotspotLoginView />;
 }
 
-function HotspotLoginView({ troubleshootingOnly = false }: { troubleshootingOnly?: boolean } = {}) {
+function HotspotLoginView({
+  troubleshootingOnly = false,
+  initialTroubleshootOpen = false,
+}: {
+  troubleshootingOnly?: boolean;
+  initialTroubleshootOpen?: boolean;
+} = {}) {
   const brand = useBrand();
   const [portalBranding, setPortalBranding] = useState<PortalBranding>({});
   useEffect(() => {
@@ -423,9 +429,59 @@ function HotspotLoginView({ troubleshootingOnly = false }: { troubleshootingOnly
   const [troubleshootAction, setTroubleshootAction] = useState<"check" | "login" | null>(null);
   const troubleshootInFlight = useRef(false);
   const autoTroubleshootKey = useRef("");
+  const [troubleshootDialogOpen, setTroubleshootDialogOpen] = useState(() => (
+    initialTroubleshootOpen
+    || (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("page") === "troubleshoot")
+  ));
+  const troubleshootTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const troubleshootDialogRef = useRef<HTMLDivElement | null>(null);
   const [mpesaMessage, setMpesaMessage] = useState("");
   const [mpesaReconnectLoading, setMpesaReconnectLoading] = useState(false);
   const [mpesaReconnectError, setMpesaReconnectError] = useState("");
+
+  useEffect(() => {
+    if (!troubleshootDialogOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    document.body.style.overflow = "hidden";
+    const dialog = troubleshootDialogRef.current;
+    const closeButton = dialog?.querySelector<HTMLElement>(".hp-troubleshoot-close");
+    (closeButton ?? dialog)?.focus();
+
+    const handleDialogKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setTroubleshootDialogOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+      ));
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleDialogKeydown);
+    return () => {
+      document.removeEventListener("keydown", handleDialogKeydown);
+      document.body.style.overflow = previousOverflow;
+      const trigger = troubleshootTriggerRef.current;
+      if (trigger?.isConnected) trigger.focus();
+      else previousFocus?.focus();
+    };
+  }, [troubleshootDialogOpen]);
 
   useEffect(() => {
     setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
@@ -637,7 +693,7 @@ function HotspotLoginView({ troubleshootingOnly = false }: { troubleshootingOnly
     const destination = portalContext.linkLogin || portalContext.linkOrig;
     if (!/^https?:\/\//i.test(destination) || !hotspotCredentials) {
       if (!troubleshootingOnly) {
-        window.location.assign(`/portal/troubleshoot${window.location.search}`);
+        setTroubleshootDialogOpen(true);
       } else {
         setTroubleshootMessage("Your account is ready. Return to the Wi-Fi sign-in page to finish connecting.");
       }
@@ -1010,6 +1066,40 @@ function HotspotLoginView({ troubleshootingOnly = false }: { troubleshootingOnly
       }
     });
   }, [troubleshootingOnly, adminId, portalContext.mac, requestHotspotTroubleshoot]);
+
+  useEffect(() => {
+    if (!troubleshootDialogOpen) return;
+    let retryTimer = 0;
+    const runCheck = () => {
+      if (HOTSPOT_RUNTIME_CONFIG.previewOnly) {
+        setTroubleshootError("Connection checks are available when this page is opened from an active hotspot device.");
+        return;
+      }
+      if (!adminId || !portalContext.mac) {
+        setTroubleshootError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
+        return;
+      }
+      if (troubleshootInFlight.current) {
+        retryTimer = window.setTimeout(runCheck, 150);
+        return;
+      }
+      troubleshootInFlight.current = true;
+      setLoginSession(null);
+      setTroubleshootLoading(true);
+      setTroubleshootError("");
+      setTroubleshootMessage("");
+      setTroubleshootAction("check");
+      void requestHotspotTroubleshoot("check").finally(() => {
+        troubleshootInFlight.current = false;
+        setTroubleshootLoading(false);
+        setTroubleshootAction(null);
+      });
+    };
+    runCheck();
+    return () => {
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, [troubleshootDialogOpen, adminId, portalContext.mac, requestHotspotTroubleshoot]);
 
   const handlePlanLogin = async () => {
     if (troubleshootInFlight.current) return;
@@ -1949,32 +2039,6 @@ function HotspotLoginView({ troubleshootingOnly = false }: { troubleshootingOnly
             </div>
           </div>
 
-          {!troubleshootingOnly && (
-            <div className="hp-troubleshoot-card" style={{ maxWidth: 840, margin: "14px auto 20px" }}>
-              <div className="hp-troubleshoot-card-copy">
-                <div className="hp-troubleshoot-card-icon" aria-hidden="true"><Wifi size={20} /></div>
-                <div>
-                  <div className="hp-troubleshoot-eyebrow">Connection support</div>
-                  <h3>Having trouble connecting?</h3>
-                  <p>Check your package and router session, then retry sign-in if needed.</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                className="hp-troubleshoot-card-action"
-                onClick={() => window.location.assign(`/portal/troubleshoot${window.location.search}`)}
-              >
-                <Wifi size={15} /> Troubleshoot connection <ArrowRight size={15} />
-              </button>
-            </div>
-          )}
-
-          {!troubleshootingOnly && (
-            <div style={{ maxWidth: 840, margin: "0 auto 20px" }}>
-              {mpesaReconnectCard}
-            </div>
-          )}
-
           {!troubleshootingOnly && (loginSession?.status === "expired" || loginSession?.status === "depleted") && (
             <div
               role="alert"
@@ -2505,6 +2569,163 @@ function HotspotLoginView({ troubleshootingOnly = false }: { troubleshootingOnly
                       </button>
                     </form>
                   )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="hp-troubleshoot-card" style={{ maxWidth: 840, margin: "14px auto 12px" }}>
+            <div className="hp-troubleshoot-card-copy">
+              <div className="hp-troubleshoot-card-icon" aria-hidden="true"><Wifi size={20} /></div>
+              <div>
+                <div className="hp-troubleshoot-eyebrow">Connection support</div>
+                <h3>Having trouble connecting?</h3>
+                <p>Check your package and router session, then retry sign-in if needed.</p>
+              </div>
+            </div>
+            <button
+              ref={troubleshootTriggerRef}
+              type="button"
+              className="hp-troubleshoot-card-action"
+              aria-haspopup="dialog"
+              aria-expanded={troubleshootDialogOpen}
+              onClick={() => setTroubleshootDialogOpen(true)}
+            >
+              <Wifi size={15} /> Troubleshoot connection <ArrowRight size={15} />
+            </button>
+          </div>
+
+          <div style={{ maxWidth: 840, margin: "0 auto 20px" }}>
+            {mpesaReconnectCard}
+          </div>
+
+          {troubleshootDialogOpen && (
+            <div
+              className="hp-troubleshoot-overlay"
+              role="presentation"
+              onMouseDown={event => {
+                if (event.target === event.currentTarget) setTroubleshootDialogOpen(false);
+              }}
+            >
+              <div
+                ref={troubleshootDialogRef}
+                className="hp-troubleshoot-dialog"
+                data-state="open"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="hp-troubleshoot-dialog-title"
+                aria-describedby="hp-troubleshoot-dialog-description"
+                tabIndex={-1}
+              >
+                <div className="hp-troubleshoot-dialog-ambient" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="hp-troubleshoot-close"
+                  aria-label="Close troubleshooting"
+                  onClick={() => setTroubleshootDialogOpen(false)}
+                >
+                  ×
+                </button>
+                <div className="hp-troubleshoot-dialog-inner">
+                  <div className="hp-troubleshoot-dialog-head">
+                    <div className="hp-troubleshoot-dialog-icon" aria-hidden="true"><Wifi size={21} /></div>
+                    <div>
+                      <div className="hp-troubleshoot-dialog-kicker">Connection assistant</div>
+                      <h2 id="hp-troubleshoot-dialog-title" className="hp-troubleshoot-dialog-title">Troubleshoot connection</h2>
+                      <p id="hp-troubleshoot-dialog-description" className="hp-troubleshoot-dialog-description">
+                        Check this device’s latest package and see whether the router confirmed access.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="hp-troubleshoot-device">
+                    <span className="hp-troubleshoot-device-label">Checking this device</span>
+                    <strong>{portalContext.mac || "Device MAC unavailable"}</strong>
+                  </div>
+
+                  {troubleshootLoading ? (
+                    <div className="hp-troubleshoot-loading" role="status" aria-live="polite">
+                      <span className="hp-troubleshoot-loading-icon">
+                        <Loader2 size={21} style={{ animation: "spin 1s linear infinite" }} />
+                      </span>
+                      <span>{troubleshootAction === "login" ? "Asking the router to log in…" : "Checking your package and router…"}</span>
+                    </div>
+                  ) : troubleshootError ? (
+                    <div className="hp-troubleshoot-error" role="alert">
+                      <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                      <span>{troubleshootError}</span>
+                    </div>
+                  ) : troubleshootStatus && loginSession ? (
+                    <div className="hp-troubleshoot-result" role="status" aria-live="polite">
+                      <div className="hp-troubleshoot-status" data-tone={troubleshootStatusTone}>
+                        <div className="hp-troubleshoot-status-heading">
+                          <span className="hp-troubleshoot-status-mark" aria-hidden="true">
+                            {loginSession.status === "active" && loginSession.connected
+                              ? <CheckCircle2 size={17} />
+                              : <AlertCircle size={17} />}
+                          </span>
+                          <strong>{loginSession.connected ? "Connected" : troubleshootStatus.label}</strong>
+                        </div>
+                        {loginSession.planName && (
+                          <p className="hp-troubleshoot-status-copy" style={{ marginBottom: 4 }}>
+                            Package: <strong>{loginSession.planName}</strong>
+                          </p>
+                        )}
+                        <p className="hp-troubleshoot-status-copy">{troubleshootStatus.detail}</p>
+                        {loginSession.status === "active" && (
+                          <div className="hp-troubleshoot-session-meta">
+                            {loginSession.username && (
+                              <div><span>Hotspot account</span><strong>{loginSession.username}</strong></div>
+                            )}
+                            <div><span>Router session</span><strong>{loginSession.connected ? "Confirmed" : "Login required"}</strong></div>
+                          </div>
+                        )}
+                        {troubleshootMessage && <div className="hp-troubleshoot-note">{troubleshootMessage}</div>}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="hp-troubleshoot-note" role="status">
+                      {troubleshootMessage || "The connection check result will appear here."}
+                    </div>
+                  )}
+
+                  <div className="hp-troubleshoot-modal-actions">
+                    {loginSession?.status === "active" && !loginSession.connected && (
+                      <button
+                        type="button"
+                        className="hp-troubleshoot-modal-action primary"
+                        onClick={handlePlanLogin}
+                        disabled={troubleshootLoading}
+                      >
+                        {troubleshootLoading
+                          ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Logging in…</>
+                          : <><Wifi size={15} /> Login now</>}
+                      </button>
+                    )}
+                    {(loginSession?.status === "expired" || loginSession?.status === "depleted" || loginSession?.status === "not_found") && (
+                      <button
+                        type="button"
+                        className="hp-troubleshoot-modal-action primary"
+                        onClick={() => {
+                          setTroubleshootDialogOpen(false);
+                          window.setTimeout(() => document.getElementById("hp-plan-tabs")?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
+                        }}
+                      >
+                        <CreditCard size={15} /> Browse packages
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="hp-troubleshoot-modal-action"
+                      onClick={handleTroubleshoot}
+                      disabled={troubleshootLoading}
+                    >
+                      {troubleshootLoading
+                        ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Checking…</>
+                        : <><ArrowRight size={15} /> Check again</>}
+                    </button>
+                  </div>
+                  <p className="hp-troubleshoot-modal-footnote">Package details are matched to this device’s MAC address.</p>
                 </div>
               </div>
             </div>
