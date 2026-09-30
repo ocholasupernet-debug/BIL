@@ -106,7 +106,6 @@
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:.75rem">
-      <button onclick="openTroubleshootPage()" id="alreadyPaidBtn" style="display:none;font-size:.8125rem;font-weight:500;color:rgba(216,180,254,.75);background:none;border:none;cursor:pointer;letter-spacing:.01em">Troubleshoot connection →</button>
       <a id="portalHeaderPhone" href="#" style="display:none;align-items:center;gap:.375rem;background:rgba(192,38,211,.15);border:1px solid rgba(192,38,211,.3);color:rgba(240,171,252,.9);font-size:.8125rem;font-weight:500;padding:.375rem .875rem;border-radius:9999px;text-decoration:none;transition:background .2s">
         <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 5.25v1.5z"/></svg>
          <span id="portalHeaderPhoneText"></span>
@@ -161,6 +160,24 @@
         <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#c084fc" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
         Reliable Network
       </div>
+    </div>
+  </div>
+</section>
+
+<section id="portalRecoveryCards" style="max-width:880px;margin:0 auto;padding:0 1.25rem 1rem">
+  <div class="sec-card" style="max-width:840px;margin:0 auto;background:rgba(255,255,255,.035)">
+    <div class="sec-head" style="background:linear-gradient(135deg,rgba(126,34,206,.24),rgba(37,99,235,.18))">
+      <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(216,180,254,.72);margin-bottom:.625rem">
+        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
+        Connection Support
+      </div>
+      <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Having trouble connecting?</h3>
+      <p style="color:rgba(216,180,254,.55);font-size:.875rem;margin-top:.375rem">Check your package and router session, then retry sign-in if needed.</p>
+    </div>
+    <div class="sec-body" style="padding-top:1.25rem;padding-bottom:1.25rem">
+      <button type="button" class="btn btn-full" onclick="openTroubleshootPage()" style="background:linear-gradient(135deg,#7c3aed,#4f46e5);border:1px solid rgba(216,180,254,.35);color:#fff">
+        Troubleshoot connection
+      </button>
     </div>
   </div>
 </section>
@@ -250,12 +267,6 @@
             <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
             Click Here To Connect
           </button>
-          <button type="button" id="legacyTroubleshootBtn" class="btn btn-full" onclick="openTroubleshootPage()" style="margin-top:.65rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:rgba(255,255,255,.78);box-shadow:none">
-            Troubleshoot connection
-          </button>
-          <p style="margin:.35rem 0 0;color:rgba(255,255,255,.34);font-size:.72rem;line-height:1.45;text-align:center">
-            This checks the latest successful hotspot purchase linked to this device MAC. If it is active, you can log in without entering a password.
-          </p>
           <div id="legacyPortalSessionStatus" role="status" style="display:none;margin-top:.9rem;padding:.85rem 1rem;border-radius:.75rem;font-size:.8rem;line-height:1.5"></div>
         </div>
       </form>
@@ -333,7 +344,7 @@
 </section>
 
 <!-- M-Pesa Message -->
-<section id="mpesaReconnectSection" hidden style="padding:1rem 0 0">
+<section id="mpesaReconnectSection" hidden style="max-width:840px;margin:1rem auto 0;padding:0">
   <div class="sec-card" style="background:rgba(255,255,255,.035)">
     <div class="sec-head" style="background:linear-gradient(135deg,rgba(6,95,70,.3),rgba(7,89,133,.3))">
       <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(110,231,183,.65);margin-bottom:.625rem">
@@ -481,6 +492,12 @@ var ROUTER_CHAP_CHALLENGE="$(chap-challenge)";
   var PORTAL_ACCENT="#d96835", PORTAL_BACKGROUND="midnight", PORTAL_PACKAGE_SHAPE="rounded", PORTAL_PREVIEW_ONLY=false;
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
 var PORTAL_QUERY=new URLSearchParams(window.location.search);
+var mpesaReconnectHome=document.getElementById("portalRecoveryCards");
+var mpesaReconnectSection=document.getElementById("mpesaReconnectSection");
+if(mpesaReconnectHome&&mpesaReconnectSection){
+  mpesaReconnectHome.appendChild(mpesaReconnectSection);
+  mpesaReconnectSection.hidden=false;
+}
 
 function normaliseMac(value){
   var raw=String(value||"").trim();
@@ -1135,10 +1152,16 @@ function openTroubleshootPage(){
   if(result&&!portalTroubleshootBusy)result.textContent="Checking your package and router session…";
   troubleshootConnection();
 }
+function restoreMpesaReconnectSection(){
+  var reconnect=document.getElementById("mpesaReconnectSection");
+  var home=document.getElementById("portalRecoveryCards");
+  if(reconnect&&home&&reconnect.parentNode!==home)home.appendChild(reconnect);
+}
 function closeTroubleshootPage(){
   var page=document.getElementById("troubleshootPage");
   if(page)page.style.display="none";
   document.body.style.overflow="";
+  restoreMpesaReconnectSection();
   try{
     var url=new URL(window.location.href);
     url.searchParams.delete("page");
@@ -1150,6 +1173,7 @@ window.addEventListener("popstate",function(){
   var page=document.getElementById("troubleshootPage");
   if(page)page.style.display=visible?"block":"none";
   document.body.style.overflow=visible?"hidden":"";
+  if(!visible)restoreMpesaReconnectSection();
   if(visible&&!portalTroubleshootBusy)troubleshootConnection();
 });
 function toggleLoginPass(){var i=document.getElementById("loginPass");i.type=i.type==="password"?"text":"password";}
@@ -1338,12 +1362,10 @@ function submitMpesa(){
     });
 }
 
-function checkWidth(){var button=document.getElementById("alreadyPaidBtn");if(button)button.style.display="block";}
 function renderPortalDeviceMac(){
   var value=document.getElementById("portalDeviceMacValue");
   if(value)value.textContent=DEVICE_MAC||"Resolved by router";
 }
-window.addEventListener("resize",checkWidth); checkWidth();
 try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
   EMBEDDED_PLANS=normalisePlanList(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.plans);
 }

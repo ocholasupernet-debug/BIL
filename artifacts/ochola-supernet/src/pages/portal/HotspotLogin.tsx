@@ -1067,6 +1067,48 @@ function HotspotLoginView({ troubleshootingOnly = false }: { troubleshootingOnly
     }
   };
 
+  const mpesaReconnectCard = (
+    <div className="hp-glass" style={{ marginTop: 16 }}>
+      <div className="hp-glass-header">
+        <div className="hp-glass-icon" style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
+          <Shield size={16} color="var(--isp-accent)" />
+        </div>
+        <div>
+          <div className="hp-glass-title">Reconnect with M-Pesa</div>
+          <div className="hp-glass-desc">We look up completed payments on your account and only reconnect the device registered to that purchase while its package is active.</div>
+        </div>
+      </div>
+      <div className="hp-glass-body">
+        <form onSubmit={handleMpesaReconnect}>
+          <div className="hp-input-group">
+            <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation message</label>
+            <textarea
+              id="mpesa-reconnect-message"
+              className="hp-input hp-textarea"
+              rows={4}
+              maxLength={1000}
+              placeholder="Paste the full confirmation message"
+              value={mpesaMessage}
+              onChange={event => { setMpesaMessage(event.target.value); setMpesaReconnectError(""); }}
+              required
+            />
+          </div>
+          {mpesaReconnectError && (
+            <div className="hp-error" role="alert">
+              <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+              {mpesaReconnectError}
+            </div>
+          )}
+          <button type="submit" disabled={mpesaReconnectLoading} className="hp-btn hp-btn-ghost">
+            {mpesaReconnectLoading
+              ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Verifying payment...</>
+              : <><Shield size={16} /> Verify and reconnect</>}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+
   const [voucherCode, setVoucherCode] = useState("");
   const [voucherLoading, setVoucherLoading] = useState(false);
   const [voucherError, setVoucherError] = useState("");
@@ -1927,6 +1969,12 @@ function HotspotLoginView({ troubleshootingOnly = false }: { troubleshootingOnly
             </div>
           )}
 
+          {!troubleshootingOnly && (
+            <div style={{ maxWidth: 840, margin: "0 auto 20px" }}>
+              {mpesaReconnectCard}
+            </div>
+          )}
+
           {!troubleshootingOnly && (loginSession?.status === "expired" || loginSession?.status === "depleted") && (
             <div
               role="alert"
@@ -2074,45 +2122,7 @@ function HotspotLoginView({ troubleshootingOnly = false }: { troubleshootingOnly
                 </div>
               </div>
 
-              <div className="hp-glass" style={{ marginTop: 16 }}>
-                <div className="hp-glass-header">
-                  <div className="hp-glass-icon" style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
-                    <Shield size={16} color="var(--isp-accent)" />
-                  </div>
-                  <div>
-                    <div className="hp-glass-title">Reconnect with M-Pesa</div>
-                    <div className="hp-glass-desc">We look up completed payments on your account and only reconnect the device registered to that purchase while its package is active.</div>
-                  </div>
-                </div>
-                <div className="hp-glass-body">
-                  <form onSubmit={handleMpesaReconnect}>
-                    <div className="hp-input-group">
-                      <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation message</label>
-                      <textarea
-                        id="mpesa-reconnect-message"
-                        className="hp-input hp-textarea"
-                        rows={4}
-                        maxLength={1000}
-                        placeholder="Paste the full confirmation message"
-                        value={mpesaMessage}
-                        onChange={event => { setMpesaMessage(event.target.value); setMpesaReconnectError(""); }}
-                        required
-                      />
-                    </div>
-                    {mpesaReconnectError && (
-                      <div className="hp-error" role="alert">
-                        <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                        {mpesaReconnectError}
-                      </div>
-                    )}
-                    <button type="submit" disabled={mpesaReconnectLoading} className="hp-btn hp-btn-ghost">
-                      {mpesaReconnectLoading
-                        ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Verifying payment...</>
-                        : <><Shield size={16} /> Verify and reconnect</>}
-                    </button>
-                  </form>
-                </div>
-              </div>
+              {mpesaReconnectCard}
             </section>
           ) : (
             <>
