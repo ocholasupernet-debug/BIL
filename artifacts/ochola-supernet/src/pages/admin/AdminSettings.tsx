@@ -2579,16 +2579,41 @@ const ROUTING_CONFIGURABLE_GATEWAYS = new Set([
   "bank_transfer",
 ]);
 
+function PaymentSettingsLoadPrompt({ onLoad }: { onLoad: () => void }) {
+  return (
+    <Card
+      title="Protected payment settings"
+      desc="Load your saved gateway details and payment routing when you are ready."
+    >
+      <p style={{ color: C.muted, fontSize: "0.75rem", lineHeight: 1.5, margin: "0 0 14px" }}>
+        Loading these settings does not change them. If your secure access has expired, you will be asked to verify with the WhatsApp number already stored on this account.
+      </p>
+      <Row>
+        <button
+          type="button"
+          onClick={onLoad}
+          style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit" }}
+        >
+          Verify and load settings
+        </button>
+      </Row>
+    </Card>
+  );
+}
+
 function PaymentGatewaysTab() {
   const gatewayOtp = useGatewaySettingsOtp();
   const isReseller = getAdminRole() === "reseller";
+  const [settingsRequested, setSettingsRequested] = useState(false);
   if (isReseller) {
     return (
       <>
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
           Configure your own payment gateway here. Your collection account is independent from the connected ISP; only your assigned router and VLAN scope are shared.
         </div>
-        <ResellerPaymentGatewayCard />
+        {settingsRequested
+          ? <ResellerPaymentGatewayCard />
+          : <PaymentSettingsLoadPrompt onLoad={() => setSettingsRequested(true)} />}
       </>
     );
   }
@@ -2614,6 +2639,7 @@ function PaymentGatewaysTab() {
   const [routingError, setRoutingError] = useState("");
 
   useEffect(() => {
+    if (!settingsRequested) return;
     let active = true;
     const load = async () => {
       const response = await fetch(`/api/admin/mpesa-gateway-config?adminId=${ADMIN_ID}`, {
@@ -2638,9 +2664,10 @@ function PaymentGatewaysTab() {
       if (active) setSaveError(cause instanceof Error ? cause.message : "Could not load payment gateway settings.");
     });
     return () => { active = false; };
-  }, [gatewayOtp.headers]);
+  }, [gatewayOtp.headers, settingsRequested]);
 
   useEffect(() => {
+    if (!settingsRequested) return;
     let active = true;
     const load = async () => {
       const response = await fetch(`/api/admin/payment-routing?adminId=${ADMIN_ID}`, {
@@ -2664,7 +2691,7 @@ function PaymentGatewaysTab() {
       if (active) setRoutingError(cause instanceof Error ? cause.message : "Could not load payment routing settings.");
     });
     return () => { active = false; };
-  }, [gatewayOtp.headers]);
+  }, [gatewayOtp.headers, settingsRequested]);
 
   const updateField = (gwId: string, fieldKey: string, value: string) => {
     setFields(prev => {
@@ -2748,6 +2775,9 @@ function PaymentGatewaysTab() {
   const setupOnlyGateway = Boolean(activeGw && ![
     "mpesa_paybill", "mpesa_till_push", "bank_stk_push", "bank_transfer",
   ].includes(activeGw.id));
+  if (!settingsRequested) {
+    return <PaymentSettingsLoadPrompt onLoad={() => setSettingsRequested(true)} />;
+  }
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
