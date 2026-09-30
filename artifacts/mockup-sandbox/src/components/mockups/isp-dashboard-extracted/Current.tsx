@@ -1,4 +1,5 @@
 import "./_group.css";
+import "./Current.css";
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { Activity, ArrowUpRight, Banknote, BarChart3, CalendarDays, CircleCheck, Eye, EyeOff, Landmark, MessageSquare, ReceiptText, Router, Server, Signal, SlidersHorizontal, TrendingUp, Users, Wifi, WifiOff, X } from "lucide-react";
 
@@ -23,8 +24,50 @@ const transactions = [
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const money = (n: number) => `KSh ${n.toLocaleString("en-KE")}`;
 function Link({ children, className = "", href = "#" }: { children: ReactNode; className?: string; href?: string }) { return <a href={href} className={className} onClick={(e) => e.preventDefault()}>{children}</a>; }
-function KpiCard({ label, value, icon, tone }: { label: string; value: string; icon: ReactNode; tone: string }) { return <article className={`dashboard-kpi dashboard-kpi--${tone}`}><div className="dashboard-kpi-icon">{icon}</div><div className="dashboard-kpi-copy"><div className="dashboard-kpi-label">{label}</div><div className="dashboard-kpi-value">{value}</div></div></article>; }
-function StatMiniCard({ label, value, icon, tone }: { label: string; value: string; icon: ReactNode; tone: string }) { return <Link href="#" className={`dashboard-stat dashboard-stat--${tone}`}><span className="dashboard-stat-icon">{icon}</span><span className="dashboard-stat-copy"><span className="dashboard-stat-label">{label}</span><span className="dashboard-stat-value">{value}</span></span><ArrowUpRight className="dashboard-stat-arrow" size={15} /></Link>; }
+function KpiCard({ label, value, icon, tone }: { label: string; value: string; icon: ReactNode; tone: string }) {
+  const content: Record<string, { label: string; eyebrow: string; description: string }> = {
+    "Income today": { label: "Collected today", eyebrow: "Today · EAT", description: "Since midnight" },
+    "Income this month": { label: "Collected this month", eyebrow: "Month to date", description: "Resets on the 1st" },
+    "Total transactions": { label: "Transactions", eyebrow: "All time", description: "Completed + pending" },
+    "Total revenue": { label: "Lifetime revenue", eyebrow: "All time", description: "Completed collections" },
+  };
+  const copy = content[label] ?? { label, eyebrow: "Live metric", description: "Updated from activity" };
+  return (
+    <article className={`dashboard-kpi modern-kpi dashboard-kpi--${tone}`}>
+      <div className="modern-kpi-head">
+        <span className="dashboard-kpi-icon modern-kpi-icon" aria-hidden="true">{icon}</span>
+        <span className="modern-kpi-eyebrow">{copy.eyebrow}</span>
+      </div>
+      <span className="modern-kpi-label">{copy.label}</span>
+      <strong className="modern-kpi-value">{value}</strong>
+      <span className="modern-kpi-description">{copy.description}</span>
+    </article>
+  );
+}
+function StatMiniCard({ label, value, icon, tone }: { label: string; value: string; icon: ReactNode; tone: string }) {
+  const details: Record<string, { label: string; detail: string }> = {
+    "Total online users": { label: "Online now", detail: "All access types" },
+    "PPPoE online": { label: "PPPoE sessions", detail: "Authenticated" },
+    "Hotspot online": { label: "Hotspot users", detail: "Active leases" },
+    "VLAN users online": { label: "VLAN connections", detail: "Assigned users" },
+    "Static online": { label: "Static users", detail: "Online now" },
+    "Active / expired users": { label: "Active / expired", detail: "Customer accounts" },
+    "Active resellers": { label: "Active resellers", detail: "Partner accounts" },
+    "Online resellers": { label: "Resellers online", detail: "Connected now" },
+  };
+  const copy = details[label] ?? { label, detail: "Current count" };
+  return (
+    <Link href="#" className={`dashboard-stat modern-stat dashboard-stat--${tone}`}>
+      <span className="dashboard-stat-icon modern-stat-icon" aria-hidden="true">{icon}</span>
+      <span className="dashboard-stat-copy">
+        <span className="dashboard-stat-label">{copy.label}</span>
+        <strong className="dashboard-stat-value">{label === "Active / expired users" ? value.replace("/", " / ") : value}</strong>
+        <span className="modern-stat-detail">{copy.detail}</span>
+      </span>
+      <ArrowUpRight className="dashboard-stat-arrow" size={15} aria-hidden="true" />
+    </Link>
+  );
+}
 function DonutChart({ insights }: { insights: { label: string; count: number; color: string }[] }) {
   const total = insights.reduce((a, b) => a + b.count, 0), radius = 55, circumference = 2 * Math.PI * radius;
   let offset = 0;
@@ -32,7 +75,21 @@ function DonutChart({ insights }: { insights: { label: string; count: number; co
 }
 function PlatformBillingBanner() {
   const [phone, setPhone] = useState("0712 345 678"); const [message, setMessage] = useState("");
-  return <section role="status" className="platform-billing-banner"><div><strong>Platform renewal due</strong><span>KSh 2,500 due by 31 Jul. Time left: <strong>5d 4h 20m</strong></span><small>{message || "Renewal payments are unavailable in this preview."}</small></div><div className="platform-billing-actions"><input value={phone} onChange={(e) => setPhone(e.target.value)} aria-label="M-Pesa phone number" placeholder="07xx xxx xxx" /><button type="button" onClick={() => setMessage("Payment prompt simulated in this preview.")}>Renew</button></div></section>;
+  return (
+    <section role="status" className="platform-billing-banner modern-billing-banner">
+      <span className="modern-billing-icon" aria-hidden="true"><Landmark size={18} /></span>
+      <div className="modern-billing-copy">
+        <span className="modern-billing-eyebrow">Monthly platform billing</span>
+        <strong>Renewal payment due</strong>
+        <span>KSh 2,500 <span className="modern-billing-separator">·</span> due 31 Jul <span className="modern-billing-separator">·</span> <b>5d 4h 20m remaining</b></span>
+        <small>{message || "Renewal payment is simulated in this preview."}</small>
+      </div>
+      <div className="platform-billing-actions modern-billing-actions">
+        <input value={phone} onChange={(e) => setPhone(e.target.value)} aria-label="M-Pesa phone number" placeholder="07xx xxx xxx" />
+        <button type="button" onClick={() => setMessage("Payment prompt simulated in this preview.")}>Pay renewal</button>
+      </div>
+    </section>
+  );
 }
 
 export function Current() {
@@ -42,7 +99,7 @@ export function Current() {
   const insights = [{ label: "Hotspot", count: 58, color: "var(--dashboard-accent, var(--isp-accent))" }, { label: "PPPoE", count: 24, color: "#8879b7" }, { label: "Static", count: 9, color: "var(--isp-green)" }];
   const monthly = useMemo(() => MONTHS.map((month, i) => ({ month, count: customers.filter((c) => new Date(c.created_at).getMonth() === i).length })), []);
   const maxCount = Math.max(...monthly.map((m) => m.count), 1);
-  return <div className="admin-shell isp-mock"><aside className="admin-sidebar admin-sidebar--open" style={{ width: 240 }}><div className="sidebar-logo"><div className="sidebar-logo-inner"><div className="sidebar-logo-icon"><Router size={16} /></div><div><div className="sidebar-brand-name">Ochola SuperNet</div><div className="sidebar-brand-sub">Admin Panel</div></div></div><button className="sidebar-close-btn" type="button"><SlidersHorizontal size={14} /></button></div><nav className="sidebar-nav">{["Overview", "Customers", "Billing", "Network", "Tools", "Admin"].map((section) => <div className="nav-section" key={section}><div className="nav-section-label">{section}</div><div className={`nav-row ${section === "Overview" ? "nav-row--active" : ""}`}><span className="nav-icon"><Activity size={14} /></span><span className="nav-label">{section === "Overview" ? "Dashboard" : section}</span></div></div>)}</nav><div className="sidebar-user"><div className="sidebar-avatar">A</div><div className="sidebar-user-info"><div className="sidebar-user-name">Administrator</div><div className="sidebar-user-status"><span className="status-dot" /> Online</div></div></div></aside>
+  return <div className="admin-shell isp-mock isp-modern"><aside className="admin-sidebar admin-sidebar--open" style={{ width: 240 }}><div className="sidebar-logo"><div className="sidebar-logo-inner"><div className="sidebar-logo-icon"><Router size={16} /></div><div><div className="sidebar-brand-name">Ochola SuperNet</div><div className="sidebar-brand-sub">Admin Panel</div></div></div><button className="sidebar-close-btn" type="button" aria-label="Dashboard options"><SlidersHorizontal size={14} /></button></div><nav className="sidebar-nav">{["Overview", "Customers", "Billing", "Network", "Tools", "Admin"].map((section) => <div className="nav-section" key={section}><div className="nav-section-label">{section}</div><div className={`nav-row ${section === "Overview" ? "nav-row--active" : ""}`}><span className="nav-icon"><Activity size={14} /></span><span className="nav-label">{section === "Overview" ? "Dashboard" : section}</span></div></div>)}</nav><div className="sidebar-user"><div className="sidebar-avatar">A</div><div className="sidebar-user-info"><div className="sidebar-user-name">Administrator</div><div className="sidebar-user-status"><span className="status-dot" /> Online</div></div></div></aside>
     <div className="admin-main"><header className="admin-header admin-header--dark"><button className="header-btn" type="button"><SlidersHorizontal size={16} /></button><div className="header-search"><span className="header-search-icon">⌕</span><input className="header-search-input" placeholder="Search customers, routers…" /><kbd className="header-search-kbd">⌘K</kbd></div><div className="header-spacer" /><div className="header-actions"><div className="header-live-pill"><span className="live-dot" /> LIVE</div><button className="header-btn" type="button"><MessageSquare size={15} /></button><div className="header-user-pill"><div className="header-avatar">A</div><span className="header-user-name">Administrator</span></div></div></header>
       <main className="admin-content"><PlatformBillingBanner /><div className="dashboard-page" style={{ "--dashboard-accent": "#d96835" } as CSSProperties}><header className="dashboard-hero"><div><div className="dashboard-eyebrow"><span className="dashboard-live-mark"><Activity size={12} /></span>Live operations</div><h1>Good morning, Administrator</h1><p>Network pulse, customer activity, and cashflow in one view.</p></div><div className="dashboard-date"><CalendarDays size={15} /> Friday, 25 July</div></header>
         <div className="dashboard-section-kicker">Financial pulse <span className="dashboard-section-meta">Updated from live payment activity</span><button className="dashboard-amount-toggle" type="button" onClick={() => setHideAmounts(!hideAmounts)}>{hideAmounts ? <Eye size={13} /> : <EyeOff size={13} />} {hideAmounts ? "Show amounts" : "Hide amounts"}</button></div>

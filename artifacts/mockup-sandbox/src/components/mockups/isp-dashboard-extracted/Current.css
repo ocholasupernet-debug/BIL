@@ -1,0 +1,911 @@
+.isp-modern {
+  --modern-ink: #203347;
+  --modern-muted: #708195;
+  --modern-line: #dfe7ed;
+  --modern-surface: #fbfcfd;
+  color: var(--modern-ink);
+  font-family: "Aptos", "Segoe UI Variable", system-ui, sans-serif;
+}
+
+.isp-modern .admin-header {
+  background: rgba(250, 252, 253, 0.96);
+  border-color: #dce5ec;
+}
+
+.isp-modern .admin-sidebar {
+  background: linear-gradient(180deg, #17304a 0%, #132a42 100%);
+}
+
+.isp-modern .sidebar-logo-icon,
+.isp-modern .header-avatar {
+  background: linear-gradient(145deg, #397f85, #24636d);
+}
+
+.isp-modern .dashboard-page {
+  gap: 17px;
+}
+
+.isp-modern .dashboard-hero {
+  padding: 7px 0 2px;
+}
+
+.isp-modern .dashboard-hero h1 {
+  color: #1d3145;
+  font-size: clamp(1.55rem, 2.15vw, 1.9rem);
+  font-weight: 750;
+  letter-spacing: -0.045em;
+}
+
+.isp-modern .dashboard-hero p {
+  margin-top: 7px;
+  color: #708195;
+  font-size: 0.82rem;
+}
+
+.isp-modern .dashboard-eyebrow {
+  color: #397d79;
+  letter-spacing: 0.085em;
+}
+
+.modern-hero-dot {
+  width: 4px;
+  height: 4px;
+  margin: 0 1px;
+  border-radius: 50%;
+  background: #a5b4c0;
+}
+
+.isp-modern .dashboard-date {
+  border-color: #dfe7ed;
+  border-radius: 10px;
+  color: #64788b;
+  background: #fbfcfd;
+  box-shadow: 0 3px 10px rgba(31, 56, 78, 0.04);
+}
+
+.isp-modern .modern-section-kicker {
+  min-height: 31px;
+  color: #21374b;
+  font-size: 0.78rem;
+  font-weight: 760;
+  letter-spacing: -0.005em;
+  text-transform: none;
+}
+
+.isp-modern .modern-section-kicker > span {
+  color: #8292a0;
+  font-size: 0.72rem;
+}
+
+.isp-modern .dashboard-amount-toggle {
+  padding: 7px 10px;
+  border: 1px solid #dce5ec;
+  border-radius: 8px;
+  color: #526a7e;
+  background: #fbfcfd;
+  font-size: 0.7rem;
+}
+
+.isp-modern .dashboard-amount-toggle:hover {
+  color: #274759;
+  background: #f0f5f7;
+}
+
+.modern-kpi-grid {
+  gap: 13px;
+}
+
+.isp-modern .modern-kpi {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 148px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  overflow: hidden;
+  padding: 15px 16px 14px;
+  border: 1px solid var(--modern-border);
+  border-radius: 14px;
+  background: linear-gradient(145deg, var(--modern-tint), #fbfcfd 82%);
+  box-shadow: 0 2px 7px rgba(28, 55, 77, 0.035);
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+.isp-modern .modern-kpi::after {
+  position: absolute;
+  right: -22px;
+  bottom: -37px;
+  width: 106px;
+  height: 106px;
+  border: 1px solid color-mix(in srgb, var(--modern-tone) 17%, transparent);
+  border-radius: 50%;
+  content: "";
+  opacity: 0.75;
+  pointer-events: none;
+}
+
+.isp-modern .modern-kpi:hover {
+  transform: translateY(-2px);
+}
+
+.modern-kpi--mint {
+  --modern-tone: #287d6c;
+  --modern-tint: #e8f5f1;
+  --modern-border: #d6eae3;
+}
+
+.modern-kpi--sky {
+  --modern-tone: #426da9;
+  --modern-tint: #eaf1fa;
+  --modern-border: #dbe5f2;
+}
+
+.modern-kpi--honey {
+  --modern-tone: #a46d20;
+  --modern-tint: #fcf3e3;
+  --modern-border: #efe4cb;
+}
+
+.modern-kpi--rose {
+  --modern-tone: #ad5a55;
+  --modern-tint: #f8ece9;
+  --modern-border: #eedbd8;
+}
+
+.modern-kpi-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 13px;
+}
+
+.isp-modern .modern-kpi-icon {
+  width: 33px;
+  height: 33px;
+  border: 1px solid color-mix(in srgb, var(--modern-tone) 13%, transparent);
+  border-radius: 10px;
+  color: var(--modern-tone);
+  background: color-mix(in srgb, var(--modern-tone) 10%, white);
+}
+
+.modern-kpi-eyebrow {
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--modern-tone) 15%, transparent);
+  border-radius: 999px;
+  color: var(--modern-tone);
+  background: color-mix(in srgb, var(--modern-tone) 7%, white);
+  font-size: 0.59rem;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.modern-kpi-label {
+  color: #6e8090;
+  font-size: 0.73rem;
+  font-weight: 600;
+}
+
+.isp-modern .modern-kpi-value {
+  position: relative;
+  z-index: 1;
+  display: block;
+  margin-top: 4px;
+  color: var(--modern-tone);
+  font-size: clamp(1.16rem, 1.55vw, 1.42rem);
+  font-weight: 780;
+  letter-spacing: -0.045em;
+  line-height: 1.2;
+}
+
+.modern-kpi-description {
+  margin-top: 6px;
+  color: #8997a4;
+  font-size: 0.66rem;
+}
+
+.modern-stat-grid {
+  gap: 11px;
+}
+
+.isp-modern .modern-stat {
+  position: relative;
+  min-width: 0;
+  min-height: 86px;
+  gap: 11px;
+  overflow: hidden;
+  padding: 12px 12px;
+  border: 1px solid var(--modern-border);
+  border-radius: 12px;
+  background: linear-gradient(115deg, var(--modern-tint), #fbfcfd 78%);
+  box-shadow: 0 2px 6px rgba(28, 55, 77, 0.025);
+  transition: transform 180ms ease, opacity 180ms ease;
+}
+
+.isp-modern .modern-stat:hover {
+  transform: translateY(-2px);
+}
+
+.modern-stat--mint {
+  --modern-tone: #287d6c;
+  --modern-tint: #edf7f3;
+  --modern-border: #dcece6;
+}
+
+.modern-stat--blue {
+  --modern-tone: #4a6fa3;
+  --modern-tint: #edf2f9;
+  --modern-border: #dfe7f1;
+}
+
+.modern-stat--cyan {
+  --modern-tone: #2c7f91;
+  --modern-tint: #eaf5f6;
+  --modern-border: #d8e9eb;
+}
+
+.modern-stat--violet {
+  --modern-tone: #696c9c;
+  --modern-tint: #f0eff7;
+  --modern-border: #e1dfec;
+}
+
+.modern-stat--amber {
+  --modern-tone: #a3712c;
+  --modern-tint: #faf3e8;
+  --modern-border: #ece2d0;
+}
+
+.modern-stat--coral {
+  --modern-tone: #af6255;
+  --modern-tint: #f8efec;
+  --modern-border: #eedfdb;
+}
+
+.modern-stat--plum {
+  --modern-tone: #825e80;
+  --modern-tint: #f5eef4;
+  --modern-border: #e9dfe8;
+}
+
+.modern-stat--teal {
+  --modern-tone: #337e78;
+  --modern-tint: #edf6f4;
+  --modern-border: #dbeae7;
+}
+
+.isp-modern .modern-stat-icon {
+  width: 33px;
+  height: 33px;
+  border: 1px solid color-mix(in srgb, var(--modern-tone) 15%, transparent);
+  border-radius: 10px;
+  color: var(--modern-tone);
+  background: color-mix(in srgb, var(--modern-tone) 9%, white);
+}
+
+.isp-modern .modern-stat .dashboard-stat-label {
+  color: #65798a;
+  font-size: 0.67rem;
+  font-weight: 600;
+}
+
+.isp-modern .modern-stat .dashboard-stat-value {
+  margin-top: 3px;
+  color: var(--modern-tone);
+  font-size: 1rem;
+  letter-spacing: -0.025em;
+}
+
+.modern-stat-detail {
+  display: block;
+  margin-top: 3px;
+  color: #93a0ab;
+  font-size: 0.61rem;
+}
+
+.isp-modern .modern-stat .dashboard-stat-arrow {
+  color: color-mix(in srgb, var(--modern-tone) 60%, #aeb9c2);
+}
+
+.isp-modern .modern-gateway-strip {
+  min-height: 59px;
+  padding: 10px 14px;
+  border: 1px solid #d9e5e9;
+  border-radius: 12px;
+  background: linear-gradient(105deg, #e8f3f2, #fbfcfd 58%);
+}
+
+.isp-modern .modern-gateway-strip .gateway-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  color: #317872;
+  background: #d8ece8;
+}
+
+.isp-modern .modern-gateway-strip .gateway-copy strong {
+  color: #315f60;
+  font-size: 0.74rem;
+}
+
+.isp-modern .modern-gateway-strip .gateway-copy span {
+  color: #82979b;
+  font-size: 0.66rem;
+}
+
+.isp-modern .modern-panel {
+  position: relative;
+  border-radius: 14px;
+  border-color: var(--panel-border);
+  background: linear-gradient(160deg, var(--panel-tint), #fbfcfd 34%);
+  box-shadow: 0 3px 12px rgba(31, 56, 78, 0.035);
+}
+
+.isp-modern .modern-panel::before {
+  position: absolute;
+  top: 0;
+  left: 14px;
+  width: 46px;
+  height: 3px;
+  border-radius: 0 0 4px 4px;
+  background: var(--panel-tone);
+  content: "";
+}
+
+.modern-panel--router {
+  --panel-tone: #4b8c75;
+  --panel-tint: #f1f8f5;
+  --panel-border: #dcebe3;
+}
+
+.modern-panel--telemetry {
+  --panel-tone: #5881ad;
+  --panel-tint: #f1f5fa;
+  --panel-border: #dee7f1;
+}
+
+.modern-panel--chart {
+  --panel-tone: #c58d43;
+  --panel-tint: #fbf7ef;
+  --panel-border: #eee5d5;
+}
+
+.modern-panel--mix {
+  --panel-tone: #9b6e82;
+  --panel-tint: #f8f2f5;
+  --panel-border: #eadfe5;
+}
+
+.modern-panel--payments {
+  --panel-tone: #438582;
+  --panel-tint: #f0f7f6;
+  --panel-border: #dceae9;
+}
+
+.isp-modern .modern-panel .panel-heading {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--panel-tone) 14%, #e3eaf0);
+}
+
+.isp-modern .modern-panel .panel-heading h2 {
+  color: #2c4053;
+  font-size: 0.84rem;
+  letter-spacing: -0.015em;
+}
+
+.isp-modern .modern-panel .panel-heading p {
+  color: #8292a0;
+  font-size: 0.69rem;
+}
+
+.modern-panel-note {
+  color: #9a8a6f;
+  font-size: 0.64rem;
+}
+
+.isp-modern .router-card {
+  border: 1px solid #dfe8e5;
+  border-left: 3px solid #4c9b7b;
+  border-radius: 11px;
+  background: #f8fbfa;
+}
+
+.isp-modern .router-card:nth-child(2) {
+  border-color: #dfe6ef;
+  border-left-color: #5a7fae;
+  background: #f7f9fc;
+}
+
+.isp-modern .router-card--offline {
+  border-color: #eddfd8;
+  border-left-color: #c77b5d;
+  background: #fcf7f4;
+}
+
+.isp-modern .router-card-name {
+  color: #34495b;
+}
+
+.isp-modern .router-filter-bar {
+  border-color: #dce5ec;
+  border-radius: 12px;
+  background: #f9fbfc;
+}
+
+.isp-modern .dashboard-telemetry-total {
+  border-radius: 10px;
+}
+
+.isp-modern .modern-billing-banner {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) minmax(280px, 380px);
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #f0dfc3;
+  border-left: 3px solid #c98e3f;
+  border-radius: 13px;
+  background: linear-gradient(100deg, #fff8ed, #fffcf6);
+  box-shadow: 0 3px 9px rgba(100, 76, 41, 0.045);
+}
+
+.modern-billing-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid #eddfc8;
+  border-radius: 11px;
+  color: #a87931;
+  background: #f8ecd8;
+}
+
+.modern-billing-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  color: #506274;
+  font-size: 0.72rem;
+}
+
+.modern-billing-eyebrow {
+  color: #a17b43;
+  font-size: 0.58rem;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.modern-billing-copy > strong {
+  color: #4b4030;
+  font-size: 0.85rem;
+}
+
+.modern-billing-copy > span:not(.modern-billing-eyebrow) {
+  color: #7b6b56;
+  font-size: 0.68rem;
+}
+
+.modern-billing-copy b {
+  color: #9a6824;
+  font-weight: 700;
+}
+
+.modern-billing-separator {
+  padding: 0 3px;
+  color: #c3aa83;
+}
+
+.modern-billing-copy small {
+  color: #9b8d7a;
+  font-size: 0.63rem;
+}
+
+.isp-modern .modern-billing-actions {
+  max-width: none;
+  gap: 7px;
+}
+
+.isp-modern .modern-billing-actions input {
+  min-width: 120px;
+  border-color: #eadcc5;
+  border-radius: 8px;
+  color: #5b5145;
+  background: #fffdfa;
+  font-size: 0.71rem;
+}
+
+.isp-modern .modern-billing-actions button {
+  padding: 9px 12px;
+  border: 1px solid #bd8439;
+  border-radius: 8px;
+  color: #fffaf1;
+  background: #aa7431;
+  font-size: 0.7rem;
+  font-weight: 750;
+}
+
+.isp-modern .modern-billing-actions button:hover {
+  background: #935f25;
+}
+
+.isp-modern .modern-panel .isp-table th {
+  color: #82909c;
+  background: color-mix(in srgb, var(--panel-tone) 4%, #f9fbfc);
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.isp-modern .modern-panel .isp-table tbody tr:hover {
+  background: color-mix(in srgb, var(--panel-tone) 5%, #fff);
+}
+
+.isp-modern .modern-panel .table-amount {
+  color: #356f68;
+  font-weight: 750;
+}
+
+@media (max-width: 980px) {
+  .isp-modern .modern-billing-banner {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .isp-modern .modern-billing-actions {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 680px) {
+  .isp-modern .dashboard-hero {
+    display: block;
+  }
+
+  .isp-modern .dashboard-date {
+    margin-top: 12px;
+  }
+
+  .isp-modern .dashboard-kpi-grid,
+  .isp-modern .dashboard-stat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .isp-modern .modern-kpi {
+    min-height: 132px;
+  }
+
+  .isp-modern .modern-billing-banner {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 9px;
+    padding: 11px;
+  }
+
+  .isp-modern .modern-billing-icon {
+    width: 33px;
+    height: 33px;
+  }
+
+  .isp-modern .modern-billing-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+.isp-modern .dashboard-section-kicker {
+  min-height: 31px;
+  color: #21374b;
+  font-size: 0.78rem;
+  font-weight: 760;
+  letter-spacing: -0.005em;
+  text-transform: none;
+}
+
+.isp-modern .dashboard-section-kicker > span {
+  color: #8292a0;
+  font-size: 0.72rem;
+}
+
+.isp-modern .dashboard-kpi-grid {
+  gap: 13px;
+}
+
+.isp-modern .dashboard-kpi-grid > .modern-kpi:nth-child(1) {
+  --modern-tone: #287d6c;
+  --modern-tint: #e8f5f1;
+  --modern-border: #d6eae3;
+}
+
+.isp-modern .dashboard-kpi-grid > .modern-kpi:nth-child(2) {
+  --modern-tone: #426da9;
+  --modern-tint: #eaf1fa;
+  --modern-border: #dbe5f2;
+}
+
+.isp-modern .dashboard-kpi-grid > .modern-kpi:nth-child(3) {
+  --modern-tone: #a46d20;
+  --modern-tint: #fcf3e3;
+  --modern-border: #efe4cb;
+}
+
+.isp-modern .dashboard-kpi-grid > .modern-kpi:nth-child(4) {
+  --modern-tone: #ad5a55;
+  --modern-tint: #f8ece9;
+  --modern-border: #eedbd8;
+}
+
+.isp-modern .dashboard-stat-grid {
+  gap: 11px;
+}
+
+.isp-modern .dashboard-stat-grid > .modern-stat:nth-child(1) {
+  --modern-tone: #287d6c;
+  --modern-tint: #edf7f3;
+  --modern-border: #dcece6;
+}
+
+.isp-modern .dashboard-stat-grid > .modern-stat:nth-child(2) {
+  --modern-tone: #4a6fa3;
+  --modern-tint: #edf2f9;
+  --modern-border: #dfe7f1;
+}
+
+.isp-modern .dashboard-stat-grid > .modern-stat:nth-child(3) {
+  --modern-tone: #2c7f91;
+  --modern-tint: #eaf5f6;
+  --modern-border: #d8e9eb;
+}
+
+.isp-modern .dashboard-stat-grid > .modern-stat:nth-child(4) {
+  --modern-tone: #696c9c;
+  --modern-tint: #f0eff7;
+  --modern-border: #e1dfec;
+}
+
+.isp-modern .dashboard-stat-grid > .modern-stat:nth-child(5) {
+  --modern-tone: #a3712c;
+  --modern-tint: #faf3e8;
+  --modern-border: #ece2d0;
+}
+
+.isp-modern .dashboard-stat-grid > .modern-stat:nth-child(6) {
+  --modern-tone: #af6255;
+  --modern-tint: #f8efec;
+  --modern-border: #eedfdb;
+}
+
+.isp-modern .dashboard-stat-grid > .modern-stat:nth-child(7) {
+  --modern-tone: #825e80;
+  --modern-tint: #f5eef4;
+  --modern-border: #e9dfe8;
+}
+
+.isp-modern .dashboard-stat-grid > .modern-stat:nth-child(8) {
+  --modern-tone: #337e78;
+  --modern-tint: #edf6f4;
+  --modern-border: #dbeae7;
+}
+
+.isp-modern .gateway-strip {
+  min-height: 59px;
+  padding: 10px 14px;
+  border: 1px solid #d9e5e9;
+  border-radius: 12px;
+  background: linear-gradient(105deg, #e8f3f2, #fbfcfd 58%);
+}
+
+.isp-modern .gateway-strip .gateway-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  color: #317872;
+  background: #d8ece8;
+}
+
+.isp-modern .gateway-strip .gateway-copy strong {
+  color: #315f60;
+  font-size: 0.74rem;
+}
+
+.isp-modern .gateway-strip .gateway-copy span {
+  color: #82979b;
+  font-size: 0.66rem;
+}
+
+.isp-modern .dashboard-router-panel,
+.isp-modern [aria-label="Network telemetry overview"],
+.isp-modern .chart-panel,
+.isp-modern .insight-card,
+.isp-modern .transaction-panel {
+  position: relative;
+  border-radius: 14px;
+  border-color: var(--panel-border);
+  background: linear-gradient(160deg, var(--panel-tint), #fbfcfd 34%);
+  box-shadow: 0 3px 12px rgba(31, 56, 78, 0.035);
+}
+
+.isp-modern .dashboard-router-panel {
+  --panel-tone: #4b8c75;
+  --panel-tint: #f1f8f5;
+  --panel-border: #dcebe3;
+}
+
+.isp-modern [aria-label="Network telemetry overview"] {
+  --panel-tone: #5881ad;
+  --panel-tint: #f1f5fa;
+  --panel-border: #dee7f1;
+}
+
+.isp-modern .chart-panel {
+  --panel-tone: #c58d43;
+  --panel-tint: #fbf7ef;
+  --panel-border: #eee5d5;
+}
+
+.isp-modern .insight-card {
+  --panel-tone: #9b6e82;
+  --panel-tint: #f8f2f5;
+  --panel-border: #eadfe5;
+}
+
+.isp-modern .transaction-panel {
+  --panel-tone: #438582;
+  --panel-tint: #f0f7f6;
+  --panel-border: #dceae9;
+}
+
+.isp-modern .dashboard-router-panel::before,
+.isp-modern [aria-label="Network telemetry overview"]::before,
+.isp-modern .chart-panel::before,
+.isp-modern .insight-card::before,
+.isp-modern .transaction-panel::before {
+  position: absolute;
+  top: 0;
+  left: 14px;
+  width: 46px;
+  height: 3px;
+  border-radius: 0 0 4px 4px;
+  background: var(--panel-tone);
+  content: "";
+}
+
+.isp-modern .dashboard-router-panel .panel-heading,
+.isp-modern [aria-label="Network telemetry overview"] .panel-heading,
+.isp-modern .chart-panel .panel-heading,
+.isp-modern .insight-card .panel-heading,
+.isp-modern .transaction-panel .panel-heading {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--panel-tone) 14%, #e3eaf0);
+}
+
+.isp-modern .dashboard-router-panel .panel-heading h2,
+.isp-modern [aria-label="Network telemetry overview"] .panel-heading h2,
+.isp-modern .chart-panel .panel-heading h2,
+.isp-modern .insight-card .panel-heading h2,
+.isp-modern .transaction-panel .panel-heading h2 {
+  color: #2c4053;
+  font-size: 0.84rem;
+  letter-spacing: -0.015em;
+}
+
+.isp-modern .dashboard-router-panel .panel-heading p,
+.isp-modern [aria-label="Network telemetry overview"] .panel-heading p,
+.isp-modern .chart-panel .panel-heading p,
+.isp-modern .insight-card .panel-heading p,
+.isp-modern .transaction-panel .panel-heading p {
+  color: #8292a0;
+  font-size: 0.69rem;
+}
+
+.isp-modern .dashboard-router-panel .router-card {
+  border: 1px solid #dfe8e5;
+  border-left: 3px solid #4c9b7b;
+  border-radius: 11px;
+  background: #f8fbfa;
+}
+
+.isp-modern .dashboard-router-panel .router-card:nth-child(2) {
+  border-color: #dfe6ef;
+  border-left-color: #5a7fae;
+  background: #f7f9fc;
+}
+
+.isp-modern .dashboard-router-panel .router-card--offline {
+  border-color: #eddfd8;
+  border-left-color: #c77b5d;
+  background: #fcf7f4;
+}
+
+.isp-modern .dashboard-router-panel .router-card-name {
+  color: #34495b;
+}
+
+.isp-modern .router-filter-bar {
+  border-color: #dce5ec;
+  border-radius: 12px;
+  background: #f9fbfc;
+}
+
+.isp-modern .dashboard-telemetry-total {
+  border-radius: 10px;
+}
+
+.isp-modern .modern-billing-icon {
+  display: grid;
+  margin-top: 0;
+}
+
+.isp-modern .modern-billing-separator {
+  display: inline;
+  margin: 0;
+  padding: 0 3px;
+}
+
+.isp-modern .dashboard-router-panel .isp-table th,
+.isp-modern [aria-label="Network telemetry overview"] .isp-table th,
+.isp-modern .transaction-panel .isp-table th {
+  color: #82909c;
+  background: color-mix(in srgb, var(--panel-tone) 4%, #f9fbfc);
+  font-size: 0.62rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.isp-modern .dashboard-router-panel .isp-table tbody tr:hover,
+.isp-modern [aria-label="Network telemetry overview"] .isp-table tbody tr:hover,
+.isp-modern .transaction-panel .isp-table tbody tr:hover {
+  background: color-mix(in srgb, var(--panel-tone) 5%, #fff);
+}
+
+.isp-modern .transaction-panel .table-amount {
+  color: #356f68;
+  font-weight: 750;
+}
+
+@media (max-width: 980px) {
+  .isp-modern .modern-billing-banner {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .isp-modern .modern-billing-actions {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 680px) {
+  .isp-modern .dashboard-hero {
+    display: block;
+  }
+
+  .isp-modern .dashboard-date {
+    margin-top: 12px;
+  }
+
+  .isp-modern .dashboard-kpi-grid,
+  .isp-modern .dashboard-stat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .isp-modern .modern-kpi {
+    min-height: 132px;
+  }
+
+  .isp-modern .modern-billing-banner {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 9px;
+    padding: 11px;
+  }
+
+  .isp-modern .modern-billing-icon {
+    width: 33px;
+    height: 33px;
+  }
+
+  .isp-modern .modern-billing-actions {
+    grid-column: 1 / -1;
+  }
+}
