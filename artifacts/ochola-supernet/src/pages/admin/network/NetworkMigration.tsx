@@ -4,6 +4,7 @@ import {
   Check,
   CheckCircle2,
   CircleHelp,
+  Copy,
   Download,
   FileSearch,
   LoaderCircle,
@@ -233,6 +234,17 @@ export default function NetworkMigration() {
     finally { setBusy(false); }
   };
 
+  const copyScript = async (label: string, contents: string) => {
+    setError("");
+    setNotice("");
+    try {
+      await navigator.clipboard.writeText(contents);
+      setNotice(`${label} copied. Run it only on the selected source router while its temporary access is valid.`);
+    } catch {
+      setError("Clipboard access was blocked. The complete script is visible below for manual copying.");
+    }
+  };
+
   const startMigration = () => runBusy(async () => {
     if (!sourceId) throw new Error("Choose a source router first.");
     const result = await migrationApi.start(Number(sourceId));
@@ -404,6 +416,9 @@ export default function NetworkMigration() {
               <span>Management address: {selectedSource.vpn_ip || selectedSource.host || "not saved"}</span>
             </div>
           )}
+          <div style={muted}>
+            After you start inspection, the exact temporary tunnel and export scripts appear below for review, copying, or download. Viewing a script does not run it.
+          </div>
         </section>
 
         {jobId && (
@@ -429,6 +444,16 @@ export default function NetworkMigration() {
                     <RefreshCw size={14} /> Refresh script
                   </button>
                 </div>
+                {tunnelScript && (
+                  <details open style={{ marginTop: 12, borderTop: "1px solid var(--isp-border)", paddingTop: 10 }}>
+                    <summary style={{ color: "var(--isp-text)", cursor: "pointer", fontWeight: 800 }}>View temporary tunnel script (.rsc)</summary>
+                    <p style={{ ...muted, margin: "8px 0" }}>This temporary setup script is for the selected source router only. Keep it private; the access it creates expires automatically.</p>
+                    <button type="button" style={buttonStyle(false)} onClick={() => void copyScript("Tunnel script", tunnelScript)}>
+                      <Copy size={14} /> Copy tunnel script
+                    </button>
+                    <pre aria-label="Temporary tunnel RouterOS script" style={{ whiteSpace: "pre", overflow: "auto", color: "var(--isp-text)", fontSize: 11, lineHeight: 1.5, maxHeight: 320, padding: 12, borderRadius: 8, background: "rgba(15,23,42,.05)" }}>{tunnelScript}</pre>
+                  </details>
+                )}
                 {job?.tunnel && <div style={{ ...muted, marginTop: 9 }}>Tunnel: {statusLabel(job.tunnel.status)} · expires {new Date(job.tunnel.expiresAt).toLocaleString()}</div>}
               </div>
               <div style={{ border: "1px solid var(--isp-border)", borderRadius: 10, padding: 13 }}>
@@ -462,6 +487,16 @@ export default function NetworkMigration() {
                     <RefreshCw size={14} /> Refresh export script
                   </button>
                 </div>
+                {collectorScript && (
+                  <details open style={{ marginTop: 12, borderTop: "1px solid var(--isp-border)", paddingTop: 10 }}>
+                    <summary style={{ color: "var(--isp-text)", cursor: "pointer", fontWeight: 800 }}>View export collector script (.rsc)</summary>
+                    <p style={{ ...muted, margin: "8px 0" }}>This script contains a short-lived upload token. Run it only on the selected source router after the API preflight, and do not share it.</p>
+                    <button type="button" style={buttonStyle(false)} onClick={() => void copyScript("Export collector script", collectorScript)}>
+                      <Copy size={14} /> Copy export script
+                    </button>
+                    <pre aria-label="RouterOS export collector script" style={{ whiteSpace: "pre", overflow: "auto", color: "var(--isp-text)", fontSize: 11, lineHeight: 1.5, maxHeight: 320, padding: 12, borderRadius: 8, background: "rgba(15,23,42,.05)" }}>{collectorScript}</pre>
+                  </details>
+                )}
                 <div style={{ ...muted, marginTop: 8 }}>Run the tunnel script first; run the export collector second.</div>
               </div>
             </div>
@@ -576,9 +611,10 @@ export default function NetworkMigration() {
               The app captures encrypted, redacted target state before the first write. It stops at the first failed write; it does not perform an automatic rollback.
             </div>
             {dryRun.commands.length > 0 && (
-              <details>
-                <summary style={{ color: "var(--isp-text)", cursor: "pointer", fontWeight: 800 }}>View planned commands ({dryRun.commands.length})</summary>
-                <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", color: "var(--isp-text-muted)", fontSize: 11, maxHeight: 250, overflow: "auto" }}>
+              <details open>
+                <summary style={{ color: "var(--isp-text)", cursor: "pointer", fontWeight: 800 }}>Planned replacement-router API commands ({dryRun.commands.length})</summary>
+                <p style={muted}>These are the exact API commands the app will send after you confirm. They are not a .rsc script to paste into a RouterOS terminal.</p>
+                <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", color: "var(--isp-text)", fontSize: 11, maxHeight: 320, overflow: "auto", padding: 12, borderRadius: 8, background: "rgba(15,23,42,.05)" }}>
                   {dryRun.commands.map(command => command.join(" ")).join("\n")}
                 </pre>
               </details>
