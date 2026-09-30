@@ -120,9 +120,14 @@ then
   $SUDO ln -s "$(rooted_path /usr/share/easy-rsa)" "${OVPN_DIR}/easy-rsa"
 fi
 
-AUTH_SCRIPT="${OVPN_DIR}/verify-router-pass.sh"
-if [ ! -s "$AUTH_SCRIPT" ]; then
-  $SUDO tee "$AUTH_SCRIPT" >/dev/null <<'AUTHEOF'
+write_auth_script() {
+  local auth_script="$1"
+  if [ ! -s "$auth_script" ] ||
+     ! $SUDO grep -Fqx 'PASSFILE="${1:?credentials file is required}"' "$auth_script" ||
+     ! $SUDO grep -Fqx 'USERNAME="${username:-}"' "$auth_script" ||
+     ! $SUDO grep -Fqx 'PASSWORD="${password:-}"' "$auth_script"
+  then
+    $SUDO tee "$auth_script" >/dev/null <<'AUTHEOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -136,8 +141,14 @@ PASSWORD="${password:-}"
 
 grep -Fqx "${USERNAME}:${PASSWORD}" "$PASSFILE"
 AUTHEOF
-  $SUDO chmod 700 "$AUTH_SCRIPT"
-fi
+  fi
+  $SUDO chmod 700 "$auth_script"
+}
+
+PRIMARY_AUTH_SCRIPT="${OVPN_DIR}/verify-router-pass.sh"
+BACKUP_AUTH_SCRIPT="${OVPN_DIR}/verify-router-backup-pass.sh"
+write_auth_script "$PRIMARY_AUTH_SCRIPT"
+write_auth_script "$BACKUP_AUTH_SCRIPT"
 
 write_empty_auth_file() {
   local path="$1"
@@ -160,6 +171,7 @@ write_config() {
   local ipp="$6"
   local status="$7"
   local authfile="$8"
+  local authscript="$9"
 
   local tmp
   tmp="$(mktemp)"
@@ -182,7 +194,7 @@ persist-key
 persist-tun
 script-security 3
 verify-client-cert none
-auth-user-pass-verify ${AUTH_SCRIPT} via-env
+auth-user-pass-verify ${authscript} ${authfile} via-env
 username-as-common-name
 cipher AES-128-CBC
 data-ciphers AES-128-CBC
@@ -219,7 +231,8 @@ write_config \
   "${SERVER_DIR}/ochola-router-ccd" \
   "${OVPN_DIR}/router-ipp.txt" \
   "/var/log/openvpn/ochola-router-status.log" \
-  "${OVPN_DIR}/router-passwd"
+  "${OVPN_DIR}/router-passwd" \
+  "$PRIMARY_AUTH_SCRIPT"
 PRIMARY_CONFIG_FINGERPRINT="$CONFIG_FINGERPRINT"
 PRIMARY_CONFIG_UNCHANGED="$CONFIG_UNCHANGED"
 
@@ -231,7 +244,8 @@ write_config \
   "${SERVER_DIR}/ochola-router-backup-ccd" \
   "${OVPN_DIR}/router-backup-ipp.txt" \
   "/var/log/openvpn/ochola-router-backup-status.log" \
-  "${OVPN_DIR}/router-backup-passwd"
+  "${OVPN_DIR}/router-backup-passwd" \
+  "$BACKUP_AUTH_SCRIPT"
 BACKUP_CONFIG_FINGERPRINT="$CONFIG_FINGERPRINT"
 BACKUP_CONFIG_UNCHANGED="$CONFIG_UNCHANGED"
 

@@ -390,6 +390,7 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(setup, /VPN Port  : 1196\/tcp/);
   assert.match(setup, /\/etc\/openvpn\/server\/ochola-router\.conf/);
   assert.match(setup, /\/etc\/openvpn\/router-passwd/);
+   assert.match(setup, /auth-user-pass-verify \$AUTHSCRIPT \$AUTHFILE via-env/);
   assert.match(setup, /\/etc\/openvpn\/server\/ochola-router-ccd/);
   assert.match(setup, /\/var\/log\/openvpn\/ochola-router-status\.log/);
   assert.match(setup, /\/etc\/openvpn\/router-ipp\.txt/);
@@ -440,6 +441,8 @@ test("VPS setup and runtime status readers use the same management paths", () =>
   assert.match(backupSetup, /VPN Port  : 1197\/tcp/);
   assert.match(backupSetup, /server\/ochola-router-backup\.conf/);
   assert.match(backupSetup, /router-backup-passwd/);
+   assert.match(backupSetup, /auth-user-pass-verify \$AUTHSCRIPT \$AUTHFILE via-env/);
+   assert.match(backupSetup, /AUTHSCRIPT="\/etc\/openvpn\/verify-router-backup-pass\.sh"/);
   assert.match(backupSetup, /server\/ochola-router-backup-ccd/);
   assert.match(backupSetup, /ochola-router-backup-status\.log/);
   assert.match(backupSetup, /dev tun-router-bkp/);

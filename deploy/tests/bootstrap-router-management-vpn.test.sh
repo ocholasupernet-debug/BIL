@@ -256,7 +256,32 @@ assert_contains "$SCENARIO_LOG" "ip <-4> <addr> <show> <dev> <tun-router-bkp>"
 assert_contains "$SCENARIO_LOG" "ss <-H> <-lnt>"
 assert_contains "$SCENARIO_OUTPUT" "Primary OpenVPN: TCP 1196 on 10.8.5.0/24"
 assert_contains "$SCENARIO_OUTPUT" "Backup OpenVPN:  TCP 1197 on 10.8.6.0/24"
+assert_contains "${clean_root}/etc/openvpn/server/ochola-router.conf" "auth-user-pass-verify ${clean_root}/etc/openvpn/verify-router-pass.sh ${clean_root}/etc/openvpn/router-passwd via-env"
+assert_contains "${clean_root}/etc/openvpn/server/ochola-router-backup.conf" "auth-user-pass-verify ${clean_root}/etc/openvpn/verify-router-backup-pass.sh ${clean_root}/etc/openvpn/router-backup-passwd via-env"
+assert_contains "${clean_root}/etc/openvpn/verify-router-backup-pass.sh" 'PASSFILE="${1:?credentials file is required}"'
 echo "PASS: clean host starts modern units and verifies both tunnel addresses and listeners"
+
+repair_root="$(prepare_root managed-auth-repair)"
+run_scenario managed-auth-repair "$repair_root"
+if [ "$SCENARIO_STATUS" -ne 0 ]; then
+  echo "FAIL: initial managed-auth-repair setup failed" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+printf '%s\n' 'auth-user-pass-verify /etc/openvpn/verify-router-pass.sh via-env' > \
+  "${repair_root}/etc/openvpn/server/ochola-router-backup.conf"
+printf '%s\n' '# stale helper' > "${repair_root}/etc/openvpn/verify-router-backup-pass.sh"
+run_scenario managed-auth-repair "$repair_root"
+if [ "$SCENARIO_STATUS" -ne 0 ]; then
+  echo "FAIL: managed authentication repair failed" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+assert_contains "${repair_root}/etc/openvpn/server/ochola-router-backup.conf" "auth-user-pass-verify ${repair_root}/etc/openvpn/verify-router-backup-pass.sh ${repair_root}/etc/openvpn/router-backup-passwd via-env"
+assert_contains "${repair_root}/etc/openvpn/verify-router-backup-pass.sh" 'PASSFILE="${1:?credentials file is required}"'
+assert_not_contains "$SCENARIO_LOG" "systemctl <stop> <openvpn@ochola-router-backup>"
+assert_not_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn@ochola-router-backup>"
+echo "PASS: managed auth directive and helper are repaired without disturbing legacy ownership"
 
 wrong_address_root="$(prepare_root wrong-primary-address)"
 run_scenario wrong-primary-address "$wrong_address_root"

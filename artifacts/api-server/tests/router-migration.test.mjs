@@ -5,12 +5,27 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 const outdir = "tests/.migration-build";
-await build({ entryPoints: ["src/lib/router-migration-exporter.ts", "src/lib/router-migration-importer.ts", "src/lib/router-migration-export-script.ts", "src/lib/migration-tunnel.ts"], outdir, bundle: true, platform: "node", format: "cjs", outExtension: { ".js": ".cjs" }, external: ["node-routeros"], logLevel: "silent" });
+await build({ entryPoints: ["src/lib/router-migration-exporter.ts", "src/lib/router-migration-importer.ts", "src/lib/router-migration-export-script.ts", "src/lib/migration-tunnel.ts", "src/lib/router-migration-vpn.ts"], outdir, bundle: true, platform: "node", format: "cjs", outExtension: { ".js": ".cjs" }, external: ["node-routeros"], logLevel: "silent" });
 const exporter = await import(path.resolve(outdir, "router-migration-exporter.cjs"));
 const importer = await import(path.resolve(outdir, "router-migration-importer.cjs"));
 const exportScript = await import(path.resolve(outdir, "router-migration-export-script.cjs"));
 const tunnelScript = await import(path.resolve(outdir, "migration-tunnel.cjs"));
+const migrationVpn = await import(path.resolve(outdir, "router-migration-vpn.cjs"));
 await rm(outdir, { recursive: true, force: true });
+
+test("temporary migration provisioning requires the complete backup auth directive", () => {
+  const script = migrationVpn.buildRouterMigrationVpnProvisionScript({
+    username: "ochola-mig-1",
+    password: "temporary-secret-123456789012",
+    assignedIp: "10.8.6.42",
+  });
+  assert.match(
+    script,
+    /grep -Fqx 'auth-user-pass-verify \/etc\/openvpn\/verify-router-backup-pass\.sh \/etc\/openvpn\/router-backup-passwd via-env'/,
+  );
+  assert.doesNotMatch(script, /auth-user-pass-verify \/etc\/openvpn\/verify-router-backup-pass\.sh via-env'/);
+  assert.doesNotMatch(script, /auth-user-pass-verify \/etc\/openvpn\/verify-router-pass\.sh/);
+});
 
 test("source allowlist excludes files and mutations", () => {
   assert.ok(exporter.SOURCE_PRINT_COMMANDS.every(x => x.endsWith("/print") && !x.startsWith("/file")));

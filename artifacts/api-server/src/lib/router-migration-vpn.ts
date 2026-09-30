@@ -32,7 +32,7 @@ function requireSafeAddress(value: string): string {
   return ip;
 }
 
-function shellScript(client: MigrationVpnClient): string {
+export function buildRouterMigrationVpnProvisionScript(client: MigrationVpnClient): string {
   const username = requireSafeUsername(client.username);
   const password = requireSafePassword(client.password);
   const assignedIp = requireSafeAddress(client.assignedIp);
@@ -59,7 +59,7 @@ grep -Eq '^server[[:space:]]+10\\.8\\.6\\.0[[:space:]]+255\\.255\\.255\\.0$' "$c
 grep -Eq '^topology[[:space:]]+net30$' "$config"
 grep -Fqx 'client-config-dir ${profile.ccdPath}' "$config"
 grep -Fqx 'ifconfig-pool-persist ${profile.ippPath}' "$config"
-grep -Fqx 'auth-user-pass-verify ${profile.authScriptPath} via-env' "$config"
+ grep -Fqx 'auth-user-pass-verify ${profile.authScriptPath} ${profile.authFilePath} via-env' "$config"
 if awk -F: -v name="$username" '$1 == name { found=1 } END { exit !found }' "$auth"; then
   echo "Temporary migration username already exists." >&2
   exit 21
@@ -161,7 +161,7 @@ async function runProtectedScript(script: string): Promise<void> {
 }
 
 export async function provisionRouterMigrationVpnClient(client: MigrationVpnClient): Promise<void> {
-  await runProtectedScript(shellScript(client));
+  await runProtectedScript(buildRouterMigrationVpnProvisionScript(client));
 }
 
 export async function revokeRouterMigrationVpnClient(username: string): Promise<void> {

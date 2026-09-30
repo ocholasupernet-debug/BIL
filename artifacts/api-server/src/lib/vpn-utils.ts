@@ -252,7 +252,7 @@ fi
    else
      echo "client-cert-not-required"
    fi
-  echo "auth-user-pass-verify $AUTHSCRIPT via-env"
+   echo "auth-user-pass-verify $AUTHSCRIPT $AUTHFILE via-env"
   echo "username-as-common-name"
   echo "cipher AES-128-CBC"
    if [ "$OPENVPN_SUPPORTS_DATA_CIPHERS" = true ]; then
@@ -282,9 +282,9 @@ echo "[6] Enabling username/password auth..."
 cat > "$AUTHSCRIPT" << 'AUTHEOF'
 #!/usr/bin/env bash
 # Simple username:password verifier for OpenVPN
-PASSFILE="${contract.authFilePath}"
-username="\${username:-\${1:-}}"
-password="\${password:-\${2:-}}"
+PASSFILE="\${1:?credentials file is required}"
+username="\${username:-}"
+password="\${password:-}"
 [ -f "$PASSFILE" ] || exit 1
 grep -Fqx "\${username}:\${password}" "$PASSFILE" && exit 0 || exit 1
 AUTHEOF
