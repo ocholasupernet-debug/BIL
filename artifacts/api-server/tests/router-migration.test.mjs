@@ -262,3 +262,30 @@ test("unlisted source registration is tenant-bound, retry-safe, and never a repl
   assert.match(runner, /2026_router_migration_source_registration\.sql/);
   assert.match(ensure, /migration_source_only=eq\.false/);
 });
+
+test("migration allocator collision fix is registered after copy flow", async () => {
+  const runner = await readFile("scripts/apply-deployment-migrations.mjs", "utf8");
+  const copyFlow = runner.indexOf("2026_router_migration_copy_flow.sql");
+  const collisionFix = runner.indexOf("2026_router_migration_tunnel_allocator_collision_fix.sql");
+  const sourceRegistration = runner.indexOf("2026_router_migration_source_registration.sql");
+  assert.ok(copyFlow >= 0);
+  assert.ok(collisionFix > copyFlow && collisionFix < sourceRegistration);
+});
+
+test("migration allocator globally locks and reserves failed address pairs", async () => {
+  const migration = await readFile(
+    "migrations/2026_router_migration_tunnel_allocator_collision_fix.sql",
+    "utf8",
+  );
+  assert.match(migration, /router-migration-vpn-address-pool/);
+  assert.match(migration, /where id = p_source_router_id and admin_id = p_admin_id/);
+  assert.match(migration, /where admin_id = p_admin_id\s+and source_router_id = p_source_router_id/);
+  assert.match(migration, /split_part\(split_part\(r\.vpn_ip::text, '\/', 1\), '\.', 1\) = '10'/);
+  assert.match(migration, /split_part\(split_part\(r\.vpn_ip::text, '\/', 1\), '\.', 2\) = '8'/);
+  assert.match(migration, /split_part\(split_part\(r\.vpn_ip::text, '\/', 1\), '\.', 3\) = '5'/);
+  assert.doesNotMatch(migration, /r\.admin_id\s*=\s*p_admin_id/);
+  assert.match(migration, /'server_unavailable'/);
+  assert.match(migration, /status in \(\s*'issued', 'script_issued', 'connected', 'exported',\s*'server_unavailable'/s);
+  assert.match(migration, /revoke all on function issue_router_migration_tunnel_lease/);
+  assert.match(migration, /grant execute on function issue_router_migration_tunnel_lease/);
+});
