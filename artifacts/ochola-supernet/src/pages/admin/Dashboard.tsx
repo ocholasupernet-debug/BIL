@@ -258,11 +258,13 @@ function KpiCard({
   value,
   icon,
   tone = "accent",
+  description,
 }: {
   label: string;
   value: string;
   icon: ReactNode;
   tone?: "accent" | "green" | "amber" | "plum";
+  description?: string;
 }) {
   return (
     <article className={`dashboard-kpi dashboard-kpi--${tone}`}>
@@ -270,6 +272,7 @@ function KpiCard({
       <div className="dashboard-kpi-copy">
         <div className="dashboard-kpi-label">{label}</div>
         <div className="dashboard-kpi-value">{value}</div>
+        {description && <div className="dashboard-kpi-description">{description}</div>}
       </div>
     </article>
   );
@@ -509,7 +512,7 @@ export default function Dashboard() {
 
   return (
     <AdminLayout>
-      <div className="dashboard-page" style={dashboardStyle}>
+      <div className={`dashboard-page dashboard-page--${preferences.layout} dashboard-shape--${preferences.cardShape}`} style={dashboardStyle}>
         <header className="dashboard-hero">
           <div>
             <div className="dashboard-eyebrow">
@@ -521,7 +524,7 @@ export default function Dashboard() {
           </div>
           <div className="dashboard-date">
             <CalendarDays size={15} />
-            {now.toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long" })}
+            {now.toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Nairobi" })}
           </div>
         </header>
 
@@ -556,10 +559,10 @@ export default function Dashboard() {
           </button>
         </div>
         <section className="dashboard-kpi-grid" aria-label="Revenue overview">
-            <KpiCard label="Income today" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} tone="green" />
-            <KpiCard label="Income this month" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeMonth)} icon={<TrendingUp size={19} />} tone="green" />
-           <KpiCard label="Total transactions" value={revenueLoading ? "…" : String(revenueSummary?.totalTransactions ?? 0)} icon={<ReceiptText size={19} />} tone="amber" />
-           <KpiCard label="Total revenue" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(completedRevenue)} icon={<BarChart3 size={19} />} tone="plum" />
+            <KpiCard label="Income today" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} tone="green" description="Since midnight · EAT" />
+            <KpiCard label="Income this month" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeMonth)} icon={<TrendingUp size={19} />} tone="green" description="Month to date · resets on the 1st" />
+           <KpiCard label="Total transactions" value={revenueLoading ? "…" : String(revenueSummary?.totalTransactions ?? 0)} icon={<ReceiptText size={19} />} tone="amber" description="All time" />
+            <KpiCard label="Total revenue" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(completedRevenue)} icon={<BarChart3 size={19} />} tone="plum" description="All time" />
         </section>
 
         <section className="dashboard-stat-grid" aria-label="Network quick stats">

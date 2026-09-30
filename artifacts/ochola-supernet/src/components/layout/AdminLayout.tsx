@@ -260,6 +260,13 @@ function PlatformBillingBanner() {
   const hours = Math.floor((remaining % 86400000) / 3600000);
   const minutes = Math.floor((remaining % 3600000) / 60000);
   const countdown = remaining ? `${days}d ${hours}h ${minutes}m` : "Past due";
+  const dueDateLabel = new Date(`${state.invoice.due_date}T12:00:00.000Z`).toLocaleDateString("en-KE", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "Africa/Nairobi",
+  });
+  const isPastDue = remaining === 0;
 
   const renew = async () => {
     setBusy(true);
@@ -314,33 +321,40 @@ function PlatformBillingBanner() {
 
   return (
     <section
+      className={`platform-billing-banner${isPastDue ? " platform-billing-banner--overdue" : ""}`}
       role="status"
-      style={{
-        marginBottom: 18, borderRadius: 14, padding: "15px 17px",
-        border: "1px solid rgba(245,158,11,0.4)", background: "linear-gradient(115deg, rgba(120,53,15,0.26), rgba(245,158,11,0.08))",
-        color: "var(--isp-text)", display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap",
-      }}
+      aria-label="Monthly platform renewal reminder"
     >
-      <div style={{ flex: "1 1 260px" }}>
-        <strong style={{ display: "block", color: "#fbbf24", fontSize: 14 }}>Platform renewal due</strong>
-        <span style={{ display: "block", marginTop: 3, fontSize: 12 }}>
-          KSh {Number(state.invoice.amount_due).toLocaleString("en-KE")} due by {new Date(`${state.invoice.due_date}T00:00:00.000Z`).toLocaleDateString("en-KE", { day: "numeric", month: "short" })}.
-          {" "}Time left: <strong>{countdown}</strong>
-        </span>
-        {!state.paymentsAvailable && <small style={{ display: "block", marginTop: 6 }}>Renewal payments are unavailable in this preview.</small>}
-        {message && <small style={{ display: "block", marginTop: 6, color: message.includes("confirmed") ? "#86efac" : "var(--isp-text-muted)" }}>{message}</small>}
+      <span className="platform-billing-banner__icon" aria-hidden="true"><CreditCard size={19} /></span>
+      <div className="platform-billing-banner__copy">
+        <div className="platform-billing-banner__heading">
+          <div>
+            <span className="platform-billing-banner__eyebrow">Monthly platform billing</span>
+            <strong>{isPastDue ? "Renewal payment is overdue" : "Your monthly renewal is ready"}</strong>
+          </div>
+          <span className={`platform-billing-banner__badge${isPastDue ? " platform-billing-banner__badge--overdue" : ""}`}>
+            {isPastDue ? "Past due" : `Due in ${countdown}`}
+          </span>
+        </div>
+        <p className="platform-billing-banner__summary">
+          KSh {Number(state.invoice.amount_due).toLocaleString("en-KE")} due by <strong>{dueDateLabel}</strong>.
+        </p>
+        <span className="platform-billing-banner__note">Monthly reminder · available from the 1st of each month</span>
+        {!state.paymentsAvailable && <small className="platform-billing-banner__message">Renewal payments are unavailable in this preview.</small>}
+        {message && <small className={`platform-billing-banner__message${message.includes("confirmed") ? " platform-billing-banner__message--success" : ""}`}>{message}</small>}
       </div>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flex: "1 1 320px", maxWidth: 430 }}>
+      <div className="platform-billing-banner__actions">
         <input
           value={phone}
           onChange={event => setPhone(event.target.value)}
           disabled={!state.paymentsAvailable}
           placeholder="07xx xxx xxx"
+          type="tel"
+          autoComplete="tel"
           aria-label="M-Pesa phone number"
-          style={{ flex: 1, minWidth: 145, padding: "9px 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.15)", background: "rgba(0,0,0,0.15)", color: "inherit" }}
         />
-        <button type="button" onClick={() => void renew()} disabled={!state.paymentsAvailable || busy || !phone.trim()} style={{ border: 0, borderRadius: 8, padding: "10px 14px", background: "#f59e0b", color: "#1c1917", fontWeight: 800, cursor: busy ? "wait" : "pointer", whiteSpace: "nowrap" }}>
-          {busy ? "Waiting…" : "Renew"}
+        <button type="button" onClick={() => void renew()} disabled={!state.paymentsAvailable || busy || !phone.trim()}>
+          {busy ? "Waiting…" : "Pay renewal"}
         </button>
       </div>
     </section>

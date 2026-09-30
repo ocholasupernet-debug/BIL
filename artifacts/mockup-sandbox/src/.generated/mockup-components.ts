@@ -4,7 +4,8 @@ export const modules: ModuleMap = {
   "./components/mockups/isp-dashboard/Current.tsx": () => import("../components/mockups/isp-dashboard/Current.tsx"),
   "./components/mockups/isp-dashboard/EmeraldFinance.tsx": () => import("../components/mockups/isp-dashboard/EmeraldFinance.tsx"),
   "./components/mockups/isp-dashboard/ExecutiveNavy.tsx": () => import("../components/mockups/isp-dashboard/ExecutiveNavy.tsx"),
-  "./components/mockups/isp-dashboard/ExtractedCurrent.tsx": () => import("../components/mockups/isp-dashboard/ExtractedCurrent.tsx"),
   "./components/mockups/isp-dashboard/SlateProfessional.tsx": () => import("../components/mockups/isp-dashboard/SlateProfessional.tsx"),
+  "./components/mockups/isp-dashboard-extracted/Current.tsx": () => import("../components/mockups/isp-dashboard-extracted/Current.tsx"),
+  "./components/mockups/isp-dashboard-extracted/Standardized.tsx": () => import("../components/mockups/isp-dashboard-extracted/Standardized.tsx"),
   "./components/mockups/migration-page/MigrationPage.tsx": () => import("../components/mockups/migration-page/MigrationPage.tsx")
 };

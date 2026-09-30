@@ -1,5 +1,4 @@
 - [VPS deployment verification](vps-deployment-verification.md) — Use the latest successful release branch and SHA as the baseline; verify live behavior after one deploy run.
-- [Theme token cascade](theme-token-cascade.md) — Update the final legacy token layer too; later root declarations can silently override the primary design system.
 - [VPS SSH key fallback](vps-ssh-key-fallback.md) — Production SSH may require the versioned deployment-key fallback; validate key format before diagnosing remote service failures.
 - [Wildcard certificate deployment](wildcard-certificate-deployment.md) — Install a separately supplied SAN certificate through encrypted Actions secrets; never commit its private key.
 - [GitHub connector commit flow](github-connector-commit.md) — Read files individually, compare the full remote tree with local tracked files, then use one non-forced tree/commit/ref update.
@@ -21,7 +20,6 @@
 - [Hotspot credential login](hotspot-credential-login.md) — Credential login must use the submitted account and server-side RouterOS activation; MAC troubleshooting is a separate recovery path.
 - [Hotspot private portal DNS](hotspot-private-dns.md) — Advertise only the MikroTik gateway DNS when the portal hostname is internal; public fallback causes NXDOMAIN before login.
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
-- [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
 - [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.
 - [RouterOS version dispatch](routeros-version-dispatch.md) — Read the installed major version locally; never let RouterOS 7 receive or parse the RouterOS 6 child path.
 - [Router VPN fallback contract](router-management-vpn-fallback.md) — Keep fallback protocol material server-side, isolate child scripts, and treat intermediate protocol failures as recoverable.
