@@ -12,6 +12,8 @@ import {
 import { hashIspAdminPassword, verifyIspAdminPassword } from "../lib/passwords.js";
 import { getTenantSubdomainFromRequest, RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
 import { registerAccount } from "../controllers/auth-controller.js";
+import { logger } from "../lib/logger.js";
+import { recordWhatsAppSignInFailure, type WhatsAppLoginAccountType } from "../services/whatsapp/whatsapp-service.js";
 
 const router: IRouter = Router();
 
@@ -27,6 +29,25 @@ function sendInvalidCredentials(res: Response): void {
   setTimeout(() => {
     res.status(401).json({ ok: false, error: "Invalid credentials" });
   }, 400);
+}
+
+async function recordFailedAccountSignIn(
+  req: Request,
+  accountType: WhatsAppLoginAccountType,
+  accountId: unknown,
+): Promise<void> {
+  const id = Number(accountId);
+  if (!Number.isSafeInteger(id) || id <= 0) return;
+  try {
+    await recordWhatsAppSignInFailure(
+      accountType,
+      id,
+      req.ip ?? req.socket.remoteAddress,
+      req.get("user-agent"),
+    );
+  } catch (error) {
+    logger.warn({ err: error, accountType }, "[auth] suspicious sign-in tracking failed");
+  }
 }
 
 router.post("/auth/register", registerAccount);
@@ -82,6 +103,7 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
     ? rows.find((row) => Number(row.id) === tenantId || Number(row.parent_id) === tenantId)
     : rows.find((row) => String(row.subdomain ?? "").toLowerCase() === tenantSubdomain);
   if (!admin || !await verifyIspAdminPassword(admin.password, password) || admin.is_active !== true) {
+    if (admin) await recordFailedAccountSignIn(req, "admin", admin.id);
     sendInvalidCredentials(res);
     return;
   }
@@ -181,6 +203,7 @@ router.post("/auth/customer/login", async (req: Request, res: Response): Promise
     typeof customer.password === "string" ? customer.password : "",
     password,
   )) {
+    if (customer) await recordFailedAccountSignIn(req, "customer", customer.id);
     setTimeout(() => {
       res.status(401).json({ ok: false, error: "Invalid credentials" });
     }, 400);

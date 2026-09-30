@@ -3,8 +3,10 @@ import { randomBytes } from "node:crypto";
 import {
   authenticatedAccount,
   generateVlanHotspotPortalContextToken,
+  extractToken,
   requireAdmin,
 } from "../lib/api-auth.js";
+import { hasWhatsAppGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import {
   sbDeleteStrict,
   sbInsertStrict,
@@ -1082,6 +1084,29 @@ async function currentAccount(req: Request) {
   const account = await authenticatedAccount(req);
   if (!account) throw new Error("Signed-in account was not found.");
   return account;
+}
+
+async function requireResellerGatewaySettingsGrant(
+  req: Request,
+  res: Response,
+  accountId: number,
+): Promise<boolean> {
+  const header = (value: string | string[] | undefined): string =>
+    Array.isArray(value) ? value[0] ?? "" : value ?? "";
+  const valid = await hasWhatsAppGatewaySettingsGrant({
+    accountId,
+    requestId: header(req.headers["x-whatsapp-gateway-request-id"]),
+    grant: header(req.headers["x-whatsapp-gateway-grant"]),
+    sessionToken: extractToken(req),
+  });
+  if (!valid) {
+    res.status(403).json({
+      ok: false,
+      error: "Verify the WhatsApp code to open or update payment gateway settings.",
+    });
+    return false;
+  }
+  return true;
 }
 
 async function tenantRouter(adminId: number, routerId: number): Promise<RouterRow> {
@@ -3292,7 +3317,7 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
     const [users, portRows, gateways, sales, customers, revenueRows] = await Promise.all([
       sbSelectStrict("isp_admins", `id=eq.${account.id}&select=id,name,company_name,username,email,phone,earnings_balance,created_at&limit=1`),
        sbSelectStrict<ResellerPortRow>("isp_reseller_ports", `assigned_reseller_id=eq.${account.id}&select=id,admin_id,reseller_id,assigned_reseller_id,router_id,interface_name,vlan_tag,bridge_name,hotspot_enabled,pppoe_enabled,subnet_range,bandwidth_cap_mbps,reseller_bandwidth_cap,status,link_status,handoff_mode,handoff_type,handoff_interface,xpon_identifier,link_detected,last_link_checked_at,link_detection_error,provisioning_error,link_provisioning_error&limit=1000`),
-      sbSelectStrict("reseller_payment_gateway_routes", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,gateway_type,router_id,port_id,is_active,created_at,updated_at&order=updated_at.desc`),
+      sbSelectStrict<ResellerGatewayRouteRow & { created_at: string; updated_at: string }>("reseller_payment_gateway_routes", `admin_id=eq.${tenantId}&reseller_id=eq.${account.id}&select=id,admin_id,reseller_id,gateway_type,router_id,port_id,is_active,config_ciphertext,config_preview,created_at,updated_at&order=updated_at.desc`),
       sbSelectStrict("isp_reseller_sales", `reseller_id=eq.${account.id}&select=id,admin_id,reseller_port_id,client_reference,client_ip,amount,gateway_type,payment_reference,status,created_at&order=created_at.desc&limit=100`),
       sbSelectStrict<ResellerCustomerMetricRow>("isp_customers", `admin_id=eq.${account.id}&select=id,type,status,expires_at,created_at,name,username,data_used_mb,data_used_bytes&limit=5000`),
       sbRpc<{
@@ -3311,6 +3336,43 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
       : [];
     const routerMap = new Map(routers.map((router) => [router.id, router]));
     const ports = portRows.map((port) => ({ ...port, router: routerMap.get(Number(port.router_id)) ?? null }));
+    const paymentGatewayRoutes = gateways.map((route) => {
+      const preview = route.config_preview && typeof route.config_preview === "object"
+        ? route.config_preview
+        : {};
+      const destinationFields = [
+        "bankName", "accountName", "accountNumber", "accountReference",
+        "merchantIdentifier", "paybillNumber", "tillNumber",
+      ];
+      const destinationPreview = Object.fromEntries(
+        destinationFields
+          .filter((field) => typeof preview[field] === "string" && preview[field].trim())
+          .map((field) => [field, String(preview[field]).slice(0, 120)]),
+      );
+      let destinationConfigured: boolean | null = false;
+      let destinationStatus: "configured" | "needs_setup" | "unavailable" = "needs_setup";
+      try {
+        const config = route.config_ciphertext ? decryptGatewayConfig(route.config_ciphertext) : {};
+        destinationConfigured = resellerGatewayConfigComplete(route.gateway_type, config);
+        destinationStatus = destinationConfigured ? "configured" : "needs_setup";
+      } catch {
+        // A broken legacy route must not take down the reseller dashboard. Keep
+        // the failure opaque and distinguish it from an incomplete destination.
+        destinationConfigured = null;
+        destinationStatus = "unavailable";
+      }
+      return {
+        id: route.id,
+        gatewayType: route.gateway_type,
+        routerId: route.router_id,
+        portId: route.port_id,
+        scopeType: resellerGatewayScope(route.router_id, route.port_id),
+        isActive: route.is_active,
+        destinationConfigured,
+        destinationStatus,
+        destinationPreview,
+      };
+    });
     const now = Date.now();
     const activeCustomers = customers.filter((customer) => {
       const expiry = customer.expires_at ? Date.parse(customer.expires_at) : NaN;
@@ -3357,7 +3419,16 @@ router.get("/reseller/me", requireAdmin(), async (req, res): Promise<void> => {
       ok: true,
       account: users[0] ?? null,
       ports,
-      gateways,
+      gateways: gateways.map(({ id, gateway_type, router_id, port_id, is_active, created_at, updated_at }) => ({
+        id,
+        gateway_type,
+        router_id,
+        port_id,
+        is_active,
+        created_at,
+        updated_at,
+      })),
+      paymentGatewayRoutes,
       sales,
       metrics: {
         revenue: {
@@ -3743,6 +3814,7 @@ router.get("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
       res.status(403).json({ ok: false, error: "Only reseller accounts can configure payment gateways." });
       return;
     }
+    if (!(await requireResellerGatewaySettingsGrant(req, res, account.id))) return;
     const [{ ports, routers }, routes] = await Promise.all([
       resellerGatewayResources(account),
       sbSelectStrict<ResellerGatewayRouteRow>(
@@ -3755,7 +3827,58 @@ router.get("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
       Number(port.id),
       `${routerNames.get(Number(port.router_id)) ?? "Router"} · ${port.interface_name}${port.vlan_tag ? ` · VLAN ${port.vlan_tag}` : ""}`,
     ]));
-    res.json({
+    res.set("Cache-Control", "no-store").json({
+      ok: true,
+      scopes: {
+        routers: routers.map((router) => ({ id: router.id, name: router.name, status: router.status })),
+        ports: ports.map((port) => ({ id: port.id, routerId: port.router_id, label: portLabels.get(Number(port.id)) })),
+      },
+      routes: routes.map((route) => {
+        const config = decryptGatewayConfig(route.config_ciphertext);
+        return {
+          id: route.id,
+          gatewayType: route.gateway_type,
+          routerId: route.router_id,
+          portId: route.port_id,
+          scopeType: resellerGatewayScope(route.router_id, route.port_id),
+          scopeLabel: route.port_id
+            ? portLabels.get(Number(route.port_id)) ?? "Assigned VLAN port"
+            : route.router_id
+              ? `Router · ${routerNames.get(Number(route.router_id)) ?? "Assigned router"}`
+              : "Reseller default",
+          config: route.config_preview ?? {},
+          destinationConfigured: resellerGatewayConfigComplete(route.gateway_type, config),
+          hasStoredSecrets: Boolean(route.config_ciphertext),
+          isActive: route.is_active,
+        };
+      }),
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load reseller payment gateways." });
+  }
+});
+
+router.get("/reseller/payment-gateways/settings", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role !== "reseller") {
+      res.status(403).json({ ok: false, error: "Only reseller accounts can configure payment gateways." });
+      return;
+    }
+    if (!(await requireResellerGatewaySettingsGrant(req, res, account.id))) return;
+    const [{ ports, routers }, routes] = await Promise.all([
+      resellerGatewayResources(account),
+      sbSelectStrict<ResellerGatewayRouteRow>(
+        "reseller_payment_gateway_routes",
+        `admin_id=eq.${account.parent_id ?? 0}&reseller_id=eq.${account.id}&select=id,admin_id,reseller_id,router_id,port_id,gateway_type,config_ciphertext,config_preview,is_active&order=updated_at.desc`,
+      ),
+    ]);
+    const routerNames = new Map(routers.map((router) => [Number(router.id), router.name]));
+    const portLabels = new Map(ports.map((port) => [
+      Number(port.id),
+      `${routerNames.get(Number(port.router_id)) ?? "Router"} · ${port.interface_name}${port.vlan_tag ? ` · VLAN ${port.vlan_tag}` : ""}`,
+    ]));
+    res.set("Cache-Control", "no-store").json({
       ok: true,
       scopes: {
         routers: routers.map((router) => ({ id: router.id, name: router.name, status: router.status })),
@@ -3793,6 +3916,7 @@ router.post("/reseller/payment-gateways/:routeId/test", requireAdmin(), async (r
       res.status(403).json({ ok: false, error: "Only reseller accounts can test their payment gateways." });
       return;
     }
+    if (!(await requireResellerGatewaySettingsGrant(req, res, account.id))) return;
     const routeId = Number(req.params.routeId);
     if (!Number.isSafeInteger(routeId) || routeId <= 0) {
       res.status(400).json({ ok: false, error: "Choose a saved reseller payment route." });
@@ -3834,6 +3958,7 @@ router.put("/reseller/payment-gateways", requireAdmin(), async (req, res): Promi
       res.status(403).json({ ok: false, error: "Only reseller accounts can configure payment gateways." });
       return;
     }
+    if (!(await requireResellerGatewaySettingsGrant(req, res, account.id))) return;
     const gatewayType = typeof req.body?.gatewayType === "string" ? req.body.gatewayType.trim().toLowerCase() : "";
     if (!isResellerGatewayId(gatewayType)) {
       res.status(400).json({ ok: false, error: "Choose a supported payment gateway." });
@@ -3922,6 +4047,7 @@ router.delete("/reseller/payment-gateways/:routeId", requireAdmin(), async (req,
       res.status(403).json({ ok: false, error: "Only reseller accounts can remove payment gateways." });
       return;
     }
+    if (!(await requireResellerGatewaySettingsGrant(req, res, account.id))) return;
     const routeId = Number(req.params.routeId);
     if (!Number.isSafeInteger(routeId) || routeId <= 0) {
       res.status(400).json({ ok: false, error: "Invalid payment gateway route." });

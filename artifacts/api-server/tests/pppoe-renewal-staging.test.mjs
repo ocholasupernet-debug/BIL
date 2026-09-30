@@ -43,6 +43,9 @@ async function bundleRenewalHelper() {
               export async function sbSelect(table) { return globalThis.__pppoeStaging.db.select(table); }
               export async function sbInsert() { return []; }
               export async function sbUpdate() { return []; }
+              export async function sbUpdateStrict(table, filter, values) {
+                return globalThis.__pppoeStaging.db.updateStrict(table, filter, values);
+              }
             `,
             "mikrotik": `
               export async function fetchPPPSecrets() { return structuredClone(globalThis.__pppoeStaging.secrets); }
@@ -70,8 +73,11 @@ async function bundleRenewalHelper() {
               export async function disconnectHotspotActiveUser() {}
               export async function requireHotspotUserProfile() {}
               export async function scheduleHotspotUserExpiry() {}
+              export async function scheduleHotspotUserFup() {}
+              export async function removeHotspotUserFup() {}
               export async function schedulePppUserExpiry() {}
               export async function reconcileVlanCustomerQueue() {}
+              export async function reconcileHotspotUserAccess() {}
               export function classifyRouterConnectionFailure() {
                 return { profile: "unknown", summary: "Router unavailable", message: "Router unavailable" };
               }
@@ -117,6 +123,16 @@ function fixture(overrides = {}) {
       if (table === "isp_customers") return state.customers;
       if (table === "isp_routers") return state.routers;
       return [];
+    },
+    updateStrict(table, filter, values) {
+      if (table !== "isp_customers") return [];
+      const params = new URLSearchParams(filter);
+      const id = Number(params.get("id")?.slice(3));
+      const adminId = Number(params.get("admin_id")?.slice(3));
+      const customer = state.customers.find(row => row.id === id && row.admin_id === adminId);
+      if (!customer) return [];
+      Object.assign(customer, values);
+      return [customer];
     },
   };
   globalThis.__pppoeStaging = state;

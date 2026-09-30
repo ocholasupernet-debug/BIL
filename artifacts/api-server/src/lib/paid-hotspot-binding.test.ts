@@ -29,7 +29,7 @@ test("device IP lookup only returns the address for the purchased MAC", () => {
   assert.equal(hotspotDeviceAddressForMac(devices, "00:11:22:33:44:55"), null);
 });
 
-test("a paid active session must match its account and target device identity", () => {
+test("a paid active session must match both its account and target device identity", () => {
   const sessions = [
     { user: "tv-package", address: "10.0.0.88", "mac-address": "AA:BB:CC:DD:EE:FF" },
     { user: "phone-package", address: "10.0.0.12", "mac-address": "11:22:33:44:55:66" },

@@ -121,7 +121,11 @@ const stkRateLimits = new Map<string, { count: number; startedAt: number }>();
 const callbackIntakeLimits = new Map<string, { count: number; startedAt: number }>();
 const CALLBACK_RECONCILIATION_WINDOW_MS = 10 * 60 * 1000;
 const CALLBACK_EVENT_RETENTION_MS = 24 * 60 * 60 * 1000;
+const CALLBACK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const CALLBACK_SCAN_BATCH_SIZE = 50;
 let lastCallbackPurgeAt = 0;
+let deferredCallbackOlderIdCursor = 0;
+let deferredCallbackExpiredIdCursor = 0;
 
 type HotspotRouterRow = {
   id?: number;
@@ -1289,26 +1293,95 @@ export async function processMpesaCallback(
   return true;
 }
 
-export async function processDeferredMpesaCallbacks(checkoutId?: string): Promise<void> {
-  const now = Date.now();
+export interface DeferredMpesaCallbackEvent {
+  id: number;
+  payload: unknown;
+  created_at: string;
+}
+
+export interface DeferredMpesaCallbackDependencies {
+  select: (filter: string) => Promise<DeferredMpesaCallbackEvent[]>;
+  update: (filter: string, values: { status: "processed" | "ignored" }) => Promise<unknown>;
+  purgeTerminal: (filter: string) => Promise<unknown>;
+  processCallback: (payload: unknown) => Promise<boolean>;
+  now: () => number;
+}
+
+export async function processDeferredMpesaCallbacks(
+  checkoutId?: string,
+  overrides: Partial<DeferredMpesaCallbackDependencies> = {},
+): Promise<void> {
+  const dependencies: DeferredMpesaCallbackDependencies = {
+    select: filter => sbSelect<DeferredMpesaCallbackEvent>("isp_webhook_events", filter),
+    update: (filter, values) => sbUpdate("isp_webhook_events", filter, values),
+    purgeTerminal: filter => sbDelete("isp_webhook_events", filter),
+    processCallback: payload => processMpesaCallback(payload),
+    now: Date.now,
+    ...overrides,
+  };
+  const now = dependencies.now();
+  const horizon = new Date(now - CALLBACK_MAX_AGE_MS).toISOString();
+
+  if (checkoutId) {
+    const events = await dependencies.select(
+      `gateway=eq.mpesa&status=eq.received&reference=eq.${encodeURIComponent(checkoutId)}&select=id,payload,created_at&order=created_at.asc&limit=1`,
+    );
+    for (const event of events) {
+      if (!Number.isFinite(Date.parse(event.created_at)) || now - Date.parse(event.created_at) > CALLBACK_MAX_AGE_MS) {
+        await dependencies.update(`id=eq.${event.id}&status=eq.received`, { status: "ignored" });
+      } else if (await dependencies.processCallback(event.payload)) {
+        await dependencies.update(`id=eq.${event.id}&status=eq.received`, { status: "processed" });
+      }
+    }
+    return;
+  }
+
   const activeCutoff = new Date(now - CALLBACK_RECONCILIATION_WINDOW_MS).toISOString();
-  const referenceFilter = checkoutId ? `&reference=eq.${encodeURIComponent(checkoutId)}` : `&created_at=gte.${encodeURIComponent(activeCutoff)}`;
-  const events = await sbSelect<{ id: number; payload: unknown; created_at: string }>(
-    "isp_webhook_events",
-    `gateway=eq.mpesa&status=eq.received${referenceFilter}&select=id,payload,created_at&order=created_at.asc&limit=100`,
+  const freshEvents = await dependencies.select(
+    `gateway=eq.mpesa&status=eq.received&created_at=gte.${encodeURIComponent(activeCutoff)}&select=id,payload,created_at&order=created_at.asc&limit=${CALLBACK_SCAN_BATCH_SIZE}`,
   );
-  for (const event of events) {
-    if (await processMpesaCallback(event.payload)) {
-      await sbUpdate("isp_webhook_events", `id=eq.${event.id}`, { status: "processed" });
-    } else if (now - Date.parse(event.created_at) >= CALLBACK_RECONCILIATION_WINDOW_MS) {
-      await sbUpdate("isp_webhook_events", `id=eq.${event.id}&status=eq.received`, { status: "ignored" });
+  for (const event of freshEvents) {
+    if (await dependencies.processCallback(event.payload)) {
+      await dependencies.update(`id=eq.${event.id}&status=eq.received`, { status: "processed" });
     }
   }
-  if (!checkoutId && now - lastCallbackPurgeAt >= 60 * 60 * 1000) {
+
+  // Scan older callbacks independently from fresh traffic. The advancing ID
+  // cursor lets repeated failures elsewhere in the old-event set make progress
+  // without consuming the fresh-event batch on every timer tick.
+  const olderEvents = await dependencies.select(
+    `gateway=eq.mpesa&status=eq.received&created_at=gte.${encodeURIComponent(horizon)}&created_at=lt.${encodeURIComponent(activeCutoff)}&id=gt.${deferredCallbackOlderIdCursor}&select=id,payload,created_at&order=id.asc&limit=${CALLBACK_SCAN_BATCH_SIZE}`,
+  );
+  if (olderEvents.length) {
+    deferredCallbackOlderIdCursor = olderEvents[olderEvents.length - 1].id;
+    for (const event of olderEvents) {
+      if (await dependencies.processCallback(event.payload)) {
+        await dependencies.update(`id=eq.${event.id}&status=eq.received`, { status: "processed" });
+      }
+    }
+  } else {
+    deferredCallbackOlderIdCursor = 0;
+  }
+
+  // Retire expired received callbacks in a bounded batch instead of letting
+  // them accumulate indefinitely. The status predicate also protects terminal
+  // records if their state changes between selection and update.
+  const expiredEvents = await dependencies.select(
+    `gateway=eq.mpesa&status=eq.received&created_at=lt.${encodeURIComponent(horizon)}&id=gt.${deferredCallbackExpiredIdCursor}&select=id,created_at&order=id.asc&limit=${CALLBACK_SCAN_BATCH_SIZE}`,
+  );
+  if (expiredEvents.length) {
+    deferredCallbackExpiredIdCursor = expiredEvents[expiredEvents.length - 1].id;
+    for (const event of expiredEvents) {
+      await dependencies.update(`id=eq.${event.id}&status=eq.received`, { status: "ignored" });
+    }
+  } else {
+    deferredCallbackExpiredIdCursor = 0;
+  }
+
+  if (now - lastCallbackPurgeAt >= 60 * 60 * 1000) {
     lastCallbackPurgeAt = now;
     const retentionCutoff = new Date(now - CALLBACK_EVENT_RETENTION_MS).toISOString();
-    await sbDelete(
-      "isp_webhook_events",
+    await dependencies.purgeTerminal(
       `gateway=eq.mpesa&status=in.(processed,ignored)&created_at=lt.${encodeURIComponent(retentionCutoff)}`,
     );
   }
@@ -2681,20 +2754,20 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   const now = Date.now();
   const linkedCustomer = linkedCustomers[0];
   const linkedExpiry = linkedCustomer?.expires_at ? Date.parse(linkedCustomer.expires_at) : 0;
-   if (linkedCustomer && linkedCustomer.depletion_reason === "data_limit") {
-     res.status(409).json({
-       ok: false,
-       error: "The data allowance on this paid package has been used. Purchase a new package to reconnect.",
-     });
-     return;
-   }
-   if (linkedCustomer && linkedCustomer.status === "expired") {
-     res.status(409).json({
-       ok: false,
-       error: "The package from this paid checkout has expired. Purchase a new package to reconnect.",
-     });
-     return;
-   }
+  if (linkedCustomer && linkedCustomer.depletion_reason === "data_limit") {
+    res.status(409).json({
+      ok: false,
+      error: "The data allowance on this paid package has been used. Purchase a new package to reconnect.",
+    });
+    return;
+  }
+  if (linkedCustomer && linkedCustomer.status === "expired") {
+    res.status(409).json({
+      ok: false,
+      error: "The package from this paid checkout has expired. Purchase a new package to reconnect.",
+    });
+    return;
+  }
   if (linkedCustomer && (!Number.isFinite(linkedExpiry) || linkedExpiry <= now)) {
     res.status(409).json({
       ok: false,

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { createContext, useCallback, useContext, useState, useRef, useEffect, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
@@ -51,6 +51,172 @@ function adminApiHeaders(): Record<string, string> {
     "Content-Type": "application/json",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
+}
+
+interface GatewaySettingsAccess {
+  requestId: string;
+  grant: string;
+}
+
+interface GatewaySettingsOtpContextValue {
+  headers: () => Promise<Record<string, string>>;
+}
+
+const GatewaySettingsOtpContext = createContext<GatewaySettingsOtpContextValue | null>(null);
+
+function useGatewaySettingsOtp(): GatewaySettingsOtpContextValue {
+  const context = useContext(GatewaySettingsOtpContext);
+  if (!context) throw new Error("Payment settings OTP context is unavailable.");
+  return context;
+}
+
+function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
+  const [access, setAccess] = useState<GatewaySettingsAccess | null>(null);
+  const [expiresAt, setExpiresAt] = useState(0);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [requestId, setRequestId] = useState("");
+  const [challengeId, setChallengeId] = useState("");
+  const [code, setCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [resendSeconds, setResendSeconds] = useState(0);
+  const [error, setError] = useState("");
+  const pendingRef = useRef<Promise<GatewaySettingsAccess> | null>(null);
+  const resolveRef = useRef<((value: GatewaySettingsAccess) => void) | null>(null);
+  const rejectRef = useRef<((reason: Error) => void) | null>(null);
+
+  const requestCode = useCallback(async (id: string) => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/whatsapp/gateway-settings/request-otp", {
+        method: "POST",
+        headers: adminApiHeaders(),
+        body: JSON.stringify({ requestId: id }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; challengeId?: string; resendAfterSeconds?: number };
+      if (!response.ok || !data.ok || !data.challengeId) {
+        throw new Error(data.error || "Could not send the WhatsApp verification code.");
+      }
+      setChallengeId(data.challengeId);
+      setCode("");
+      setResendSeconds(Math.max(1, data.resendAfterSeconds ?? 60));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const ensureAccess = useCallback((): Promise<GatewaySettingsAccess> => {
+    if (access && expiresAt > Date.now() + 5_000) return Promise.resolve(access);
+    if (pendingRef.current) return pendingRef.current;
+
+    const id = crypto.randomUUID();
+    setRequestId(id);
+    setChallengeId("");
+    setCode("");
+    setResendSeconds(0);
+    setError("");
+    setDialogOpen(true);
+    const pending = new Promise<GatewaySettingsAccess>((resolve, reject) => {
+      resolveRef.current = resolve;
+      rejectRef.current = reject;
+    });
+    pendingRef.current = pending;
+    void requestCode(id).catch(cause => {
+      setError(cause instanceof Error ? cause.message : "Could not send the WhatsApp verification code.");
+      setResendSeconds(60);
+    });
+    return pending;
+  }, [access, expiresAt, requestCode]);
+
+  useEffect(() => {
+    if (resendSeconds <= 0) return;
+    const timer = window.setTimeout(() => setResendSeconds(value => Math.max(0, value - 1)), 1000);
+    return () => window.clearTimeout(timer);
+  }, [resendSeconds]);
+
+  const headers = useCallback(async () => {
+    const authorization = await ensureAccess();
+    return {
+      ...adminApiHeaders(),
+      "X-WhatsApp-Gateway-Request-Id": authorization.requestId,
+      "X-WhatsApp-Gateway-Grant": authorization.grant,
+    };
+  }, [ensureAccess]);
+
+  const verifyCode = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!challengeId || !requestId || !/^\d{6}$/.test(code.trim())) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/auth/whatsapp/gateway-settings/verify-otp", {
+        method: "POST",
+        headers: adminApiHeaders(),
+        body: JSON.stringify({ challengeId, requestId, code: code.trim() }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; grant?: string; expiresInSeconds?: number };
+      if (!response.ok || !data.ok || !data.grant) {
+        throw new Error(data.error || "The WhatsApp verification code was not accepted.");
+      }
+      const nextAccess = { requestId, grant: data.grant };
+      setAccess(nextAccess);
+      setExpiresAt(Date.now() + (data.expiresInSeconds ?? 600) * 1000);
+      setResendSeconds(0);
+      setDialogOpen(false);
+      pendingRef.current = null;
+      resolveRef.current?.(nextAccess);
+      resolveRef.current = null;
+      rejectRef.current = null;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The WhatsApp verification code was not accepted.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const cancel = () => {
+    setDialogOpen(false);
+    pendingRef.current = null;
+    rejectRef.current?.(new Error("Payment settings verification was cancelled."));
+    resolveRef.current = null;
+    rejectRef.current = null;
+  };
+
+  return (
+    <GatewaySettingsOtpContext.Provider value={{ headers }}>
+      {children}
+      {dialogOpen && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/75 p-4" role="presentation">
+          <section role="dialog" aria-modal="true" aria-labelledby="gateway-otp-title" className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-6 text-slate-100 shadow-2xl">
+            <h2 id="gateway-otp-title" className="text-lg font-semibold text-white">Verify payment settings</h2>
+            <p className="mt-2 text-sm text-slate-400">Enter the six-digit WhatsApp code sent to the phone number already stored on this ISP or reseller account. Legacy accounts can verify their existing number here; this step cannot enroll or change a phone number. The authorization lasts ten minutes and is tied to this signed-in session. If the stored number is missing or incorrect, contact your ISP administrator or support to recover the account phone first.</p>
+            <form onSubmit={verifyCode} className="mt-5 space-y-3">
+              <label className="block text-sm text-slate-300">WhatsApp verification code
+                <input
+                  autoFocus
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  value={code}
+                  onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                  className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-base tracking-[0.25em] text-white outline-none focus:border-cyan-500"
+                />
+              </label>
+              {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
+              {!challengeId && loading && <p className="text-sm text-slate-400">Sending verification code…</p>}
+              <div className="flex flex-wrap justify-between gap-2 pt-2">
+                <button type="button" onClick={cancel} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => void requestCode(requestId).catch(cause => { setError(cause instanceof Error ? cause.message : "Could not resend the code."); setResendSeconds(60); })} disabled={loading || !requestId || resendSeconds > 0} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300 disabled:opacity-50">{resendSeconds > 0 ? `Resend in ${resendSeconds}s` : "Resend code"}</button>
+                  <button type="submit" disabled={loading || code.trim().length !== 6 || !challengeId} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{loading ? "Checking…" : "Verify"}</button>
+                </div>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+    </GatewaySettingsOtpContext.Provider>
+  );
 }
 
 function Toggle({ on, onChange, label = "Toggle setting" }: { on: boolean; onChange: (v: boolean) => void; label?: string }) {
@@ -443,6 +609,7 @@ function AdminPaymentTestCard({ currency }: { currency: string }) {
 }
 
 function ResellerPaymentTestCard() {
+  const gatewayOtp = useGatewaySettingsOtp();
   type Route = {
     id: number;
     gatewayType: string;
@@ -467,7 +634,7 @@ function ResellerPaymentTestCard() {
     const load = async () => {
       try {
         const routesResponse = await fetch("/api/reseller/payment-gateways", {
-          headers: adminApiHeaders(),
+          headers: await gatewayOtp.headers(),
           cache: "no-store",
         });
         const routeData = await routesResponse.json() as { ok?: boolean; routes?: Route[]; error?: string };
@@ -549,7 +716,7 @@ function ResellerPaymentTestCard() {
     try {
       const response = await fetch(`/api/reseller/payment-gateways/${selectedRoute.id}/test`, {
         method: "POST",
-        headers: adminApiHeaders(),
+        headers: await gatewayOtp.headers(),
       });
       const data = await response.json() as {
         ok?: boolean;
@@ -731,19 +898,30 @@ function ResellerPaymentTestCard() {
   );
 }
 function AdminPaymentGatewayCard() {
+  const gatewayOtp = useGatewaySettingsOtp();
   const [paymentGateway, setPaymentGateway] = useState("mpesa_paybill");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch(`/api/settings/mpesa?adminId=${ADMIN_ID}`)
-      .then(response => response.json())
-      .then((data: { settings?: { paymentGateway?: string } }) => {
+    let active = true;
+    const load = async () => {
+      const response = await fetch(`/api/admin/payment-gateway?adminId=${ADMIN_ID}`, {
+        headers: await gatewayOtp.headers(),
+        cache: "no-store",
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; settings?: { paymentGateway?: string } };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not load your payment gateway settings.");
+      if (active) {
         setPaymentGateway(ADMIN_PAYMENT_GATEWAY_OPTIONS.some(option => option.id === data.settings?.paymentGateway) ? data.settings?.paymentGateway || "mpesa_paybill" : "mpesa_paybill");
-      })
-      .catch(() => setError("Could not load your payment gateway settings."));
-  }, []);
+      }
+    };
+    void load().catch(cause => {
+      if (active) setError(cause instanceof Error ? cause.message : "Could not load your payment gateway settings.");
+    });
+    return () => { active = false; };
+  }, [gatewayOtp.headers]);
 
   const savePaymentGateway = async () => {
     setSaving(true);
@@ -752,7 +930,7 @@ function AdminPaymentGatewayCard() {
     try {
       const response = await fetch("/api/admin/payment-gateway", {
         method: "POST",
-        headers: adminApiHeaders(),
+        headers: await gatewayOtp.headers(),
         body: JSON.stringify({ adminId: ADMIN_ID, paymentGateway }),
       });
       const data = await response.json() as { ok?: boolean; error?: string };
@@ -795,6 +973,7 @@ function AdminPaymentGatewayCard() {
 }
 
 function ResellerPaymentGatewayCard() {
+  const gatewayOtp = useGatewaySettingsOtp();
   type Route = {
     id: number;
     gatewayType: string;
@@ -830,7 +1009,10 @@ function ResellerPaymentGatewayCard() {
   const load = async () => {
     setLoading(true);
     try {
-      const response = await fetch("/api/reseller/payment-gateways", { headers: adminApiHeaders(), cache: "no-store" });
+      const response = await fetch("/api/reseller/payment-gateways/settings", {
+        headers: await gatewayOtp.headers(),
+        cache: "no-store",
+      });
       const data = await response.json() as { ok?: boolean; routes?: Route[]; scopes?: ScopeData; error?: string };
       if (!response.ok || !data.ok) throw new Error(data.error || "Could not load reseller payment gateways.");
       const nextRoutes = data.routes || [];
@@ -888,7 +1070,7 @@ function ResellerPaymentGatewayCard() {
     try {
       const response = await fetch("/api/reseller/payment-gateways", {
         method: "PUT",
-        headers: adminApiHeaders(),
+        headers: await gatewayOtp.headers(),
         body: JSON.stringify({
           gatewayType: form.gatewayType,
           scopeType: form.scopeType,
@@ -915,7 +1097,10 @@ function ResellerPaymentGatewayCard() {
     setSaving(true);
     setError("");
     try {
-      const response = await fetch(`/api/reseller/payment-gateways/${selectedRoute}`, { method: "DELETE", headers: adminApiHeaders() });
+      const response = await fetch(`/api/reseller/payment-gateways/${selectedRoute}`, {
+        method: "DELETE",
+        headers: await gatewayOtp.headers(),
+      });
       const data = await response.json() as { ok?: boolean; error?: string };
       if (!response.ok || !data.ok) throw new Error(data.error || "Could not remove the reseller payment gateway.");
       newRoute();
@@ -2423,6 +2608,7 @@ const ROUTING_CONFIGURABLE_GATEWAYS = new Set([
 ]);
 
 function PaymentGatewaysTab() {
+  const gatewayOtp = useGatewaySettingsOtp();
   const isReseller = getAdminRole() === "reseller";
   if (isReseller) {
     return (
@@ -2456,40 +2642,57 @@ function PaymentGatewaysTab() {
   const [routingError, setRoutingError] = useState("");
 
   useEffect(() => {
-    fetch(`/api/admin/mpesa-gateway-config?adminId=${ADMIN_ID}`)
-      .then(response => response.ok ? response.json() : null)
-      .then((data: { configs?: Record<string, Record<string, string>> } | null) => {
-        const configs = data?.configs;
-        if (!configs) return;
-        setFields(prev => ({
-          ...prev,
-          ...Object.fromEntries(
-            Object.entries(configs).map(([gatewayId, config]) => [
-              gatewayId,
-              { ...(prev[gatewayId] || {}), ...config },
-            ]),
-          ),
-        }));
-      })
-      .catch(() => {});
-  }, []);
+    let active = true;
+    const load = async () => {
+      const response = await fetch(`/api/admin/mpesa-gateway-config?adminId=${ADMIN_ID}`, {
+        headers: await gatewayOtp.headers(),
+        cache: "no-store",
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; configs?: Record<string, Record<string, string>> };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not load payment gateway settings.");
+      const configs = data.configs;
+      if (!active || !configs) return;
+      setFields(prev => ({
+        ...prev,
+        ...Object.fromEntries(
+          Object.entries(configs).map(([gatewayId, config]) => [
+            gatewayId,
+            { ...(prev[gatewayId] || {}), ...config },
+          ]),
+        ),
+      }));
+    };
+    void load().catch(cause => {
+      if (active) setSaveError(cause instanceof Error ? cause.message : "Could not load payment gateway settings.");
+    });
+    return () => { active = false; };
+  }, [gatewayOtp.headers]);
 
   useEffect(() => {
-    fetch(`/api/admin/payment-routing?adminId=${ADMIN_ID}`, { headers: adminApiHeaders() })
-      .then(response => response.ok ? response.json() : null)
-      .then((data: {
+    let active = true;
+    const load = async () => {
+      const response = await fetch(`/api/admin/payment-routing?adminId=${ADMIN_ID}`, {
+        headers: await gatewayOtp.headers(),
+        cache: "no-store",
+      });
+      const data = await response.json() as {
         mode?: "shared" | "separate";
         services?: Record<"hotspot" | "pppoe", { gatewayId?: string; config?: Record<string, string> }>;
-      } | null) => {
-        if (!data) return;
-        setRoutingMode(data.mode === "separate" ? "separate" : "shared");
-        setRoutingServices(prev => ({
-          hotspot: { gatewayId: data.services?.hotspot?.gatewayId || prev.hotspot.gatewayId, config: data.services?.hotspot?.config || prev.hotspot.config },
-          pppoe: { gatewayId: data.services?.pppoe?.gatewayId || prev.pppoe.gatewayId, config: data.services?.pppoe?.config || prev.pppoe.config },
-        }));
-      })
-      .catch(() => {});
-  }, []);
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || "Could not load payment routing settings.");
+      if (!active) return;
+      setRoutingMode(data.mode === "separate" ? "separate" : "shared");
+      setRoutingServices(prev => ({
+        hotspot: { gatewayId: data.services?.hotspot?.gatewayId || prev.hotspot.gatewayId, config: data.services?.hotspot?.config || prev.hotspot.config },
+        pppoe: { gatewayId: data.services?.pppoe?.gatewayId || prev.pppoe.gatewayId, config: data.services?.pppoe?.config || prev.pppoe.config },
+      }));
+    };
+    void load().catch(cause => {
+      if (active) setRoutingError(cause instanceof Error ? cause.message : "Could not load payment routing settings.");
+    });
+    return () => { active = false; };
+  }, [gatewayOtp.headers]);
 
   const updateField = (gwId: string, fieldKey: string, value: string) => {
     setFields(prev => {
@@ -2511,7 +2714,7 @@ function PaymentGatewaysTab() {
       if (gwId === "bank_stk_push" || gwId === "mpesa_till_push" || gwId === "mpesa_paybill" || gwId === "bank_transfer") {
         const response = await fetch("/api/admin/mpesa-gateway-config", {
           method: "POST",
-          headers: adminApiHeaders(),
+          headers: await gatewayOtp.headers(),
           body: JSON.stringify({ adminId: ADMIN_ID, gatewayId: gwId, config: fields[gwId] || {} }),
         });
         const data = await response.json() as { ok?: boolean; error?: string };
@@ -2544,7 +2747,7 @@ function PaymentGatewaysTab() {
     try {
       const response = await fetch("/api/admin/payment-routing", {
         method: "POST",
-        headers: adminApiHeaders(),
+        headers: await gatewayOtp.headers(),
         body: JSON.stringify({
           adminId: ADMIN_ID,
           mode: routingMode,
@@ -3048,6 +3251,7 @@ export default function AdminSettings() {
   };
 
   return (
+    <GatewaySettingsOtpProvider>
     <AdminLayout>
       <div className="settings-layout" style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
 
@@ -3107,5 +3311,6 @@ export default function AdminSettings() {
         </div>
       </div>
     </AdminLayout>
+    </GatewaySettingsOtpProvider>
   );
 }

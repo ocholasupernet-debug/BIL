@@ -11,8 +11,16 @@ import {
   sbSelectStrict,
   sbUpsertStrict,
   sbUpdate,
+  supabaseServiceRoleConfigured,
 } from "../../lib/supabase-client.js";
+import { generateToken } from "../../lib/api-auth.js";
 import { logger } from "../../lib/logger.js";
+import { RESERVED_SUBDOMAINS, TENANT_BASE_DOMAIN } from "../../lib/tenant-host.js";
+import {
+  decryptWhatsAppSecret,
+  encryptWhatsAppSecret,
+  type EncryptedWhatsAppSecret,
+} from "./whatsapp-crypto.js";
 
 export type WhatsAppFeature =
   | "login"
@@ -23,6 +31,7 @@ export type WhatsAppFeature =
   | "ispNotifications"
   | "resellerNotifications"
   | "customerNotifications"
+  | "securityNotifications"
   | "selfService";
 
 export interface WhatsAppSettings {
@@ -41,6 +50,10 @@ export interface WhatsAppSettings {
     expiry: string;
     ispSubscription: string;
     reseller: string;
+    welcome: string;
+    accountStatus: string;
+    security: string;
+    suspiciousSignIn: string;
     test: string;
   };
 }
@@ -49,10 +62,28 @@ interface StoredSettingsRow {
   config: unknown;
 }
 
+interface StoredWhatsAppCredentialsRow {
+  id: string;
+  access_token: EncryptedWhatsAppSecret | null;
+  webhook_verify_token: EncryptedWhatsAppSecret | null;
+  app_secret: EncryptedWhatsAppSecret | null;
+}
+
+export interface WhatsAppServerCredentials {
+  accessToken: string;
+  webhookVerifyToken: string;
+  appSecret: string;
+}
+
+type WhatsAppCredentialSource = "super-admin" | "environment" | "missing";
+
 export interface WhatsAppSecretsStatus {
   accessTokenConfigured: boolean;
   webhookVerifyTokenConfigured: boolean;
   appSecretConfigured: boolean;
+  accessTokenSource: WhatsAppCredentialSource;
+  webhookVerifyTokenSource: WhatsAppCredentialSource;
+  appSecretSource: WhatsAppCredentialSource;
 }
 
 export interface WhatsAppMessageResult {
@@ -80,6 +111,7 @@ const FEATURE_KEYS: WhatsAppFeature[] = [
   "ispNotifications",
   "resellerNotifications",
   "customerNotifications",
+  "securityNotifications",
   "selfService",
 ];
 
@@ -94,6 +126,7 @@ const DEFAULT_SETTINGS: WhatsAppSettings = {
     ispNotifications: false,
     resellerNotifications: false,
     customerNotifications: false,
+    securityNotifications: false,
     selfService: false,
   },
   businessAccountId: "",
@@ -109,6 +142,10 @@ const DEFAULT_SETTINGS: WhatsAppSettings = {
     expiry: "",
     ispSubscription: "",
     reseller: "",
+    welcome: "",
+    accountStatus: "",
+    security: "",
+    suspiciousSignIn: "",
     test: "",
   },
 };
@@ -151,6 +188,10 @@ function cleanSettings(value: unknown): WhatsAppSettings {
       expiry: cleanString(templates.expiry, 100),
       ispSubscription: cleanString(templates.ispSubscription, 100),
       reseller: cleanString(templates.reseller, 100),
+      welcome: cleanString(templates.welcome, 100),
+      accountStatus: cleanString(templates.accountStatus, 100),
+      security: cleanString(templates.security, 100),
+      suspiciousSignIn: cleanString(templates.suspiciousSignIn, 100),
       test: cleanString(templates.test, 100),
     },
   };
@@ -171,6 +212,10 @@ function environmentSettings(): Partial<WhatsAppSettings> {
       expiry: process.env.WHATSAPP_EXPIRY_TEMPLATE ?? "",
       ispSubscription: process.env.WHATSAPP_ISP_SUBSCRIPTION_TEMPLATE ?? "",
       reseller: process.env.WHATSAPP_RESELLER_TEMPLATE ?? "",
+      welcome: process.env.WHATSAPP_WELCOME_TEMPLATE ?? "",
+      accountStatus: process.env.WHATSAPP_ACCOUNT_STATUS_TEMPLATE ?? "",
+      security: process.env.WHATSAPP_SECURITY_TEMPLATE ?? "",
+      suspiciousSignIn: process.env.WHATSAPP_SUSPICIOUS_SIGN_IN_TEMPLATE ?? "",
       test: process.env.WHATSAPP_TEST_TEMPLATE ?? "",
     },
   };
@@ -214,12 +259,121 @@ export async function getWhatsAppSettings(): Promise<WhatsAppSettings> {
   return overlayEnvironment(stored, hasStoredConfig);
 }
 
-export function getWhatsAppSecretsStatus(): WhatsAppSecretsStatus {
+async function storedWhatsAppCredentials(): Promise<StoredWhatsAppCredentialsRow | null> {
+  const rows = await sbSelectStrict<StoredWhatsAppCredentialsRow>(
+    "platform_whatsapp_credentials",
+    `id=eq.${SETTINGS_ID}&select=id,access_token,webhook_verify_token,app_secret&limit=1`,
+  );
+  return rows[0] ?? null;
+}
+
+function credentialSource(
+  stored: EncryptedWhatsAppSecret | null | undefined,
+  environmentValue: string | undefined,
+): WhatsAppCredentialSource {
+  if (stored?.ciphertext) return "super-admin";
+  if (environmentValue?.trim()) return "environment";
+  return "missing";
+}
+
+export async function getWhatsAppSecretsStatus(): Promise<WhatsAppSecretsStatus> {
+  const stored = await storedWhatsAppCredentials();
+  const accessTokenSource = credentialSource(stored?.access_token, process.env.WHATSAPP_ACCESS_TOKEN);
+  const webhookVerifyTokenSource = credentialSource(
+    stored?.webhook_verify_token,
+    process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+  );
+  const appSecretSource = credentialSource(stored?.app_secret, process.env.WHATSAPP_APP_SECRET);
   return {
-    accessTokenConfigured: !!process.env.WHATSAPP_ACCESS_TOKEN?.trim(),
-    webhookVerifyTokenConfigured: !!process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN?.trim(),
-    appSecretConfigured: !!process.env.WHATSAPP_APP_SECRET?.trim(),
+    accessTokenConfigured: accessTokenSource !== "missing",
+    webhookVerifyTokenConfigured: webhookVerifyTokenSource !== "missing",
+    appSecretConfigured: appSecretSource !== "missing",
+    accessTokenSource,
+    webhookVerifyTokenSource,
+    appSecretSource,
   };
+}
+
+function decryptStoredCredential(
+  encrypted: EncryptedWhatsAppSecret | null | undefined,
+  environmentValue: string | undefined,
+): string {
+  if (encrypted?.ciphertext) {
+    try {
+      return decryptWhatsAppSecret(encrypted);
+    } catch {
+      throw new WhatsAppProviderError(
+        "Stored WhatsApp credentials could not be decrypted. Re-enter them in Super Admin settings.",
+      );
+    }
+  }
+  return environmentValue?.trim() ?? "";
+}
+
+export async function getWhatsAppServerCredentials(): Promise<WhatsAppServerCredentials> {
+  const stored = await storedWhatsAppCredentials();
+  return {
+    accessToken: decryptStoredCredential(stored?.access_token, process.env.WHATSAPP_ACCESS_TOKEN),
+    webhookVerifyToken: decryptStoredCredential(
+      stored?.webhook_verify_token,
+      process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN,
+    ),
+    appSecret: decryptStoredCredential(stored?.app_secret, process.env.WHATSAPP_APP_SECRET),
+  };
+}
+
+export async function saveWhatsAppCredentials(input: unknown): Promise<WhatsAppSecretsStatus> {
+  const body = input && typeof input === "object" && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : {};
+  const values = {
+    access_token: typeof body.accessToken === "string" ? body.accessToken.trim() : "",
+    webhook_verify_token: typeof body.webhookVerifyToken === "string" ? body.webhookVerifyToken.trim() : "",
+    app_secret: typeof body.appSecret === "string" ? body.appSecret.trim() : "",
+  };
+  if (Object.values(values).every(value => !value)) {
+    throw new Error("Enter at least one WhatsApp credential to save.");
+  }
+  if (values.access_token.length > 4096 ||
+      values.webhook_verify_token.length > 1024 ||
+      values.app_secret.length > 1024) {
+    throw new Error("One or more WhatsApp credentials exceed the allowed length.");
+  }
+
+  const current = await storedWhatsAppCredentials();
+  await sbUpsertStrict<StoredWhatsAppCredentialsRow>(
+    "platform_whatsapp_credentials",
+    "id",
+    {
+      id: SETTINGS_ID,
+      access_token: values.access_token
+        ? encryptWhatsAppSecret(values.access_token)
+        : current?.access_token ?? null,
+      webhook_verify_token: values.webhook_verify_token
+        ? encryptWhatsAppSecret(values.webhook_verify_token)
+        : current?.webhook_verify_token ?? null,
+      app_secret: values.app_secret
+        ? encryptWhatsAppSecret(values.app_secret)
+        : current?.app_secret ?? null,
+      updated_at: new Date().toISOString(),
+    },
+  );
+  return getWhatsAppSecretsStatus();
+}
+
+export async function clearWhatsAppCredentials(): Promise<WhatsAppSecretsStatus> {
+  await sbUpsertStrict<StoredWhatsAppCredentialsRow>(
+    "platform_whatsapp_credentials",
+    "id",
+    {
+      id: SETTINGS_ID,
+      access_token: null,
+      webhook_verify_token: null,
+      app_secret: null,
+      updated_at: new Date().toISOString(),
+    },
+  );
+  return getWhatsAppSecretsStatus();
 }
 
 export async function saveWhatsAppSettings(input: unknown): Promise<WhatsAppSettings> {
@@ -260,11 +414,11 @@ export function isWhatsAppFeatureEnabled(
   return isWhatsAppEnabled(settings) && settings.features[feature];
 }
 
-function requireProviderConfiguration(settings: WhatsAppSettings): {
+async function requireProviderConfiguration(settings: WhatsAppSettings): Promise<{
   accessToken: string;
   phoneNumberId: string;
-} {
-  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN?.trim() ?? "";
+}> {
+  const { accessToken } = await getWhatsAppServerCredentials();
   if (!isWhatsAppEnabled(settings)) throw new WhatsAppProviderError("WhatsApp is disabled.");
   if (!accessToken || !settings.phoneNumberId) {
     throw new WhatsAppProviderError("WhatsApp Cloud API credentials are not configured.");
@@ -277,7 +431,7 @@ async function graphRequest(
   options: { method?: "GET" | "POST"; body?: unknown } = {},
 ): Promise<Record<string, unknown>> {
   const settings = await getWhatsAppSettings();
-  const { accessToken } = requireProviderConfiguration(settings);
+  const { accessToken } = await requireProviderConfiguration(settings);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12_000);
   try {
@@ -385,7 +539,8 @@ export async function sendWhatsAppText(
   text: string,
 ): Promise<WhatsAppMessageResult> {
   const settings = await getWhatsAppSettings();
-  const { phoneNumberId } = requireProviderConfiguration(settings);
+  const phoneNumberId = settings.phoneNumberId;
+  if (!phoneNumberId) throw new WhatsAppProviderError("WhatsApp phone number ID is not configured.");
   const result = await graphRequest(`${encodeURIComponent(phoneNumberId)}/messages`, {
     method: "POST",
     body: {
@@ -413,7 +568,8 @@ export async function sendWhatsAppTemplate(
   language?: string,
 ): Promise<WhatsAppMessageResult> {
   const settings = await getWhatsAppSettings();
-  const { phoneNumberId } = requireProviderConfiguration(settings);
+  const phoneNumberId = settings.phoneNumberId;
+  if (!phoneNumberId) throw new WhatsAppProviderError("WhatsApp phone number ID is not configured.");
   if (!/^[a-z0-9_]{1,100}$/i.test(templateName)) {
     throw new WhatsAppProviderError("A valid approved WhatsApp template name is required.");
   }
@@ -465,7 +621,7 @@ export async function checkWhatsAppConnection(): Promise<{
   error?: string;
 }> {
   const settings = await getWhatsAppSettings();
-  const secrets = getWhatsAppSecretsStatus();
+  const secrets = await getWhatsAppSecretsStatus();
   if (!isWhatsAppEnabled(settings) || !settings.phoneNumberId || !secrets.accessTokenConfigured) {
     return { status: "NOT CONFIGURED" };
   }
@@ -496,15 +652,95 @@ export async function enqueueWhatsAppExpiryNotifications(): Promise<void> {
   await sbRpc("enqueue_whatsapp_expiry_notifications", {});
 }
 
+export type WhatsAppLoginAccountType = "admin" | "customer";
+
+export interface WhatsAppSignInRequestContext {
+  ipAddress: string | null;
+  userAgent: string | null;
+}
+
+function sanitizeSignInContextValue(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const sanitized = value
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+  return sanitized || null;
+}
+
+export function sanitizeWhatsAppSignInContext(
+  ipAddress: unknown,
+  userAgent: unknown,
+): WhatsAppSignInRequestContext {
+  return {
+    ipAddress: sanitizeSignInContextValue(ipAddress, 64),
+    userAgent: sanitizeSignInContextValue(userAgent, 180),
+  };
+}
+
+export async function recordWhatsAppSignInFailure(
+  accountType: WhatsAppLoginAccountType,
+  accountId: number,
+  ipAddress: unknown,
+  userAgent: unknown,
+): Promise<boolean> {
+  const context = sanitizeWhatsAppSignInContext(ipAddress, userAgent);
+  const result: unknown = await sbRpc<unknown>("record_whatsapp_login_failure", {
+    p_account_type: accountType,
+    p_account_id: accountId,
+    p_ip_address: context.ipAddress,
+    p_user_agent: context.userAgent,
+  });
+  const first = Array.isArray(result) ? result[0] : result;
+  return first === true ||
+    (first !== null && typeof first === "object" &&
+      (first as Record<string, unknown>).alert_queued === true);
+}
+
+let lastLoginAttemptPruneAt = 0;
+async function pruneWhatsAppLoginAttempts(): Promise<void> {
+  if (!supabaseServiceRoleConfigured || Date.now() - lastLoginAttemptPruneAt < 5 * 60 * 1000) return;
+  lastLoginAttemptPruneAt = Date.now();
+  await sbRpc("prune_whatsapp_login_attempts", {}).catch(error => {
+    logger.warn({ err: error }, "[whatsapp] sign-in attempt cleanup failed");
+  });
+}
+
+export function createWhatsAppWelcomeSetupUrl(
+  adminId: number,
+  subdomainValue: unknown,
+  mustChangePassword: boolean,
+): string {
+  const subdomain = cleanString(subdomainValue, 63).toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(subdomain) ||
+      RESERVED_SUBDOMAINS.has(subdomain) ||
+      !TENANT_BASE_DOMAIN) {
+    throw new WhatsAppProviderError("A secure account setup link could not be generated.");
+  }
+  const path = mustChangePassword ? "/admin/set-password" : "/admin/login";
+  const url = new URL(path, `https://${subdomain}.${TENANT_BASE_DOMAIN}`);
+  if (mustChangePassword) {
+    url.hash = new URLSearchParams({
+      setupToken: generateToken("p", String(adminId)),
+    }).toString();
+  }
+  return url.toString();
+}
+
 export async function processWhatsAppOutboxBatch(limit = 10): Promise<number> {
+  await pruneWhatsAppLoginAttempts();
   const settings = await getWhatsAppSettings();
   if (!isWhatsAppEnabled(settings)) return 0;
   const customerNotifications = isWhatsAppFeatureEnabled(settings, "customerNotifications");
+  const securityNotifications = isWhatsAppFeatureEnabled(settings, "securityNotifications");
   const eventTypes = [
     ...(customerNotifications && isWhatsAppFeatureEnabled(settings, "paymentNotifications") ? ["payment"] : []),
     ...(customerNotifications && isWhatsAppFeatureEnabled(settings, "packageNotifications") ? ["renewal", "expiry"] : []),
-    ...(isWhatsAppFeatureEnabled(settings, "ispNotifications") ? ["isp_subscription"] : []),
-    ...(isWhatsAppFeatureEnabled(settings, "resellerNotifications") ? ["reseller_subscription"] : []),
+    ...(customerNotifications ? ["account_activated", "account_suspended", "account_reactivated"] : []),
+    ...(securityNotifications ? ["password_changed", "suspicious_sign_in"] : []),
+    ...(isWhatsAppFeatureEnabled(settings, "ispNotifications") ? ["isp_subscription", "isp_welcome"] : []),
+    ...(isWhatsAppFeatureEnabled(settings, "resellerNotifications") ? ["reseller_subscription", "reseller_welcome"] : []),
   ];
   if (eventTypes.length === 0) return 0;
   const claimed = await sbRpc<{
@@ -571,9 +807,23 @@ export async function processWhatsAppOutboxBatch(limit = 10): Promise<number> {
               ? settings.templates.reseller
               : item.event_type === "isp_subscription"
                 ? settings.templates.ispSubscription
+                : item.event_type === "isp_welcome" || item.event_type === "reseller_welcome"
+                  ? settings.templates.welcome
+                  : item.event_type === "account_activated" ||
+                      item.event_type === "account_suspended" ||
+                      item.event_type === "account_reactivated"
+                    ? settings.templates.accountStatus
+                    : item.event_type === "password_changed"
+                      ? settings.templates.security
+                      : item.event_type === "suspicious_sign_in"
+                        ? settings.templates.suspiciousSignIn
                 : "";
       if (!templateName) throw new WhatsAppProviderError("The required approved notification template is not configured.");
       const payload = item.payload ?? {};
+      const recipientName = cleanString(
+        customer?.fullname ?? customer?.name ?? admin?.fullname ?? admin?.name ?? admin?.company_name,
+        100,
+      );
       const params = item.event_type === "payment"
         ? [
             String(payload.amount ?? ""),
@@ -587,6 +837,36 @@ export async function processWhatsAppOutboxBatch(limit = 10): Promise<number> {
             String(payload.days_remaining ?? ""),
             String(payload.expires_at ?? ""),
           ]
+          : item.event_type === "isp_welcome" || item.event_type === "reseller_welcome"
+            ? [
+                recipientName,
+                createWhatsAppWelcomeSetupUrl(
+                  Number(item.admin_id),
+                  admin?.subdomain,
+                  admin?.must_change_password === true || admin?.must_change_password === "true",
+                ),
+              ]
+            : item.event_type === "account_activated" ||
+                item.event_type === "account_suspended" ||
+                item.event_type === "account_reactivated"
+              ? [
+                  recipientName,
+                  String(payload.previous_status ?? ""),
+                  String(payload.status ?? item.event_type.replace("account_", "")),
+                  planName,
+                ]
+              : item.event_type === "password_changed"
+                ? [
+                    recipientName,
+                    String(payload.changed_at ?? new Date().toISOString()),
+                  ]
+                : item.event_type === "suspicious_sign_in"
+                  ? [
+                      recipientName,
+                      String(payload.attempted_at ?? new Date().toISOString()),
+                      String(payload.ip_address ?? "Unavailable"),
+                      String(payload.user_agent ?? "Unavailable"),
+                    ]
           : [
             String(payload.billing_period ?? ""),
             String(payload.amount ?? ""),
@@ -624,17 +904,39 @@ export async function processWhatsAppOutboxBatch(limit = 10): Promise<number> {
   return claimed.length;
 }
 
-export async function recordWhatsAppWebhookMessage(
+export async function claimWhatsAppWebhookEvent(
   providerMessageId: string,
   senderPhone: string,
   eventType: string,
-): Promise<boolean> {
-  const result = await sbRpc<{ is_new: boolean }>("record_whatsapp_webhook_message", {
-    p_provider_message_id: providerMessageId,
+): Promise<{ shouldProcess: boolean; attempts: number; processingStatus: string | null }> {
+  const result = await sbRpc<{
+    should_process: boolean;
+    attempts: number;
+    processing_status: string;
+  }>("claim_whatsapp_webhook_event", {
+    p_provider_event_id: providerMessageId,
     p_sender_phone: senderPhone,
     p_event_type: eventType,
   });
-  return result[0]?.is_new === true;
+  return {
+    shouldProcess: result[0]?.should_process === true,
+    attempts: Number(result[0]?.attempts ?? 0),
+    processingStatus: result[0]?.processing_status ?? null,
+  };
+}
+
+export async function completeWhatsAppWebhookEvent(providerEventId: string): Promise<void> {
+  await sbRpc("complete_whatsapp_webhook_event", { p_provider_event_id: providerEventId });
+}
+
+export async function failWhatsAppWebhookEvent(
+  providerEventId: string,
+  failureCode: string,
+): Promise<void> {
+  await sbRpc("fail_whatsapp_webhook_event", {
+    p_provider_event_id: providerEventId,
+    p_failure_code: failureCode,
+  });
 }
 
 export async function createWhatsAppActionToken(

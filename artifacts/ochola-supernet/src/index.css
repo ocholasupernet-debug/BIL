@@ -1362,10 +1362,10 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
 .dashboard-kpi-grid,
 .dashboard-stat-grid {
   display: grid;
-  gap: 18px;
+  gap: 14px;
 }
 .dashboard-kpi-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.dashboard-stat-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.dashboard-stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .dashboard-kpi,
 .dashboard-stat,
 .gateway-strip,
@@ -1378,14 +1378,14 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 13px;
+  min-height: 88px;
+  padding: 13px 14px;
   border-radius: 12px;
   background: var(--isp-card);
-  border-top: 2px solid var(--kpi-tone, var(--isp-accent));
-  transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 .dashboard-kpi:hover {
-  transform: translateY(-2px);
+  border-color: var(--dashboard-accent-border);
   box-shadow: var(--shadow-md);
 }
 .dashboard-kpi--accent { --kpi-tone: var(--dashboard-accent); }
@@ -1418,13 +1418,18 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   white-space: nowrap;
 }
 .dashboard-kpi-label {
-  margin-top: 5px;
   overflow: hidden;
   color: var(--isp-text-muted);
   font-size: 0.8rem;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.dashboard-kpi-description {
+  margin-top: 4px;
+  color: var(--isp-text-sub);
+  font-size: 0.7rem;
+  line-height: 1.25;
 }
 .dashboard-stat {
   display: flex;
@@ -2118,6 +2123,122 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   .dashboard-amount-toggle { padding: 4px 6px; font-size: 0.58rem; }
   .insight-content { align-items: flex-start; flex-direction: column; }
   .donut-chart { align-self: center; }
+}
+
+.platform-billing-banner {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) minmax(280px, 410px);
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 15px 17px;
+  color: var(--isp-text);
+  background: linear-gradient(110deg, color-mix(in srgb, #d99026 10%, var(--isp-card)), var(--isp-card));
+  border: 1px solid color-mix(in srgb, #d99026 35%, var(--isp-border));
+  border-left: 4px solid #c98522;
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+.platform-billing-banner--overdue {
+  background: linear-gradient(110deg, color-mix(in srgb, #cb5a4a 10%, var(--isp-card)), var(--isp-card));
+  border-color: color-mix(in srgb, #cb5a4a 35%, var(--isp-border));
+  border-left-color: #cb5a4a;
+}
+.platform-billing-banner__icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  color: #9a6513;
+  background: color-mix(in srgb, #d99026 13%, var(--isp-card));
+  border: 1px solid color-mix(in srgb, #d99026 28%, var(--isp-border));
+  border-radius: 11px;
+}
+.platform-billing-banner--overdue .platform-billing-banner__icon {
+  color: #a63d32;
+  background: color-mix(in srgb, #cb5a4a 13%, var(--isp-card));
+  border-color: color-mix(in srgb, #cb5a4a 28%, var(--isp-border));
+}
+.platform-billing-banner__copy { min-width: 0; }
+.platform-billing-banner__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.platform-billing-banner__heading > div { display: flex; flex-direction: column; gap: 3px; }
+.platform-billing-banner__eyebrow {
+  color: var(--isp-text-sub);
+  font-size: 0.66rem;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.platform-billing-banner__heading strong { color: var(--isp-text); font-size: 0.9rem; }
+.platform-billing-banner__badge {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  color: #80530d;
+  background: color-mix(in srgb, #d99026 14%, var(--isp-card));
+  border: 1px solid color-mix(in srgb, #d99026 26%, var(--isp-border));
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.platform-billing-banner__badge--overdue {
+  color: #9c3329;
+  background: color-mix(in srgb, #cb5a4a 13%, var(--isp-card));
+  border-color: color-mix(in srgb, #cb5a4a 28%, var(--isp-border));
+}
+.platform-billing-banner__summary { margin: 6px 0 2px; color: var(--isp-text-muted); font-size: 0.8rem; }
+.platform-billing-banner__summary strong { color: var(--isp-text); }
+.platform-billing-banner__note,
+.platform-billing-banner__message { display: block; margin-top: 4px; color: var(--isp-text-sub); font-size: 0.7rem; }
+.platform-billing-banner__message--success { color: var(--isp-green); }
+.platform-billing-banner__actions { display: flex; align-items: center; gap: 8px; }
+.platform-billing-banner__actions input {
+  flex: 1;
+  min-width: 120px;
+  padding: 9px 10px;
+  color: var(--isp-text);
+  background: var(--isp-inner-card);
+  border: 1px solid var(--isp-border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.78rem;
+}
+.platform-billing-banner__actions input:focus-visible,
+.platform-billing-banner__actions button:focus-visible {
+  outline: 2px solid var(--isp-accent);
+  outline-offset: 2px;
+}
+.platform-billing-banner__actions button {
+  flex: 0 0 auto;
+  padding: 10px 13px;
+  color: #34260d;
+  background: #e1a83c;
+  border: 1px solid #d29a31;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 750;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.platform-billing-banner__actions button:hover:not(:disabled) { background: #e8b64f; }
+.platform-billing-banner__actions button:disabled { opacity: 0.58; cursor: not-allowed; }
+@media (max-width: 900px) {
+  .platform-billing-banner { grid-template-columns: 42px minmax(0, 1fr); }
+  .platform-billing-banner__actions { grid-column: 2; }
+}
+@media (max-width: 600px) {
+  .platform-billing-banner { grid-template-columns: 34px minmax(0, 1fr); gap: 10px; padding: 12px; }
+  .platform-billing-banner__icon { width: 34px; height: 34px; border-radius: 9px; }
+  .platform-billing-banner__heading { align-items: flex-start; flex-direction: column; gap: 7px; }
+  .platform-billing-banner__actions { grid-column: 1 / -1; }
+  .platform-billing-banner__actions input { min-width: 0; }
+  .platform-billing-banner__actions button { padding-inline: 10px; }
 }
 
 /* Readable utility scale: keep normal interface text out of the 10–12px range. */

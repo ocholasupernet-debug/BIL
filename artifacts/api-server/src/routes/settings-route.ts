@@ -23,6 +23,7 @@ import { sbRpc, sbSelect, sbUpdate } from "../lib/supabase-client.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { authenticatedAccount, extractToken, validateToken } from "../lib/api-auth.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
+import { hasWhatsAppGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import {
   CHECKOUT_READY_GATEWAY_IDS,
   PAYMENT_GATEWAY_IDS,
@@ -89,6 +90,21 @@ async function requireAdminPaymentChange(req: Request, res: Response, adminId: n
   if (auth.uid !== "superadmin" && Number(auth.uid) !== adminId && !isConnectedReseller) {
     res.status(403).json({ ok: false, error: "You can only change payment routing for your own ISP." });
     return false;
+  }
+  if (auth.uid !== "superadmin") {
+    const validGrant = await hasWhatsAppGatewaySettingsGrant({
+      accountId: Number(auth.uid),
+      requestId: String(req.headers["x-whatsapp-gateway-request-id"] ?? ""),
+      grant: String(req.headers["x-whatsapp-gateway-grant"] ?? ""),
+      sessionToken: extractToken(req),
+    });
+    if (!validGrant) {
+      res.status(403).json({
+        ok: false,
+        error: "Verify the WhatsApp code to open or update payment gateway settings.",
+      });
+      return false;
+    }
   }
   return true;
 }
@@ -381,6 +397,20 @@ router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void>
 });
 
 /* ── ISP Admin payment gateway preference ── */
+router.get("/admin/payment-gateway", async (req: Request, res: Response): Promise<void> => {
+  const adminId = await paymentAdminIdFromRequest(req);
+  if (!adminId) {
+    res.status(400).json({ ok: false, error: "A valid adminId is required." });
+    return;
+  }
+  if (!(await requireAdminPaymentChange(req, res, adminId))) return;
+  const settings = await getAdminPaymentSettings(adminId);
+  res.set("Cache-Control", "no-store").json({
+    ok: true,
+    settings: { paymentGateway: settings.paymentGateway },
+  });
+});
+
 router.post("/admin/payment-gateway", async (req: Request, res: Response): Promise<void> => {
   const adminId = await paymentChangeAdminId(req, req.body?.adminId);
   const paymentGateway = getPaymentGateway(req.body?.paymentGateway);
@@ -503,6 +533,7 @@ router.get("/admin/bank-stk-push", async (req: Request, res: Response): Promise<
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
   }
+  if (!(await requireAdminPaymentChange(req, res, adminId))) return;
   const { bankStkPush } = await getAdminPaymentSettings(adminId);
   res.json({ ok: true, config: bankStkPush, configured: isBankStkPushConfigured(bankStkPush) });
 });
@@ -557,6 +588,7 @@ router.get("/admin/mpesa-gateway-config", async (req: Request, res: Response): P
     res.status(400).json({ ok: false, error: "A valid adminId is required." });
     return;
   }
+  if (!(await requireAdminPaymentChange(req, res, adminId))) return;
   const { bankStkPush, mpesaTillPush, mpesaPaybill, bankTransfer } = await getAdminPaymentSettings(adminId);
   res.json({
     ok: true,

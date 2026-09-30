@@ -1,7 +1,10 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
 import {
+  extractToken,
   generateToken,
+  requireAdmin,
+  validateToken,
 } from "../lib/api-auth.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { logger } from "../lib/logger.js";
@@ -15,10 +18,15 @@ import { activeSuperAdminName } from "./super-admin-auth-route.js";
 import {
   checkWhatsAppConnection,
   compareSecret,
+  clearWhatsAppCredentials,
   consumeWhatsAppActionToken,
   createWhatsAppActionToken,
   generateWhatsAppOtp,
+  claimWhatsAppWebhookEvent,
+  completeWhatsAppWebhookEvent,
+  failWhatsAppWebhookEvent,
   getWhatsAppDashboardStats,
+  getWhatsAppServerCredentials,
   getWhatsAppSecretsStatus,
   getWhatsAppSettings,
   hashWhatsAppActionToken,
@@ -26,7 +34,7 @@ import {
   isWhatsAppFeatureEnabled,
   normalizeWhatsAppPhone,
   noteWhatsAppDeliveryStatus,
-  recordWhatsAppWebhookMessage,
+  saveWhatsAppCredentials,
   saveWhatsAppSettings,
   sendWhatsAppOtp,
   sendWhatsAppTemplate,
@@ -35,6 +43,11 @@ import {
   type WhatsAppSettings,
   WhatsAppProviderError,
 } from "../services/whatsapp/whatsapp-service.js";
+import {
+  hasWhatsAppGatewaySettingsGrant,
+  issueWhatsAppGatewaySettingsOtp,
+  verifyWhatsAppGatewaySettingsOtp,
+} from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 
 const router: IRouter = Router();
 const OTP_TTL_SECONDS = Math.max(
@@ -128,6 +141,122 @@ function respondInvalidOtp(res: Response): void {
   res.status(401).json({ ok: false, error: "The code is invalid or has expired. Request a new code and try again." });
 }
 
+async function gatewaySettingsOtpActor(
+  req: Request,
+  res: Response,
+): Promise<{ id: number; phone: string; sessionToken: string } | null> {
+  const sessionToken = extractToken(req);
+  const auth = validateToken(sessionToken);
+  if (!auth || auth.type !== "a" || auth.uid === "superadmin" || !/^[1-9]\d*$/.test(auth.uid)) {
+    res.status(401).json({ ok: false, error: "Sign in to the ISP or reseller account before verifying payment settings." });
+    return null;
+  }
+  const id = Number(auth.uid);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    res.status(401).json({ ok: false, error: "The signed-in account is invalid." });
+    return null;
+  }
+  const rows = await sbSelect<Record<string, unknown>>(
+    "isp_admins",
+    `id=eq.${id}&select=id,is_active,phone_e164&limit=1`,
+  );
+  const account = rows[0];
+  const phone = typeof account?.phone_e164 === "string" ? account.phone_e164.trim() : "";
+  if (!account || account.is_active !== true) {
+    res.status(403).json({
+      ok: false,
+      error: "An active ISP or reseller account is required to verify payment settings.",
+    });
+    return null;
+  }
+  if (!/^\+[1-9][0-9]{7,14}$/.test(phone)) {
+    res.status(409).json({
+      ok: false,
+      error: "This account does not have a valid stored phone number. Contact your ISP administrator or support to update the account phone before verifying payment settings.",
+    });
+    return null;
+  }
+  return { id, phone, sessionToken };
+}
+
+router.post(
+  "/auth/whatsapp/gateway-settings/request-otp",
+  requireAdmin(),
+  async (req, res): Promise<void> => {
+    const actor = await gatewaySettingsOtpActor(req, res);
+    if (!actor) return;
+    const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : "";
+    if (!/^[0-9a-f-]{36}$/i.test(requestId)) {
+      res.status(400).json({ ok: false, error: "Start a new payment settings request and try again." });
+      return;
+    }
+    try {
+      const issued = await issueWhatsAppGatewaySettingsOtp({
+        accountId: actor.id,
+        phone: actor.phone,
+        requestId,
+        sessionToken: actor.sessionToken,
+        ip: req.ip ?? req.socket.remoteAddress ?? "",
+      });
+      if (issued.outcome === "limited") {
+        res.status(429).json({ ok: false, error: "Too many verification requests. Wait before requesting another code." });
+        return;
+      }
+      if (issued.outcome !== "issued" || !issued.challengeId) {
+        res.status(503).json({ ok: false, error: "WhatsApp verification could not be started." });
+        return;
+      }
+      res.set("Cache-Control", "no-store").status(202).json({
+        ok: true,
+        challengeId: issued.challengeId,
+        expiresInSeconds: 300,
+        resendAfterSeconds: 60,
+        message: "A verification code was sent to the phone number already stored on this account.",
+      });
+    } catch (error) {
+      logger.warn(
+        { errorCode: error instanceof WhatsAppProviderError ? error.code : null },
+        "[whatsapp] gateway settings OTP delivery failed",
+      );
+      res.status(502).json({ ok: false, error: "The verification code could not be delivered. Try again later." });
+    }
+  },
+);
+
+router.post(
+  "/auth/whatsapp/gateway-settings/verify-otp",
+  requireAdmin(),
+  async (req, res): Promise<void> => {
+    const actor = await gatewaySettingsOtpActor(req, res);
+    if (!actor) return;
+    const challengeId = typeof req.body?.challengeId === "string" ? req.body.challengeId.trim() : "";
+    const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : "";
+    const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+    try {
+      const result = await verifyWhatsAppGatewaySettingsOtp({
+        accountId: actor.id,
+        expectedPhone: actor.phone,
+        challengeId,
+        requestId,
+        code,
+        sessionToken: actor.sessionToken,
+      });
+      if (result.outcome !== "verified" || !result.grant) {
+        respondInvalidOtp(res);
+        return;
+      }
+      res.set("Cache-Control", "no-store").json({
+        ok: true,
+        grant: result.grant,
+        expiresInSeconds: 600,
+      });
+    } catch (error) {
+      logger.warn({ err: error }, "[whatsapp] gateway settings OTP verification failed");
+      res.status(503).json({ ok: false, error: "Verification is temporarily unavailable." });
+    }
+  },
+);
+
 router.get("/super-admin/whatsapp/settings", async (req, res): Promise<void> => {
   if (!superAdminActor(req, res)) return;
   try {
@@ -184,11 +313,46 @@ router.put("/super-admin/whatsapp/settings", async (req, res): Promise<void> => 
     res.set("Cache-Control", "no-store").json({
       ok: true,
       settings: saved,
-      secrets: getWhatsAppSecretsStatus(),
+      secrets: await getWhatsAppSecretsStatus(),
     });
   } catch (error) {
     logger.error({ err: error, actor }, "[whatsapp] platform settings save failed");
     res.status(503).json({ ok: false, error: "WhatsApp settings could not be saved. Confirm the secure settings migration and service-role access." });
+  }
+});
+
+router.put("/super-admin/whatsapp/credentials", async (req, res): Promise<void> => {
+  const actor = superAdminActor(req, res);
+  if (!actor) return;
+  try {
+    const secrets = await saveWhatsAppCredentials(req.body?.credentials);
+    logger.info({ actor }, "[whatsapp] encrypted platform credentials updated");
+    res.set("Cache-Control", "no-store").json({ ok: true, secrets });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    const invalidInput = message.includes("Enter at least one") ||
+      message.includes("exceed the allowed length");
+    res.status(invalidInput ? 400 : 503).json({
+      ok: false,
+      error: invalidInput
+        ? message
+        : "WhatsApp credentials could not be saved. Confirm the secure credentials migration and service-role access.",
+    });
+  }
+});
+
+router.delete("/super-admin/whatsapp/credentials", async (req, res): Promise<void> => {
+  const actor = superAdminActor(req, res);
+  if (!actor) return;
+  try {
+    const secrets = await clearWhatsAppCredentials();
+    logger.info({ actor }, "[whatsapp] encrypted platform credentials cleared");
+    res.set("Cache-Control", "no-store").json({ ok: true, secrets });
+  } catch {
+    res.status(503).json({
+      ok: false,
+      error: "Stored WhatsApp credentials could not be cleared. Confirm the secure credentials migration and service-role access.",
+    });
   }
 });
 
@@ -458,8 +622,14 @@ router.post("/auth/whatsapp/reset-password", async (req, res): Promise<void> => 
   }
 });
 
-router.get("/whatsapp/webhook", (req, res): void => {
-  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN?.trim() ?? "";
+router.get("/whatsapp/webhook", async (req, res): Promise<void> => {
+  let verifyToken = "";
+  try {
+    verifyToken = (await getWhatsAppServerCredentials()).webhookVerifyToken;
+  } catch {
+    res.sendStatus(503);
+    return;
+  }
   const mode = req.query["hub.mode"];
   const token = typeof req.query["hub.verify_token"] === "string" ? req.query["hub.verify_token"] : "";
   const challenge = typeof req.query["hub.challenge"] === "string" ? req.query["hub.challenge"] : "";
@@ -551,18 +721,32 @@ async function handleInboundMessage(sender: string, text: string): Promise<void>
 }
 
 router.post("/whatsapp/webhook", async (req, res): Promise<void> => {
-  const appSecret = process.env.WHATSAPP_APP_SECRET?.trim() ?? "";
+  let appSecret = "";
+  try {
+    appSecret = (await getWhatsAppServerCredentials()).appSecret;
+  } catch {
+    logger.error({ reason: "credential_unavailable" }, "[whatsapp] webhook credentials unavailable");
+    res.sendStatus(503);
+    return;
+  }
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
   const signature = typeof req.headers["x-hub-signature-256"] === "string"
     ? req.headers["x-hub-signature-256"]
     : "";
-  if (!appSecret || !signature || !body.length) {
-    res.sendStatus(403);
+  if (!appSecret) {
+    logger.error({ reason: "app_secret_missing" }, "[whatsapp] webhook signature verification is not configured");
+    res.sendStatus(503);
+    return;
+  }
+  if (!signature || !body.length) {
+    logger.warn({ reason: "signature_or_body_missing" }, "[whatsapp] rejected malformed webhook request");
+    res.sendStatus(400);
     return;
   }
   const expected = `sha256=${createHmac("sha256", appSecret).update(body).digest("hex")}`;
   if (!compareSecret(signature, expected)) {
-    res.sendStatus(403);
+    logger.warn({ reason: "signature_invalid" }, "[whatsapp] rejected webhook with an invalid signature");
+    res.sendStatus(401);
     return;
   }
 
@@ -570,6 +754,7 @@ router.post("/whatsapp/webhook", async (req, res): Promise<void> => {
   try {
     payload = JSON.parse(body.toString("utf8")) as Record<string, unknown>;
   } catch {
+    logger.warn({ reason: "invalid_json" }, "[whatsapp] rejected malformed webhook payload");
     res.sendStatus(400);
     return;
   }
@@ -591,12 +776,22 @@ router.post("/whatsapp/webhook", async (req, res): Promise<void> => {
           if (!status || typeof status !== "object") continue;
           const row = status as Record<string, unknown>;
           if (typeof row.id === "string" && typeof row.status === "string") {
-            await recordWhatsAppWebhookMessage(
-              `status:${row.id}:${row.status}`,
-              "",
-              `delivery_${row.status}`,
-            );
-            await noteWhatsAppDeliveryStatus(row.id, row.status);
+            const eventId = `status:${row.id}:${row.status}`;
+            const claim = await claimWhatsAppWebhookEvent(eventId, "", `delivery_${row.status}`);
+            if (!claim.shouldProcess) {
+              if (claim.processingStatus === "processing") {
+                throw new Error("Webhook event is still being processed.");
+              }
+              if (claim.processingStatus === "processed" || claim.processingStatus === "failed") continue;
+              throw new Error("Webhook event claim could not be resolved.");
+            }
+            try {
+              await noteWhatsAppDeliveryStatus(row.id, row.status);
+              await completeWhatsAppWebhookEvent(eventId);
+            } catch {
+              await failWhatsAppWebhookEvent(eventId, "delivery_status_update_failed").catch(() => {});
+              throw new Error("WhatsApp delivery status update failed.");
+            }
           }
         }
 
@@ -605,21 +800,41 @@ router.post("/whatsapp/webhook", async (req, res): Promise<void> => {
           if (!message || typeof message !== "object") continue;
           const row = message as Record<string, unknown>;
           if (typeof row.id !== "string" || typeof row.from !== "string") continue;
-          const sender = `+${row.from.replace(/\D/g, "")}`;
-          const inserted = await recordWhatsAppWebhookMessage(row.id, sender, "incoming_message");
-          if (!inserted) continue;
-          const textObject = row.text && typeof row.text === "object"
-            ? row.text as Record<string, unknown>
-            : {};
-          if (typeof textObject.body === "string") {
-            await handleInboundMessage(sender, textObject.body);
+          const senderDigits = row.from.replace(/\D/g, "");
+          if (senderDigits.length < 8 || senderDigits.length > 15 || senderDigits.startsWith("0")) continue;
+          const sender = `+${senderDigits}`;
+          const claim = await claimWhatsAppWebhookEvent(row.id, sender, "incoming_message");
+          if (!claim.shouldProcess) {
+            if (claim.processingStatus === "processing") {
+              throw new Error("Webhook event is still being processed.");
+            }
+            if (claim.processingStatus === "processed" || claim.processingStatus === "failed") continue;
+            throw new Error("Webhook event claim could not be resolved.");
+          }
+          try {
+            const textObject = row.text && typeof row.text === "object"
+              ? row.text as Record<string, unknown>
+              : {};
+            if (typeof textObject.body === "string") {
+              await handleInboundMessage(sender, textObject.body);
+            }
+            await completeWhatsAppWebhookEvent(row.id);
+          } catch {
+            await failWhatsAppWebhookEvent(row.id, "incoming_message_processing_failed").catch(() => {});
+            throw new Error("WhatsApp incoming message processing failed.");
           }
         }
       }
     }
     res.sendStatus(200);
   } catch (error) {
-    logger.warn({ err: error }, "[whatsapp] signed webhook processing failed");
+    logger.warn(
+      {
+        reason: error instanceof WhatsAppProviderError ? "provider_error" : "processing_failed",
+        errorCode: error instanceof WhatsAppProviderError ? error.code : null,
+      },
+      "[whatsapp] signed webhook processing failed",
+    );
     res.sendStatus(500);
   }
 });

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { KeyRound, Eye, EyeOff, CheckCircle2, AlertCircle } from "lucide-react";
-import { clearPasswordSetupToken, getPasswordSetupToken, setAdminAuth } from "@/lib/supabase";
+import { clearPasswordSetupToken, getPasswordSetupToken, setAdminAuth, setPasswordSetupToken } from "@/lib/supabase";
 import { Logo } from "@/components/Logo";
 
 export default function AdminSetPassword() {
@@ -15,6 +15,17 @@ export default function AdminSetPassword() {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
+    const queryParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.slice(1));
+    const linkToken = hashParams.get("setupToken") ?? queryParams.get("setupToken");
+    if (linkToken) {
+      if (linkToken.length <= 256) setPasswordSetupToken(linkToken);
+      queryParams.delete("setupToken");
+      hashParams.delete("setupToken");
+      const query = queryParams.toString();
+      const hash = hashParams.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${query ? `?${query}` : ""}${hash ? `#${hash}` : ""}`);
+    }
     if (!getPasswordSetupToken()) setLocation("/admin/login");
   }, [setLocation]);
 

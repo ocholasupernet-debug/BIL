@@ -35,6 +35,9 @@ jobs:
       - name: Check out the release
         uses: actions/checkout@v4
 
+      - name: Test router-management VPN bootstrap decisions
+        run: bash deploy/tests/bootstrap-router-management-vpn.test.sh
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -45,6 +48,9 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+
+      - name: Test WhatsApp environment sync
+        run: node --test deploy/tests/sync-whatsapp-env.test.mjs
 
       - name: Build release artifacts on the runner
         env:
@@ -109,6 +115,11 @@ jobs:
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.5
+        env:
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+          WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN }}
+          WHATSAPP_APP_SECRET: ${{ secrets.WHATSAPP_APP_SECRET }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
         with:
           host: 102.203.116.204
           username: root
@@ -117,7 +128,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -135,9 +146,26 @@ jobs:
             upsert_env() {
               local key="$1" val="$2"
               [ -z "$val" ] && return
-              grep -q "^${key}=" .env 2>/dev/null \
-                && sed -i "s|^${key}=.*|${key}=${val}|" .env \
-                || echo "${key}=${val}" >> .env
+              case "$val" in
+                *$'\n'*|*$'\r'*)
+                  echo "ERROR: ${key} must be a single-line value." >&2
+                  return 1
+                  ;;
+              esac
+              local temp_file
+              temp_file="$(mktemp ./.env.XXXXXX)"
+              chmod 600 "$temp_file"
+              if [ -f .env ]; then
+                while IFS= read -r line || [ -n "$line" ]; do
+                  case "$line" in
+                    "${key}="*|"export ${key}="*) continue ;;
+                  esac
+                  printf '%s\n' "$line" >> "$temp_file"
+                done < .env
+              fi
+              printf '%s=%s\n' "$key" "$val" >> "$temp_file"
+              mv -f "$temp_file" .env
+              chmod 600 .env
               echo "  ✓ ${key} written to .env"
             }
 
@@ -156,6 +184,7 @@ jobs:
             # authorized by this deployment key.
             upsert_env "VPS_HOST"                 "vpn.isplatty.org"
             upsert_env "VPS_USER"                 "root"
+            node deploy/sync-whatsapp-env.mjs
             # Store multiline SSH material as base64: so .env remains valid.
             # The API decodes it only in memory when opening the SSH channel.
             if [ -n "${VPS_SSH_KEY_B64:-}" ]; then

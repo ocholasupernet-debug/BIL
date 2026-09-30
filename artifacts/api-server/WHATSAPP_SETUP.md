@@ -15,19 +15,19 @@ The callback URL must be the public HTTPS origin that routes `/api` to this API 
 
 ## Server environment
 
-Set these variables in Replit Secrets for development and in the external VPS service environment for production. Replit Secrets do not automatically configure the separately managed VPS.
+Set these variables in Replit Secrets for development. For the external VPS, add them as GitHub repository Actions secrets; the deploy workflow syncs them into the VPS `.env` and reloads PM2. Replit Secrets do not automatically configure the separately managed VPS.
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `WHATSAPP_ACCESS_TOKEN` | Yes | Meta Cloud API bearer token |
 | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Yes | Secret used for the Meta webhook GET verification |
 | `WHATSAPP_APP_SECRET` | Yes | Meta app secret used to validate signed webhook POSTs |
+| `WHATSAPP_PHONE_NUMBER_ID` | No | Optional sender ID override; otherwise configure it in Super Admin → WhatsApp |
 | `WHATSAPP_ENABLED` | No | Set to `false` to force WhatsApp off; otherwise the Super Admin switch controls it |
 | `WHATSAPP_REQUIRE_REGISTRATION_VERIFICATION` | No | Set to `true` to fail registration closed if WhatsApp settings cannot be loaded |
 | `WHATSAPP_WORKER_ENABLED` | No | Set to `false` to pause production outbox processing |
 | `WHATSAPP_OTP_TTL_SECONDS` | No | OTP lifetime; defaults to 600 seconds and is limited to 60–900 |
 | `WHATSAPP_BUSINESS_ACCOUNT_ID` | No | Overrides the Business Account ID in the settings page |
-| `WHATSAPP_PHONE_NUMBER_ID` | No | Overrides the Phone Number ID in the settings page |
 | `WHATSAPP_BUSINESS_PHONE` | No | Display-only sender phone override |
 | `WHATSAPP_API_VERSION` | No | Graph API version; defaults to `v23.0` |
 | `WHATSAPP_DEFAULT_COUNTRY_CODE` | No | Default calling code for local-format phone numbers; defaults to `254` |
@@ -43,7 +43,7 @@ Never put the access token, App Secret, or verify token in the settings form, da
 
 ## Super Admin configuration
 
-After the database migration is applied, open **Super Admin → WhatsApp**. Configure the non-secret IDs, sender display number, language, and exact approved template names. The page reports whether the three server secrets are present and checks the Cloud API connection. Enable the main switch only after the connection and templates are ready; then turn on the individual features needed.
+Add the GitHub Actions secrets `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, and `WHATSAPP_APP_SECRET`; optionally add `WHATSAPP_PHONE_NUMBER_ID`. After the database migration is applied, open **Super Admin → WhatsApp**. Configure the non-secret IDs, sender display number, language, and exact approved template names. The page reports whether the three server secrets are present and checks the Cloud API connection. Enable the main switch only after the connection and templates are ready; then turn on the individual features needed.
 
 The production migration runner applies `migrations/2026_whatsapp_integration.sql`. Do not apply the migration manually to the separate billing system.
 

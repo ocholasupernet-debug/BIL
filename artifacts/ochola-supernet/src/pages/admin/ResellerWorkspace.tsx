@@ -27,6 +27,7 @@ type ResellerResponse = {
   account: { name: string; company_name?: string; username: string } | null;
   ports: Assignment[];
   gateways: { gateway_type: string; is_active: boolean }[];
+  paymentGatewayRoutes?: ResellerGatewayRoute[];
   sales: Sale[];
   metrics?: {
     revenue: { incomeToday: number; incomeMonth: number; totalRevenue: number; totalTransactions: number };
@@ -53,6 +54,9 @@ type ResellerGatewayRoute = {
   portId: number | null;
   scopeType: "default" | "router" | "port";
   isActive: boolean;
+  destinationConfigured?: boolean | null;
+  destinationStatus?: "configured" | "needs_setup" | "unavailable";
+  destinationPreview?: Record<string, string>;
 };
 type ResellerPlan = { id: number; name: string; type: string; port_id: number | null; router_id: number | null; price: number | string; validity: number; validity_unit?: string | null };
 function authHeaders(): HeadersInit {
@@ -835,15 +839,14 @@ function ResellerDashboard() {
 
   const load = async () => {
     try {
-      const [dashboard, liveTelemetry, paymentSettings, planContext] = await Promise.all([
+      const [dashboard, liveTelemetry, planContext] = await Promise.all([
         apiJson<ResellerResponse>("/api/reseller/me"),
         apiJson<ResellerTelemetry>("/api/admin/dashboard/telemetry").catch(() => null),
-        apiJson<{ ok: boolean; routes: ResellerGatewayRoute[] }>("/api/reseller/payment-gateways").catch(() => ({ routes: [] })),
         apiJson<{ plans?: ResellerPlan[] }>("/api/plans/admin-context").catch(() => ({ plans: [] })),
       ]);
       setData(dashboard);
       setTelemetry(liveTelemetry);
-      setGatewayRoutes(paymentSettings?.routes || []);
+      setGatewayRoutes(dashboard.paymentGatewayRoutes || []);
       setPlans(planContext.plans ?? []);
       setSelectedPortId((current) => current || String(dashboard.ports?.[0]?.id ?? ""));
       setCheckout((current) => ({ ...current, portId: current.portId || String(dashboard.ports?.[0]?.id ?? "") }));
@@ -912,6 +915,13 @@ function ResellerDashboard() {
   };
   const port = data?.ports?.find((item) => String(item.id) === selectedPortId) ?? data?.ports?.[0];
   const linkStatus = port?.link_status ?? "pending";
+  const selectedGatewayRoute = gatewayRoutes
+    .filter((item) => item.isActive && (
+      (item.scopeType === "port" && Number(item.portId) === Number(port?.id))
+      || (item.scopeType === "router" && Number(item.routerId) === Number(port?.router_id))
+      || item.scopeType === "default"
+    ))
+    .sort((a, b) => (a.scopeType === "port" ? 0 : a.scopeType === "router" ? 1 : 2) - (b.scopeType === "port" ? 0 : b.scopeType === "router" ? 1 : 2))[0];
   const revenue = data?.metrics?.revenue;
   const users = data?.metrics?.users;
   const analytics = data?.metrics?.analytics;
@@ -1042,7 +1052,17 @@ function ResellerDashboard() {
           )}
              <section style={{ ...cardStyle, borderColor: "rgba(37,99,235,.28)" }}>
              <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><WalletCards size={18} color="var(--isp-accent)" /> Reseller payment method</div>
-              <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5, marginBottom: 0 }}>Reseller customer payments use the gateway routed to the selected port or router: <strong>{paymentGateway}</strong>. The connected ISP does not override a reseller route.</p>
+               <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5, marginBottom: 0 }}>Reseller customer payments use the gateway routed to the selected port or router: <strong>{paymentGateway}</strong>. The connected ISP does not override a reseller route. Server checkout routing remains authoritative.</p>
+               {selectedGatewayRoute && <div style={{ marginTop: 8, color: "var(--isp-text-muted)", fontSize: 12 }}>
+                 Destination {selectedGatewayRoute.destinationStatus === "unavailable"
+                   ? "unavailable"
+                   : selectedGatewayRoute.destinationConfigured
+                     ? "configured"
+                     : "needs setup"}
+                 {Object.values(selectedGatewayRoute.destinationPreview ?? {}).length > 0
+                   ? ` · ${Object.values(selectedGatewayRoute.destinationPreview ?? {}).join(" · ")}`
+                   : ""}
+               </div>}
            </section>
           {port?.handoff_mode === "vlan_services" && port.pppoe_enabled && (
             <form onSubmit={assignPppoeClient} style={{ ...cardStyle, borderColor: "rgba(37,99,235,.3)" }}>

@@ -50,6 +50,8 @@
 - [OpenVPN setup-script compatibility](openvpn-setup-script-compatibility.md) — Preserve literal `dh none` and escape Bash indirect expansion when generating scripts inside TypeScript templates.
 - [Router installer stale files](router-installer-stale-files.md) — Verify the dynamic installer revision and no-store response before treating repeated RouterOS output as current.
 - [Router installer token](router-installer-token.md) — Keep the router API password separate from the short-lived token used by VPN bootstrap URLs.
+- [WhatsApp secure setup links](whatsapp-setup-link.md) — Put one-time setup tokens in URL fragments so they stay out of HTTP requests, logs, and referrers.
+- [WhatsApp webhook retries](whatsapp-webhook-retries.md) — Acknowledge completed duplicates, but request provider retry while another handler still owns the event.
 - [Router hotspot walled garden](router-hotspot-walled-garden.md) — Allow the tenant portal hostname before login and ignore default hotspot profiles with a 0.0.0.0 gateway.
 - [Hotspot service forwarding](hotspot-service-forwarding.md) — Service masquerade alone is insufficient; explicitly allow bridge forwarding and router DNS while protecting WAN DNS.
 - [Coexistence policy reconciliation](coexistence-policy-reconciliation.md) — Compiler fixes affect new payloads; existing routers need an identified, scoped repair or service redeploy.

@@ -87,12 +87,15 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_admin_settings_persistence.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_shared_hotspot_resource_names.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_immutable_revenue_billing.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_revenue_summary_africa_nairobi.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_port_service_provisioning_status.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_vlan_service_ip_pools.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_plan_service_pools.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_reseller_scoped_payment_gateways.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_reseller_subdomains.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_whatsapp_integration.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_whatsapp_secure_credentials.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_whatsapp_security_events.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_sms_integration.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });

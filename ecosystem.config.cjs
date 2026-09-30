@@ -12,11 +12,9 @@ function loadDeploymentEnv(filePath) {
     if (!match) continue;
     const [, key] = match;
     let value = match[2];
-    if (
-      value.length >= 2 &&
-      ((value.startsWith("\"") && value.endsWith("\"")) ||
-        (value.startsWith("'") && value.endsWith("'")))
-    ) {
+    if (value.length >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+      value = value.slice(1, -1).replace(/\\(["\\$`])/g, "$1");
+    } else if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
       value = value.slice(1, -1);
     }
     if (!process.env[key]?.trim()) process.env[key] = value;
@@ -68,6 +66,10 @@ module.exports = {
         SUPABASE_URL:         process.env.SUPABASE_URL || "",
         SUPABASE_DB_URL: process.env.SUPABASE_DB_URL || process.env.SUPABASE_DATABASE_URL || "",
          SESSION_SECRET:       process.env.SESSION_SECRET || "",
+         WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || "",
+         WHATSAPP_WEBHOOK_VERIFY_TOKEN: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "",
+         WHATSAPP_APP_SECRET: process.env.WHATSAPP_APP_SECRET || "",
+         WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || "",
          ROUTER_OPENVPN_ENDPOINT: process.env.ROUTER_OPENVPN_ENDPOINT || "vpn.isplatty.org",
          VPS_HOST:             process.env.VPS_HOST || "vpn.isplatty.org",
          VPS_USER:             process.env.VPS_USER || "",
