@@ -23,7 +23,7 @@ import { getRouterCreds } from "./mikrotik-route.js";
 
 const router = Router();
 const ACTIVE_TUNNEL_STATUSES = ["issued", "script_issued", "connected", "exported"];
-const SAFE_SELECT_JOB = "id,admin_id,source_router_id,target_router_id,source_label,source_mode,target_mode,status,ciphertext,iv,auth_tag,findings_json,plan_json,stages_json,verification_json,audit_json,pre_state_ciphertext,pre_state_iv,pre_state_auth_tag,created_at,updated_at,completed_at";
+const SAFE_SELECT_JOB = "id,admin_id,source_router_id,target_router_id,source_label,source_mode,target_mode,status,ciphertext,iv,auth_tag,findings_json,plan_json,stages_json,verification_json,audit_json,pre_state_ciphertext,pre_state_iv,pre_state_auth_tag,registration_key_hash,created_at,updated_at,completed_at";
 const SAFE_SELECT_TUNNEL = "id,admin_id,source_router_id,migration_job_id,username,assigned_ip,server_endpoint,bootstrap_token_hash,ciphertext,iv,auth_tag,status,expires_at,verified_at,revoked_at";
 
 type MigrationJob = {
@@ -38,6 +38,7 @@ type MigrationJob = {
   ciphertext: string;
   iv: string;
   auth_tag: string;
+  registration_key_hash?: string | null;
   findings_json?: Record<string, unknown>;
   plan_json?: Record<string, unknown>;
 };
@@ -72,6 +73,8 @@ type SourceRouter = {
   username?: string | null;
   identity?: string | null;
   serial?: string | null;
+  model?: string | null;
+  migration_source_only?: boolean;
 };
 
 type TunnelPayload = {
@@ -127,13 +130,69 @@ async function loadRouter(adminId: number, idValue: unknown, res?: Response): Pr
   const ownerFilter = buildOwnerFilter(adminId);
   const rows = await sbSelectStrict<SourceRouter>(
     "isp_routers",
-    `id=eq.${id}${ownerFilter}&select=id,admin_id,name,status,host,vpn_ip,bridge_ip,router_secret,username,identity,serial&limit=1`,
+    `id=eq.${id}${ownerFilter}&select=id,admin_id,name,status,host,vpn_ip,bridge_ip,router_secret,username,identity,serial,model,migration_source_only&limit=1`,
   );
   if (!rows[0]) {
     res?.status(404).json({ error: "Router not found for this ISP account." });
     return null;
   }
   return rows[0];
+}
+
+async function createPendingMigrationSource(adminId: number): Promise<SourceRouter> {
+  const allocated = await sbRpc<{ router_id: number; router_name: string }>(
+    "create_router_migration_source_stub",
+    { p_admin_id: adminId },
+  );
+  const routerId = Number(allocated[0]?.router_id);
+  if (!Number.isSafeInteger(routerId) || routerId <= 0) {
+    throw new Error("The pending migration source could not be registered.");
+  }
+  const source = await loadRouter(adminId, routerId);
+  if (!source) throw new Error("The pending migration source could not be loaded.");
+  return source;
+}
+
+function isValidRegistrationKey(value: unknown): value is string {
+  return typeof value === "string" && /^[a-zA-Z0-9_-]{20,100}$/.test(value);
+}
+
+async function findRegistrationJob(adminId: number, keyHash: string): Promise<MigrationJob | null> {
+  const rows = await sbSelectStrict<MigrationJob>(
+    "router_migration_jobs",
+    `admin_id=eq.${adminId}&registration_key_hash=eq.${keyHash}&select=${SAFE_SELECT_JOB}&limit=1`,
+  );
+  return rows[0] ?? null;
+}
+
+async function reuseRegistrationJob(
+  adminId: number,
+  job: MigrationJob,
+  res: Response,
+): Promise<void> {
+  if (!job.source_router_id || ["failed", "completed"].includes(job.status)) {
+    res.status(409).json({ error: "This source registration attempt has ended. Start a fresh registration." });
+    return;
+  }
+  const tunnel = await loadTunnel(adminId, job.id);
+  if (!tunnel || !["issued", "script_issued", "connected"].includes(tunnel.status) || Date.parse(tunnel.expires_at) <= Date.now()) {
+    res.status(409).json({ error: "This source registration tunnel expired. Start a fresh registration." });
+    return;
+  }
+  const source = await loadRouter(adminId, job.source_router_id);
+  if (!source) {
+    res.status(409).json({ error: "The pending source record is unavailable. Start a fresh registration." });
+    return;
+  }
+  res.status(200).json({
+    jobId: job.id,
+    sourceRouterId: source.id,
+    sourceRouterName: source.name,
+    tunnelAddress: String(tunnel.assigned_ip).split("/")[0],
+    expiresAt: tunnel.expires_at,
+    reused: true,
+    warning: "This resumes the existing one-hour source registration tunnel; the router is added only after identity verification.",
+  });
 }
 
 async function loadJob(adminId: number, idValue: unknown, res?: Response): Promise<MigrationJob | null> {
@@ -504,7 +563,7 @@ router.get("/router-migrations/routers", async (req, res) => {
     if (!adminId) return;
     const rows = await sbSelectStrict<SourceRouter>(
       "isp_routers",
-      `admin_id=eq.${adminId}&select=id,name,status,host,vpn_ip,bridge_ip&order=id.asc`,
+      `admin_id=eq.${adminId}&status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,name,status,host,vpn_ip,bridge_ip,identity,serial,migration_source_only&order=id.asc`,
     );
     res.json({ routers: rows });
   } catch (error) {
@@ -517,27 +576,70 @@ router.post("/router-migrations/jobs", async (req, res) => {
   if (!adminId) return;
   let jobId = 0;
   let tunnel: MigrationTunnel | null = null;
+  let pendingSourceRouterId = 0;
+  let registrationKeyHash: string | null = null;
   try {
-    const source = await loadRouter(adminId, req.body?.sourceRouterId, res);
+    const registeringSource = req.body?.registerSource === true;
+    let source: SourceRouter | null = null;
+    if (registeringSource) {
+      const registrationKey = req.body?.registrationKey;
+      if (!isValidRegistrationKey(registrationKey)) {
+        res.status(400).json({ error: "A valid one-time source registration key is required." });
+        return;
+      }
+      registrationKeyHash = sha256(registrationKey);
+      const existing = await findRegistrationJob(adminId, registrationKeyHash);
+      if (existing) {
+        await reuseRegistrationJob(adminId, existing, res);
+        return;
+      }
+      source = await createPendingMigrationSource(adminId);
+      pendingSourceRouterId = source.id;
+    } else {
+      source = await loadRouter(adminId, req.body?.sourceRouterId, res);
+    }
     if (!source) return;
     const initial = encryptJson({});
-    const jobs = await sbInsertStrict<MigrationJob>("router_migration_jobs", {
-      admin_id: adminId,
-      source_router_id: source.id,
-      target_router_id: null,
-      source_label: String(source.name ?? `Router ${source.id}`).slice(0, 100),
-      source_mode: "domain_collector",
-      target_mode: "replace_router",
-      status: "source_pending",
-      ciphertext: initial.ciphertext,
-      iv: initial.iv,
-      auth_tag: initial.auth_tag,
-      findings_json: { warnings: ["Sensitive RouterOS export is encrypted at rest and never returned to the browser."] },
-      plan_json: {},
-      stages_json: {},
-      verification_json: {},
-      audit_json: {},
-    });
+    let jobs: MigrationJob[];
+    try {
+      jobs = await sbInsertStrict<MigrationJob>("router_migration_jobs", {
+        admin_id: adminId,
+        source_router_id: source.id,
+        target_router_id: null,
+        source_label: String(source.name ?? `Router ${source.id}`).slice(0, 100),
+        source_mode: "domain_collector",
+        target_mode: "replace_router",
+        status: "source_pending",
+        ciphertext: initial.ciphertext,
+        iv: initial.iv,
+        auth_tag: initial.auth_tag,
+        registration_key_hash: registrationKeyHash,
+        findings_json: {
+          warnings: ["Sensitive RouterOS export is encrypted at rest and never returned to the browser."],
+          sourceRegistrationPending: registeringSource,
+        },
+        plan_json: {},
+        stages_json: {},
+        verification_json: {},
+        audit_json: {},
+      });
+    } catch (error) {
+      if (registrationKeyHash) {
+        const raced = await findRegistrationJob(adminId, registrationKeyHash).catch(() => null);
+        if (raced) {
+          if (pendingSourceRouterId) {
+            try {
+              await sbDeleteStrict("isp_routers", `id=eq.${pendingSourceRouterId}&admin_id=eq.${adminId}`);
+            } catch {
+              /* The competing request may already have attached the row to its job. */
+            }
+          }
+          await reuseRegistrationJob(adminId, raced, res);
+          return;
+        }
+      }
+      throw error;
+    }
     const job = jobs[0];
     if (!job) throw new Error("Could not create migration job.");
     jobId = job.id;
@@ -605,14 +707,26 @@ router.post("/router-migrations/jobs", async (req, res) => {
     await updateJob(adminId, job.id, { status: "tunnel_issued" });
     res.status(201).json({
       jobId: job.id,
+      sourceRouterId: source.id,
+      sourceRouterName: source.name,
+      sourceRegistration: registeringSource,
       tunnelScript: script,
       tunnelAddress: String(lease.assigned_ip).split("/")[0],
       expiresAt: tunnel.expires_at,
-      warning: "The tunnel account expires automatically. Run this script on the source MikroTik; it does not change billing or promote a router.",
+      warning: registeringSource
+        ? "Run this temporary script on the source MikroTik. It creates no persistent management access and changes no billing data; the dashboard record is finalized only after identity verification."
+        : "The tunnel account expires automatically. Run this script on the source MikroTik; it does not change billing or promote a router.",
     });
   } catch (error) {
     if (tunnel) {
       await failTunnelSetup(adminId, tunnel);
+    }
+    if (!jobId && pendingSourceRouterId) {
+      try {
+        await sbDeleteStrict("isp_routers", `id=eq.${pendingSourceRouterId}&admin_id=eq.${adminId}`);
+      } catch {
+        /* A job may have been committed even if its insert response failed. */
+      }
     }
     if (jobId) {
       try { await updateJob(adminId, jobId, { status: "failed" }); } catch { /* preserve original failure */ }
@@ -640,6 +754,50 @@ router.post("/router-migrations/jobs/:id/verify", async (req, res) => {
       password: payload.apiPassword,
     };
     const identity = await routerIdentity(creds);
+    if (job.registration_key_hash && job.source_router_id) {
+      const pendingSource = await loadRouter(adminId, job.source_router_id);
+      if (!pendingSource || !pendingSource.migration_source_only) {
+        res.status(409).json({ error: "The pending migration-only source record is unavailable." });
+        return;
+      }
+      const serial = String(identity.serial ?? "").trim();
+      if (serial) {
+        const duplicates = await sbSelectStrict<{ id: number; admin_id: number; name: string }>(
+          "isp_routers",
+          `serial=eq.${encodeURIComponent(serial)}&id=neq.${pendingSource.id}&select=id,admin_id,name&limit=1`,
+        );
+        const duplicate = duplicates[0];
+        if (duplicate) {
+          res.status(409).json({
+            error: Number(duplicate.admin_id) === adminId
+              ? `This MikroTik is already registered as ${duplicate.name}. Use that existing dashboard router instead.`
+              : "This MikroTik serial is already registered to another ISP account. Verify device ownership before continuing.",
+          });
+          return;
+        }
+      }
+      try {
+        await sbUpdateStrict<SourceRouter>(
+          "isp_routers",
+          `id=eq.${pendingSource.id}&admin_id=eq.${adminId}`,
+          {
+            identity: identity.identity,
+            serial: serial || null,
+            model: identity.board || null,
+            ros_version: identity.version || null,
+            status: "offline",
+            description: "Migration source only. RouterOS access is temporary; no persistent management credentials are configured.",
+            updated_at: new Date().toISOString(),
+          },
+        );
+      } catch (error) {
+        if (String(error).includes("isp_routers_serial_unique_uidx")) {
+          res.status(409).json({ error: "This MikroTik serial is already registered. Verify the existing router record before continuing." });
+          return;
+        }
+        throw error;
+      }
+    }
     await updateTunnel(adminId, tunnel.id, { status: "connected", verified_at: new Date().toISOString() });
     await updateJob(adminId, job.id, {
       status: job.status === "exported" ? "exported" : "connected",
@@ -648,9 +806,17 @@ router.post("/router-migrations/jobs/:id/verify", async (req, res) => {
         sourceIdentity: identity,
         sourceVersion: identity.version,
         sourceBoard: identity.board,
+        sourceRegistrationComplete: Boolean(job.registration_key_hash),
       },
     });
-    res.json({ ok: true, identity, readOnly: true });
+    res.json({
+      ok: true,
+      identity,
+      readOnly: true,
+      sourceRouterId: job.source_router_id,
+      sourceRouterName: job.source_label,
+      sourceRegistered: Boolean(job.registration_key_hash),
+    });
   } catch (error) {
     handleError(res, error, "RouterOS tunnel verification failed. Confirm that the temporary script is running and the API service is reachable.", 502);
   }
@@ -773,6 +939,11 @@ router.post("/router-migrations/jobs/:id/target", async (req, res) => {
         res.status(409).json({ error: "This source must be registered through the existing router onboarding flow before adoption." });
         return;
       }
+      const source = await loadRouter(adminId, job.source_router_id);
+      if (!source || source.migration_source_only) {
+        res.status(409).json({ error: "A migration-only source cannot be adopted as a managed router. Choose a separate configured replacement." });
+        return;
+      }
       await updateJob(adminId, job.id, {
         target_router_id: null,
         target_mode: "adopt_source",
@@ -783,6 +954,10 @@ router.post("/router-migrations/jobs/:id/target", async (req, res) => {
     }
     const target = await loadRouter(adminId, req.body?.targetRouterId, res);
     if (!target) return;
+    if (target.migration_source_only) {
+      res.status(409).json({ error: "A migration-only source has no persistent RouterOS access and cannot be used as the replacement target." });
+      return;
+    }
     if (!job.source_router_id) {
       res.status(409).json({ error: "The source router must be registered before using a replacement target." });
       return;
@@ -915,6 +1090,13 @@ router.post("/router-migrations/jobs/:id/apply", async (req, res) => {
   }
   if (job.target_mode === "adopt_source") {
     try {
+      if (job.source_router_id) {
+        const source = await loadRouter(adminId, job.source_router_id);
+        if (!source || source.migration_source_only) {
+          res.status(409).json({ error: "A migration-only source cannot be adopted as a managed router." });
+          return;
+        }
+      }
       await updateJob(adminId, job.id, {
         status: "completed",
         completed_at: new Date().toISOString(),
@@ -932,6 +1114,12 @@ router.post("/router-migrations/jobs/:id/apply", async (req, res) => {
   try {
     if (!job.target_router_id) {
       res.status(409).json({ error: "A replacement target must be selected." });
+      return;
+    }
+    const targetRouter = await loadRouter(adminId, job.target_router_id);
+    if (!targetRouter) return;
+    if (targetRouter.migration_source_only) {
+      res.status(409).json({ error: "A migration-only source cannot be used as the replacement target." });
       return;
     }
     const approvedIds: string[] = Array.isArray(req.body?.approvedIds)

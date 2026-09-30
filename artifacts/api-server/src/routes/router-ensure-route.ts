@@ -18,7 +18,7 @@ import { readIppEntries } from "../lib/vpn-status.js";
 import { provisionRouterManagementOpenVpnPair } from "../lib/router-vpn-provisioning.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 import { getTenantSubdomain } from "../lib/tenant-host.js";
-import { isSafeRouterName } from "../lib/router-name-policy.js";
+import { isSafeRouterName, nextOrdinalRouterName, routerNameBase } from "../lib/router-name-policy.js";
 
 const router: IRouter = Router();
 
@@ -51,17 +51,6 @@ function makeSecret(adminId: number): string {
     .slice(0, 48);
 }
 
-function routerNameBase(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const base = slug.slice(0, 27).replace(/-+$/g, "");
-  if (!base) throw new Error("A tenant subdomain is required before creating a router");
-  return base;
-}
-
 async function nextCompanyRouterName(adminId: number, requestHost: string): Promise<string> {
   const requestTenant = getTenantSubdomain(requestHost);
   let base = requestTenant ? routerNameBase(requestTenant) : "";
@@ -87,12 +76,7 @@ async function nextCompanyRouterName(adminId: number, requestHost: string): Prom
   );
   if (!usedRes.ok) throw new Error(`Could not inspect existing router names (${usedRes.status})`);
   const usedRows = await usedRes.json() as Array<{ name?: string | null }>;
-  const used = new Set(usedRows.map(row => String(row.name ?? "").trim().toLowerCase()));
-  for (let ordinal = 1; ordinal <= 9999; ordinal += 1) {
-    const candidate = `${base}${ordinal}`;
-    if (!used.has(candidate.toLowerCase())) return candidate;
-  }
-  throw new Error(`No available router name remains for company prefix "${base}"`);
+  return nextOrdinalRouterName(base, usedRows.map(row => row.name));
 }
 
 function escapeRegExp(value: string): string {
@@ -116,7 +100,7 @@ async function unfinishedRouterName(adminId: number): Promise<string> {
   }
 
   const unfinishedRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&status=in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=name,created_at&order=created_at.asc,updated_at.asc`,
+    `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&migration_source_only=eq.false&status=in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=name,created_at&order=created_at.asc,updated_at.asc`,
     { headers: sbHeaders(BEST_KEY) },
   );
   if (!unfinishedRes.ok) return "";
@@ -230,7 +214,7 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
   /* ── 1. Try to find an existing router with this name ── */
   try {
     const existRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&name=eq.${encodeURIComponent(name)}&select=*&limit=1`,
+      `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&migration_source_only=eq.false&name=eq.${encodeURIComponent(name)}&select=*&limit=1`,
       { headers: sbHeaders(BEST_KEY) }
     );
     if (existRes.ok) {
@@ -325,7 +309,7 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
       /* 409 Conflict → row already exists, fetch it */
       if (createRes.status === 409) {
         const existRes2 = await fetch(
-          `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&name=eq.${encodeURIComponent(name)}&select=*&limit=1`,
+          `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&migration_source_only=eq.false&name=eq.${encodeURIComponent(name)}&select=*&limit=1`,
           { headers: sbHeaders(key) }
         );
         if (existRes2.ok) {
@@ -341,6 +325,17 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
             res.json({ ok: true, router: publicRouter(existing), created: false, managementVpn });
             return;
           }
+        }
+        const migrationOnlyRes = await fetch(
+          `${SUPABASE_URL}/rest/v1/isp_routers?admin_id=eq.${adminId}&migration_source_only=eq.true&name=eq.${encodeURIComponent(name)}&select=id&limit=1`,
+          { headers: sbHeaders(key) }
+        );
+        if (migrationOnlyRes.ok && (await migrationOnlyRes.json() as unknown[]).length > 0) {
+          res.status(409).json({
+            ok: false,
+            error: "This router name is reserved by a migration-only source. Retry setup to allocate the next company router number.",
+          });
+          return;
         }
       }
 

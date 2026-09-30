@@ -203,3 +203,26 @@ test("collector handoff requires the authenticated RouterOS preflight", async ()
   assert.match(page, /Download both/);
   assert.match(page, /setCurrentStep\(2\)/);
 });
+test("unlisted source registration is tenant-bound, retry-safe, and never a replacement target", async () => {
+  const route = await readFile("src/routes/router-migrations-route.ts", "utf8");
+  const migration = await readFile("migrations/2026_router_migration_source_registration.sql", "utf8");
+  const schemaSnapshot = await readFile("migrations/supabase_schema.sql", "utf8");
+  const runner = await readFile("scripts/apply-deployment-migrations.mjs", "utf8");
+  const ensure = await readFile("src/routes/router-ensure-route.ts", "utf8");
+  assert.match(route, /req\.body\?\.registerSource === true/);
+  assert.match(route, /registration_key_hash=eq\.\$\{keyHash\}/);
+  assert.match(route, /create_router_migration_source_stub/);
+  assert.match(route, /sourceRegistrationComplete:\s*Boolean\(job\.registration_key_hash\)/);
+  assert.match(route, /if \(target\.migration_source_only\)/);
+  assert.match(route, /serial=eq\.\$\{encodeURIComponent\(serial\)\}/);
+  assert.match(migration, /add column if not exists identity text/);
+  assert.match(migration, /add column if not exists serial text/);
+  assert.match(migration, /migration_source_only,\s*description/);
+  assert.match(migration, /true,\s*'Pending identity verification through RouterOS migration/);
+  assert.match(migration, /registration_key_hash/);
+  assert.match(migration, /pg_advisory_xact_lock/);
+  assert.match(migration, /isp_routers_serial_unique_uidx/);
+  assert.match(schemaSnapshot, /public\.create_router_migration_source_stub/);
+  assert.match(runner, /2026_router_migration_source_registration\.sql/);
+  assert.match(ensure, /migration_source_only=eq\.false/);
+});

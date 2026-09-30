@@ -8,6 +8,9 @@ export interface MigrationRouter {
   host?: string | null;
   vpn_ip?: string | null;
   bridge_ip?: string | null;
+  identity?: string | null;
+  serial?: string | null;
+  migration_source_only?: boolean;
 }
 
 export interface MigrationPlanItem {
@@ -27,7 +30,7 @@ export interface MigrationPlanResponse {
 
 export interface MigrationJobStatus {
   id: number;
-  sourceRouterId: number;
+  sourceRouterId: number | null;
   sourceLabel: string;
   targetRouterId: number | null;
   targetMode: "adopt_source" | "replace_router";
@@ -36,6 +39,7 @@ export interface MigrationJobStatus {
     counts?: Record<string, number>;
     warnings?: string[];
     sourceIdentity?: { identity?: string; version?: string; board?: string; serial?: string };
+    sourceRegistrationComplete?: boolean;
     manualConfigurationCount?: number;
   };
   tunnel?: { status: string; expiresAt: string; verifiedAt?: string | null } | null;
@@ -63,14 +67,34 @@ async function migrationRequest<T>(path: string, init: RequestInit = {}): Promis
 export const migrationApi = {
   routers: () => migrationRequest<{ routers: MigrationRouter[] }>("/routers"),
   start: (sourceRouterId: number) =>
-    migrationRequest<{ jobId: number; tunnelScript: string; tunnelAddress: string; expiresAt: string; warning: string }>(
+    migrationRequest<{ jobId: number; sourceRouterId: number; sourceRouterName: string; tunnelScript: string; tunnelAddress: string; expiresAt: string; warning: string }>(
       "/jobs",
       { method: "POST", body: JSON.stringify({ sourceRouterId }) },
+    ),
+  registerSource: (registrationKey: string) =>
+    migrationRequest<{
+      jobId: number;
+      sourceRouterId: number;
+      sourceRouterName: string;
+      tunnelScript?: string;
+      tunnelAddress?: string;
+      expiresAt?: string;
+      warning?: string;
+      reused?: boolean;
+    }>(
+      "/jobs",
+      { method: "POST", body: JSON.stringify({ registerSource: true, registrationKey }) },
     ),
   tunnelScript: (jobId: number) =>
     migrationRequest<{ tunnelScript: string; expiresAt: string }>(`/jobs/${jobId}/tunnel-script`),
   verify: (jobId: number) =>
-    migrationRequest<{ ok: boolean; identity: { identity: string; version: string; board: string; serial: string } }>(
+    migrationRequest<{
+      ok: boolean;
+      identity: { identity: string; version: string; board: string; serial: string };
+      sourceRouterId: number | null;
+      sourceRouterName: string | null;
+      sourceRegistered: boolean;
+    }>(
       `/jobs/${jobId}/verify`,
       { method: "POST", body: "{}" },
     ),

@@ -157,6 +157,12 @@ function PlanRow({
   );
 }
 
+function createMigrationRegistrationKey(): string {
+  const bytes = new Uint8Array(32);
+  window.crypto.getRandomValues(bytes);
+  return Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+}
+
 export default function NetworkMigration() {
   const [routers, setRouters] = useState<MigrationRouter[]>([]);
   const [sourceId, setSourceId] = useState<number | "">("");
@@ -179,38 +185,46 @@ export default function NetworkMigration() {
 
   const selectedSource = useMemo(() => routers.find(item => item.id === Number(sourceId)), [routers, sourceId]);
   const replacementRouters = useMemo(
-    () => routers.filter(item => item.id !== Number(sourceId)),
+    () => routers.filter(item => item.id !== Number(sourceId) && !item.migration_source_only),
     [routers, sourceId],
   );
+  const canStartMigration = !loading && !busy && (!jobId || ["failed", "completed"].includes(job?.status ?? ""));
 
   const refreshJob = useCallback(async (id: number) => {
     const current = await migrationApi.job(id);
     setJob(current);
-    if (current.status === "exported" || current.status === "target_selected" || current.status === "dry_run" || current.status === "importing" || current.status === "completed" || current.status === "failed") {
-      setCurrentStep(current.status === "exported" ? 3 : current.status === "target_selected" || current.status === "dry_run" ? 4 : current.status === "completed" || current.status === "failed" ? 4 : 4);
-    }
+    setSourceId(current.sourceRouterId ?? "");
+    setTargetId(current.targetRouterId ?? "");
+    setOutcome(current.targetMode);
+    if (current.status === "source_pending" || current.status === "tunnel_issued") setCurrentStep(1);
+    else if (current.status === "connected") setCurrentStep(2);
+    else if (current.status === "exported") setCurrentStep(3);
+    else if (["target_selected", "dry_run", "importing", "completed", "failed"].includes(current.status)) setCurrentStep(4);
     return current;
   }, []);
 
   useEffect(() => {
     let cancelled = false;
+    const savedJobId = Number(sessionStorage.getItem("ochola_router_migration_job_id"));
+    const hasSavedJob = Number.isSafeInteger(savedJobId) && savedJobId > 0;
     (async () => {
       try {
         const result = await migrationApi.routers();
         if (cancelled) return;
         setRouters(result.routers);
-        if (result.routers[0]) setSourceId(result.routers[0].id);
+        if (!hasSavedJob && result.routers[0]) setSourceId(result.routers[0].id);
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : "Routers could not be loaded.");
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    const savedJobId = Number(sessionStorage.getItem("ochola_router_migration_job_id"));
-    if (Number.isSafeInteger(savedJobId) && savedJobId > 0) {
+    if (hasSavedJob) {
       setJobId(savedJobId);
       void refreshJob(savedJobId).catch(() => {
         sessionStorage.removeItem("ochola_router_migration_job_id");
+        setJobId(null);
+        setJob(null);
       });
       void migrationApi.tunnelScript(savedJobId).then(result => setTunnelScript(result.tunnelScript)).catch(() => {});
     }
@@ -250,6 +264,8 @@ export default function NetworkMigration() {
     const result = await migrationApi.start(Number(sourceId));
     setJobId(result.jobId);
     sessionStorage.setItem("ochola_router_migration_job_id", String(result.jobId));
+    setTargetId("");
+    setOutcome("replace_router");
     setTunnelScript(result.tunnelScript);
     setCollectorScript("");
     setPlan(null);
@@ -257,6 +273,46 @@ export default function NetworkMigration() {
     await refreshJob(result.jobId);
     setCurrentStep(1);
     setNotice(`Temporary tunnel reserved at ${result.tunnelAddress}. It expires at ${new Date(result.expiresAt).toLocaleString()}.`);
+  });
+
+  const startSourceRegistration = () => runBusy(async () => {
+    const keyStorage = "ochola_router_migration_registration_key";
+    const registrationKey = jobId
+      ? createMigrationRegistrationKey()
+      : sessionStorage.getItem(keyStorage) || createMigrationRegistrationKey();
+    sessionStorage.setItem(keyStorage, registrationKey);
+    try {
+      const result = await migrationApi.registerSource(registrationKey);
+      const tunnelScript = result.tunnelScript || (await migrationApi.tunnelScript(result.jobId)).tunnelScript;
+      setJobId(result.jobId);
+      sessionStorage.setItem("ochola_router_migration_job_id", String(result.jobId));
+      setSourceId(result.sourceRouterId);
+      setTargetId("");
+      setOutcome("replace_router");
+      setRouters(current => {
+        const pending = {
+          id: result.sourceRouterId,
+          name: result.sourceRouterName,
+          status: "setup",
+          host: "",
+          migration_source_only: true,
+        };
+        return [pending, ...current.filter(item => item.id !== pending.id)];
+      });
+      setTunnelScript(tunnelScript);
+      setCollectorScript("");
+      setPlan(null);
+      setApplyResult(null);
+      await refreshJob(result.jobId);
+      setCurrentStep(1);
+      const expiry = result.expiresAt ? ` It expires at ${new Date(result.expiresAt).toLocaleString()}.` : "";
+      setNotice(`Pending source ${result.sourceRouterName} is bound to this migration. Run the temporary tunnel script; identity verification will finalize an offline, migration-only dashboard record.${expiry}`);
+    } catch (cause) {
+      if (cause instanceof Error && /registration attempt has ended|tunnel expired/i.test(cause.message)) {
+        sessionStorage.removeItem(keyStorage);
+      }
+      throw cause;
+    }
   });
 
   const reloadTunnelScript = () => runBusy(async () => {
@@ -273,7 +329,15 @@ export default function NetworkMigration() {
     const collector = await migrationApi.collectorScript(jobId);
     setCollectorScript(collector.collectorScript);
     await refreshJob(jobId);
-    setNotice(`RouterOS API verified: ${result.identity.identity}, RouterOS ${result.identity.version}. The collector token is time-limited.`);
+    if (result.sourceRegistered) {
+      const routerList = await migrationApi.routers();
+      setRouters(routerList.routers);
+      setSourceId(result.sourceRouterId ?? "");
+      setOutcome("replace_router");
+      setNotice(`Identity verified: ${result.identity.identity}, RouterOS ${result.identity.version}. ${result.sourceRouterName} is now listed as offline and migration-only; it has no persistent router access. The collector token is time-limited.`);
+    } else {
+      setNotice(`RouterOS API verified: ${result.identity.identity}, RouterOS ${result.identity.version}. The collector token is time-limited.`);
+    }
   });
 
   const refreshCollector = () => runBusy(async () => {
@@ -345,7 +409,7 @@ export default function NetworkMigration() {
           <div style={{ color: "var(--isp-accent)", fontSize: 11, fontWeight: 900, letterSpacing: ".12em" }}>NETWORK RECOVERY</div>
           <h1 style={{ margin: "6px 0 5px", color: "var(--isp-text)", fontSize: "1.55rem", fontWeight: 900 }}>RouterOS migration</h1>
           <p style={{ ...muted, margin: 0, maxWidth: 820 }}>
-            Inspect a source MikroTik through a temporary management tunnel. Then adopt that router or copy only reviewed, portable RouterOS configuration to a separate replacement.
+            Inspect a MikroTik through a temporary management tunnel, then review and copy supported RouterOS configuration and saved accounts to a separate replacement.
           </p>
         </header>
 
@@ -359,7 +423,8 @@ export default function NetworkMigration() {
               <ul style={{ ...muted, margin: "6px 0 0", paddingLeft: 18 }}>
                 <li>Billing plans, customers, payment records, balances, and transaction history are not copied or changed.</li>
                 <li>The temporary tunnel is restricted to this router, uses the isolated management VPN, and expires automatically.</li>
-                <li>Raw exports and pre-migration target state stay encrypted on the server. RouterOS active sessions cannot be transferred.</li>
+                <li>Saved PPPoE and Hotspot accounts are included only when RouterOS provides their credentials in the sensitive export; missing credentials and unsupported hardware-specific settings need manual setup.</li>
+                <li>Raw exports and pre-migration target state stay encrypted on the server. Active sessions cannot be transferred, so customers reconnect on the replacement.</li>
               </ul>
             </div>
           </div>
@@ -382,7 +447,7 @@ export default function NetworkMigration() {
           <SectionHeading
             number="1"
             title="Choose the source router"
-            detail="The source is inspected through a one-hour temporary tunnel. This does not promote or change its ISP router status."
+            detail="Use a listed router or register an unlisted source with a temporary script. A newly registered source remains migration-only and offline after identity verification."
           />
           <div style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) auto", gap: 12, alignItems: "end" }}>
             <label style={{ display: "grid", gap: 6, color: "var(--isp-text)", fontSize: 12, fontWeight: 800 }}>
@@ -395,17 +460,25 @@ export default function NetworkMigration() {
               >
                 <option value="">Select a router…</option>
                 {routers.map(item => (
-                  <option key={item.id} value={item.id}>{displayRouter(item)} · {item.host || item.vpn_ip || "address not saved"}</option>
+                  <option key={item.id} value={item.id}>{displayRouter(item)} · {item.migration_source_only ? "migration-only · offline" : item.host || item.vpn_ip || "address not saved"}</option>
                 ))}
               </select>
             </label>
-            <button type="button" style={buttonStyle(true, busy || loading || !sourceId || Boolean(jobId && !["failed", "completed"].includes(job?.status ?? "")))} disabled={busy || loading || !sourceId || Boolean(jobId && !["failed", "completed"].includes(job?.status ?? ""))} onClick={startMigration}>
+            <button type="button" style={buttonStyle(true, !canStartMigration || !sourceId)} disabled={!canStartMigration || !sourceId} onClick={startMigration}>
               {busy ? <LoaderCircle size={15} /> : <Wifi size={15} />} Start source inspection
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) auto", gap: 12, alignItems: "center", paddingTop: 4 }}>
+            <div style={muted}>
+              If the existing MikroTik is not listed, register it here. The script creates only temporary access; the dashboard record is finalized after RouterOS identity is verified.
+            </div>
+            <button type="button" style={buttonStyle(false, !canStartMigration)} disabled={!canStartMigration} onClick={startSourceRegistration}>
+              {busy ? <LoaderCircle size={15} /> : <LockKeyhole size={15} />} Register unlisted source
             </button>
           </div>
           {routers.length === 0 && !loading && (
             <div style={{ ...muted, padding: 12, background: "rgba(148,163,184,.08)", borderRadius: 9 }}>
-              No router records are available for this ISP account. Add the router through the standard router onboarding flow first.{" "}
+              No routers are listed yet. Use “Register unlisted source” for migration, or add a permanently managed router through the standard onboarding flow.{" "}
               <Link href="/admin/network/routers" style={{ color: "var(--isp-accent)", fontWeight: 800 }}>Open routers</Link>
             </div>
           )}
@@ -413,7 +486,7 @@ export default function NetworkMigration() {
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12, color: "var(--isp-text-muted)", fontSize: 12 }}>
               <span><Server size={14} style={{ verticalAlign: "middle", marginRight: 5 }} />{displayRouter(selectedSource)}</span>
               <span>Current record status: {selectedSource.status || "unknown"}</span>
-              <span>Management address: {selectedSource.vpn_ip || selectedSource.host || "not saved"}</span>
+              <span>Management address: {selectedSource.migration_source_only ? "temporary migration access only" : selectedSource.vpn_ip || selectedSource.host || "not saved"}</span>
             </div>
           )}
           <div style={muted}>
@@ -542,10 +615,12 @@ export default function NetworkMigration() {
               <div style={{ ...muted }}>Credentials unavailable to the source export require manual configuration: {job.findings?.manualConfigurationCount ?? 0} item(s).</div>
               <div style={{ color: "var(--isp-text)", fontWeight: 850, fontSize: 13 }}>Choose the outcome</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(245px,1fr))", gap: 10 }}>
-                <label style={{ border: `1px solid ${outcome === "adopt_source" ? "var(--isp-accent)" : "var(--isp-border)"}`, borderRadius: 10, padding: 12, display: "flex", gap: 9, cursor: "pointer" }}>
-                  <input type="radio" name="migration-outcome" checked={outcome === "adopt_source"} onChange={() => setOutcome("adopt_source")} />
-                  <span><strong style={{ color: "var(--isp-text)", fontSize: 13 }}>Adopt this same router</strong><span style={{ ...muted, display: "block", marginTop: 4 }}>No target copy or RouterOS writes. Existing install/verification gates remain unchanged.</span></span>
-                </label>
+                {!job.findings?.sourceRegistrationComplete && (
+                  <label style={{ border: `1px solid ${outcome === "adopt_source" ? "var(--isp-accent)" : "var(--isp-border)"}`, borderRadius: 10, padding: 12, display: "flex", gap: 9, cursor: "pointer" }}>
+                    <input type="radio" name="migration-outcome" checked={outcome === "adopt_source"} onChange={() => setOutcome("adopt_source")} />
+                    <span><strong style={{ color: "var(--isp-text)", fontSize: 13 }}>Adopt this same router</strong><span style={{ ...muted, display: "block", marginTop: 4 }}>No target copy or RouterOS writes. Existing install/verification gates remain unchanged.</span></span>
+                  </label>
+                )}
                 <label style={{ border: `1px solid ${outcome === "replace_router" ? "var(--isp-accent)" : "var(--isp-border)"}`, borderRadius: 10, padding: 12, display: "flex", gap: 9, cursor: "pointer" }}>
                   <input type="radio" name="migration-outcome" checked={outcome === "replace_router"} onChange={() => setOutcome("replace_router")} />
                   <span><strong style={{ color: "var(--isp-text)", fontSize: 13 }}>Copy to a replacement router</strong><span style={{ ...muted, display: "block", marginTop: 4 }}>Select a different device; only reviewed portable RouterOS settings can be written.</span></span>
