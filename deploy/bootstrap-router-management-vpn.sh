@@ -122,24 +122,25 @@ fi
 
 write_auth_script() {
   local auth_script="$1"
+  local auth_file="$2"
   if [ ! -s "$auth_script" ] ||
-     ! $SUDO grep -Fqx 'PASSFILE="${1:?credentials file is required}"' "$auth_script" ||
+     ! $SUDO grep -Fqx "PASSFILE=\"${auth_file}\"" "$auth_script" ||
      ! $SUDO grep -Fqx 'USERNAME="${username:-}"' "$auth_script" ||
      ! $SUDO grep -Fqx 'PASSWORD="${password:-}"' "$auth_script"
   then
-    $SUDO tee "$auth_script" >/dev/null <<'AUTHEOF'
+    $SUDO tee "$auth_script" >/dev/null <<AUTHEOF
 #!/usr/bin/env bash
 set -euo pipefail
 
-PASSFILE="${1:?credentials file is required}"
-USERNAME="${username:-}"
-PASSWORD="${password:-}"
+PASSFILE="${auth_file}"
+USERNAME="\${username:-}"
+PASSWORD="\${password:-}"
 
-[ -n "$USERNAME" ] || exit 1
-[ -n "$PASSWORD" ] || exit 1
-[ -r "$PASSFILE" ] || exit 1
+[ -n "\$USERNAME" ] || exit 1
+[ -n "\$PASSWORD" ] || exit 1
+[ -r "\$PASSFILE" ] || exit 1
 
-grep -Fqx "${USERNAME}:${PASSWORD}" "$PASSFILE"
+grep -Fqx "\${USERNAME}:\${PASSWORD}" "\$PASSFILE"
 AUTHEOF
   fi
   $SUDO chmod 700 "$auth_script"
@@ -147,8 +148,8 @@ AUTHEOF
 
 PRIMARY_AUTH_SCRIPT="${OVPN_DIR}/verify-router-pass.sh"
 BACKUP_AUTH_SCRIPT="${OVPN_DIR}/verify-router-backup-pass.sh"
-write_auth_script "$PRIMARY_AUTH_SCRIPT"
-write_auth_script "$BACKUP_AUTH_SCRIPT"
+write_auth_script "$PRIMARY_AUTH_SCRIPT" "${OVPN_DIR}/router-passwd"
+write_auth_script "$BACKUP_AUTH_SCRIPT" "${OVPN_DIR}/router-backup-passwd"
 
 write_empty_auth_file() {
   local path="$1"
@@ -170,8 +171,7 @@ write_config() {
   local ccd="$5"
   local ipp="$6"
   local status="$7"
-  local authfile="$8"
-  local authscript="$9"
+  local authscript="$8"
 
   local tmp
   tmp="$(mktemp)"
@@ -194,7 +194,7 @@ persist-key
 persist-tun
 script-security 3
 verify-client-cert none
-auth-user-pass-verify ${authscript} ${authfile} via-env
+auth-user-pass-verify ${authscript} via-env
 username-as-common-name
 cipher AES-128-CBC
 data-ciphers AES-128-CBC
@@ -231,7 +231,6 @@ write_config \
   "${SERVER_DIR}/ochola-router-ccd" \
   "${OVPN_DIR}/router-ipp.txt" \
   "/var/log/openvpn/ochola-router-status.log" \
-  "${OVPN_DIR}/router-passwd" \
   "$PRIMARY_AUTH_SCRIPT"
 PRIMARY_CONFIG_FINGERPRINT="$CONFIG_FINGERPRINT"
 PRIMARY_CONFIG_UNCHANGED="$CONFIG_UNCHANGED"
@@ -244,7 +243,6 @@ write_config \
   "${SERVER_DIR}/ochola-router-backup-ccd" \
   "${OVPN_DIR}/router-backup-ipp.txt" \
   "/var/log/openvpn/ochola-router-backup-status.log" \
-  "${OVPN_DIR}/router-backup-passwd" \
   "$BACKUP_AUTH_SCRIPT"
 BACKUP_CONFIG_FINGERPRINT="$CONFIG_FINGERPRINT"
 BACKUP_CONFIG_UNCHANGED="$CONFIG_UNCHANGED"

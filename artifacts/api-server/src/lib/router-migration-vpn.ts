@@ -47,19 +47,21 @@ set -euo pipefail
 umask 077
 config=${JSON.stringify(profile.configPath)}
 auth=${JSON.stringify(profile.authFilePath)}
+auth_script=${JSON.stringify(profile.authScriptPath)}
 ccd=${JSON.stringify(profile.ccdPath)}
 username=${JSON.stringify(username)}
 password=${JSON.stringify(password)}
 assigned_ip=${JSON.stringify(assignedIp)}
 peer_ip=${JSON.stringify(peerIp)}
-test -f "$config" && test -f "$auth" && test -d "$ccd"
+test -f "$config" && test -f "$auth" && test -f "$auth_script" && test -d "$ccd"
 grep -Eq '^port[[:space:]]+${profile.port}$' "$config"
 grep -Eq '^dev[[:space:]]+${profile.interfaceName}$' "$config"
 grep -Eq '^server[[:space:]]+10\\.8\\.6\\.0[[:space:]]+255\\.255\\.255\\.0$' "$config"
 grep -Eq '^topology[[:space:]]+net30$' "$config"
 grep -Fqx 'client-config-dir ${profile.ccdPath}' "$config"
 grep -Fqx 'ifconfig-pool-persist ${profile.ippPath}' "$config"
- grep -Fqx 'auth-user-pass-verify ${profile.authScriptPath} ${profile.authFilePath} via-env' "$config"
+grep -Fqx 'auth-user-pass-verify ${profile.authScriptPath} via-env' "$config"
+grep -Fqx 'PASSFILE="${profile.authFilePath}"' "$auth_script"
 if awk -F: -v name="$username" '$1 == name { found=1 } END { exit !found }' "$auth"; then
   echo "Temporary migration username already exists." >&2
   exit 21

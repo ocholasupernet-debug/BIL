@@ -159,14 +159,16 @@ check "primary network is 10.8.5.0/24" grep -Eq '^server 10\.8\.5\.0 255\.255\.2
 check "backup port is 1197/tcp" grep -Eq '^port 1197$' "$BACKUP_CONF"
 check "backup protocol is tcp-server" grep -Eq '^proto tcp-server$' "$BACKUP_CONF"
 check "backup network is 10.8.6.0/24" grep -Eq '^server 10\.8\.6\.0 255\.255\.255\.0$' "$BACKUP_CONF"
-check "primary auth directive is canonical" grep -Fqx "auth-user-pass-verify /etc/openvpn/verify-router-pass.sh /etc/openvpn/router-passwd via-env" "$PRIMARY_CONF"
-check "backup auth directive is canonical" grep -Fqx "auth-user-pass-verify /etc/openvpn/verify-router-backup-pass.sh /etc/openvpn/router-backup-passwd via-env" "$BACKUP_CONF"
+check "primary auth directive is canonical" grep -Fqx "auth-user-pass-verify /etc/openvpn/verify-router-pass.sh via-env" "$PRIMARY_CONF"
+check "backup auth directive is canonical" grep -Fqx "auth-user-pass-verify /etc/openvpn/verify-router-backup-pass.sh via-env" "$BACKUP_CONF"
 echo "primary: 1196/tcp on 10.8.5.0/24"
 echo "backup: 1197/tcp on 10.8.6.0/24"
 
 echo "=== Router-management authentication ==="
 check "primary auth file exists" test -s "$PRIMARY_AUTH"
 check "backup auth file exists" test -s "$BACKUP_AUTH"
+check "primary verifier uses the primary auth file" grep -Fqx 'PASSFILE="/etc/openvpn/router-passwd"' /etc/openvpn/verify-router-pass.sh
+check "backup verifier uses the backup auth file" grep -Fqx 'PASSFILE="/etc/openvpn/router-backup-passwd"' /etc/openvpn/verify-router-backup-pass.sh
 PRIMARY_IDENTITY=""
 if [ -s "$PRIMARY_AUTH" ]; then
   PRIMARY_IDENTITY="$(awk -F: '/^[A-Za-z0-9][A-Za-z0-9._-]*:[^:]*$/ { print $1; exit }' "$PRIMARY_AUTH")"

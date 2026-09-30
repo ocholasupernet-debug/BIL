@@ -5,12 +5,13 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 const outdir = "tests/.migration-build";
-await build({ entryPoints: ["src/lib/router-migration-exporter.ts", "src/lib/router-migration-importer.ts", "src/lib/router-migration-export-script.ts", "src/lib/migration-tunnel.ts", "src/lib/router-migration-vpn.ts"], outdir, bundle: true, platform: "node", format: "cjs", outExtension: { ".js": ".cjs" }, external: ["node-routeros"], logLevel: "silent" });
+await build({ entryPoints: ["src/lib/router-migration-exporter.ts", "src/lib/router-migration-importer.ts", "src/lib/router-migration-export-script.ts", "src/lib/migration-tunnel.ts", "src/lib/router-migration-vpn.ts", "src/lib/vpn-utils.ts"], outdir, bundle: true, platform: "node", format: "cjs", outExtension: { ".js": ".cjs" }, external: ["node-routeros"], logLevel: "silent" });
 const exporter = await import(path.resolve(outdir, "router-migration-exporter.cjs"));
 const importer = await import(path.resolve(outdir, "router-migration-importer.cjs"));
 const exportScript = await import(path.resolve(outdir, "router-migration-export-script.cjs"));
 const tunnelScript = await import(path.resolve(outdir, "migration-tunnel.cjs"));
 const migrationVpn = await import(path.resolve(outdir, "router-migration-vpn.cjs"));
+const vpnUtils = await import(path.resolve(outdir, "vpn-utils.cjs"));
 await rm(outdir, { recursive: true, force: true });
 
 test("temporary migration provisioning requires the complete backup auth directive", () => {
@@ -21,10 +22,30 @@ test("temporary migration provisioning requires the complete backup auth directi
   });
   assert.match(
     script,
-    /grep -Fqx 'auth-user-pass-verify \/etc\/openvpn\/verify-router-backup-pass\.sh \/etc\/openvpn\/router-backup-passwd via-env'/,
+    /grep -Fqx 'auth-user-pass-verify \/etc\/openvpn\/verify-router-backup-pass\.sh via-env'/,
   );
-  assert.doesNotMatch(script, /auth-user-pass-verify \/etc\/openvpn\/verify-router-backup-pass\.sh via-env'/);
+  assert.match(script, /grep -Fqx 'PASSFILE="\/etc\/openvpn\/router-backup-passwd"'/);
+  assert.doesNotMatch(script, /auth-user-pass-verify \/etc\/openvpn\/verify-router-backup-pass\.sh \/etc\/openvpn\/router-backup-passwd via-env/);
   assert.doesNotMatch(script, /auth-user-pass-verify \/etc\/openvpn\/verify-router-pass\.sh/);
+});
+
+test("one-shot OpenVPN setup keeps auth arguments valid and binds each helper to its own file", () => {
+  for (const { vpnRole, routerTunnelIp, authFile } of [
+    { vpnRole: "primary", routerTunnelIp: "10.8.5.42", authFile: "router-passwd" },
+    { vpnRole: "backup", routerTunnelIp: "10.8.6.42", authFile: "router-backup-passwd" },
+  ]) {
+    const script = vpnUtils.generateVpsOvpnSetupScript({
+      vpsPublicIp: "vpn.example.test",
+      vpnUsername: "router-auth-test",
+      vpnPassword: "temporary-auth-test-password",
+      routerTunnelIp,
+      vpnRole,
+    });
+    assert.match(script, /echo "auth-user-pass-verify \$AUTHSCRIPT via-env"/);
+    assert.doesNotMatch(script, /auth-user-pass-verify \$AUTHSCRIPT \$AUTHFILE via-env/);
+    assert.ok(script.includes(`AUTHFILE="/etc/openvpn/${authFile}"`));
+    assert.match(script, /PASSFILE="\$AUTHFILE"/);
+  }
 });
 
 test("source allowlist excludes files and mutations", () => {

@@ -256,9 +256,10 @@ assert_contains "$SCENARIO_LOG" "ip <-4> <addr> <show> <dev> <tun-router-bkp>"
 assert_contains "$SCENARIO_LOG" "ss <-H> <-lnt>"
 assert_contains "$SCENARIO_OUTPUT" "Primary OpenVPN: TCP 1196 on 10.8.5.0/24"
 assert_contains "$SCENARIO_OUTPUT" "Backup OpenVPN:  TCP 1197 on 10.8.6.0/24"
-assert_contains "${clean_root}/etc/openvpn/server/ochola-router.conf" "auth-user-pass-verify ${clean_root}/etc/openvpn/verify-router-pass.sh ${clean_root}/etc/openvpn/router-passwd via-env"
-assert_contains "${clean_root}/etc/openvpn/server/ochola-router-backup.conf" "auth-user-pass-verify ${clean_root}/etc/openvpn/verify-router-backup-pass.sh ${clean_root}/etc/openvpn/router-backup-passwd via-env"
-assert_contains "${clean_root}/etc/openvpn/verify-router-backup-pass.sh" 'PASSFILE="${1:?credentials file is required}"'
+assert_contains "${clean_root}/etc/openvpn/server/ochola-router.conf" "auth-user-pass-verify ${clean_root}/etc/openvpn/verify-router-pass.sh via-env"
+assert_contains "${clean_root}/etc/openvpn/server/ochola-router-backup.conf" "auth-user-pass-verify ${clean_root}/etc/openvpn/verify-router-backup-pass.sh via-env"
+assert_contains "${clean_root}/etc/openvpn/verify-router-pass.sh" "PASSFILE=\"${clean_root}/etc/openvpn/router-passwd\""
+assert_contains "${clean_root}/etc/openvpn/verify-router-backup-pass.sh" "PASSFILE=\"${clean_root}/etc/openvpn/router-backup-passwd\""
 echo "PASS: clean host starts modern units and verifies both tunnel addresses and listeners"
 
 repair_root="$(prepare_root managed-auth-repair)"
@@ -277,8 +278,8 @@ if [ "$SCENARIO_STATUS" -ne 0 ]; then
   cat "$SCENARIO_OUTPUT" >&2
   exit 1
 fi
-assert_contains "${repair_root}/etc/openvpn/server/ochola-router-backup.conf" "auth-user-pass-verify ${repair_root}/etc/openvpn/verify-router-backup-pass.sh ${repair_root}/etc/openvpn/router-backup-passwd via-env"
-assert_contains "${repair_root}/etc/openvpn/verify-router-backup-pass.sh" 'PASSFILE="${1:?credentials file is required}"'
+assert_contains "${repair_root}/etc/openvpn/server/ochola-router-backup.conf" "auth-user-pass-verify ${repair_root}/etc/openvpn/verify-router-backup-pass.sh via-env"
+assert_contains "${repair_root}/etc/openvpn/verify-router-backup-pass.sh" "PASSFILE=\"${repair_root}/etc/openvpn/router-backup-passwd\""
 assert_not_contains "$SCENARIO_LOG" "systemctl <stop> <openvpn@ochola-router-backup>"
 assert_not_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn@ochola-router-backup>"
 echo "PASS: managed auth directive and helper are repaired without disturbing legacy ownership"
