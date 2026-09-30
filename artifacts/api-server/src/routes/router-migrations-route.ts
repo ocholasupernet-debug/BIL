@@ -70,7 +70,6 @@ type SourceRouter = {
   vpn_ip?: string | null;
   bridge_ip?: string | null;
   router_secret?: string | null;
-  username?: string | null;
   identity?: string | null;
   serial?: string | null;
   model?: string | null;
@@ -130,7 +129,7 @@ async function loadRouter(adminId: number, idValue: unknown, res?: Response): Pr
   const ownerFilter = buildOwnerFilter(adminId);
   const rows = await sbSelectStrict<SourceRouter>(
     "isp_routers",
-    `id=eq.${id}${ownerFilter}&select=id,admin_id,name,status,host,vpn_ip,bridge_ip,router_secret,username,identity,serial,model,migration_source_only&limit=1`,
+    `id=eq.${id}${ownerFilter}&select=id,admin_id,name,status,host,vpn_ip,bridge_ip,router_secret,identity,serial,model,migration_source_only&limit=1`,
   );
   if (!rows[0]) {
     res?.status(404).json({ error: "Router not found for this ISP account." });
