@@ -3,6 +3,7 @@ import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { sbDelete, sbInsert, sbSelect, sbSelectStrict, sbUpdate, sbUpsertStrict, sbDeleteStrict, sbInsertStrict, sbUpdateStrict } from "../lib/supabase-client.js";
 import { getMpesaSettings, getPaymentDestinations, isMpesaConfigured } from "../lib/settings-store.js";
 import { encryptGatewayConfig, gatewayConfigPreview, isResellerGatewayId, type ResellerGatewayRouteRow } from "../lib/reseller-payment-gateway.js";
+import { sendPlatformSecurityNotice } from "../lib/platform-email.js";
 
 const router: IRouter = Router();
 const PLAN_TYPES = new Set(["hotspot", "pppoe", "static"]);
@@ -196,6 +197,10 @@ router.put("/super-admin/reseller-payment-routes", async (req, res): Promise<voi
     const saved = existing[0]
       ? await sbUpdateStrict<{ id: number }>("reseller_payment_gateway_routes", `id=eq.${existing[0].id}`, payload)
       : await sbInsertStrict<{ id: number }>("reseller_payment_gateway_routes", { ...payload, created_at: new Date().toISOString() });
+    void sendPlatformSecurityNotice(
+      "Reseller payment gateway route changed",
+      `The Super Admin saved the ${gatewayType} payment route for reseller #${resellerId}. No payment account credentials are included in this notice.`,
+    );
     res.json({ ok: true, routeId: saved[0]?.id ?? existing[0]?.id });
   } catch (error) {
     res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Could not save the reseller payment route." });
@@ -211,6 +216,10 @@ router.delete("/super-admin/reseller-payment-routes/:id", async (req, res): Prom
   }
   try {
     await sbDeleteStrict("reseller_payment_gateway_routes", `id=eq.${routeId}`);
+    void sendPlatformSecurityNotice(
+      "Reseller payment gateway route removed",
+      "The Super Admin removed a reseller payment gateway route.",
+    );
     res.json({ ok: true });
   } catch (error) {
     res.status(400).json({ ok: false, error: error instanceof Error ? error.message : "Could not remove the reseller payment route." });

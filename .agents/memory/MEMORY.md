@@ -4,14 +4,14 @@
 - [Wildcard certificate deployment](wildcard-certificate-deployment.md) — Install a separately supplied SAN certificate through encrypted Actions secrets; never commit its private key.
 - [GitHub connector commit flow](github-connector-commit.md) — Read files individually, compare the full remote tree with local tracked files, then use one non-forced tree/commit/ref update.
 - [GitHub connector blob encoding](github-connector-blob-encoding.md) — Use readFile UTF-8 for large blobs, upload sequentially, and verify each returned SHA.
-- [GitHub push path limitations](github-push-paths.md) — Connector writes can be endpoint/path limited; verify the remote tree instead of assuming blob success means a push completed.
-- [GitHub connector workflow writes](github-connector-workflow-writes.md) — Stage contents writes on a temporary branch; workflow files require Actions write permission and may be rejected with 403.
+- [GitHub connector workflow writes](github-connector-workflow-writes.md) — Workflow Contents APIs can be filtered; inspect through Git tree/blob and verify refs after branch writes.
 - [GitHub workflow SSH heredocs](github-workflow-heredoc.md) — Heredoc terminators in Actions SSH scripts must align exactly with the YAML block indentation.
-- [Git tree shell transport](github-tree-shell-transport.md) — Shell output can lose tabs or truncate full Git trees; compare compact paths and verify changed blobs individually.
+- [Git tree shell transport](github-tree-shell-transport.md) — Shell output can lose tabs, NUL records, or truncate trees; compare compact paths and verify changed blobs individually.
 - [RouterOS collector transport](routeros-collector-transport.md) — RouterOS HTTP fetch cannot use file upload mode; send bounded POST bodies and reject truncated file reads.
 - [VPN control plane](vpn-control-plane.md) — Encrypt client secrets, redact command payloads, and persist verified RouterOS resource references before follow-up mutations.
 - [Tenant-scoped admin APIs](tenant-scoped-admin-apis.md) — Most APIs remain tenant-scoped; migration is an intentional authenticated-global exception.
 - [Migration UI safety flow](migration-ui-safety-flow.md) — Keep tenant scope, two-script order, distinct export review, and the explicit write boundary visible.
+- [RouterOS migration boundary](routeros-migration-boundary.md) — Copy only approved RouterOS configuration; never clone billing data or promote a source during inspection.
 - [Router management VPN pool](router-management-vpn-pool.md) — Keep persistent MikroTik management clients on the isolated 10.8.5.x OpenVPN instance; preserve legacy end-user 10.8.0.x clients.
 - [Router management VPN failover](router-management-vpn-failover.md) — Self Install must prefer the 10.8.5.x client and activate the isolated 10.8.6.x client only after primary failure.
 - [Hotspot MAC payment access](hotspot-mac-payment-access.md) — Paid MAC bypasses must be paired with a persistent RouterOS expiry scheduler and must not expose router credentials to the portal.
@@ -49,6 +49,7 @@
 - [Storage capacity alerts](storage-capacity-alerts.md) — Evaluate capacity warnings from the current authoritative measurement, independently of snapshot persistence success.
 - [OpenVPN setup-script compatibility](openvpn-setup-script-compatibility.md) — Preserve literal `dh none` and escape Bash indirect expansion when generating scripts inside TypeScript templates.
 - [Router installer stale files](router-installer-stale-files.md) — Verify the dynamic installer revision and no-store response before treating repeated RouterOS output as current.
+- [RouterOS API timeout events](routeros-api-timeout-events.md) — Guard post-connect node-routeros error events; route-level catches alone cannot prevent API process termination.
 - [Router installer token](router-installer-token.md) — Keep the router API password separate from the short-lived token used by VPN bootstrap URLs.
 - [Router hotspot walled garden](router-hotspot-walled-garden.md) — Allow the tenant portal hostname before login and ignore default hotspot profiles with a 0.0.0.0 gateway.
 - [Hotspot service forwarding](hotspot-service-forwarding.md) — Service masquerade alone is insufficient; explicitly allow bridge forwarding and router DNS while protecting WAN DNS.

@@ -16,6 +16,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { autoProvision }  from "../lib/auto-provision";
 import { sbSelect, sbInsert, sbRpc } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
+import { sendRegistrationConfirmationEmail } from "../lib/platform-email.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import { secretMatches, verifyStripeSignature } from "../lib/webhook-auth.js";
 
@@ -124,6 +125,7 @@ async function settlePendingPaybillRegistration(
     return false;
   }
 
+  void sendRegistrationConfirmationEmail(transaction.admin_id);
   void provisionTenantCertificateForAdmin(transaction.admin_id).catch(error => {
     logger.error({ err: error, adminId: transaction.admin_id }, "[registration] PayBill certificate provisioning failed; timer will retry");
   });

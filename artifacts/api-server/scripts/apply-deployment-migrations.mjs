@@ -41,6 +41,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_router_vpn_ip.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_management_vpn_credentials.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_migration_jobs.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_router_migration_copy_flow.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_vpn_management.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_tenant_subdomain_rules.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_vpn_fallbacks.sql", import.meta.url)),
@@ -64,6 +65,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_registration_payment_phone.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_registration_payments.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_secure_daraja_settings.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_platform_email_settings.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_service_payment_routing.sql", import.meta.url)),
   // The base reseller-port table must exist before the additive port-service
   // columns and payment-gateway schema are applied.

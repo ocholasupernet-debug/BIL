@@ -13,6 +13,7 @@
 import { randomBytes, timingSafeEqual } from "crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { logger } from "../lib/logger.js";
+import { sendPlatformSecurityNotice } from "../lib/platform-email.js";
 
 const router: IRouter = Router();
 
@@ -122,6 +123,10 @@ router.post("/super-admin/login", (req: Request, res: Response): void => {
   failedLoginAttempts.delete(attemptKey);
 
   logger.info({ username }, "[super-admin/login] successful login — single session enforced");
+  void sendPlatformSecurityNotice(
+    "Super Admin sign-in",
+    "A successful sign-in to the OcholaSupernet Super Admin interface was recorded. This alert does not report logins made directly on an external payment-provider website.",
+  );
 
   res.json({
     ok:       true,

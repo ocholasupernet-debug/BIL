@@ -45,10 +45,6 @@ export default function SuperAdminSystemSettings() {
     domain: "isplatty.org",
     adminEmail: "admin@isplatty.org",
     supportEmail: "support@isplatty.org",
-    smtpHost: "smtp.gmail.com",
-    smtpPort: "587",
-    smtpUser: "noreply@isplatty.org",
-    smtpPass: "",
     radiusHost: "127.0.0.1",
     radiusPort: "1812",
     radiusSecret: "",
@@ -68,8 +64,33 @@ export default function SuperAdminSystemSettings() {
   const [visibilitySaving, setVisibilitySaving] = useState(false);
   const [visibilitySaved, setVisibilitySaved] = useState(false);
   const [visibilityError, setVisibilityError] = useState("");
+  const [emailCfg, setEmailCfg] = useState({
+    enabled: false,
+    host: "",
+    port: "587",
+    security: "starttls",
+    authEnabled: true,
+    username: "",
+    password: "",
+    fromEmail: "",
+    fromName: "OcholaSupernet",
+    securityEmail: "",
+    hasPassword: false,
+    configured: false,
+  });
+  const [emailLoading, setEmailLoading] = useState(true);
+  const [emailSaving, setEmailSaving] = useState(false);
+  const [emailTesting, setEmailTesting] = useState(false);
+  const [emailSaved, setEmailSaved] = useState(false);
+  const [emailTestMessage, setEmailTestMessage] = useState("");
+  const [emailError, setEmailError] = useState("");
   const set = (k: keyof typeof cfg, v: string | boolean) => { setCfg(f => ({ ...f, [k]: v })); setSaved(false); };
   const save = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
+  const updateEmailCfg = (changes: Partial<typeof emailCfg>) => {
+    setEmailCfg(current => ({ ...current, ...changes, configured: false }));
+    setEmailSaved(false);
+    setEmailTestMessage("");
+  };
 
   const superAdminHeaders = (): Record<string, string> => {
     const token = localStorage.getItem("ochola_superadmin_token") || "";
@@ -93,6 +114,41 @@ export default function SuperAdminSystemSettings() {
       }
     };
     void loadVisibility();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadEmailSettings = async () => {
+      try {
+        const response = await fetch("/api/super-admin/email-settings", {
+          headers: superAdminHeaders(),
+          cache: "no-store",
+        });
+        const data = await response.json() as {
+          settings?: {
+            enabled?: boolean; host?: string; port?: number; security?: string;
+            authEnabled?: boolean; username?: string; fromEmail?: string;
+            fromName?: string; securityEmail?: string; hasPassword?: boolean;
+            configured?: boolean;
+          };
+          error?: string;
+        };
+        if (!response.ok) throw new Error(data.error || "Email settings could not be loaded.");
+        if (cancelled || !data.settings) return;
+        setEmailCfg(current => ({
+          ...current,
+          ...data.settings,
+          port: String(data.settings?.port ?? 587),
+          password: "",
+        }));
+      } catch (error) {
+        if (!cancelled) setEmailError(error instanceof Error ? error.message : "Email settings could not be loaded.");
+      } finally {
+        if (!cancelled) setEmailLoading(false);
+      }
+    };
+    void loadEmailSettings();
     return () => { cancelled = true; };
   }, []);
 
@@ -120,6 +176,74 @@ export default function SuperAdminSystemSettings() {
       setVisibilityError(error instanceof Error ? error.message : "Visibility settings could not be saved.");
     } finally {
       setVisibilitySaving(false);
+    }
+  };
+
+  const saveEmailSettings = async () => {
+    setEmailSaving(true);
+    setEmailError("");
+    setEmailTestMessage("");
+    try {
+      const response = await fetch("/api/super-admin/email-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...superAdminHeaders() },
+        body: JSON.stringify({
+          enabled: emailCfg.enabled,
+          host: emailCfg.host,
+          port: emailCfg.port,
+          security: emailCfg.security,
+          authEnabled: emailCfg.authEnabled,
+          username: emailCfg.username,
+          password: emailCfg.password,
+          fromEmail: emailCfg.fromEmail,
+          fromName: emailCfg.fromName,
+          securityEmail: emailCfg.securityEmail,
+        }),
+      });
+      const data = await response.json() as {
+        settings?: {
+          enabled?: boolean; host?: string; port?: number; security?: string;
+          authEnabled?: boolean; username?: string; fromEmail?: string;
+          fromName?: string; securityEmail?: string; hasPassword?: boolean;
+          configured?: boolean;
+        };
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || "SMTP settings could not be saved.");
+      if (data.settings) {
+        setEmailCfg(current => ({
+          ...current,
+          ...data.settings,
+          port: String(data.settings?.port ?? current.port),
+          password: "",
+        }));
+      }
+      setEmailSaved(true);
+      setTimeout(() => setEmailSaved(false), 3000);
+    } catch (error) {
+      setEmailError(error instanceof Error ? error.message : "SMTP settings could not be saved.");
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
+  const sendTestEmail = async () => {
+    setEmailTesting(true);
+    setEmailError("");
+    setEmailTestMessage("");
+    try {
+      const response = await fetch("/api/super-admin/email-settings/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...superAdminHeaders() },
+        body: JSON.stringify({ to: emailCfg.securityEmail }),
+      });
+      const data = await response.json() as { ok?: boolean; message?: string; error?: string };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Test email could not be sent.");
+      setEmailTestMessage(data.message || "Test email sent.");
+    } catch (error) {
+      setEmailError(error instanceof Error ? error.message : "Test email could not be sent.");
+    } finally {
+      setEmailTesting(false);
     }
   };
 
@@ -169,14 +293,88 @@ export default function SuperAdminSystemSettings() {
           </div>
         </Card>
 
-        {/* SMTP */}
+        {/* Platform-wide SMTP */}
         <Card title="Email (SMTP)" icon={Mail}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
-            <Field label="SMTP Host"><input style={inp} value={cfg.smtpHost} onChange={e => set("smtpHost", e.target.value)} /></Field>
-            <Field label="SMTP Port"><input style={inp} value={cfg.smtpPort} onChange={e => set("smtpPort", e.target.value)} /></Field>
-            <Field label="SMTP Username"><input style={inp} value={cfg.smtpUser} onChange={e => set("smtpUser", e.target.value)} /></Field>
-            <Field label="SMTP Password"><input style={inp} type="password" value={cfg.smtpPass} onChange={e => set("smtpPass", e.target.value)} placeholder="••••••••" /></Field>
-          </div>
+          {emailLoading ? (
+            <p style={{ color: C.muted, fontSize: "0.82rem", margin: 0 }}>Loading secure email settings…</p>
+          ) : (
+            <>
+              <p style={{ color: C.muted, fontSize: "0.8rem", lineHeight: 1.55, margin: "0 0 16px" }}>
+                One shared sender for the platform. Registration confirmations go to the new account; gateway-change and Super Admin sign-in alerts go to the security email. SMTP passwords are encrypted and never returned to this page.
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+                <Field label="SMTP Host">
+                  <input style={inp} value={emailCfg.host} placeholder="smtp.your-provider.com" onChange={e => updateEmailCfg({ host: e.target.value })} />
+                </Field>
+                <Field label="SMTP Port">
+                  <input style={inp} type="number" min="1" max="65535" value={emailCfg.port} onChange={e => updateEmailCfg({ port: e.target.value })} />
+                </Field>
+                <Field label="Connection Security">
+                  <select style={inp} value={emailCfg.security} onChange={e => updateEmailCfg({ security: e.target.value })}>
+                    <option value="starttls">STARTTLS (recommended, usually port 587)</option>
+                    <option value="tls">SSL/TLS (usually port 465)</option>
+                    <option value="none">None (not recommended)</option>
+                  </select>
+                </Field>
+                <Field label="Sender Email">
+                  <input style={inp} type="email" value={emailCfg.fromEmail} placeholder="notifications@example.com" onChange={e => updateEmailCfg({ fromEmail: e.target.value })} />
+                </Field>
+                <Field label="Sender Name">
+                  <input style={inp} value={emailCfg.fromName} placeholder="OcholaSupernet" onChange={e => updateEmailCfg({ fromName: e.target.value })} />
+                </Field>
+                <Field label="Security Alert Email">
+                  <input style={inp} type="email" value={emailCfg.securityEmail} placeholder="admin@example.com" onChange={e => updateEmailCfg({ securityEmail: e.target.value })} />
+                </Field>
+                <Field label="SMTP Username">
+                  <input style={inp} value={emailCfg.username} autoComplete="username" onChange={e => updateEmailCfg({ username: e.target.value })} />
+                </Field>
+                <Field label="SMTP Password">
+                  <input
+                    style={inp}
+                    type="password"
+                    autoComplete="new-password"
+                    value={emailCfg.password}
+                    placeholder={emailCfg.hasPassword ? "Saved — leave blank to keep it" : "SMTP app password"}
+                    onChange={e => updateEmailCfg({ password: e.target.value })}
+                  />
+                </Field>
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 9, color: C.text, fontSize: "0.82rem", margin: "2px 0 16px", cursor: "pointer" }}>
+                <input type="checkbox" checked={emailCfg.authEnabled} onChange={e => updateEmailCfg({ authEnabled: e.target.checked })} />
+                Use SMTP username and password authentication
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 9, color: C.text, fontSize: "0.82rem", marginBottom: 18, cursor: "pointer" }}>
+                <input type="checkbox" checked={emailCfg.enabled} onChange={e => updateEmailCfg({ enabled: e.target.checked })} />
+                Enable platform email delivery
+              </label>
+              {emailCfg.hasPassword && (
+                <p style={{ color: "#86efac", fontSize: "0.76rem", margin: "-8px 0 14px" }}>
+                  An SMTP password is saved securely. Leaving the password field blank keeps the current one.
+                </p>
+              )}
+              {emailError && <p role="alert" style={{ color: "#fca5a5", fontSize: "0.8rem", margin: "0 0 12px" }}>{emailError}</p>}
+              {emailTestMessage && <p role="status" style={{ color: "#86efac", fontSize: "0.8rem", margin: "0 0 12px" }}>{emailTestMessage}</p>}
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => void saveEmailSettings()}
+                  disabled={emailSaving}
+                  style={{ display: "flex", alignItems: "center", gap: 8, background: emailSaved ? "#065f46" : C.accent, border: "none", borderRadius: 9, padding: "9px 15px", color: "white", fontWeight: 700, fontSize: "0.8rem", cursor: emailSaving ? "wait" : "pointer", opacity: emailSaving ? 0.7 : 1 }}
+                >
+                  {emailSaved ? <CheckCircle2 size={14} /> : <Save size={14} />}
+                  {emailSaving ? "Saving…" : emailSaved ? "Email Saved" : "Save Email Settings"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void sendTestEmail()}
+                  disabled={emailTesting || !emailCfg.configured || !emailCfg.enabled}
+                  style={{ display: "flex", alignItems: "center", gap: 8, background: "#172033", border: `1px solid ${C.border}`, borderRadius: 9, padding: "9px 15px", color: C.text, fontWeight: 700, fontSize: "0.8rem", cursor: emailTesting || !emailCfg.configured || !emailCfg.enabled ? "not-allowed" : "pointer", opacity: emailTesting || !emailCfg.configured || !emailCfg.enabled ? 0.55 : 1 }}
+                >
+                  <Mail size={14} /> {emailTesting ? "Sending…" : "Send Test Email"}
+                </button>
+              </div>
+            </>
+          )}
         </Card>
 
         {/* RADIUS */}
