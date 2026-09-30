@@ -38,7 +38,7 @@ import AdminVouchers from "./pages/admin/Vouchers";
 import HotspotBinding from "./pages/admin/HotspotBinding";
 import PrepaidUsers from "./pages/admin/PrepaidUsers";
 
-import HotspotLogin from "./pages/portal/HotspotLogin";
+import HotspotLogin, { HotspotTroubleshootPage } from "./pages/portal/HotspotLogin";
 import PPPoELogin  from "./pages/portal/PPPoELogin";
 import SuperAdminLogin from "./pages/super-admin/Login";
 import SuperAdminDashboard from "./pages/super-admin/Dashboard";
@@ -192,6 +192,7 @@ function Router() {
       <Route path="/admin/vpn/settings" component={VpnSettings} />
 
       {/* Portals — multiple aliases so MikroTik redirect URLs all work */}
+      <Route path="/portal/troubleshoot" component={HotspotTroubleshootPage} />
       <Route path="/hotspot-login" component={HotspotLogin} />
       <Route path="/portal/hotspot" component={HotspotLogin} />
       <Route path="/portal" component={HotspotLogin} />

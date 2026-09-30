@@ -6,6 +6,7 @@
 - [GitHub connector blob encoding](github-connector-blob-encoding.md) — Use readFile UTF-8 for large blobs, upload sequentially, and verify each returned SHA.
 - [GitHub connector workflow writes](github-connector-workflow-writes.md) — Workflow Contents APIs can be filtered; inspect through Git tree/blob and verify refs after branch writes.
 - [GitHub workflow SSH heredocs](github-workflow-heredoc.md) — Heredoc terminators in Actions SSH scripts must align exactly with the YAML block indentation.
+- [GitHub workflow validation](github-workflow-validation.md) — A no-job Actions failure can be a duplicate YAML key; validate workflow mappings before releasing.
 - [Git tree shell transport](github-tree-shell-transport.md) — Shell output can lose tabs, NUL records, or truncate trees; compare compact paths and verify changed blobs individually.
 - [RouterOS collector transport](routeros-collector-transport.md) — RouterOS HTTP fetch cannot use file upload mode; send bounded POST bodies and reject truncated file reads.
 - [VPN control plane](vpn-control-plane.md) — Encrypt client secrets, redact command payloads, and persist verified RouterOS resource references before follow-up mutations.
@@ -16,9 +17,10 @@
 - [Router management VPN failover](router-management-vpn-failover.md) — Self Install must prefer the 10.8.5.x client and activate the isolated 10.8.6.x client only after primary failure.
 - [Hotspot MAC payment access](hotspot-mac-payment-access.md) — Paid MAC bypasses must be paired with a persistent RouterOS expiry scheduler and must not expose router credentials to the portal.
 - [Hotspot forwarding auth gate](hotspot-forwarding-auth-gate.md) — Never put a blanket bridge-to-WAN accept before Hotspot processing; unauthenticated clients must stay behind the portal.
-- [Hotspot M-Pesa reconnect](hotspot-mpesa-reconnect.md) — Treat an SMS as a lookup key for a trusted stored receipt, never as payment proof by itself.
+- [Hotspot M-Pesa reconnect](hotspot-mpesa-reconnect.md) — Require a stored active payment and live router confirmation of its linked device; SMS is only a receipt lookup key.
 - [Hotspot payment router selection](hotspot-payment-router-selection.md) — Payment flows must use the management VPN address, never the customer-facing hotspot gateway.
 - [Hotspot credential login](hotspot-credential-login.md) — Credential login must use the submitted account and server-side RouterOS activation; MAC troubleshooting is a separate recovery path.
+- [Hotspot purchase login handoff](hotspot-purchase-login-handoff.md) — Provision verified purchases server-side, then let the RouterOS portal sign in normal devices; TV purchases and explicit retries stay direct.
 - [Hotspot private portal DNS](hotspot-private-dns.md) — Advertise only the MikroTik gateway DNS when the portal hostname is internal; public fallback causes NXDOMAIN before login.
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
 - [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
@@ -72,7 +74,7 @@
 - [Onboarding deployment modes](onboarding-deployment-modes.md) — Greenfield, Brownfield, and Zero-Touch need separate safety boundaries with legacy aliases normalized centrally.
 - [Unified script compiler migration](unified-script-compiler-migration.md) — Introduce a new RouterOS compiler behind existing installer boundaries; retire old families only after hardware validation.
 - [Self Install script scope](self-install-script-scope.md) — Use a one-time bootstrap to fetch/import mainhotspot.rsc; keep the management .ovpn recovery download separate.
-- [Prepaid session enforcement](prepaid-session-enforcement.md) — Separate routine counter reads from renewal resets; use persistent RouterOS counters and expiry schedulers.
+- [Prepaid session enforcement](prepaid-session-enforcement.md) — Keep expiry disconnects, lightweight portal notices, and full quota checks aligned.
 - [Hotspot FUP enforcement](hotspot-fup-enforcement.md) — Throttle policies must suppress hard byte caps and RADIUS Max-Data, while keeping router-local FUP enforcement and expiry separate.
 - [Multi-port service isolation](multi-port-service-isolation.md) — Separate Hotspot pages per physical port require one bridge, subnet, and uniquely named server/profile per port.
 - [ISP-owned port services](isp-owned-port-services.md) — Legacy port rows require reseller_id; ISP-owned multiport rows use the tenant owner while assigned_reseller_id stays empty.

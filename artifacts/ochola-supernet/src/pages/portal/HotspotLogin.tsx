@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
-  Wifi, Phone, Lock, Zap, CheckCircle2, Ticket,
-  AlertCircle, User, Loader2, Shield, Clock, X,
+  Wifi, Phone, Zap, CheckCircle2, Ticket,
+  AlertCircle, Loader2, Shield, Clock,
   ArrowRight, ArrowUpRight, CreditCard, Tv, Sparkles, Database,
 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
@@ -58,7 +57,7 @@ interface ConnectedDevice {
   routerId: number;
   routerName: string;
 }
-type Tab = "plans" | "tv" | "login" | "voucher";
+type Tab = "plans" | "tv" | "voucher";
 
 function positivePortalId(value: unknown): number | null {
   const parsed = Number(value);
@@ -233,22 +232,6 @@ function hotspotLoginStorageKey(adminId: number | null): string {
   ].map(value => encodeURIComponent(value)).join(":");
 }
 
-function readStoredHotspotCredentials(storageKey: string): HotspotCredentials | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const stored = JSON.parse(window.localStorage.getItem(storageKey) ?? "null") as Partial<HotspotCredentials> | null;
-    if (
-      typeof stored?.username === "string" &&
-      stored.username.trim() &&
-      typeof stored.password === "string" &&
-      stored.password
-    ) {
-      return { username: stored.username, password: stored.password };
-    }
-  } catch {}
-  return null;
-}
-
 function storeHotspotCredentials(storageKey: string, credentials: HotspotCredentials): void {
   try {
     window.localStorage.setItem(storageKey, JSON.stringify(credentials));
@@ -294,7 +277,15 @@ function checkoutPaymentLabel(paymentGateway: string): string {
   return "M-Pesa PayBill";
 }
 
+export function HotspotTroubleshootPage() {
+  return <HotspotLoginView troubleshootingOnly />;
+}
+
 export default function HotspotLogin() {
+  return <HotspotLoginView />;
+}
+
+function HotspotLoginView({ troubleshootingOnly = false }: { troubleshootingOnly?: boolean } = {}) {
   const brand = useBrand();
   const [portalBranding, setPortalBranding] = useState<PortalBranding>({});
   useEffect(() => {
@@ -409,6 +400,7 @@ export default function HotspotLogin() {
   const [checkoutId, setCheckoutId] = useState<string | null>(null);
   const [paymentConfirmed, setPaymentConfirmed] = useState(false);
   const [accessReady, setAccessReady] = useState(false);
+  const [portalHandoffReady, setPortalHandoffReady] = useState(false);
   const [accessRetrying, setAccessRetrying] = useState(false);
   const [paymentFailed, setPaymentFailed] = useState(false);
   const [hotspotCredentials, setHotspotCredentials] = useState<HotspotCredentials | null>(null);
@@ -424,16 +416,7 @@ export default function HotspotLogin() {
   } | null>(null);
   const [paymentStatusLoaded, setPaymentStatusLoaded] = useState(false);
   const loginCredentialsStorageKey = hotspotLoginStorageKey(adminId);
-  const storedLoginCredentials = readStoredHotspotCredentials(loginCredentialsStorageKey);
-  const [loginUsername, setLoginUsername] = useState(storedLoginCredentials?.username ?? "");
-  const [loginPassword, setLoginPassword] = useState(storedLoginCredentials?.password ?? "");
-  const [loginCredentialsLocked, setLoginCredentialsLocked] = useState(Boolean(storedLoginCredentials));
-  const [loginLoading, setLoginLoading] = useState(false);
-  const [loginError, setLoginError] = useState("");
-  const [loginSuccess, setLoginSuccess] = useState(false);
-  const [loggedInName, setLoggedInName] = useState("");
   const [loginSession, setLoginSession] = useState<HotspotSession | null>(null);
-  const [troubleshootDialogOpen, setTroubleshootDialogOpen] = useState(false);
   const [troubleshootLoading, setTroubleshootLoading] = useState(false);
   const [troubleshootMessage, setTroubleshootMessage] = useState("");
   const [troubleshootError, setTroubleshootError] = useState("");
@@ -449,6 +432,11 @@ export default function HotspotLogin() {
   }, [savedTvDevicesStorageKey]);
 
   useEffect(() => {
+    if (troubleshootingOnly) {
+      setPlansLoading(false);
+      setPaymentStatusLoaded(true);
+      return;
+    }
     if (HOTSPOT_RUNTIME_CONFIG.previewOnly) {
       setPlansLoading(false);
       setPaymentStatusLoaded(true);
@@ -492,7 +480,7 @@ export default function HotspotLogin() {
         setPaymentStatusLoaded(true);
       }
     })();
-  }, [adminId, planScopeQuery]);
+  }, [adminId, planScopeQuery, troubleshootingOnly]);
 
   useEffect(() => {
     if (!tvDialogOpen) return;
@@ -531,6 +519,9 @@ export default function HotspotLogin() {
           ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
           mac_address: deviceMacAddress,
           device_name: deviceName,
+          ...(!retryRouter && paymentMode !== "tv" && (portalContext.linkLogin || portalContext.linkOrig)
+            ? { portal_login_handoff: true }
+            : {}),
           ...(paymentMode === "tv" ? { target_device: true } : portalContext.ip ? { client_ip: portalContext.ip } : {}),
         }),
       });
@@ -539,6 +530,7 @@ export default function HotspotLogin() {
         error?: string;
         credentials?: HotspotCredentials;
         connected?: boolean;
+        portal_login_handoff?: boolean;
         expires_at?: string;
         message?: string;
       };
@@ -546,12 +538,11 @@ export default function HotspotLogin() {
         throw new Error(accessData.error || "Payment confirmed, but the hotspot router could not be updated yet.");
       }
       setHotspotCredentials(accessData.credentials);
-      setLoginUsername(accessData.credentials.username);
-      setLoginPassword(accessData.credentials.password);
       storeHotspotCredentials(loginCredentialsStorageKey, accessData.credentials);
-      setLoginCredentialsLocked(true);
       const connected = accessData.connected === true;
+      const portalHandoff = accessData.portal_login_handoff === true;
       setAccessReady(connected);
+      setPortalHandoffReady(portalHandoff);
       setPaidAccessExpiresAt(accessData.expires_at ?? null);
       setShowTvSuccess(connected && paymentMode === "tv");
       if (connected && paymentMode === "tv") {
@@ -578,11 +569,14 @@ export default function HotspotLogin() {
       setPaymentConfirmed(true);
       setPayError(connected
         ? null
-        : accessData.message || "Payment is confirmed, but the router has not confirmed this device's login yet.");
-      return connected;
+        : portalHandoff
+          ? null
+          : accessData.message || "Payment is confirmed, but the router has not confirmed this device's login yet.");
+      return connected || portalHandoff;
     } catch (error) {
       setPaymentConfirmed(true);
       setAccessReady(false);
+      setPortalHandoffReady(false);
       setShowTvSuccess(false);
       setPayError(error instanceof Error ? error.message : "The hotspot router could not be updated yet.");
       return false;
@@ -638,11 +632,15 @@ export default function HotspotLogin() {
   }, [checkoutId, paymentConfirmed, paymentFailed, adminId, bindPaidHotspotAccess]);
 
   useEffect(() => {
-    if (!accessReady) return;
+    if (!accessReady && !portalHandoffReady) return;
     if (paymentMode === "tv") return;
     const destination = portalContext.linkLogin || portalContext.linkOrig;
     if (!/^https?:\/\//i.test(destination) || !hotspotCredentials) {
-      setActiveTab("login");
+      if (!troubleshootingOnly) {
+        window.location.assign(`/portal/troubleshoot${window.location.search}`);
+      } else {
+        setTroubleshootMessage("Your account is ready. Return to the Wi-Fi sign-in page to finish connecting.");
+      }
       return;
     }
     const destinationWithoutHash = destination.split("#", 1)[0];
@@ -652,10 +650,10 @@ export default function HotspotLogin() {
     }).toString();
     const redirectTimer = window.setTimeout(
       () => window.location.assign(`${destinationWithoutHash}#${credentialHash}`),
-      1200,
+      portalHandoffReady ? 80 : 250,
     );
     return () => window.clearTimeout(redirectTimer);
-  }, [accessReady, hotspotCredentials, paymentMode]);
+  }, [accessReady, portalHandoffReady, hotspotCredentials, paymentMode, troubleshootingOnly]);
 
   const startPayment = async (options: {
     plan: Plan;
@@ -684,7 +682,7 @@ export default function HotspotLogin() {
     setPhone(phoneValue);
     setDeviceMacAddress(macAddress);
     setDeviceName(normalizedDeviceName);
-    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setAccessReady(false); setShowTvSuccess(false); setPaidAccessExpiresAt(null); setHotspotCredentials(null); setPollTimedOut(false);
+    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setAccessReady(false); setPortalHandoffReady(false); setShowTvSuccess(false); setPaidAccessExpiresAt(null); setHotspotCredentials(null); setPollTimedOut(false);
     bindingInFlight.current = false;
     try {
       const intentResponse = await hotspotPortalFetch(hotspotApiUrl("/api/mpesa/intent"), {
@@ -856,11 +854,10 @@ export default function HotspotLogin() {
     expiresAt: string | null;
     planName: string | null;
     username: string | null;
-    name: string;
     error?: string;
   };
 
-  const requestHotspotTroubleshoot = async (action: "check" | "login"): Promise<TroubleshootResult | null> => {
+  const requestHotspotTroubleshoot = useCallback(async (action: "check" | "login", expiryOnly = false): Promise<TroubleshootResult | null> => {
     if (!adminId || !portalContext.mac) {
       setTroubleshootError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
       return null;
@@ -872,6 +869,7 @@ export default function HotspotLogin() {
         body: JSON.stringify({
           adminId,
           action,
+          ...(expiryOnly ? { expiry_only: true } : {}),
           ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
           mac_address: portalContext.mac,
         }),
@@ -885,7 +883,6 @@ export default function HotspotLogin() {
         planName?: string | null;
         username?: string | null;
         error?: string;
-        customer?: { name?: string | null };
       };
       if (!res.ok && !data.status) {
         setTroubleshootError(data.error ?? "Could not verify the latest hotspot purchase.");
@@ -900,7 +897,6 @@ export default function HotspotLogin() {
         expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
         planName: typeof data.planName === "string" ? data.planName : null,
         username: typeof data.username === "string" ? data.username : null,
-        name: data.customer?.name || data.username || "your device",
         error: data.error,
       };
       setLoginSession({
@@ -911,8 +907,6 @@ export default function HotspotLogin() {
         planName: result.planName,
         username: result.username,
       });
-      setLoggedInName(result.name);
-      setLoginError("");
       setTroubleshootError("");
       setTroubleshootMessage(
         result.status === "active" || result.status === "depleted" || result.status === "unavailable"
@@ -920,7 +914,6 @@ export default function HotspotLogin() {
           : "",
       );
       if (action === "login" && result.connected) {
-        setLoginSuccess(true);
         setTroubleshootMessage("");
       }
       return result;
@@ -928,52 +921,7 @@ export default function HotspotLogin() {
       setTroubleshootError("Could not reach the server. Please try again.");
       return null;
     }
-  };
-
-  useEffect(() => {
-    if (!adminId || !portalContext.mac) return;
-    const lookupKey = `${adminId}:${portalContext.mac}`;
-    if (autoTroubleshootKey.current === lookupKey) return;
-    autoTroubleshootKey.current = lookupKey;
-    let cancelled = false;
-
-    void (async () => {
-      try {
-        const res = await hotspotPortalFetch(hotspotApiUrl("/api/customers/hotspot-troubleshoot"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ adminId, action: "check", mac_address: portalContext.mac }),
-        });
-        const data = await res.json() as {
-          found?: boolean;
-          status?: "active" | "depleted" | "expired" | "not_found" | "unavailable";
-          expiresAt?: string | null;
-          planName?: string | null;
-          username?: string | null;
-          customer?: { name?: string | null };
-        };
-        if (
-          cancelled ||
-          data.found !== true ||
-          (data.status !== "active" && data.status !== "depleted" && data.status !== "expired")
-        ) return;
-        setLoginSession({
-          found: true,
-          status: data.status,
-          connected: false,
-          expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
-          planName: typeof data.planName === "string" ? data.planName : null,
-          username: typeof data.username === "string" ? data.username : null,
-        });
-        setLoggedInName(data.customer?.name || data.username || "your device");
-      } catch {
-        // The sign-in form remains available if automatic purchase lookup fails.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [adminId, portalContext.mac]);
+  }, [adminId, portalContext.ip, portalContext.mac]);
 
   useEffect(() => {
     if (!loginSession || loginSession.status !== "active" || !loginSession.expiresAt) return;
@@ -991,7 +939,6 @@ export default function HotspotLogin() {
           ? { ...current, status: "expired", connected: false }
           : current,
       );
-      setLoginSuccess(false);
     };
     expireWhenDue();
     return () => window.clearTimeout(timer);
@@ -1010,10 +957,11 @@ export default function HotspotLogin() {
       }
       setShowTvSuccess(false);
       setAccessReady(false);
+      setPortalHandoffReady(false);
       setPaymentConfirmed(false);
       setStkSent(false);
       setCheckoutId(null);
-      setActiveTab("login");
+      setActiveTab("plans");
       setLoginSession({
         found: true,
         status: "expired",
@@ -1029,13 +977,11 @@ export default function HotspotLogin() {
 
   const handleTroubleshoot = async () => {
     if (troubleshootInFlight.current) return;
-    setTroubleshootDialogOpen(true);
     troubleshootInFlight.current = true;
     setTroubleshootLoading(true);
     setLoginSession(null);
     setTroubleshootMessage("");
     setTroubleshootError("");
-    setLoginError("");
     setTroubleshootAction("check");
     try {
       await requestHotspotTroubleshoot("check");
@@ -1046,69 +992,41 @@ export default function HotspotLogin() {
     }
   };
 
+  useEffect(() => {
+    if (!troubleshootingOnly && (HOTSPOT_RUNTIME_CONFIG.previewOnly || !adminId || !portalContext.mac)) return;
+    const lookupKey = `${adminId ?? "missing"}:${portalContext.mac || "missing"}`;
+    if (autoTroubleshootKey.current === lookupKey) return;
+    autoTroubleshootKey.current = lookupKey;
+    troubleshootInFlight.current = true;
+    if (troubleshootingOnly) {
+      setTroubleshootLoading(true);
+      setTroubleshootAction("check");
+    }
+    void requestHotspotTroubleshoot("check", !troubleshootingOnly).finally(() => {
+      troubleshootInFlight.current = false;
+      if (troubleshootingOnly) {
+        setTroubleshootLoading(false);
+        setTroubleshootAction(null);
+      }
+    });
+  }, [troubleshootingOnly, adminId, portalContext.mac, requestHotspotTroubleshoot]);
+
   const handlePlanLogin = async () => {
     if (troubleshootInFlight.current) return;
     troubleshootInFlight.current = true;
     setTroubleshootLoading(true);
     setTroubleshootAction("login");
     setTroubleshootError("");
-    setLoginError("");
     try {
       const result = await requestHotspotTroubleshoot("login");
       if (result && result.status === "active" && !result.connected && !result.error) {
         setTroubleshootMessage("The router did not confirm the login. Tap Login now to retry.");
       }
-      if (result?.connected) setTroubleshootDialogOpen(false);
     } finally {
       troubleshootInFlight.current = false;
       setTroubleshootLoading(false);
       setTroubleshootAction(null);
     }
-  };
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoginError(""); setLoginLoading(true);
-    try {
-      const res = await hotspotPortalFetch(hotspotApiUrl("/api/customers/hotspot-login"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          adminId,
-          username: loginUsername.trim(),
-          password: loginPassword,
-          ...(deviceMacAddress ? { mac_address: deviceMacAddress } : {}),
-          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
-        }),
-      });
-      const data = await res.json() as {
-        ok?: boolean;
-        error?: string;
-        connected?: boolean;
-        customer?: { name?: string | null };
-        session?: { status?: "active" | "expired"; connected?: boolean; expiresAt?: string | null };
-      };
-      if (!res.ok || !data.ok || data.connected !== true) {
-        throw new Error(data.error || "Login failed. Please check your hotspot credentials.");
-      }
-
-      const credentials = { username: loginUsername.trim(), password: loginPassword };
-      setHotspotCredentials(credentials);
-      storeHotspotCredentials(loginCredentialsStorageKey, credentials);
-      setLoginCredentialsLocked(true);
-      setLoginSession({
-        status: data.session?.status === "expired" ? "expired" : "active",
-        connected: true,
-        expiresAt: data.session?.expiresAt ?? null,
-      });
-      setLoggedInName(data.customer?.name || credentials.username);
-      setLoginError("");
-      setTroubleshootMessage("");
-      setLoginSuccess(true);
-    } catch (error) {
-      setLoginError(error instanceof Error ? error.message : "Could not reach the server. Please try again.");
-    }
-    finally { setLoginLoading(false); }
   };
 
   const handleMpesaReconnect = async (e: React.FormEvent) => {
@@ -1137,13 +1055,10 @@ export default function HotspotLogin() {
         throw new Error(data.error || "That M-Pesa payment could not be matched to a hotspot account.");
       }
       setHotspotCredentials(data.credentials);
-      setLoginUsername(data.credentials.username);
-      setLoginPassword(data.credentials.password);
       storeHotspotCredentials(loginCredentialsStorageKey, data.credentials);
-      setLoginCredentialsLocked(true);
-      setLoggedInName(data.credentials.username);
-      setLoginSuccess(true);
-      setAccessReady(true);
+      setPortalHandoffReady(Boolean(portalContext.linkLogin || portalContext.linkOrig));
+      setAccessReady(!portalContext.linkLogin && !portalContext.linkOrig);
+      setTroubleshootMessage("Payment verified. Your hotspot sign-in is being restored.");
       setMpesaMessage("");
     } catch (error) {
       setMpesaReconnectError(error instanceof Error ? error.message : "Could not reconnect this M-Pesa payment.");
@@ -1177,7 +1092,6 @@ export default function HotspotLogin() {
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: "plans", label: "Buy Data", icon: <CreditCard size={16} /> },
     { id: "tv", label: "Buy for TV", icon: <Tv size={16} /> },
-    { id: "login", label: "Login", icon: <User size={16} /> },
     { id: "voucher", label: "Voucher", icon: <Ticket size={16} /> },
   ];
   const isTvMode = paymentMode === "tv";
@@ -1982,17 +1896,218 @@ export default function HotspotLogin() {
                 <Wifi size={36} color="var(--isp-accent)" strokeWidth={2} />
               </div>
             </div>
-             <h1 className="hp-title">Your world, connected.</h1>
-             <p className="hp-subtitle">{portalBranding.tagline || `Fast, reliable internet for your phone, home and TV — powered by ${portalBrand.ispName}.`}</p>
+             <h1 className="hp-title">{troubleshootingOnly ? "Connection help" : "Your world, connected."}</h1>
+             <p className="hp-subtitle">{troubleshootingOnly
+               ? "Check your package and router session, then retry the connection if needed."
+               : portalBranding.tagline || `Fast, reliable internet for your phone, home and TV — powered by ${portalBrand.ispName}.`}</p>
             <div className="hp-badges">
               <span className="hp-badge"><Shield size={12} /> Secure</span>
               <span className="hp-badge"><Zap size={12} /> Instant</span>
               <span className="hp-badge"><Clock size={12} /> 24/7</span>
             </div>
+            {!troubleshootingOnly && (
+              <button
+                type="button"
+                className="hp-troubleshoot-card-action"
+                style={{ marginTop: 17 }}
+                onClick={() => window.location.assign(`/portal/troubleshoot${window.location.search}`)}
+              >
+                <Wifi size={15} /> Troubleshoot connection <ArrowRight size={15} />
+              </button>
+            )}
           </div>
 
+          {!troubleshootingOnly && (loginSession?.status === "expired" || loginSession?.status === "depleted") && (
+            <div
+              role="alert"
+              aria-live="assertive"
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 12,
+                maxWidth: 840,
+                margin: "0 auto 20px",
+                padding: "16px 18px",
+                borderRadius: 14,
+                background: "rgba(245,158,11,0.1)",
+                border: "1px solid rgba(245,158,11,0.32)",
+                color: "rgba(255,255,255,0.92)",
+              }}
+            >
+              <AlertCircle size={20} color="#fbbf24" style={{ flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <strong style={{ display: "block", color: "#fcd34d", marginBottom: 4 }}>
+                  {loginSession.status === "expired" ? "Your package has expired" : "Your package data allowance has been used"}
+                </strong>
+                <p style={{ color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: 1.5 }}>
+                  {loginSession.status === "expired"
+                    ? `Your hotspot session has ended${loginSession.expiresAt ? ` on ${formatSessionExpiry(loginSession.expiresAt)}` : ""}. Choose a new package below to sign in again.`
+                    : "Your hotspot session has ended because the package data allowance was used. Choose a new package below to reconnect."}
+                </p>
+                <button
+                  type="button"
+                  className="hp-troubleshoot-modal-action primary"
+                  style={{ marginTop: 12 }}
+                  onClick={() => document.getElementById("hp-plan-tabs")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+                >
+                  <CreditCard size={15} /> Sign in again with a package
+                </button>
+              </div>
+            </div>
+          )}
+
+          {troubleshootingOnly ? (
+            <section className="hp-section" style={{ maxWidth: 540, margin: "0 auto" }}>
+              <button
+                type="button"
+                className="hp-troubleshoot-modal-action"
+                style={{ marginBottom: 14 }}
+                onClick={() => window.location.assign(`/hotspot-login${window.location.search}`)}
+              >
+                <ArrowRight size={15} style={{ transform: "rotate(180deg)" }} /> Back to packages
+              </button>
+
+              <div className="hp-glass">
+                <div className="hp-glass-header">
+                  <div className="hp-troubleshoot-dialog-icon" aria-hidden="true"><Wifi size={21} /></div>
+                  <div>
+                    <div className="hp-glass-title">Connection check</div>
+                    <div className="hp-glass-desc">We’ll check this device’s latest package and router session.</div>
+                  </div>
+                </div>
+                <div className="hp-glass-body">
+                  <div className="hp-troubleshoot-device">
+                    <span className="hp-troubleshoot-device-label">Checking this device</span>
+                    <strong>{portalContext.mac || "Device MAC unavailable"}</strong>
+                  </div>
+
+                  {troubleshootLoading ? (
+                    <div className="hp-troubleshoot-loading" role="status" aria-live="polite">
+                      <span className="hp-troubleshoot-loading-icon">
+                        <Loader2 size={21} style={{ animation: "spin 1s linear infinite" }} />
+                      </span>
+                      <span>{troubleshootAction === "login" ? "Asking the router to log in…" : "Checking your package and router…"}</span>
+                    </div>
+                  ) : troubleshootError ? (
+                    <div className="hp-troubleshoot-error" role="alert">
+                      <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                      <span>{troubleshootError}</span>
+                    </div>
+                  ) : troubleshootStatus && loginSession ? (
+                    <div className="hp-troubleshoot-result" role="status" aria-live="polite">
+                      <div className="hp-troubleshoot-status" data-tone={troubleshootStatusTone}>
+                        <div className="hp-troubleshoot-status-heading">
+                          <span className="hp-troubleshoot-status-mark" aria-hidden="true">
+                            {loginSession.status === "active" && loginSession.connected
+                              ? <CheckCircle2 size={17} />
+                              : <AlertCircle size={17} />}
+                          </span>
+                          <strong>{loginSession.connected ? "Connected" : troubleshootStatus.label}</strong>
+                        </div>
+                        {loginSession.planName && (
+                          <p className="hp-troubleshoot-status-copy" style={{ marginBottom: 4 }}>
+                            Package: <strong>{loginSession.planName}</strong>
+                          </p>
+                        )}
+                        <p className="hp-troubleshoot-status-copy">{troubleshootStatus.detail}</p>
+                        {loginSession.status === "active" && (
+                          <div className="hp-troubleshoot-session-meta">
+                            {loginSession.username && (
+                              <div><span>Hotspot account</span><strong>{loginSession.username}</strong></div>
+                            )}
+                            <div><span>Router session</span><strong>{loginSession.connected ? "Confirmed" : "Login required"}</strong></div>
+                          </div>
+                        )}
+                        {troubleshootMessage && <div className="hp-troubleshoot-note">{troubleshootMessage}</div>}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="hp-troubleshoot-note" role="status">
+                      The connection check result will appear here.
+                    </div>
+                  )}
+
+                  <div className="hp-troubleshoot-modal-actions">
+                    {loginSession?.status === "active" && !loginSession.connected && (
+                      <button
+                        type="button"
+                        className="hp-troubleshoot-modal-action primary"
+                        onClick={handlePlanLogin}
+                        disabled={troubleshootLoading}
+                      >
+                        {troubleshootLoading
+                          ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Logging in…</>
+                          : <><Wifi size={15} /> Login now</>}
+                      </button>
+                    )}
+                    {(loginSession?.status === "expired" || loginSession?.status === "depleted" || loginSession?.status === "not_found") && (
+                      <button
+                        type="button"
+                        className="hp-troubleshoot-modal-action primary"
+                        onClick={() => window.location.assign(`/hotspot-login${window.location.search}`)}
+                      >
+                        <CreditCard size={15} /> Browse packages
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="hp-troubleshoot-modal-action"
+                      onClick={handleTroubleshoot}
+                      disabled={troubleshootLoading}
+                    >
+                      {troubleshootLoading
+                        ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Checking…</>
+                        : <><ArrowRight size={15} /> Check again</>}
+                    </button>
+                  </div>
+                  <p className="hp-troubleshoot-modal-footnote">Package details are matched to this device’s MAC address.</p>
+                </div>
+              </div>
+
+              <div className="hp-glass" style={{ marginTop: 16 }}>
+                <div className="hp-glass-header">
+                  <div className="hp-glass-icon" style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
+                    <Shield size={16} color="var(--isp-accent)" />
+                  </div>
+                  <div>
+                    <div className="hp-glass-title">Reconnect with M-Pesa</div>
+                    <div className="hp-glass-desc">We look up completed payments on your account and only reconnect the device registered to that purchase while its package is active.</div>
+                  </div>
+                </div>
+                <div className="hp-glass-body">
+                  <form onSubmit={handleMpesaReconnect}>
+                    <div className="hp-input-group">
+                      <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation message</label>
+                      <textarea
+                        id="mpesa-reconnect-message"
+                        className="hp-input hp-textarea"
+                        rows={4}
+                        maxLength={1000}
+                        placeholder="Paste the full confirmation message"
+                        value={mpesaMessage}
+                        onChange={event => { setMpesaMessage(event.target.value); setMpesaReconnectError(""); }}
+                        required
+                      />
+                    </div>
+                    {mpesaReconnectError && (
+                      <div className="hp-error" role="alert">
+                        <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                        {mpesaReconnectError}
+                      </div>
+                    )}
+                    <button type="submit" disabled={mpesaReconnectLoading} className="hp-btn hp-btn-ghost">
+                      {mpesaReconnectLoading
+                        ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Verifying payment...</>
+                        : <><Shield size={16} /> Verify and reconnect</>}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <>
           {/* Tabs */}
-          <div className="hp-tabs">
+          <div className="hp-tabs" id="hp-plan-tabs">
             {TABS.map(tab => (
                <button key={tab.id} onClick={() => handleTabChange(tab.id)} disabled={stkSent}
                  className={`hp-tab${activeTab === tab.id ? " active" : ""}`} aria-pressed={activeTab === tab.id}>
@@ -2012,9 +2127,9 @@ export default function HotspotLogin() {
                         <div className="hp-success-icon">
                           <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
                         </div>
-                          <h3>{accessReady ? (isTvMode ? "TV is ready to stream!" : "Device connected!") : "Payment Confirmed"}</h3>
+                          <h3>{accessReady ? (isTvMode ? "TV is ready to stream!" : "Device connected!") : portalHandoffReady ? "Connecting your device…" : "Payment Confirmed"}</h3>
                          <p>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</p>
-                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? (isTvMode ? "Your TV session was confirmed by the hotspot." : "Your device has been authorized by the hotspot. Use the credentials below for the next sign-in.") : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
+                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? (isTvMode ? "Your TV session was confirmed by the hotspot." : "Your device has been authorized by the hotspot. Use the credentials below for the next sign-in.") : portalHandoffReady ? "Your package is ready. Finishing hotspot sign-in now." : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
                           {hotspotCredentials && (
                             <div style={{ display: "grid", gap: 8, textAlign: "left", margin: "0 auto 16px", maxWidth: 320 }}>
                               <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)" }}>
@@ -2029,7 +2144,7 @@ export default function HotspotLogin() {
                           )}
                         <div className="hp-connected-badge" style={{ marginTop: 16, marginBottom: 24 }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399" }} />
-                            {accessReady ? "Connected" : "Payment received"}
+                            {accessReady ? "Connected" : portalHandoffReady ? "Connecting" : "Payment received"}
                         </div>
                           {!accessReady && payError && (
                             <p style={{ fontSize: 12, color: "#fbbf24", marginBottom: 16 }}>{payError}</p>
@@ -2039,7 +2154,7 @@ export default function HotspotLogin() {
                             Daraja shortcode: {mpesaStatus.shortcode} {mpesaStatus.env === "sandbox" ? "(Sandbox)" : ""}
                           </p>
                         )}
-                        <button className="hp-btn hp-btn-ghost" disabled={accessRetrying} style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
+                        <button className="hp-btn hp-btn-ghost" disabled={accessRetrying || portalHandoffReady} style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
                           onClick={() => {
                             const destination = portalContext.linkOrig || portalContext.linkLogin;
                             if (accessReady && isTvMode) {
@@ -2049,7 +2164,7 @@ export default function HotspotLogin() {
                             if (accessReady && /^https?:\/\//i.test(destination)) window.location.assign(destination);
                             else if (checkoutId && !accessRetrying) { bindingInFlight.current = true; void bindPaidHotspotAccess(checkoutId, true); }
                           }}>
-                          {accessReady ? (isTvMode ? "Show login confirmation" : "Continue online") : accessRetrying ? "Retrying connection…" : "Retry connection"}
+                          {accessReady ? (isTvMode ? "Show login confirmation" : "Continue online") : portalHandoffReady ? "Connecting…" : accessRetrying ? "Retrying connection…" : "Retry connection"}
                         </button>
                       </>
                     ) : paymentFailed ? (
@@ -2303,154 +2418,6 @@ export default function HotspotLogin() {
             </div>
           )}
 
-          {/* ── LOGIN ── */}
-          {activeTab === "login" && (
-            <div className="hp-section">
-              <div className="hp-glass">
-                <div className="hp-glass-header">
-                  <div className="hp-glass-icon" style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
-                    <User size={16} color="var(--isp-accent)" />
-                  </div>
-                  <div>
-                    <div className="hp-glass-title">Member Login</div>
-                    <div className="hp-glass-desc">Sign in with your credentials</div>
-                  </div>
-                </div>
-                <div className="hp-glass-body">
-                  {loginSuccess ? (
-                    <div className="hp-success">
-                      <div className="hp-success-icon">
-                        <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
-                      </div>
-                      <h3>Welcome, {loggedInName}!</h3>
-                      <p style={{ marginBottom: 8 }}>You're now connected to the network.</p>
-                      {loginSession && (
-                        <div style={{ margin: "0 0 24px", color: "rgba(255,255,255,0.5)", fontSize: 12 }}>
-                          {loginSession.planName && <p style={{ margin: "0 0 5px" }}>Plan: {loginSession.planName}</p>}
-                          {loginSession.username && <p style={{ margin: "0 0 5px" }}>Username: {loginSession.username}</p>}
-                          <p style={{ margin: 0 }}>
-                            {loginSession.expiresAt
-                              ? `Plan expires ${formatSessionExpiry(loginSession.expiresAt)}`
-                              : "No expiry time is recorded for this plan."}
-                          </p>
-                        </div>
-                      )}
-                      <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
-                        onClick={() => { setLoginSuccess(false); setLoginSession(null); setLoginError(""); }}>
-                        Sign Out
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <form onSubmit={handleLogin}>
-                        {loginError && (
-                          <div className="hp-error">
-                            <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                            {loginError}
-                          </div>
-                        )}
-
-                        <div className="hp-input-group">
-                          <label className="hp-label">Username</label>
-                          <div className="hp-input-wrap">
-                            <User size={15} className="hp-input-icon" />
-                            <input className="hp-input hp-input-left" type="text"
-                              placeholder="Enter username" required
-                              value={loginUsername} readOnly={loginCredentialsLocked}
-                              onChange={e => setLoginUsername(e.target.value)} />
-                          </div>
-                        </div>
-
-                        <div className="hp-input-group">
-                          <label className="hp-label">Password</label>
-                          <div className="hp-input-wrap">
-                            <Lock size={15} className="hp-input-icon" />
-                            <input className="hp-input hp-input-left" type="password"
-                              placeholder="Enter password" required
-                              value={loginPassword} readOnly={loginCredentialsLocked}
-                              onChange={e => setLoginPassword(e.target.value)} />
-                          </div>
-                        </div>
-                        <p style={{ color: "rgba(255,255,255,0.32)", fontSize: 11, lineHeight: 1.45, margin: "-2px 0 14px" }}>
-                          {loginCredentialsLocked
-                            ? "These credentials are saved on this device and will change only after a new purchase assigns a new account."
-                            : "Sign in once and this account will stay filled in on this device."}
-                        </p>
-
-                        <button type="submit" disabled={loginLoading} className="hp-btn hp-btn-primary">
-                          {loginLoading ? (
-                            <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Connecting...</>
-                          ) : (
-                            <><Wifi size={16} /> Connect</>
-                          )}
-                        </button>
-                      </form>
-                      <div style={{ marginTop: 24, paddingTop: 22, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                          <Shield size={15} color="var(--isp-accent)" />
-                          <div className="hp-glass-title">Reconnect with M-Pesa</div>
-                        </div>
-                        <p style={{ color: "rgba(255,255,255,0.42)", fontSize: 12, lineHeight: 1.55, marginBottom: 14 }}>
-                          Paste the full M-Pesa confirmation message. We match its receipt to a verified payment for this ISP before reconnecting your account.
-                        </p>
-                        <form onSubmit={handleMpesaReconnect}>
-                          <div className="hp-input-group">
-                            <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation message</label>
-                            <textarea
-                              id="mpesa-reconnect-message"
-                              className="hp-input hp-textarea"
-                              rows={4}
-                              maxLength={1000}
-                              placeholder="e.g. QK12AB34CD Confirmed. Ksh..."
-                              value={mpesaMessage}
-                              onChange={event => { setMpesaMessage(event.target.value); setMpesaReconnectError(""); }}
-                              required
-                            />
-                          </div>
-                          {mpesaReconnectError && (
-                            <div className="hp-error" role="alert">
-                              <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                              {mpesaReconnectError}
-                            </div>
-                          )}
-                          <button type="submit" disabled={mpesaReconnectLoading} className="hp-btn hp-btn-ghost">
-                            {mpesaReconnectLoading ? (
-                              <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Verifying payment...</>
-                            ) : (
-                              <><Shield size={16} /> Verify and reconnect</>
-                            )}
-                          </button>
-                        </form>
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-              <aside className="hp-troubleshoot-card" aria-labelledby="hp-troubleshoot-card-title">
-                <div className="hp-troubleshoot-card-copy">
-                  <div className="hp-troubleshoot-card-icon" aria-hidden="true">
-                    <Wifi size={20} />
-                  </div>
-                  <div>
-                    <div className="hp-troubleshoot-eyebrow">Network help</div>
-                    <h3 id="hp-troubleshoot-card-title">Troubleshoot connection</h3>
-                    <p>Check the latest package linked to this device and see whether the router has confirmed access.</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="hp-troubleshoot-card-action"
-                  disabled={troubleshootLoading || loginLoading}
-                  onClick={handleTroubleshoot}
-                >
-                  {troubleshootLoading
-                    ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Checking…</>
-                    : <>Run connection check <ArrowRight size={15} /></>}
-                </button>
-              </aside>
-            </div>
-          )}
-
           {/* ── VOUCHER ── */}
           {activeTab === "voucher" && (
             <div className="hp-section">
@@ -2522,149 +2489,6 @@ export default function HotspotLogin() {
               </div>
             </div>
           )}
-
-          <DialogPrimitive.Root open={troubleshootDialogOpen} onOpenChange={setTroubleshootDialogOpen}>
-            <DialogPrimitive.Portal>
-              <DialogPrimitive.Overlay className="hp-troubleshoot-overlay" />
-              <DialogPrimitive.Content className="hp-troubleshoot-dialog" aria-describedby="hp-troubleshoot-dialog-description">
-                <div className="hp-troubleshoot-dialog-ambient" aria-hidden="true" />
-                <DialogPrimitive.Close className="hp-troubleshoot-close" aria-label="Close connection check">
-                  <X size={17} />
-                </DialogPrimitive.Close>
-                <div className="hp-troubleshoot-dialog-inner">
-                  <div className="hp-troubleshoot-dialog-head">
-                    <div className="hp-troubleshoot-dialog-icon" aria-hidden="true"><Wifi size={21} /></div>
-                    <div>
-                      <div className="hp-troubleshoot-dialog-kicker">Connection assistant</div>
-                      <DialogPrimitive.Title className="hp-troubleshoot-dialog-title">
-                        Your connection check
-                      </DialogPrimitive.Title>
-                      <DialogPrimitive.Description id="hp-troubleshoot-dialog-description" className="hp-troubleshoot-dialog-description">
-                        We’ll verify the latest successful package for this device and check whether the router confirmed its session.
-                      </DialogPrimitive.Description>
-                    </div>
-                  </div>
-
-                  <div className="hp-troubleshoot-device">
-                    <span className="hp-troubleshoot-device-label">Checking this device</span>
-                    <strong>{portalContext.mac || "Device MAC unavailable"}</strong>
-                  </div>
-
-                  {troubleshootLoading ? (
-                    <div className="hp-troubleshoot-loading" role="status" aria-live="polite">
-                      <span className="hp-troubleshoot-loading-icon">
-                        <Loader2 size={21} style={{ animation: "spin 1s linear infinite" }} />
-                      </span>
-                      <span>{troubleshootAction === "login" ? "Asking the router to log in…" : "Checking your package and router…"}</span>
-                    </div>
-                  ) : troubleshootError ? (
-                    <>
-                      <div className="hp-troubleshoot-error" role="alert">
-                        <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
-                        <span>{troubleshootError}</span>
-                      </div>
-                      <div className="hp-troubleshoot-modal-actions">
-                        <button
-                          type="button"
-                          className="hp-troubleshoot-modal-action primary"
-                          onClick={handleTroubleshoot}
-                          disabled={troubleshootLoading}
-                        >
-                          <ArrowRight size={15} /> Check again
-                        </button>
-                        <DialogPrimitive.Close className="hp-troubleshoot-modal-action">
-                          Close
-                        </DialogPrimitive.Close>
-                      </div>
-                    </>
-                  ) : troubleshootStatus && loginSession ? (
-                    <div className="hp-troubleshoot-result" role="status" aria-live="polite">
-                      <div className="hp-troubleshoot-status" data-tone={troubleshootStatusTone}>
-                        <div className="hp-troubleshoot-status-heading">
-                          <span className="hp-troubleshoot-status-mark" aria-hidden="true">
-                            {loginSession.status === "active"
-                              ? <CheckCircle2 size={17} />
-                              : <AlertCircle size={17} />}
-                          </span>
-                          <strong>{troubleshootStatus.label}</strong>
-                        </div>
-                        {loginSession.planName && (
-                          <p className="hp-troubleshoot-status-copy" style={{ marginBottom: 4 }}>
-                            Package: <strong>{loginSession.planName}</strong>
-                          </p>
-                        )}
-                        <p className="hp-troubleshoot-status-copy">{troubleshootStatus.detail}</p>
-                        {loginSession.status === "active" && (
-                          <div className="hp-troubleshoot-session-meta">
-                            {loginSession.username && (
-                              <div>
-                                <span>Hotspot account</span>
-                                <strong>{loginSession.username}</strong>
-                              </div>
-                            )}
-                            <div>
-                              <span>Router session</span>
-                              <strong>{loginSession.connected ? "Confirmed" : "Login required"}</strong>
-                            </div>
-                          </div>
-                        )}
-                        {troubleshootMessage && (
-                          <div className="hp-troubleshoot-note">{troubleshootMessage}</div>
-                        )}
-                      </div>
-
-                      <div className="hp-troubleshoot-modal-actions">
-                        {loginSession.status === "active" && !loginSession.connected && (
-                          <button
-                            type="button"
-                            className="hp-troubleshoot-modal-action primary"
-                            onClick={handlePlanLogin}
-                            disabled={troubleshootLoading}
-                          >
-                            {troubleshootLoading
-                              ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Logging in…</>
-                              : <><Wifi size={15} /> Login now</>}
-                          </button>
-                        )}
-                        {(loginSession.status === "expired" || loginSession.status === "depleted" || loginSession.status === "not_found") && (
-                          <button
-                            type="button"
-                            className="hp-troubleshoot-modal-action primary"
-                            onClick={() => {
-                              setTroubleshootDialogOpen(false);
-                              handleTabChange(isTvMode ? "tv" : "plans");
-                            }}
-                          >
-                            <CreditCard size={15} /> Browse packages
-                          </button>
-                        )}
-                        {loginSession.status === "unavailable" && (
-                          <button
-                            type="button"
-                            className="hp-troubleshoot-modal-action primary"
-                            onClick={handleTroubleshoot}
-                            disabled={troubleshootLoading}
-                          >
-                            <ArrowRight size={15} /> Check again
-                          </button>
-                        )}
-                        <DialogPrimitive.Close className="hp-troubleshoot-modal-action">
-                          Close
-                        </DialogPrimitive.Close>
-                      </div>
-                      <p className="hp-troubleshoot-modal-footnote">
-                        Package details are matched to this device’s MAC address.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="hp-troubleshoot-note" role="status">
-                      Run a connection check to see the latest package and router status for this device.
-                    </div>
-                  )}
-                </div>
-              </DialogPrimitive.Content>
-            </DialogPrimitive.Portal>
-          </DialogPrimitive.Root>
 
           {tvDialogOpen && (
             <div className="hp-modal-backdrop" role="presentation">
@@ -2871,6 +2695,8 @@ export default function HotspotLogin() {
           <div className="hp-footer">
             {new Date().getFullYear()} {portalBrand.ispName} &middot; {portalBrand.domain}
           </div>
+            </>
+          )}
         </main>
       </div>
     </>

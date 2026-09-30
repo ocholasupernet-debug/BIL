@@ -197,6 +197,7 @@ test("signed reseller portal requests stay within their assigned service", async
   let customers: Record<string, unknown>[] = [];
   let legacyCheckout = false;
   let includeRouterFixture = false;
+  let resolvedPortalClientMac = "AA:BB:CC:DD:EE:FF";
   const routerOperations: Array<{ name: string; [key: string]: unknown }> = [];
   const recordRouterOperation = (name: string, details: Record<string, unknown> = {}) => {
     routerOperations.push({ name, ...details });
@@ -209,6 +210,10 @@ test("signed reseller portal requests stay within their assigned service", async
   hotspotPaymentOperations.resolveHotspotClientIpByMac = async (_credentials, mac) => {
     recordRouterOperation("resolveClientIp", { mac });
     return "10.43.0.10";
+  };
+  hotspotPaymentOperations.resolveHotspotClientMac = async (_credentials, ip) => {
+    recordRouterOperation("resolveClientMac", { ip });
+    return resolvedPortalClientMac;
   };
   hotspotPaymentOperations.syncRadiusCustomer = async options => {
     recordRouterOperation("radiusUser", { username: options.username, planId: options.planId });
@@ -510,6 +515,66 @@ test("signed reseller portal requests stay within their assigned service", async
     }
   });
 
+  await t.test("portal login handoff provisions access without starting an API-side router session", async () => {
+    transactions = [{ ...assignedTransaction }];
+    customers = [{ ...assignedCustomer }];
+    routerOperations.length = 0;
+    clearRequests();
+    includeRouterFixture = true;
+    try {
+      const activation = await request("/api/mpesa/hotspot-mac-access", {
+        method: "POST",
+        body: {
+          checkout_id: assignedTransaction.reference,
+          mac_address: assignedCustomer.mac_address,
+          portal_login_handoff: true,
+        },
+      });
+      assert.equal(activation.status, 200, await activation.clone().text());
+      const body = await activation.json() as {
+        ok: boolean;
+        connected?: boolean;
+        portal_login_handoff?: boolean;
+        credentials?: { username?: string };
+      };
+      assert.equal(body.ok, true);
+      assert.equal(body.connected, false);
+      assert.equal(body.portal_login_handoff, true);
+      assert.equal(body.credentials?.username, assignedCustomer.username);
+      assert.deepEqual(routerOperations.filter(row => row.name === "connectUser"), []);
+      assert.deepEqual(routerOperations.filter(row => row.name === "ensurePool"), [{
+        name: "ensurePool",
+        server: "HS_RS19_VLAN143",
+        pool: "HS_POOL_RS19_VLAN143",
+      }]);
+      assert.ok(routerOperations.some(row => row.name === "scheduleExpiry"),
+        "the handoff must preserve RouterOS expiry enforcement");
+
+      routerOperations.length = 0;
+      clearRequests();
+      const targetDevice = await request("/api/mpesa/hotspot-mac-access", {
+        method: "POST",
+        body: {
+          checkout_id: assignedTransaction.reference,
+          mac_address: assignedCustomer.mac_address,
+          portal_login_handoff: true,
+          target_device: true,
+        },
+      });
+      assert.equal(targetDevice.status, 200, await targetDevice.clone().text());
+      const targetBody = await targetDevice.json() as {
+        connected?: boolean;
+        portal_login_handoff?: boolean;
+      };
+      assert.equal(targetBody.connected, true);
+      assert.equal(targetBody.portal_login_handoff, false);
+      assert.ok(routerOperations.some(row => row.name === "connectUser"),
+        "a target-device purchase must keep the direct router-login path");
+    } finally {
+      includeRouterFixture = false;
+    }
+  });
+
   await t.test("manual receipt reconnect targets only the assigned VLAN Hotspot service", async () => {
     transactions = [{ ...assignedTransaction }];
     customers = [{ ...assignedCustomer }];
@@ -522,6 +587,7 @@ test("signed reseller portal requests stay within their assigned service", async
         body: {
           message: `${assignedTransaction.mpesa_receipt} Confirmed`,
           mac_address: assignedCustomer.mac_address,
+          client_ip: assignedCustomer.ip_address,
         },
       });
       assert.equal(reconnect.status, 200, await reconnect.clone().text());
@@ -537,6 +603,71 @@ test("signed reseller portal requests stay within their assigned service", async
     } finally {
       includeRouterFixture = false;
     }
+  });
+
+  await t.test("manual receipt reconnect requires a saved MAC and a matching live router device", async () => {
+    includeRouterFixture = true;
+    try {
+      transactions = [{ ...assignedTransaction, mac_address: null }];
+      customers = [{ ...assignedCustomer, mac_address: null }];
+      routerOperations.length = 0;
+      clearRequests();
+      const unlinked = await request("/api/mpesa/verify", {
+        method: "POST",
+        body: {
+          message: `${assignedTransaction.mpesa_receipt} Confirmed`,
+          mac_address: assignedCustomer.mac_address,
+          client_ip: assignedCustomer.ip_address,
+        },
+      });
+      assert.equal(unlinked.status, 409);
+      assert.equal(routerOperations.length, 0);
+
+      transactions = [{ ...assignedTransaction }];
+      customers = [{ ...assignedCustomer }];
+      resolvedPortalClientMac = "11:22:33:44:55:66";
+      routerOperations.length = 0;
+      clearRequests();
+      const wrongLiveDevice = await request("/api/mpesa/verify", {
+        method: "POST",
+        body: {
+          message: `${assignedTransaction.mpesa_receipt} Confirmed`,
+          mac_address: assignedCustomer.mac_address,
+          client_ip: assignedCustomer.ip_address,
+        },
+      });
+      assert.equal(wrongLiveDevice.status, 403);
+      assert.ok(routerOperations.some(row => row.name === "resolveClientMac"));
+      const mutatingOperations = new Set<string>([
+        "ensurePool",
+        "addBinding",
+        "updateUser",
+        "addUser",
+        "connectUser",
+      ]);
+      assert.equal(routerOperations.some(row => mutatingOperations.has(row.name)), false);
+    } finally {
+      resolvedPortalClientMac = "AA:BB:CC:DD:EE:FF";
+      includeRouterFixture = false;
+    }
+  });
+
+  await t.test("manual receipt reconnect refuses an expired hotspot package", async () => {
+    transactions = [{ ...assignedTransaction }];
+    customers = [{ ...assignedCustomer, status: "expired" }];
+    routerOperations.length = 0;
+    clearRequests();
+    const expired = await request("/api/mpesa/verify", {
+      method: "POST",
+      body: {
+        message: `${assignedTransaction.mpesa_receipt} Confirmed`,
+        mac_address: assignedCustomer.mac_address,
+        client_ip: assignedCustomer.ip_address,
+      },
+    });
+    assert.equal(expired.status, 409);
+    assert.match((await expired.json() as { error: string }).error, /package has expired/i);
+    assert.deepEqual(routerOperations, []);
   });
 
   await t.test("valid scope resolves its own customer, payment, and router context", async () => {
@@ -577,6 +708,33 @@ test("signed reseller portal requests stay within their assigned service", async
     assert.equal(troubleshooting.status, "active");
     assert.equal(troubleshooting.planName, assignedPlan.name);
     assert.equal(dbRequests.some(row => row.table === "isp_routers"), false);
+  });
+
+  await t.test("portal expiry checks skip router quota reads", async () => {
+    const originalDataCapMode = assignedPlan.data_cap_mode;
+    assignedPlan.data_cap_mode = "disconnect";
+    transactions = [{ ...assignedTransaction }];
+    customers = [{ ...assignedCustomer, fup_limit_mb: 1000 }];
+    routerOperations.length = 0;
+    clearRequests();
+    includeRouterFixture = true;
+    try {
+      const expiryCheck = await request("/api/customers/hotspot-troubleshoot", {
+        method: "POST",
+        body: {
+          action: "check",
+          expiry_only: true,
+          mac_address: assignedCustomer.mac_address,
+        },
+      });
+      assert.equal(expiryCheck.status, 200, await expiryCheck.clone().text());
+      assert.equal((await expiryCheck.json() as { status: string }).status, "active");
+      assert.equal(routerOperations.some(row => row.name === "readUsage"), false);
+      assert.equal(dbRequests.some(row => row.table === "isp_routers"), false);
+    } finally {
+      assignedPlan.data_cap_mode = originalDataCapMode;
+      includeRouterFixture = false;
+    }
   });
 
   await t.test("sibling customer login and troubleshooting do not reach router lookups", async () => {

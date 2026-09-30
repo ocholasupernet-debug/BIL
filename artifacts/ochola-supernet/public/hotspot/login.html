@@ -106,7 +106,7 @@
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:.75rem">
-      <button onclick="scrollToLogin()" id="alreadyPaidBtn" style="display:none;font-size:.8125rem;font-weight:500;color:rgba(216,180,254,.75);background:none;border:none;cursor:pointer;letter-spacing:.01em">Already Paid? →</button>
+      <button onclick="openTroubleshootPage()" id="alreadyPaidBtn" style="display:none;font-size:.8125rem;font-weight:500;color:rgba(216,180,254,.75);background:none;border:none;cursor:pointer;letter-spacing:.01em">Troubleshoot connection →</button>
       <a id="portalHeaderPhone" href="#" style="display:none;align-items:center;gap:.375rem;background:rgba(192,38,211,.15);border:1px solid rgba(192,38,211,.3);color:rgba(240,171,252,.9);font-size:.8125rem;font-weight:500;padding:.375rem .875rem;border-radius:9999px;text-decoration:none;transition:background .2s">
         <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 5.25v1.5z"/></svg>
          <span id="portalHeaderPhoneText"></span>
@@ -170,6 +170,17 @@
   <div id="portalAnnouncementText" style="border-radius:.875rem;padding:.875rem 1.25rem;background:rgba(217,105,53,.12);border:1px solid rgba(217,105,53,.28);color:rgba(255,237,213,.9);font-size:.8375rem;line-height:1.5;text-align:center"></div>
 </section>
 
+<section id="portalExpiryNotice" hidden role="alert" aria-live="assertive" style="max-width:1200px;margin:0 auto;padding:0 1.25rem 1.25rem">
+  <div style="display:flex;align-items:flex-start;gap:.75rem;border-radius:.875rem;padding:1rem 1.25rem;background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.32);color:rgba(255,255,255,.9)">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><path stroke-linecap="round" d="M12 7v5m0 4h.01"/></svg>
+    <div style="flex:1">
+      <strong id="portalExpiryTitle" style="display:block;margin-bottom:.25rem;color:#fcd34d">Your package has expired</strong>
+      <p id="portalExpiryMessage" style="font-size:.84rem;line-height:1.5;color:rgba(255,255,255,.72)">Your previous hotspot session has ended. Choose a new package below to connect again.</p>
+      <button type="button" onclick="document.getElementById('plansSection').scrollIntoView({behavior:'smooth'})" style="margin-top:.75rem;border:0;border-radius:.55rem;padding:.65rem 1rem;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));color:#fff;font-family:inherit;font-size:.8rem;font-weight:700;cursor:pointer">Sign in with a new package</button>
+    </div>
+  </div>
+</section>
+
 <!-- M-Pesa Banner -->
 <div id="mpesaBanner" style="max-width:1200px;margin:0 auto;padding:.25rem 1.25rem 2rem">
   <div style="border-radius:.875rem;padding:.875rem 1.5rem;display:flex;align-items:center;gap:.875rem;background:linear-gradient(90deg,rgba(5,150,105,.15),rgba(6,182,212,.08));border:1px solid rgba(5,150,105,.25)">
@@ -194,7 +205,7 @@
 </section>
 
 <!-- Login Section -->
-<section id="loginSection" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 4rem">
+<section id="loginSection" hidden aria-hidden="true" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 4rem">
   <div class="sec-card" style="background:rgba(255,255,255,.035)">
     <div class="sec-head" style="background:linear-gradient(135deg,rgba(126,34,206,.3),rgba(79,70,229,.3))">
       <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(216,180,254,.7);margin-bottom:.625rem">
@@ -239,13 +250,13 @@
             <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
             Click Here To Connect
           </button>
-          <button type="button" id="troubleshootBtn" class="btn btn-full" onclick="troubleshootConnection()" style="margin-top:.65rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:rgba(255,255,255,.78);box-shadow:none">
+          <button type="button" id="legacyTroubleshootBtn" class="btn btn-full" onclick="openTroubleshootPage()" style="margin-top:.65rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:rgba(255,255,255,.78);box-shadow:none">
             Troubleshoot connection
           </button>
           <p style="margin:.35rem 0 0;color:rgba(255,255,255,.34);font-size:.72rem;line-height:1.45;text-align:center">
             This checks the latest successful hotspot purchase linked to this device MAC. If it is active, you can log in without entering a password.
           </p>
-          <div id="portalSessionStatus" role="status" style="display:none;margin-top:.9rem;padding:.85rem 1rem;border-radius:.75rem;font-size:.8rem;line-height:1.5"></div>
+          <div id="legacyPortalSessionStatus" role="status" style="display:none;margin-top:.9rem;padding:.85rem 1rem;border-radius:.75rem;font-size:.8rem;line-height:1.5"></div>
         </div>
       </form>
     </div>
@@ -263,6 +274,22 @@
 </section>
 
 <!-- Voucher Section -->
+<section id="troubleshootPage" role="region" aria-labelledby="troubleshootTitle" style="display:none;position:fixed;inset:0;z-index:1000;overflow:auto;background:radial-gradient(ellipse 120% 80% at 50% -10%,#37104d 0%,#0d0415 55%);padding:1.5rem 1rem 3rem">
+  <div style="width:min(100%,560px);margin:0 auto">
+    <button type="button" onclick="closeTroubleshootPage()" class="btn" style="margin-bottom:1.5rem;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:#fff">← Back to packages</button>
+    <p style="font-size:.7rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:rgba(216,180,254,.7);margin:0 0 .5rem">Connection assistant</p>
+    <h1 id="troubleshootTitle" style="font-size:1.65rem;font-weight:850;color:#fff;margin:0 0 .5rem">Troubleshoot connection</h1>
+    <p style="font-size:.9rem;line-height:1.55;color:rgba(255,255,255,.55);margin:0 0 1.25rem">Check the latest package linked to this device and see whether the router confirmed access.</p>
+    <div style="padding:1.15rem;border-radius:1rem;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.12);box-shadow:0 18px 50px rgba(0,0,0,.25)">
+      <div style="font-size:.65rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.42);margin-bottom:.4rem">This device</div>
+      <div id="troubleshootDevice" style="font:700 .8rem monospace;color:rgba(255,255,255,.82);word-break:break-all"></div>
+      <div id="troubleshootResult" role="status" aria-live="polite" style="min-height:4rem;margin-top:1rem;padding:.9rem;border-radius:.75rem;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.72);font-size:.82rem;line-height:1.55">The check result will appear here.</div>
+      <button type="button" id="troubleshootBtn" class="btn btn-full" onclick="troubleshootConnection()" style="margin-top:1rem;background:linear-gradient(135deg,#7c3aed,#4f46e5);border:1px solid rgba(216,180,254,.35);color:#fff">Check connection</button>
+    </div>
+    <div id="troubleshootMpesaSlot"></div>
+  </div>
+</section>
+
 <section id="voucherSection" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 4rem">
   <div class="sec-card" style="background:rgba(255,255,255,.035)">
     <div class="sec-head" style="background:linear-gradient(135deg,rgba(180,83,9,.25),rgba(146,64,14,.25))">
@@ -306,7 +333,7 @@
 </section>
 
 <!-- M-Pesa Message -->
-<section style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 5rem">
+<section id="mpesaReconnectSection" hidden style="padding:1rem 0 0">
   <div class="sec-card" style="background:rgba(255,255,255,.035)">
     <div class="sec-head" style="background:linear-gradient(135deg,rgba(6,95,70,.3),rgba(7,89,133,.3))">
       <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(110,231,183,.65);margin-bottom:.625rem">
@@ -314,7 +341,7 @@
         M-Pesa Verification
       </div>
       <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Enter Your M-Pesa Message</h3>
-      <p style="color:rgba(110,231,183,.5);font-size:.875rem;margin-top:.375rem">Paid via M-Pesa? Paste your confirmation SMS below</p>
+      <p style="color:rgba(110,231,183,.5);font-size:.875rem;margin-top:.375rem">Paste the confirmation SMS for a completed payment. Access is restored only to the device registered to that active package.</p>
     </div>
     <div class="sec-body" id="mpesaMsgWrap">
       <div style="display:flex;flex-direction:column;gap:1.125rem">
@@ -453,6 +480,7 @@ var ROUTER_CHAP_ID="$(chap-id)";
 var ROUTER_CHAP_CHALLENGE="$(chap-challenge)";
   var PORTAL_ACCENT="#d96835", PORTAL_BACKGROUND="midnight", PORTAL_PACKAGE_SHAPE="rounded", PORTAL_PREVIEW_ONLY=false;
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
+var PORTAL_QUERY=new URLSearchParams(window.location.search);
 
 function normaliseMac(value){
   var raw=String(value||"").trim();
@@ -460,14 +488,14 @@ function normaliseMac(value){
   var compact=raw.replace(/[:-]/g,"");
   return compact.toUpperCase().match(/.{2}/g).join(":");
 }
-var DEVICE_MAC=normaliseMac(ROUTER_MAC);
+var DEVICE_MAC=normaliseMac(ROUTER_MAC)||normaliseMac(PORTAL_QUERY.get("mac")||PORTAL_QUERY.get("mac-address")||"");
 function normaliseIp(value){
   var raw=String(value||"").trim();
   if(!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(raw))return "";
   var octets=raw.split(".").map(Number);
   return octets.every(function(octet){return octet>=0&&octet<=255;})?raw:"";
 }
-var DEVICE_IP=normaliseIp(ROUTER_IP);
+var DEVICE_IP=normaliseIp(ROUTER_IP)||normaliseIp(PORTAL_QUERY.get("ip")||"");
 function darkenHex(value){
   var hex=value.replace("#","");
   var r=Math.max(0,parseInt(hex.slice(0,2),16)-45);
@@ -479,6 +507,32 @@ function apiUrl(path){return PORTAL_API_BASE?PORTAL_API_BASE+path:path;}
 function setPortalText(id,value){
   var element=document.getElementById(id);
   if(element&&typeof value==="string")element.textContent=value;
+}
+function checkPortalExpiryOnLanding(){
+  if(PORTAL_PREVIEW_ONLY||PORTAL_ADMIN_ID<1||!DEVICE_MAC||PORTAL_QUERY.get("page")==="troubleshoot")return;
+  fetch(apiUrl("/api/customers/hotspot-troubleshoot"),{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      adminId:PORTAL_ADMIN_ID,
+      action:"check",
+      expiry_only:true,
+      mac_address:DEVICE_MAC,
+      ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+    })
+  }).then(function(response){return response.json();}).then(function(data){
+    if(data.status!=="expired"&&data.status!=="depleted")return;
+    var notice=document.getElementById("portalExpiryNotice");
+    var title=document.getElementById("portalExpiryTitle");
+    var message=document.getElementById("portalExpiryMessage");
+    if(!notice||!title||!message)return;
+    title.textContent=data.status==="expired"?"Your package has expired":"Your package data allowance has been used";
+    message.textContent=data.status==="expired"
+      ?"Your previous hotspot session has ended. Choose a new package below to connect again."
+      :"Your previous hotspot session has ended because the package data allowance was used. Choose a new package below to reconnect.";
+    if(typeof data.planName==="string"&&data.planName)message.textContent+=" Package: "+data.planName+".";
+    notice.hidden=false;
+  }).catch(function(){});
 }
 function safePublicApiBase(value){
   try{
@@ -836,7 +890,7 @@ function renderModal(){
        '<p style="font-size:1.0625rem;font-weight:800;color:#4ade80;margin-bottom:.5rem">Payment Received!</p>'+
        '<p style="color:rgba(255,255,255,.5);font-size:.875rem;margin-bottom:1rem">Your <span style="color:white;font-weight:600">'+(selectedPlan?selectedPlan.name:"")+'</span> plan is now active. These credentials have been entered on the sign-in form.</p>'+
        credentialBlock+
-      '<button onclick="closeModal();scrollToLogin()" class="btn btn-green btn-full">Go to Login →</button></div>';
+       '<button onclick="closeModal()" class="btn btn-green btn-full">Continue online</button></div>';
   }
 }
 
@@ -875,6 +929,7 @@ function renderModal(){
         ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
         ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{}),
        ...(DEVICE_MAC?{mac_address:DEVICE_MAC}:{}),
+        ...(!tvPurchase&&!forceRouterRetry?{portal_login_handoff:true}:{}),
         ...(tvPurchase&&tvDeviceName?{device_name:tvDeviceName}:{}),
        ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
      })
@@ -938,7 +993,7 @@ function sendStk(){
       pollTimer=setInterval(function(){
         pollCount++;
         var el=document.getElementById("pollCounter");
-        if(el)el.textContent="Verifying payment… ("+pollCount+"/12)";
+        if(el)el.textContent="Verifying payment…";
         fetch(apiUrl("/api/mpesa/status?checkout_id="+encodeURIComponent(data.CheckoutRequestID||"")))
           .then(function(r){return r.ok?r.json():{};})
            .then(function(s){
@@ -955,8 +1010,8 @@ function sendStk(){
 
            })
           .catch(function(){});
-        if(pollCount>=12){clearInterval(pollTimer);stkError="Payment was not confirmed yet. If you were charged, contact support.";stkState="error";renderModal();}
-      },5000);
+        if(pollCount>=180){clearInterval(pollTimer);stkError="Payment was not confirmed yet. If you were charged, contact support.";stkState="error";renderModal();}
+      },1000);
     });
 }
 
@@ -1056,7 +1111,47 @@ function bindPlanButtons(){
 window.openModal=openModal;
 window.sendStk=sendStk;
 
-function scrollToLogin(){document.getElementById("loginSection").scrollIntoView({behavior:"smooth"});}
+function openTroubleshootPage(){
+  var page=document.getElementById("troubleshootPage");
+  var device=document.getElementById("troubleshootDevice");
+  var result=document.getElementById("troubleshootResult");
+  var reconnect=document.getElementById("mpesaReconnectSection");
+  var reconnectSlot=document.getElementById("troubleshootMpesaSlot");
+  if(!page)return;
+  page.style.display="block";
+  document.body.style.overflow="hidden";
+  if(device)device.textContent=DEVICE_MAC||"Device MAC unavailable";
+  if(reconnect&&reconnectSlot){
+    if(reconnect.parentNode!==reconnectSlot)reconnectSlot.appendChild(reconnect);
+    reconnect.hidden=false;
+  }
+  try{
+    var url=new URL(window.location.href);
+    if(url.searchParams.get("page")!=="troubleshoot"){
+      url.searchParams.set("page","troubleshoot");
+      window.history.pushState({portalPage:"troubleshoot"},"",url.pathname+url.search+url.hash);
+    }
+  }catch(e){}
+  if(result&&!portalTroubleshootBusy)result.textContent="Checking your package and router session…";
+  troubleshootConnection();
+}
+function closeTroubleshootPage(){
+  var page=document.getElementById("troubleshootPage");
+  if(page)page.style.display="none";
+  document.body.style.overflow="";
+  try{
+    var url=new URL(window.location.href);
+    url.searchParams.delete("page");
+    window.history.replaceState({},"",url.pathname+url.search+url.hash);
+  }catch(e){}
+}
+window.addEventListener("popstate",function(){
+  var visible=new URLSearchParams(window.location.search).get("page")==="troubleshoot";
+  var page=document.getElementById("troubleshootPage");
+  if(page)page.style.display=visible?"block":"none";
+  document.body.style.overflow=visible?"hidden":"";
+  if(visible&&!portalTroubleshootBusy)troubleshootConnection();
+});
 function toggleLoginPass(){var i=document.getElementById("loginPass");i.type=i.type==="password"?"text":"password";}
 function formatPortalExpiry(value){
   if(!value)return "No expiry time recorded";
@@ -1066,10 +1161,10 @@ function formatPortalExpiry(value){
   catch(e){return new Date(timestamp).toLocaleString();}
 }
  function setPortalSessionStatus(status,expiresAt,message,planName,username,found){
-  var element=document.getElementById("portalSessionStatus");
+   var element=document.getElementById("troubleshootResult");
   if(!element)return;
-   var active=status==="active", expired=status==="expired";
-   var title=active?"Plan active":expired?"Plan expired":status==="not_found"?"No purchased plan found":"Purchase needs help";
+    var active=status==="active", expired=status==="expired", depleted=status==="depleted";
+    var title=active?"Plan active":expired?"Plan expired":depleted?"Data allowance used":status==="not_found"?"No purchased plan found":"Purchase needs help";
    var details="";
    if(found&&planName)details+='<div style="margin-top:.35rem;color:rgba(255,255,255,.78)">Plan: <strong>'+escapePortalText(planName)+'</strong></div>';
    if(found&&username)details+='<div style="margin-top:.2rem;color:rgba(255,255,255,.68)">Username: <strong>'+escapePortalText(username)+'</strong></div>';
@@ -1077,13 +1172,15 @@ function formatPortalExpiry(value){
      ? (expiresAt?"Your plan is active and expires "+formatPortalExpiry(expiresAt)+".":"Your plan is active. No expiry time is recorded.")
      : expired
        ? ("Your plan expired"+(expiresAt?" on "+formatPortalExpiry(expiresAt):"")+"." )
+        : depleted
+          ? "Your package data allowance has been used. Purchase a new package to reconnect."
        : status==="not_found"
          ? "No successfully purchased hotspot package matches this device MAC address."
          : "A purchase was found, but its hotspot account could not be confirmed.";
   element.style.display="block";
-   element.style.background=active?"rgba(34,197,94,.08)":expired?"rgba(245,158,11,.08)":"rgba(239,68,68,.08)";
-   element.style.border="1px solid "+(active?"rgba(34,197,94,.22)":expired?"rgba(245,158,11,.22)":"rgba(239,68,68,.22)");
-   element.style.color=active?"#86efac":expired?"#fbbf24":"#fca5a5";
+    element.style.background=active?"rgba(34,197,94,.08)":(expired||depleted)?"rgba(245,158,11,.08)":"rgba(239,68,68,.08)";
+    element.style.border="1px solid "+(active?"rgba(34,197,94,.22)":(expired||depleted)?"rgba(245,158,11,.22)":"rgba(239,68,68,.22)");
+    element.style.color=active?"#86efac":(expired||depleted)?"#fbbf24":"#fca5a5";
    element.innerHTML="<strong>"+title+"</strong>"+details+
      '<div style="margin-top:.3rem;color:rgba(255,255,255,.62)">'+escapePortalText(explanation)+
      ((message||"")?" "+escapePortalText(message):"")+"</div>";
@@ -1124,7 +1221,7 @@ function troubleshootConnection(){
      return response.json().then(function(data){return{ok:response.ok,data:data||{}};});
    }).then(function(result){
      var data=result.data||{};
-     var status=["active","expired","not_found","unavailable"].indexOf(data.status)>=0?data.status:"unavailable";
+      var status=["active","depleted","expired","not_found","unavailable"].indexOf(data.status)>=0?data.status:"unavailable";
      portalTroubleshootStatus=status;
      portalTroubleshootDetails={
        expiresAt:typeof data.expiresAt==="string"?data.expiresAt:null,
@@ -1232,7 +1329,6 @@ function submitMpesa(){
       if(!applyPaidHotspotCredentials(result.data.credentials))throw new Error("The payment was verified, but hotspot credentials were not returned.");
       document.getElementById("mpesaMsgWrap").style.display="none";
       document.getElementById("mpesaMsgSuccess").style.display="block";
-      scrollToLogin();
     })
     .catch(function(error){
       if(errorEl){
@@ -1242,7 +1338,7 @@ function submitMpesa(){
     });
 }
 
-function checkWidth(){var button=document.getElementById("alreadyPaidBtn");if(button)button.style.display=window.innerWidth>=640?"block":"none";}
+function checkWidth(){var button=document.getElementById("alreadyPaidBtn");if(button)button.style.display="block";}
 function renderPortalDeviceMac(){
   var value=document.getElementById("portalDeviceMacValue");
   if(value)value.textContent=DEVICE_MAC||"Resolved by router";
@@ -1256,6 +1352,8 @@ bindPlanButtons();
 loadPortalTypography(loadPlans);
 renderPortalDeviceMac();
 applyCredentialsFromHash();
+if(PORTAL_QUERY.get("page")==="troubleshoot")openTroubleshootPage();
+else checkPortalExpiryOnLanding();
 </script>
 </body>
 </html>

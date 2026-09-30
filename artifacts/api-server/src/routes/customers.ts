@@ -1554,6 +1554,8 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
   const adminId = portalScope?.adminId ?? Number(req.body?.adminId);
   const requestedMac = normalisePortalMac(req.body?.mac_address);
   const action = req.body?.action === "login" ? "login" : "check";
+  // Landing-page expiry checks only need database status; login requests must still verify hard-cap usage.
+  const expiryOnlyCheck = action === "check" && req.body?.expiry_only === true;
 
   if (!Number.isSafeInteger(adminId) || adminId < 1 || !requestedMac) {
     res.status(400).json({ ok: false, error: "ISP context and the hotspot device MAC address are required." });
@@ -1571,7 +1573,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
 
   const customer = lookup.customer;
   const plan = lookup.plan;
-  if (lookup.status === "active" && customer && plan && plan.data_cap_mode !== "throttle") {
+  if (!expiryOnlyCheck && lookup.status === "active" && customer && plan && plan.data_cap_mode !== "throttle") {
     const rawLimitMb = Number(customer.fup_limit_mb ?? plan.data_limit_mb);
     if (Number.isFinite(rawLimitMb) && rawLimitMb > 0) {
       const routerId = customer.router_id ?? plan.router_id ?? null;

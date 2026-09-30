@@ -90,6 +90,7 @@ export const hotspotPaymentOperations = {
   requireHotspotUserProfile,
   removeHotspotUserFup,
   resetHotspotUserCounters,
+  resolveHotspotClientMac,
   resolveHotspotClientIpByMac,
   scheduleHotspotUserFup,
   scheduleHotspotUserExpiry,
@@ -2498,6 +2499,9 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
 router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Promise<void> => {
   const checkoutId = String(req.body?.checkout_id ?? "").trim();
   const forceRouterRetry = req.body?.retry === true;
+  const portalLoginHandoff = req.body?.portal_login_handoff === true
+    && req.body?.target_device !== true
+    && !forceRouterRetry;
   const portalScope = req.hotspotPortalContext;
   const adminId = portalScope?.adminId ?? await resolvePortalAdminId(req, req.body?.adminId);
   const requestedMac = readMacAddress(req.body?.mac_address);
@@ -2949,7 +2953,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       });
     }
     let routerConnected = false;
-    if (routerAddress) {
+    if (routerAddress && !portalLoginHandoff) {
       routerConnected = await hotspotPaymentOperations.connectHotspotUser(credentials, {
         user: hotspotUsername,
         password: hotspotPassword,
@@ -2969,11 +2973,18 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     });
     res.json({
       ok: true,
-      access: routerConnected ? "hotspot-authenticated" : "hotspot-credentials",
+      access: routerConnected
+        ? "hotspot-authenticated"
+        : portalLoginHandoff
+          ? "portal-login-handoff"
+          : "hotspot-credentials",
       connected: routerConnected,
+      portal_login_handoff: portalLoginHandoff,
       ...(!routerConnected
         ? {
-            message: routerAddress
+            message: portalLoginHandoff
+              ? "Your package is ready. The hotspot sign-in page is finishing the connection."
+              : routerAddress
               ? paidBindingApplied
                 ? "Payment is confirmed and the package is bound to this device, but the router has not confirmed its login yet. Retry connection."
                 : "Payment is confirmed, but the router has not confirmed this device's hotspot login yet. Retry connection."
@@ -3199,9 +3210,21 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     return;
   }
   const savedMac = transactionMac || customerMac;
-  const transactionMacForResponse = savedMac;
-  let mac = requestedMac.value || transactionMacForResponse;
-  if (requestedMac.value && transactionMacForResponse && requestedMac.value !== transactionMacForResponse) {
+  if (!savedMac) {
+    res.status(409).json({
+      ok: false,
+      error: "This payment is not linked to a saved hotspot device, so it cannot be reconnected from an SMS.",
+    });
+    return;
+  }
+  if (!requestedMac.value || !clientIp) {
+    res.status(400).json({
+      ok: false,
+      error: "Open the hotspot sign-in page on the device that purchased this package, then paste the confirmation SMS.",
+    });
+    return;
+  }
+  if (requestedMac.value !== savedMac) {
     res.status(400).json({ ok: false, error: "This M-Pesa payment belongs to a different device." });
     return;
   }
@@ -3228,6 +3251,33 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     res.status(503).json({ ok: false, error: `Payment is confirmed, but RouterOS reconnect is pending. ${diagnosis.userMessage} Try again when the router is online.` });
     return;
   }
+  let resolvedClientMac: string | null;
+  try {
+    resolvedClientMac = await hotspotPaymentOperations.resolveHotspotClientMac(credentials, clientIp);
+  } catch (error) {
+    logger.warn({ err: error, receipt, routerId: routerRow.id, clientIp }, "[mpesa/verify] live device identity lookup failed");
+    res.status(503).json({
+      ok: false,
+      error: "The hotspot router could not verify this device right now. Please try again shortly.",
+    });
+    return;
+  }
+  const mac = normaliseMacAddress(resolvedClientMac);
+  if (!mac) {
+    res.status(409).json({
+      ok: false,
+      error: "The hotspot router could not identify this device. Reopen the sign-in page on the purchased device and try again.",
+    });
+    return;
+  }
+  if (mac !== savedMac || mac !== requestedMac.value) {
+    res.status(403).json({
+      ok: false,
+      error: "This M-Pesa payment can only reconnect the device linked to that purchase.",
+    });
+    return;
+  }
+  const routerAddress = clientIp;
   let hotspotServer: string | undefined;
   if (plan.port_id) {
     try {
@@ -3287,19 +3337,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
       return;
     }
   }
-  if (!mac && clientIp) {
-    mac = await resolveHotspotClientMac(credentials, clientIp).catch(() => null) ?? "";
-  }
-  if (!mac) {
-    res.status(400).json({ ok: false, error: "The router could not identify the device to reconnect." });
-    return;
-  }
-
   const expiresInSeconds = Math.max(1, Math.ceil((expiresAtMs - Date.now()) / 1000));
-  const routerAddress = await hotspotPaymentOperations.resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
-    logger.warn({ err: error, receipt, routerId: routerRow.id, mac }, "[mpesa/verify] target device address lookup failed");
-    return null;
-  }) ?? "";
   const hotspotProfile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
   const rawDataLimitMb = Number(customer.fup_limit_mb ?? plan.data_limit_mb);
   const dataLimitMb = Number.isFinite(rawDataLimitMb) && rawDataLimitMb > 0 ? rawDataLimitMb : null;
