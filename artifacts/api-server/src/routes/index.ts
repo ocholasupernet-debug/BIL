@@ -37,6 +37,7 @@ import smsRouter from "./sms-route.js";
 import routerLoadBalancingRouter from "./router-load-balancing-route.js";
 import platformEmailRouter from "./platform-email-route.js";
 import routerMigrationsRouter from "./router-migrations-route.js";
+import routerUserSnapshotsRouter from "./router-user-snapshots-route.js";
 
 const router: IRouter = Router();
 
@@ -78,5 +79,6 @@ router.use(dashboardPreferencesRouter);
   router.use(routerLoadBalancingRouter);
   router.use(platformEmailRouter);
   router.use(routerMigrationsRouter);
+  router.use(routerUserSnapshotsRouter);
 
 export default router;

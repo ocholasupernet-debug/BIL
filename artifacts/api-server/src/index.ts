@@ -1,6 +1,8 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { sweepAllRouters } from "./routes/routers-route";
+import { getRouterCreds } from "./routes/mikrotik-route.js";
+import { processDueRouterUserSnapshots } from "./services/router-user-snapshot-service.js";
 import {
   enqueueWhatsAppExpiryNotifications,
   processWhatsAppOutboxBatch,
@@ -94,5 +96,30 @@ app.listen(port, (err) => {
       }, SWEEP_INTERVAL_MS);
       logger.info({ intervalMin: 5 }, "[monitor] Router health monitor started");
     }, 30_000);
+  }
+  if (process.env.NODE_ENV === "production" && process.env.ROUTER_USER_SNAPSHOT_WORKER_ENABLED !== "false") {
+    let snapshotWorkerBusy = false;
+    const runRouterUserSnapshotWorker = async () => {
+      if (snapshotWorkerBusy) return;
+      snapshotWorkerBusy = true;
+      try {
+        const result = await processDueRouterUserSnapshots(async (adminId, routerId) => {
+          const found = await getRouterCreds(routerId, adminId);
+          return found ? { name: found.row.name ?? `Router ${routerId}`, creds: found.creds } : null;
+        });
+        if (result.claimed > 0) {
+          logger.info(result, "[user-snapshots] scheduled refresh batch finished");
+        }
+      } catch {
+        logger.warn("[user-snapshots] scheduled refresh worker failed");
+      } finally {
+        snapshotWorkerBusy = false;
+      }
+    };
+    setTimeout(() => {
+      void runRouterUserSnapshotWorker();
+      setInterval(() => void runRouterUserSnapshotWorker(), 60_000);
+    }, 20_000);
+    logger.info({ intervalSeconds: 60 }, "[user-snapshots] scheduled refresh worker started");
   }
 });

@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
+import { RouterUserSnapshotModal } from "./RouterUserSnapshotModal";
 import {
   Loader2, RefreshCw, Search, Plus, Clock, RotateCcw,
   Edit2, Trash2, History, ExternalLink, X, CheckCircle,
@@ -785,6 +786,7 @@ export default function Routers() {
   const [deleteState, setDeleteState]   = useState<Record<number, "idle" | "confirm" | "deleting">>({});
   const [routerMenuId, setRouterMenuId] = useState<number | null>(null);
   const [historyModal, setHistoryModal] = useState<DbRouter | null>(null);
+  const [userSnapshotRouter, setUserSnapshotRouter] = useState<DbRouter | null>(null);
   const [installHistoryModal, setInstallHistoryModal] = useState<DbRouter | null>(null);
   const [autoRebootModal, setAutoRebootModal] = useState<DbRouter | null>(null);
   const [managedResetOpen, setManagedResetOpen] = useState(false);
@@ -1287,6 +1289,19 @@ export default function Routers() {
                                   boxShadow: "0 12px 30px rgba(0,0,0,0.28)",
                                 }}
                               >
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => { setRouterMenuId(null); setUserSnapshotRouter(r); }}
+                                  style={{
+                                    display: "block", width: "100%", padding: "0.5rem 0.6rem",
+                                    border: 0, borderRadius: 5, background: "transparent",
+                                    color: "var(--isp-accent)", fontSize: "0.75rem",
+                                    fontWeight: 700, textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+                                  }}
+                                >
+                                  Back up users
+                                </button>
                                 <button
                                   type="button"
                                   role="menuitem"
@@ -2042,6 +2057,13 @@ export default function Routers() {
       )}
 
       {managedResetOpen && <ManagedResetModal routers={routers} onClose={() => setManagedResetOpen(false)} />}
+      {userSnapshotRouter && (
+        <RouterUserSnapshotModal
+          routerId={userSnapshotRouter.id}
+          routerName={userSnapshotRouter.name}
+          onClose={() => setUserSnapshotRouter(null)}
+        />
+      )}
     </AdminLayout>
   );
 }
