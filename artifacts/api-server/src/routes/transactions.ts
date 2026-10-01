@@ -3,6 +3,7 @@ import { sbSelect, sbInsert } from "../lib/supabase-client";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
+const PLATFORM_PAYMENT_METHODS = "mpesa_registration,manual_registration,mpesa_platform_billing";
 
 /*
  * /api/transactions — Supabase isp_transactions proxy.
@@ -15,7 +16,10 @@ router.get("/transactions", requireAdmin(), async (req, res): Promise<void> => {
     res.status(400).json({ error: "The requested account does not match the signed-in admin session." });
     return;
   }
-  const rows = await sbSelect("isp_transactions", `admin_id=eq.${adminId}&select=*&order=created_at.desc`);
+  const rows = await sbSelect(
+    "isp_transactions",
+    `admin_id=eq.${adminId}&payment_method=not.in.(${PLATFORM_PAYMENT_METHODS})&select=*&order=created_at.desc`,
+  );
   res.json(rows);
 });
 

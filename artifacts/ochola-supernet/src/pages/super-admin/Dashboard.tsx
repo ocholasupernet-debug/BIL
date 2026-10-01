@@ -5,7 +5,7 @@ import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { supabase } from "@/lib/supabase";
 import {
   Activity, AlertTriangle, ArrowUpRight, BarChart3, CheckCircle2,
-  Database, Gauge, Globe, RefreshCw, Router, ShieldAlert,
+  Database, Gauge, Globe, ReceiptText, RefreshCw, Router, ShieldAlert,
   Users, XCircle,
 } from "lucide-react";
 
@@ -44,6 +44,17 @@ interface PlatformIncomeSummary {
   renewalMonth: number;
   renewalTotal: number;
   renewalTransactions: number;
+}
+interface PlatformTransaction {
+  transactionId: number;
+  accountId: number | null;
+  accountName: string;
+  accountRole: string | null;
+  category: "registration" | "renewal";
+  amount: number;
+  paymentMethod: string;
+  status: string;
+  createdAt: string | null;
 }
 
 function formatKes(amount: number | undefined): string {
@@ -110,6 +121,7 @@ function CardHeading({
 
 export default function SuperAdminDashboard() {
   const [lastRefresh, setLastRefresh] = React.useState(() => new Date());
+  const [transactionSearch, setTransactionSearch] = React.useState("");
 
   const adminsQuery = useQuery<AdminRecord[]>({
     queryKey: ["sa_all_admins"],
@@ -169,12 +181,33 @@ export default function SuperAdminDashboard() {
       return result.summary;
     },
   });
+  const platformTransactionsQuery = useQuery<PlatformTransaction[]>({
+    queryKey: ["sa_platform_transactions"],
+    queryFn: async () => {
+      const token = localStorage.getItem("ochola_superadmin_token") || "";
+      const response = await fetch("/api/super-admin/billing/platform-transactions", {
+        headers: { "x-sa-token": token },
+      });
+      const result = await response.json() as { ok?: boolean; error?: string; transactions?: PlatformTransaction[] };
+      if (!response.ok || !result.ok || !result.transactions) {
+        throw new Error(result.error || "Could not load platform transactions.");
+      }
+      return result.transactions;
+    },
+    refetchInterval: 60_000,
+  });
 
   const admins = adminsQuery.data ?? [];
   const routers = routersQuery.data ?? [];
   const customers = customersQuery.data ?? [];
   const plans = plansQuery.data ?? [];
-  const hasError = adminsQuery.isError || routersQuery.isError || customersQuery.isError || plansQuery.isError || incomeQuery.isError;
+  const platformTransactions = platformTransactionsQuery.data ?? [];
+  const filteredPlatformTransactions = useMemo(() => {
+    const needle = transactionSearch.trim();
+    if (!needle) return platformTransactions;
+    return platformTransactions.filter(transaction => String(transaction.transactionId).includes(needle));
+  }, [platformTransactions, transactionSearch]);
+  const hasError = adminsQuery.isError || routersQuery.isError || customersQuery.isError || plansQuery.isError || incomeQuery.isError || platformTransactionsQuery.isError;
 
   const activeAdmins = admins.filter((admin) => admin.is_active !== false).length;
   const inactiveAdmins = admins.filter((admin) => admin.is_active === false);
@@ -215,6 +248,7 @@ export default function SuperAdminDashboard() {
       customersQuery.refetch(),
       plansQuery.refetch(),
       incomeQuery.refetch(),
+      platformTransactionsQuery.refetch(),
     ]).then(() => setLastRefresh(new Date()));
   };
 
@@ -301,6 +335,89 @@ export default function SuperAdminDashboard() {
             loading={incomeQuery.isLoading}
           />
         </div>
+
+        <section className="sa-card" style={{ marginTop: 16 }}>
+          <CardHeading
+            icon={ReceiptText}
+            title="Registration and renewal transactions"
+            description="Platform payments are listed here by transaction ID and excluded from ISP and reseller transaction views."
+            count={platformTransactions.length}
+          />
+          <div style={{ padding: "0 20px 14px" }}>
+            <input
+              aria-label="Search platform transactions by transaction ID"
+              placeholder="Search by transaction ID"
+              value={transactionSearch}
+              onChange={event => setTransactionSearch(event.target.value.replace(/\D/g, ""))}
+              style={{
+                width: "100%",
+                maxWidth: 320,
+                padding: "9px 12px",
+                borderRadius: 8,
+                border: "1px solid var(--isp-accent-glow)",
+                background: "rgba(255,255,255,0.04)",
+                color: "var(--isp-text)",
+                font: "inherit",
+              }}
+            />
+          </div>
+          {platformTransactionsQuery.isLoading ? (
+            <div className="sa-empty">Loading platform transactions…</div>
+          ) : platformTransactionsQuery.isError ? (
+            <div className="sa-empty">Platform transactions are unavailable. Use Refresh to try again.</div>
+          ) : filteredPlatformTransactions.length === 0 ? (
+            <div className="sa-empty">
+              {platformTransactions.length ? "No transaction IDs match this search." : "No registration or renewal transactions recorded yet."}
+            </div>
+          ) : (
+            <div className="sa-table-wrap">
+              <table className="sa-table">
+                <thead>
+                  <tr>
+                    <th>Transaction ID</th>
+                    <th>Account</th>
+                    <th>Type</th>
+                    <th>Amount</th>
+                    <th>Payment method</th>
+                    <th>Status</th>
+                    <th>Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredPlatformTransactions.map(transaction => {
+                    const normalizedStatus = transaction.status.toLowerCase();
+                    const statusColor = ["completed", "paid", "success"].includes(normalizedStatus)
+                      ? "#34d399"
+                      : ["pending", "initiating"].includes(normalizedStatus) ? "#fbbf24" : "#f87171";
+                    return (
+                      <tr key={transaction.transactionId}>
+                        <td style={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>#{transaction.transactionId}</td>
+                        <td>
+                          <div>{transaction.accountName}</div>
+                          <small style={{ color: "var(--isp-text-muted)" }}>
+                            {transaction.accountRole || "Account"}{transaction.accountId ? ` · #${transaction.accountId}` : ""}
+                          </small>
+                        </td>
+                        <td>{transaction.category === "registration" ? "Registration" : "Renewal"}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>{formatKes(transaction.amount)}</td>
+                        <td>{transaction.paymentMethod.replaceAll("_", " ")}</td>
+                        <td style={{ color: statusColor, textTransform: "capitalize" }}>{transaction.status}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          {transaction.createdAt
+                            ? new Date(transaction.createdAt).toLocaleString("en-KE", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
+                            : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="sa-empty" style={{ textAlign: "left", paddingTop: 10 }}>
+            Showing the latest {platformTransactions.length} platform transaction{platformTransactions.length === 1 ? "" : "s"}.
+          </div>
+        </section>
 
         <div className="sa-attention">
           <div className={`sa-attention-item${inactiveAdmins.length ? " is-alert" : ""}`}>

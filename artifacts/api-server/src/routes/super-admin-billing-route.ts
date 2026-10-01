@@ -357,6 +357,62 @@ router.get("/super-admin/billing/income-summary", async (req, res): Promise<void
   }
 });
 
+router.get("/super-admin/billing/platform-transactions", async (req, res): Promise<void> => {
+  if (!isSuperAdmin(req, res)) return;
+  try {
+    const transactions = await sbSelectStrict<{
+      id: number;
+      admin_id: number | null;
+      amount: number | string;
+      payment_method: string;
+      status: string | null;
+      created_at: string | null;
+    }>(
+      "isp_transactions",
+      "payment_method=in.(mpesa_registration,manual_registration,mpesa_platform_billing)&select=id,admin_id,amount,payment_method,status,created_at&order=created_at.desc&limit=100",
+    );
+    const accountIds = [...new Set(
+      transactions
+        .map(transaction => transaction.admin_id)
+        .filter((id): id is number => typeof id === "number" && Number.isSafeInteger(id) && id > 0),
+    )];
+    const accounts = accountIds.length
+      ? await sbSelectStrict<{
+          id: number;
+          name: string | null;
+          company_name: string | null;
+          role: string | null;
+        }>(
+          "isp_admins",
+          `id=in.(${accountIds.join(",")})&select=id,name,company_name,role`,
+        )
+      : [];
+    const accountById = new Map(accounts.map(account => [account.id, account]));
+
+    res.json({
+      ok: true,
+      transactions: transactions.map(transaction => {
+        const account = transaction.admin_id ? accountById.get(transaction.admin_id) : undefined;
+        return {
+          transactionId: transaction.id,
+          accountId: transaction.admin_id,
+          accountName: account?.company_name?.trim()
+            || account?.name?.trim()
+            || (transaction.admin_id ? `Account #${transaction.admin_id}` : "Unknown account"),
+          accountRole: account?.role ?? null,
+          category: transaction.payment_method === "mpesa_platform_billing" ? "renewal" : "registration",
+          amount: Number(transaction.amount),
+          paymentMethod: transaction.payment_method,
+          status: transaction.status ?? "unknown",
+          createdAt: transaction.created_at,
+        };
+      }),
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Could not load platform transactions." });
+  }
+});
+
 router.put("/super-admin/billing/platform-config", async (req, res): Promise<void> => {
   if (!isSuperAdmin(req, res)) return;
   const numberField = (value: unknown, fallback: number) => {

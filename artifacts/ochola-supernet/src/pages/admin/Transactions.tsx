@@ -31,6 +31,7 @@ async function fetchTransactions(): Promise<DbTransaction[]> {
     .from("isp_transactions")
     .select("*")
     .eq("admin_id", ADMIN_ID)
+    .not("payment_method", "in", "(mpesa_registration,manual_registration,mpesa_platform_billing)")
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data ?? [];

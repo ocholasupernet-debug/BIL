@@ -200,6 +200,7 @@ async function fetchTransactions(customerIds: number[]): Promise<DbTransaction[]
     .from("isp_transactions")
     .select("*")
     .in("customer_id", customerIds)
+    .not("payment_method", "in", "(mpesa_registration,manual_registration,mpesa_platform_billing)")
     .order("created_at", { ascending: false })
     .limit(50);
   if (error) throw error;

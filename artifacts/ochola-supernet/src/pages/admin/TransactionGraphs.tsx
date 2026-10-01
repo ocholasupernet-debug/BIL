@@ -19,7 +19,8 @@ interface RouterRow { id: number; name: string }
 async function fetchTransactions(): Promise<DbTransaction[]> {
   const { data, error } = await supabase
     .from("isp_transactions")
-    .select("id,amount,status,plan_id,created_at")
+    .select("id,amount,status,plan_id,created_at,payment_method")
+    .not("payment_method", "in", "(mpesa_registration,manual_registration,mpesa_platform_billing)")
     .order("created_at", { ascending: true });
   if (error) throw error;
   return (data ?? []) as DbTransaction[];

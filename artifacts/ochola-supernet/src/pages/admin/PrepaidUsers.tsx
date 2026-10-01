@@ -266,6 +266,7 @@ async function fetchPayments(customerIds: number[]): Promise<Payment[]> {
     .from("isp_transactions")
     .select("id,customer_id,plan_id,amount,payment_method,reference,mpesa_receipt,notes,status,created_at")
     .eq("admin_id", ADMIN_ID)
+    .not("payment_method", "in", "(mpesa_registration,manual_registration,mpesa_platform_billing)")
     .in("customer_id", customerIds)
     .in("status", ["completed", "paid", "success"])
     .order("created_at", { ascending: false });
