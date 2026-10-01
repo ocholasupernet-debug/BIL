@@ -1,0 +1,217 @@
+.card-preview {
+  min-height: 100vh;
+  padding: 20px;
+  background: var(--isp-bg);
+  color: var(--isp-text);
+  font-family: var(--font-sans);
+}
+
+.card-preview-header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.card-preview-header h1 {
+  margin: 0;
+  font-size: 1.12rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.card-preview-header p {
+  margin: 4px 0 0;
+  color: var(--isp-text-muted);
+  font-size: 0.72rem;
+}
+
+.card-preview-note {
+  color: var(--isp-text-sub);
+  font-size: 0.62rem;
+  white-space: nowrap;
+}
+
+.card-preview-section {
+  margin-top: 18px;
+}
+
+.card-preview-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 9px;
+  color: var(--isp-text);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.card-preview-section-title span {
+  color: var(--isp-text-muted);
+  font-size: 0.62rem;
+  font-weight: 500;
+}
+
+.dashboard-kpi-grid,
+.dashboard-stat-grid,
+.reseller-card-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.dashboard-kpi,
+.dashboard-stat {
+  min-width: 0;
+  border: 1px solid var(--isp-border);
+  border-left: 4px solid var(--metric-tone);
+  border-radius: 8px;
+  background: var(--isp-card);
+  box-shadow: none;
+}
+
+.dashboard-kpi {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 78px;
+  padding: 11px 12px;
+}
+
+.dashboard-kpi-icon,
+.dashboard-stat-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--metric-tone);
+}
+
+.dashboard-kpi-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.dashboard-kpi-copy,
+.dashboard-stat-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dashboard-kpi-label,
+.dashboard-stat-label,
+.reseller-metric-label {
+  display: block;
+  color: var(--isp-text-muted);
+  font-size: 0.64rem;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0.085em;
+  text-transform: uppercase;
+}
+
+.dashboard-kpi-value,
+.dashboard-stat-value,
+.reseller-metric-value {
+  display: block;
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+  color: var(--isp-text);
+  font-family: var(--font-mono);
+  font-size: clamp(1rem, 1.5vw, 1.35rem);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  letter-spacing: -0.035em;
+}
+
+.dashboard-kpi-description {
+  margin-top: 4px;
+  color: var(--isp-text-sub);
+  font-size: 0.68rem;
+}
+
+.dashboard-stat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 62px;
+  padding: 10px 11px;
+  text-decoration: none;
+}
+
+.dashboard-stat-icon {
+  width: 26px;
+  height: 26px;
+}
+
+.dashboard-stat-value {
+  margin-top: 4px;
+  font-size: 1rem;
+}
+
+.dashboard-stat-arrow {
+  flex: 0 0 auto;
+  color: var(--isp-text-sub);
+}
+
+.reseller-card-grid {
+  align-items: stretch;
+}
+
+.reseller-stat-card {
+  min-width: 0;
+  padding: 12px 13px;
+  border: 1px solid var(--isp-border);
+  border-left: 4px solid var(--metric-tone);
+  border-radius: 8px;
+  background: var(--isp-card);
+  box-shadow: none;
+}
+
+.reseller-stat-card svg {
+  margin-bottom: 8px;
+  color: var(--metric-tone);
+}
+
+.reseller-metric-label {
+  margin-top: 4px;
+}
+
+.reseller-metric-value {
+  font-size: clamp(1rem, 1.5vw, 1.35rem);
+}
+
+.dashboard-kpi--accent,
+.dashboard-stat--accent,
+.reseller-stat-card--accent { --metric-tone: #3577c5; }
+.dashboard-kpi--green,
+.dashboard-stat--green,
+.reseller-stat-card--green { --metric-tone: #10b981; }
+.dashboard-kpi--amber,
+.dashboard-stat--amber,
+.reseller-stat-card--amber { --metric-tone: #c58b30; }
+.dashboard-kpi--plum { --metric-tone: #8275a9; }
+.dashboard-stat--teal,
+.reseller-stat-card--teal { --metric-tone: #06b6d4; }
+
+@media (max-width: 1050px) {
+  .reseller-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 767px) {
+  .dashboard-kpi-grid,
+  .dashboard-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 520px) {
+  .dashboard-kpi,
+  .dashboard-stat {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .reseller-card-grid { grid-template-columns: minmax(0, 1fr); }
+}

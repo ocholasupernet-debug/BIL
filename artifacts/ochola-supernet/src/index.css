@@ -4629,3 +4629,153 @@ table:not([role="grid"]) td [data-technical="true"] {
   .sa-page-head { flex-direction: column; gap: 10px; }
   .sa-content { padding-inline: 12px; }
 }
+
+/* Solid, high-contrast dashboard statistic tiles. Keep the existing grids,
+   dimensions, and responsive rules above; only the card surface and text change. */
+.dashboard-page .dashboard-kpi,
+.dashboard-page .dashboard-stat,
+.reseller-dashboard .reseller-stat-card {
+  color: #f8fafc;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+  background-color: var(--dashboard-tile-bg, #243b53);
+  background-image: none;
+  box-shadow: 0 4px 12px rgba(12, 24, 42, 0.16);
+}
+.dashboard-page .dashboard-kpi:hover,
+.dashboard-page .dashboard-stat:hover,
+.reseller-dashboard .reseller-stat-card:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  border-left-color: rgba(255, 255, 255, 0.28);
+  background-color: var(--dashboard-tile-bg, #243b53);
+  background-image: none;
+  box-shadow: 0 7px 18px rgba(12, 24, 42, 0.22);
+}
+.dashboard-page .dashboard-kpi--accent,
+.dashboard-page .dashboard-stat--accent,
+.reseller-dashboard .reseller-stat-card--accent { --dashboard-tile-bg: #203e63; }
+.dashboard-page .dashboard-kpi--slate,
+.reseller-dashboard .reseller-stat-card--slate { --dashboard-tile-bg: #263f5e; }
+.dashboard-page .dashboard-kpi--green,
+.dashboard-page .dashboard-stat--green,
+.reseller-dashboard .reseller-stat-card--green { --dashboard-tile-bg: #185b43; }
+.dashboard-page .dashboard-kpi--amber,
+.dashboard-page .dashboard-stat--amber,
+.reseller-dashboard .reseller-stat-card--amber { --dashboard-tile-bg: #76521e; }
+.dashboard-page .dashboard-kpi--plum,
+.dashboard-page .dashboard-stat--plum { --dashboard-tile-bg: #493b72; }
+.dashboard-page .dashboard-kpi--rust,
+.reseller-dashboard .reseller-stat-card--rust { --dashboard-tile-bg: #713f3d; }
+.dashboard-page .dashboard-stat--teal,
+.reseller-dashboard .reseller-stat-card--teal { --dashboard-tile-bg: #145b63; }
+.dashboard-page .dashboard-stat--deep-teal { --dashboard-tile-bg: #104d4e; }
+.dashboard-page .dashboard-stat--indigo { --dashboard-tile-bg: #393a73; }
+.dashboard-page .dashboard-kpi-icon,
+.dashboard-page .dashboard-stat-icon {
+  color: #f8fafc;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+}
+.dashboard-page .dashboard-kpi-label,
+.dashboard-page .dashboard-stat-label,
+.reseller-dashboard .reseller-metric-label {
+  color: rgba(248, 250, 252, 0.82);
+}
+.dashboard-page .dashboard-kpi-value,
+.dashboard-page .dashboard-stat-value,
+.reseller-dashboard .reseller-metric-value {
+  position: relative;
+  color: #f8fafc;
+}
+.dashboard-page .dashboard-kpi-description,
+.dashboard-page .dashboard-stat-arrow {
+  color: rgba(248, 250, 252, 0.74);
+}
+.reseller-dashboard .reseller-stat-card svg { color: #f8fafc; }
+.dashboard-page .dashboard-kpi-value::before,
+.dashboard-page .dashboard-stat-value::before,
+.reseller-dashboard .reseller-metric-value::before {
+  position: absolute;
+  top: -4px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: rgba(248, 250, 252, 0.2);
+  content: "";
+}
+.dashboard-page .dashboard-stat:focus-visible {
+  outline: 2px solid rgba(248, 250, 252, 0.9);
+  outline-offset: 2px;
+}
+
+/* Settings links in the main sidebar are the sole settings navigation.
+   Each route renders one selected settings section in a single content column. */
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  width: 100%;
+  align-items: start;
+}
+.settings-content-column {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  width: 100%;
+}
+.settings-page-heading {
+  margin: 0 !important;
+  padding: 14px 16px;
+  border: 1px solid var(--isp-border);
+  border-radius: 12px;
+  background: var(--isp-card);
+}
+.settings-page-heading h1 {
+  margin: 0;
+  color: var(--isp-text);
+  font-size: 1.15rem;
+  font-weight: 750;
+}
+.settings-page-heading p {
+  margin: 4px 0 0;
+  color: var(--isp-text-muted);
+  font-size: 0.76rem;
+}
+.settings-tab-content {
+  min-width: 0;
+  width: 100%;
+}
+
+.plans-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--isp-border);
+  border-radius: 12px;
+  background: var(--isp-card);
+}
+.plans-page-header h1 { margin: 0; }
+.plans-page-header p {
+  margin: 4px 0 0;
+  color: var(--isp-text-muted);
+  font-size: 0.76rem;
+}
+.plans-toolbar--category {
+  grid-template-columns: minmax(210px, 1.4fr) minmax(145px, 0.8fr) minmax(140px, 0.8fr) auto auto auto;
+}
+
+@media (max-width: 760px) {
+  .plans-page-header { align-items: flex-start; }
+  .plans-toolbar--category { grid-template-columns: minmax(0, 1fr) auto; }
+  .plans-toolbar--category .plans-search,
+  .plans-toolbar--category .plans-result-count { grid-column: 1 / -1; }
+  .plans-toolbar--category .plans-result-count { justify-self: end; }
+}
+
+@media (max-width: 520px) {
+  .plans-page-header { flex-direction: column; }
+  .settings-page-heading { padding: 12px 14px; }
+}

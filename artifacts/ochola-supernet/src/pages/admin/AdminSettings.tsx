@@ -3480,75 +3480,38 @@ export default function AdminSettings() {
     if (!visibleTabs.some(item => item.id === tab)) setTab("profile");
   }, [requestedTab, canManageGateways, gatewayPermissionLoading, tab, setLocation, isReseller]);
 
-  const selectTab = (nextTab: string) => {
-    if (nextTab === "gateways" && !canManageGateways) return;
-    setTab(nextTab);
-    setLocation(`/admin/settings?tab=${nextTab}`);
-  };
-
   return (
     <GatewaySettingsOtpProvider>
     <AdminLayout>
-      <div className="settings-layout" style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
-
-        {/* Sidebar */}
-        <aside className="settings-sidebar" style={{ width: 220, flexShrink: 0, background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden", position: "sticky", top: 0 }}>
-          <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}` }}>
-            <p style={{ fontSize: "0.7rem", fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.1em", margin: 0 }}>Settings</p>
-          </div>
-            {visibleTabs.map(t => {
-            const Icon = t.icon;
-            const active = tab === t.id;
-            return (
-              <button key={t.id} onClick={() => selectTab(t.id)} style={{
-                display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "9px 16px",
-                background: active ? "rgba(37,99,235,0.1)" : "transparent",
-                borderTop: "none", borderRight: "none",
-                borderLeft: active ? `3px solid ${C.cyan}` : "3px solid transparent",
-                borderBottom: `1px solid ${C.border}`, cursor: "pointer",
-                color: active ? C.cyan : C.muted, fontSize: "0.78rem", fontWeight: active ? 700 : 400,
-                textAlign: "left", fontFamily: "inherit", transition: "all 0.15s",
-              }}>
-                <Icon size={14} />
-                {t.label}
-              </button>
-            );
-          })}
-        </aside>
-
-        {/* Content */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ marginBottom: 18 }}>
-            <h1 style={{ fontSize: "1.1rem", fontWeight: 800, color: C.text, margin: 0 }}>
+      <div className="settings-layout">
+        <div className="settings-content-column">
+          <header className="settings-page-heading">
+            <h1 id="settings-page-title">
               {TABS.find(t => t.id === tab)?.label}
             </h1>
-            <p style={{ fontSize: "0.75rem", color: C.muted, margin: "3px 0 0" }}>
+            <p>
               Manage your {TABS.find(t => t.id === tab)?.label.toLowerCase()} settings
             </p>
-          </div>
+          </header>
           {gatewayPermissionError && (
             <p role="alert" style={{ color: "#f87171", fontSize: "0.75rem", margin: "0 0 14px" }}>
               {gatewayPermissionError} The Payment Gateways section is hidden until access can be confirmed.
             </p>
           )}
-          <div className="settings-mobile-nav">
-            <Select value={tab} onChange={event => selectTab(event.target.value)} aria-label="Choose settings section">
-              {visibleTabs.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </Select>
-          </div>
-
-          {tab === "profile"       && <IspProfileTab />}
-          {tab === "billing"       && <BillingTab />}
-           {tab === "gateways"      && <PaymentGatewaysTab />}
-          {tab === "dashboard"     && <DashboardBuilderTab />}
-          {tab === "typography"    && <TypographyTab />}
-          {tab === "sms"           && <SmsEmailTab />}
-          {tab === "network"       && <NetworkTab />}
-          {tab === "hotspot"       && <HotspotTab />}
-          {tab === "security"      && <SecurityTab />}
-          {tab === "notifications" && <NotificationsTab />}
-          {tab === "system"        && <SystemTab />}
-          {tab === "plugins"       && <PluginsTab />}
+          <section className="settings-tab-content" aria-labelledby="settings-page-title">
+            {tab === "profile"       && <IspProfileTab />}
+            {tab === "billing"       && <BillingTab />}
+            {tab === "gateways"      && <PaymentGatewaysTab />}
+            {tab === "dashboard"     && <DashboardBuilderTab />}
+            {tab === "typography"    && <TypographyTab />}
+            {tab === "sms"           && <SmsEmailTab />}
+            {tab === "network"       && <NetworkTab />}
+            {tab === "hotspot"       && <HotspotTab />}
+            {tab === "security"      && <SecurityTab />}
+            {tab === "notifications" && <NotificationsTab />}
+            {tab === "system"        && <SystemTab />}
+            {tab === "plugins"       && <PluginsTab />}
+          </section>
         </div>
       </div>
     </AdminLayout>

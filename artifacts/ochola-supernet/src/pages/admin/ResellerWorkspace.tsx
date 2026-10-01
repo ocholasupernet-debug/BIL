@@ -944,15 +944,15 @@ function ResellerDashboard() {
         <Notice error={error} success={success} />
          <div className="reseller-stat-grid">
              {[
-             { label: "Income today", value: moneyOrZero(revenue?.incomeToday), icon: Gauge, tone: "green" },
+             { label: "Income today", value: moneyOrZero(revenue?.incomeToday), icon: Gauge, tone: "slate" },
              { label: "Income this month", value: moneyOrZero(revenue?.incomeMonth), icon: WalletCards, tone: "green" },
              { label: "Total transactions", value: String(revenue?.totalTransactions ?? 0), icon: ReceiptText, tone: "amber" },
-             { label: "Total revenue", value: moneyOrZero(revenue?.totalRevenue), icon: Banknote, tone: "green" },
+             { label: "Total revenue", value: moneyOrZero(revenue?.totalRevenue), icon: Banknote, tone: "rust" },
           ].map(({ label, value, icon: Icon, tone }) => <div key={label} className={`reseller-stat-card reseller-stat-card--${tone}`}><Icon size={18} aria-hidden="true" /><div className="reseller-metric-label">{label}</div><div className="reseller-metric-value">{value}</div></div>)}
         </div>
          <div className="reseller-stat-grid">
            {[
-             { label: "Total users", value: String(users?.total ?? 0), icon: Users, tone: "accent" },
+             { label: "Total users", value: String(users?.total ?? 0), icon: Users, tone: "teal" },
              { label: "Active users", value: String(users?.active ?? 0), icon: PlayCircle, tone: "green" },
              { label: "Expired users", value: String(users?.expired ?? 0), icon: PauseCircle, tone: "amber" },
              { label: "Online on assigned router", value: String(telemetry?.totals.onlineUsers ?? 0), icon: RouterIcon, tone: "teal" },

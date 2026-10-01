@@ -264,7 +264,7 @@ function KpiCard({
   label: string;
   value: string;
   icon: ReactNode;
-  tone?: "accent" | "green" | "amber" | "plum";
+  tone?: "accent" | "green" | "amber" | "plum" | "slate" | "rust";
   description?: string;
 }) {
   return (
@@ -290,7 +290,7 @@ function StatMiniCard({
   value: string;
   href: string;
   icon: ReactNode;
-  tone: "green" | "accent" | "teal" | "amber";
+  tone: "green" | "accent" | "teal" | "amber" | "plum" | "deep-teal" | "indigo";
 }) {
   return (
     <Link href={href} className={`dashboard-stat dashboard-stat--${tone}`}>
@@ -560,19 +560,19 @@ export default function Dashboard() {
           </button>
         </div>
         <section className="dashboard-kpi-grid" aria-label="Revenue overview">
-            <KpiCard label="Income today" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} tone="green" description="Since midnight · EAT" />
+            <KpiCard label="Income today" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeToday)} icon={<Banknote size={19} />} tone="slate" description="Since midnight · EAT" />
             <KpiCard label="Income this month" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(incomeMonth)} icon={<TrendingUp size={19} />} tone="green" description="Month to date · resets on the 1st" />
            <KpiCard label="Total transactions" value={revenueLoading ? "…" : String(revenueSummary?.totalTransactions ?? 0)} icon={<ReceiptText size={19} />} tone="amber" description="All time" />
-            <KpiCard label="Total revenue" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(completedRevenue)} icon={<BarChart3 size={19} />} tone="plum" description="All time" />
+            <KpiCard label="Total revenue" value={preferences.hideAmounts ? "••••" : revenueLoading ? "…" : fmtMoney(completedRevenue)} icon={<BarChart3 size={19} />} tone="rust" description="All time" />
         </section>
 
         <section className="dashboard-stat-grid" aria-label="Network quick stats">
-          <StatMiniCard label="Total online users" value={totalOnlineValue} href="/admin/customers" icon={<Users size={16} />} tone="green" />
-          <StatMiniCard label="PPPoE online" value={liveCountLoading && onlinePppoeUsers === 0 ? "…" : String(onlinePppoeUsers)} href="/admin/customers?type=pppoe" icon={<Wifi size={16} />} tone="accent" />
-            <StatMiniCard label="Hotspot online" value={liveCountLoading && onlineHotspotUsers === 0 ? "…" : String(onlineHotspotUsers)} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="teal" />
-          <StatMiniCard label="VLAN users online" value={liveCountLoading && onlineVlanUsers === 0 && !vlanCountUnavailable ? "…" : onlineVlanValue} href="/admin/customers?type=vlan" icon={<Wifi size={16} />} tone="accent" />
-           <StatMiniCard label="Static online" value={customersLoading ? "…" : String(onlineStaticUsers)} href="/admin/customers?type=static" icon={<Server size={16} />} tone="amber" />
-           <StatMiniCard label="Active / expired users" value={customersLoading ? "…" : `${activeUsers}/${expiredUsers}`} href="/admin/customers" icon={<CircleCheck size={16} />} tone="green" />
+          <StatMiniCard label="Total online users" value={totalOnlineValue} href="/admin/customers" icon={<Users size={16} />} tone="teal" />
+          <StatMiniCard label="PPPoE online" value={liveCountLoading && onlinePppoeUsers === 0 ? "…" : String(onlinePppoeUsers)} href="/admin/customers?type=pppoe" icon={<Wifi size={16} />} tone="plum" />
+          <StatMiniCard label="Hotspot online" value={liveCountLoading && onlineHotspotUsers === 0 ? "…" : String(onlineHotspotUsers)} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="deep-teal" />
+          <StatMiniCard label="VLAN users online" value={liveCountLoading && onlineVlanUsers === 0 && !vlanCountUnavailable ? "…" : onlineVlanValue} href="/admin/customers?type=vlan" icon={<Wifi size={16} />} tone="indigo" />
+          <StatMiniCard label="Static online" value={customersLoading ? "…" : String(onlineStaticUsers)} href="/admin/customers?type=static" icon={<Server size={16} />} tone="green" />
+          <StatMiniCard label="Active / expired users" value={customersLoading ? "…" : `${activeUsers}/${expiredUsers}`} href="/admin/customers" icon={<CircleCheck size={16} />} tone="amber" />
            <StatMiniCard label="Active resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.activeResellers ?? 0)} href="/admin/network/resellers" icon={<Users size={16} />} tone="accent" />
            <StatMiniCard label="Online resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.onlineResellers ?? 0)} href="/admin/network/resellers" icon={<Wifi size={16} />} tone="teal" />
         </section>

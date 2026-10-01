@@ -1,0 +1,72 @@
+.solid-card-preview .dashboard-kpi,
+.solid-card-preview .dashboard-stat,
+.solid-card-preview .reseller-stat-card {
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-left: 1px solid rgba(255, 255, 255, 0.16);
+  background-color: var(--tile-bg, #243b53);
+  background-image: none;
+  box-shadow: 0 4px 12px rgba(12, 24, 42, 0.16);
+  color: #f8fafc;
+}
+
+.solid-card-preview .dashboard-kpi:hover,
+.solid-card-preview .dashboard-stat:hover,
+.solid-card-preview .reseller-stat-card:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background-color: var(--tile-bg, #243b53);
+  background-image: none;
+  box-shadow: 0 7px 18px rgba(12, 24, 42, 0.22);
+}
+
+.solid-card-preview .dashboard-kpi-icon,
+.solid-card-preview .dashboard-stat-icon {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+}
+
+.solid-card-preview .dashboard-kpi-label,
+.solid-card-preview .dashboard-stat-label,
+.solid-card-preview .reseller-metric-label { color: rgba(248, 250, 252, 0.82); }
+
+.solid-card-preview .dashboard-kpi-value,
+.solid-card-preview .dashboard-stat-value,
+.solid-card-preview .reseller-metric-value { position: relative; color: #f8fafc; }
+
+.solid-card-preview .dashboard-kpi-description,
+.solid-card-preview .dashboard-stat-arrow { color: rgba(248, 250, 252, 0.74); }
+
+.solid-card-preview .reseller-stat-card svg { color: #f8fafc; }
+
+.solid-card-preview .dashboard-kpi-value::before,
+.solid-card-preview .dashboard-stat-value::before,
+.solid-card-preview .reseller-metric-value::before {
+  position: absolute;
+  top: -4px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: rgba(248, 250, 252, 0.2);
+  content: "";
+}
+
+.solid-card-preview .dashboard-kpi--accent,
+.solid-card-preview .dashboard-stat--accent,
+.solid-card-preview .reseller-stat-card--accent { --tile-bg: #203e63; }
+.solid-card-preview .dashboard-kpi--slate,
+.solid-card-preview .reseller-stat-card--slate { --tile-bg: #263f5e; }
+.solid-card-preview .dashboard-kpi--green,
+.solid-card-preview .dashboard-stat--green,
+.solid-card-preview .reseller-stat-card--green { --tile-bg: #185b43; }
+.solid-card-preview .dashboard-kpi--amber,
+.solid-card-preview .dashboard-stat--amber,
+.solid-card-preview .reseller-stat-card--amber { --tile-bg: #76521e; }
+.solid-card-preview .dashboard-kpi--plum,
+.solid-card-preview .dashboard-stat--plum { --tile-bg: #493b72; }
+.solid-card-preview .dashboard-kpi--rust,
+.solid-card-preview .reseller-stat-card--rust { --tile-bg: #713f3d; }
+.solid-card-preview .dashboard-stat--teal,
+.solid-card-preview .reseller-stat-card--teal { --tile-bg: #145b63; }
+.solid-card-preview .dashboard-stat--deep-teal { --tile-bg: #104d4e; }
+.solid-card-preview .dashboard-stat--indigo { --tile-bg: #393a73; }

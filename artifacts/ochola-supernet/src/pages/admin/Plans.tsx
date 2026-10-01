@@ -1,5 +1,6 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
 import { getAdminApiToken, type DbPlan, type DbBandwidth, type DbRouter } from "@/lib/supabase";
@@ -22,11 +23,6 @@ interface DbPort {
   status: string;
   handoff_mode?: string | null;
   vlan_tag?: string | number | null;
-}
-
-function useTypeParam() {
-  const raw = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("type") : null;
-  return raw ?? "hotspot";
 }
 
 interface PlanContextResponse {
@@ -925,9 +921,12 @@ const TAB_LABELS: Record<string, string> = {
 };
 
 export default function Plans() {
-  const typeParam   = useTypeParam();
+  const [location] = useLocation();
+  const requestedType = new URLSearchParams(location.split("?")[1] ?? "").get("type");
+  const activeTab = requestedType && Object.prototype.hasOwnProperty.call(TAB_LABELS, requestedType)
+    ? requestedType
+    : "hotspot";
   const qc          = useQueryClient();
-  const [activeTab, setActiveTab] = useState(typeParam);
   const [editingPlan,  setEditingPlan]  = useState<DbPlan | null>(null);
   const [deletingPlan, setDeletingPlan] = useState<DbPlan | null>(null);
   const [copyingPlan,  setCopyingPlan] = useState<DbPlan | null>(null);
@@ -938,6 +937,13 @@ export default function Plans() {
   const [portFilter, setPortFilter] = useState("all");
   const [sortBy, setSortBy] = useState<"name" | "price" | "speed">("name");
   const [sortAscending, setSortAscending] = useState(true);
+
+  useEffect(() => {
+    setShowAddForm(false);
+    setEditingPlan(null);
+    setDeletingPlan(null);
+    setCopyingPlan(null);
+  }, [activeTab]);
 
   const isBandwidth   = activeTab === "bandwidth";
   const isServicePlan = !isBandwidth;
@@ -1039,38 +1045,17 @@ export default function Plans() {
 
       <div className="plans-page space-y-6">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <h1 className="text-2xl font-bold text-foreground">{TAB_LABELS[activeTab] ?? "Plans"}</h1>
+        <div className="plans-page-header">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">{TAB_LABELS[activeTab] ?? "Plans"}</h1>
+            <p>{activeTab === "all" ? "Browse and manage all service plans." : `Manage ${TAB_LABELS[activeTab]?.toLowerCase() ?? "plans"} independently.`}</p>
+          </div>
           {isServicePlan && !showingForm && (
             <button onClick={() => { setEditingPlan(null); setShowAddForm(true); }}
               className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold shadow-lg shadow-primary/20 hover:-translate-y-0.5 transition flex items-center gap-2">
               <Plus className="w-4 h-4" /> Add Plan
             </button>
           )}
-        </div>
-
-        {/* Tabs */}
-        <div className="flex overflow-x-auto pb-2 gap-2 hide-scrollbar">
-          {[
-            { id: "all",       label: "All Plans" },
-            { id: "hotspot",   label: "Hotspot Plans" },
-            { id: "pppoe",     label: "PPPoE Plans" },
-            { id: "static",    label: "Static IP Plans" },
-            { id: "vlan",      label: "VLAN Plans" },
-            { id: "bandwidth", label: "Bandwidth Plans" },
-            { id: "trials",    label: "Hotspot Trials" },
-            { id: "fup",       label: "FUP" },
-          ].map(t => (
-            <button key={t.id}
-              onClick={() => { setActiveTab(t.id); closeForm(); setDeletingPlan(null); }}
-              className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors whitespace-nowrap ${
-                activeTab === t.id
-                  ? "bg-primary/10 text-primary border border-primary/20"
-                  : "bg-card border border-border text-muted-foreground hover:bg-white/5 hover:text-foreground"
-              }`}>
-              {t.label}
-            </button>
-          ))}
         </div>
 
         {/* ── Sync to Router bar (service plans only, not bandwidth) ── */}
@@ -1101,7 +1086,7 @@ export default function Plans() {
         )}
 
         {isServicePlan && !showingForm && (
-          <div className="plans-toolbar" role="region" aria-label="Plan list filters">
+          <div className={`plans-toolbar ${activeTab === "all" ? "plans-toolbar--all" : "plans-toolbar--category"}`} role="region" aria-label="Plan list filters">
             <label className="plans-search">
               <Search size={15} aria-hidden="true" />
               <span className="sr-only">Search plans</span>
@@ -1112,15 +1097,17 @@ export default function Plans() {
                 type="search"
               />
             </label>
-            <label className="plans-filter">
-              <span>Service</span>
-              <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value as "all" | "pppoe" | "hotspot" | "vlan")}>
-                <option value="all">All services</option>
-                <option value="pppoe">PPPoE</option>
-                <option value="hotspot">Hotspot</option>
-                <option value="vlan">VLAN</option>
-              </select>
-            </label>
+            {activeTab === "all" && (
+              <label className="plans-filter">
+                <span>Service</span>
+                <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value as "all" | "pppoe" | "hotspot" | "vlan")}>
+                  <option value="all">All services</option>
+                  <option value="pppoe">PPPoE</option>
+                  <option value="hotspot">Hotspot</option>
+                  <option value="vlan">VLAN</option>
+                </select>
+              </label>
+            )}
             <label className="plans-filter">
               <span>Router</span>
               <select
