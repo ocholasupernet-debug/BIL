@@ -10,6 +10,12 @@ export type ResellerGatewayProbeResult = {
   message: string;
 };
 
+export type CentralDarajaProbeSettings = {
+  consumerKey: string;
+  consumerSecret: string;
+  env: "sandbox" | "production";
+};
+
 const probeWindows = new Map<number, { startedAt: number; count: number }>();
 
 export function allowResellerGatewayProbe(resellerId: number): boolean {
@@ -65,6 +71,7 @@ export async function probeResellerGatewayConnection(
   gatewayType: ResellerGatewayId,
   config: Record<string, string>,
   fetchImpl: typeof fetch = fetch,
+  centralDarajaSettings?: CentralDarajaProbeSettings,
 ): Promise<ResellerGatewayProbeResult> {
   if (!resellerGatewayConfigComplete(gatewayType, config)) {
     return {
@@ -79,16 +86,24 @@ export async function probeResellerGatewayConnection(
       case "mpesa_paybill":
       case "mpesa_till_push":
       case "bank_stk_push": {
-        const host = env === "production" ? "https://api.safaricom.co.ke" : "https://sandbox.safaricom.co.ke";
+        if (!centralDarajaSettings?.consumerKey || !centralDarajaSettings.consumerSecret) {
+          return {
+            status: "rejected",
+            message: "Daraja API credentials are managed by Super Admin and are not configured yet.",
+          };
+        }
+        const host = centralDarajaSettings.env === "production"
+          ? "https://api.safaricom.co.ke"
+          : "https://sandbox.safaricom.co.ke";
         const response = await providerRequest(
           `${host}/oauth/v1/generate?grant_type=client_credentials`,
-          { headers: { Authorization: basicAuth(config.consumerKey, config.consumerSecret) } },
+          { headers: { Authorization: basicAuth(centralDarajaSettings.consumerKey, centralDarajaSettings.consumerSecret) } },
           fetchImpl,
         );
         if (!(await responseHasToken(response))) {
-          return { status: "rejected", message: "Daraja did not accept this reseller’s credentials." };
+          return { status: "rejected", message: "Daraja did not accept the platform credentials managed by Super Admin." };
         }
-        return { status: "verified", message: "Daraja accepted this reseller’s credentials. No payment was sent." };
+        return { status: "verified", message: "Daraja accepted the platform credentials managed by Super Admin. No payment was sent." };
       }
       case "airtel": {
         const host = env === "production" ? "https://openapi.airtel.africa" : "https://openapiuat.airtel.africa";

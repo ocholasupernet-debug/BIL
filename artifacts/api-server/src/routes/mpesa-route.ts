@@ -68,8 +68,11 @@ import {
   bankBusinessNumberFor,
   decryptGatewayConfig,
   encryptGatewayConfig,
+  gatewayConfigPreview,
+  hasResellerDarajaCredentials,
   isResellerGatewayTestMetadata,
   resellerDestinationConfigured,
+  resellerGatewayCollectionConfig,
   resolveResellerGatewayRoute,
   type ResellerGatewayRouteRow,
 } from "../lib/reseller-payment-gateway.js";
@@ -419,7 +422,6 @@ type ResellerPaymentRoute = {
   resellerId: number;
   portId: number;
   gatewayRouteId: number | null;
-  gatewayConfigCiphertext: string;
   paymentGateway: PaymentGateway;
   settings: MpesaSettings;
   bankStkPush: BankStkPushConfig;
@@ -526,7 +528,23 @@ async function getResellerPaymentRoute(
         : false;
   const paymentGateway = (route?.gateway_type
     ?? (hasLegacyDestination || hasSharedDestination ? legacyPaymentGateway : "unconfigured")) as PaymentGateway;
-  const routeConfig = route?.config ?? {};
+  let routeConfig = route
+    ? resellerGatewayCollectionConfig(route.gateway_type, route.config)
+    : {};
+  if (route && (
+    hasResellerDarajaCredentials(route.gateway_type, route.config)
+    || hasResellerDarajaCredentials(route.gateway_type, route.config_preview ?? {})
+  )) {
+    await sbUpdateStrict(
+      "reseller_payment_gateway_routes",
+      `id=eq.${route.id}&reseller_id=eq.${route.reseller_id}`,
+      {
+        config_ciphertext: encryptGatewayConfig(routeConfig),
+        config_preview: gatewayConfigPreview(route.gateway_type, routeConfig),
+        updated_at: new Date().toISOString(),
+      },
+    );
+  }
   const legacyMpesaPaybill: MpesaPaybillConfig = legacyMpesa?.is_active === true
     ? {
         paybillNumber: legacyMpesa.merchant_identifier ?? "",
@@ -600,12 +618,8 @@ async function getResellerPaymentRoute(
     resellerId: port.assigned_reseller_id,
     portId,
     gatewayRouteId: route?.id ?? null,
-    gatewayConfigCiphertext: route?.config_ciphertext ?? encryptGatewayConfig(resellerSharedConfig),
     paymentGateway,
-    settings: resellerDarajaSettings(
-      routeConfig && Object.keys(routeConfig).length > 0 ? routeConfig : resellerSharedConfig,
-      sharedCallbackSettings.callbackUrl,
-    ),
+    settings: sharedCallbackSettings,
     bankStkPush,
     mpesaTillPush,
     mpesaPaybill,
@@ -1079,14 +1093,13 @@ export async function processMpesaCallback(
         const configCiphertext = typeof fields.resellerGatewayConfigCiphertext === "string"
           ? fields.resellerGatewayConfigCiphertext
           : "";
-        if (!configCiphertext) {
-          throw new Error("This reseller payment has no saved reseller-owned gateway credential snapshot.");
+        if (configCiphertext) {
+          const [config, platformSettings] = await Promise.all([
+            Promise.resolve(decryptGatewayConfig(configCiphertext)),
+            getMpesaSettings(),
+          ]);
+          return resellerDarajaSettings(config, platformSettings.callbackUrl);
         }
-        const [config, platformSettings] = await Promise.all([
-          Promise.resolve(decryptGatewayConfig(configCiphertext)),
-          getMpesaSettings(),
-        ]);
-        return resellerDarajaSettings(config, platformSettings.callbackUrl);
       }
       return getMpesaSettings();
     },
@@ -1117,7 +1130,7 @@ export async function processMpesaCallback(
   ).trim().toUpperCase();
 
   const pendingRows = await dependencies.selectPending(
-    `reference=eq.${encodeURIComponent(checkoutId)}&status=eq.pending&select=id,admin_id,customer_id,plan_id,reseller_id,reseller_port_id,amount,payment_method,payment_phone,mac_address&limit=1`,
+    `reference=eq.${encodeURIComponent(checkoutId)}&status=eq.pending&select=id,admin_id,customer_id,plan_id,reseller_id,reseller_port_id,amount,payment_method,payment_phone,mac_address,payment_metadata&limit=1`,
   );
   const transaction = pendingRows[0];
   if (!transaction) {
@@ -1477,15 +1490,30 @@ router.post("/mpesa/reseller-test", requireAdmin(), requireTenantPermission("Man
       return;
     }
 
-    const config = decryptGatewayConfig(route.config_ciphertext);
+    const storedConfig = decryptGatewayConfig(route.config_ciphertext);
+    const config = resellerGatewayCollectionConfig(route.gateway_type, storedConfig);
+    if (
+      hasResellerDarajaCredentials(route.gateway_type, storedConfig)
+      || hasResellerDarajaCredentials(route.gateway_type, route.config_preview ?? {})
+    ) {
+      await sbUpdateStrict(
+        "reseller_payment_gateway_routes",
+        `id=eq.${route.id}&reseller_id=eq.${route.reseller_id}`,
+        {
+          config_ciphertext: encryptGatewayConfig(config),
+          config_preview: gatewayConfigPreview(route.gateway_type, config),
+          updated_at: new Date().toISOString(),
+        },
+      );
+    }
     if (!resellerDestinationConfigured(route.gateway_type, config)) {
       res.status(400).json({ ok: false, error: "Complete and save this reseller’s M-Pesa collection details before testing." });
       return;
     }
     const platformSettings = await getMpesaSettings();
-    const settings = resellerDarajaSettings(config, platformSettings.callbackUrl);
+    const settings = platformSettings;
     if (!isMpesaConfigured(settings)) {
-      res.status(400).json({ ok: false, error: "Save this reseller’s own Daraja Business Shortcode, Consumer Key, Consumer Secret, and Passkey before testing." });
+      res.status(503).json({ ok: false, error: "Daraja API credentials are managed by Super Admin and are not configured yet." });
       return;
     }
     if (!supabaseServiceRoleConfigured) {
@@ -1527,7 +1555,6 @@ router.post("/mpesa/reseller-test", requireAdmin(), requireTenantPermission("Man
         destinationType: route.gateway_type === "mpesa_till_push" ? "till" : "paybill",
         merchantIdentifier: payment.destination,
         accountReference: payment.accountReference ?? "",
-        resellerGatewayConfigCiphertext: route.config_ciphertext,
       },
       reference: `initiating:${randomUUID()}`,
       status: "initiating",
@@ -2296,7 +2323,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       ok: false,
       demo: true,
       error: resellerRoute
-        ? "This reseller’s own Daraja credentials are incomplete. Ask the reseller to complete its Payment Gateways setup."
+        ? "Daraja API credentials are managed by Super Admin and are not configured yet."
         : "M-Pesa is not configured. Ask the Super Admin to complete Payment Gateways.",
     });
     return;
@@ -2364,7 +2391,6 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
           ? {
               source: "reseller_daraja_bridge",
               gatewayRouteId: resellerRoute.gatewayRouteId,
-              resellerGatewayConfigCiphertext: resellerRoute.gatewayConfigCiphertext,
               gatewayType: resellerRoute.paymentGateway,
               destinationType: resellerRoute.paymentGateway === "mpesa_till_push" ? "till" : "paybill",
               merchantIdentifier: resellerRoute.merchantIdentifier,

@@ -587,7 +587,6 @@ export default function Dashboard() {
             {gatewayError ? <CircleAlert size={12} /> : <CircleCheck size={12} />}
             {gatewayError ? "Unavailable" : "Active"}
           </span>
-          <Link href="/admin/settings" className="gateway-link">Manage gateway <ArrowUpRight size={13} /></Link>
         </section>
 
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>
@@ -618,7 +617,6 @@ export default function Dashboard() {
               <div className="dashboard-empty">
                 <Server size={19} />
                 <span>No routers registered yet.</span>
-                <Link href="/admin/network/self-install">Self Install <ArrowUpRight size={13} /></Link>
               </div>
             ) : visibleRouters.map((router) => {
               const isOnline = routerOnline(router);

@@ -801,8 +801,6 @@ function ResellerPaymentTestCard() {
     failed: "The test prompt was cancelled or declined. No payment was confirmed.",
     expired: "No confirmation arrived within three minutes. Check M-Pesa before retrying.",
   }[status];
-  const environment = selectedRoute?.config.environment === "production" ? "production" : "sandbox";
-  const shortcode = selectedRoute?.config.businessShortcode?.trim() || "";
   const submitDisabled = !selectedRoute
     || !selectedRoute.destinationConfigured
     || status === "sending"
@@ -815,12 +813,10 @@ function ResellerPaymentTestCard() {
     || status === "pending";
 
   return (
-    <Card title="Test Reseller Gateways" desc="Only routes saved under your reseller account appear here. Connection checks do not send payments.">
+    <Card title="Test Reseller Gateways" desc="STK prompts use Super Admin Daraja settings and the selected reseller collection account. Connection checks do not send payments.">
       {selectedRoute && promptGateway && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "9px 11px", borderRadius: 8, background: environment === "production" ? "rgba(245,158,11,0.08)" : "rgba(37,99,235,0.06)", border: `1px solid ${environment === "production" ? "rgba(245,158,11,0.25)" : "var(--isp-border)"}`, color: environment === "production" ? "#fbbf24" : C.muted, fontSize: "0.72rem", lineHeight: 1.45 }}>
-          {environment === "production"
-            ? `Live mode: approving an STK prompt charges the phone and sends the payment to this reseller’s saved destination${shortcode ? ` using its Daraja shortcode ${shortcode}` : ""}. Test payments do not activate service or count toward revenue.`
-            : `Sandbox mode: the prompt uses this reseller’s own Daraja credentials${shortcode ? ` and shortcode ${shortcode}` : ""}. No live payment is collected.`}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "9px 11px", borderRadius: 8, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", color: "#fbbf24", fontSize: "0.72rem", lineHeight: 1.45 }}>
+          This STK test uses Daraja settings managed by Super Admin and this route’s collection account. In live mode, approving the prompt charges the phone. Test payments do not activate service or count toward reseller revenue.
         </div>
       )}
       <Field label="Reseller payment route">
@@ -1058,7 +1054,7 @@ function ResellerPaymentGatewayCard() {
 
   const newRoute = () => {
     setSelectedRoute(null);
-    setForm({ gatewayType: "mpesa_paybill", scopeType: "default", routerId: "", portId: "", config: { environment: "sandbox" }, isActive: true });
+    setForm({ gatewayType: "mpesa_paybill", scopeType: "default", routerId: "", portId: "", config: {}, isActive: true });
     setSaved(false);
     setError("");
   };
@@ -1118,7 +1114,7 @@ function ResellerPaymentGatewayCard() {
   return (
     <Card title="Payment Gateways" desc="Choose a gateway, configure its collection account, and route it to your reseller services.">
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
-        Your reseller gateway routes are independent from ISP gateway settings. A matching VLAN port route takes priority, then its router route, then your reseller default.
+        These routes store collection destinations only. Daraja API credentials are managed by Super Admin. A VLAN-port route takes priority, then its router route, then your reseller default.
       </div>
       <div style={{
         display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8,
@@ -1134,7 +1130,7 @@ function ResellerPaymentGatewayCard() {
                 setForm(current => ({
                   ...current,
                   gatewayType: gateway.id,
-                  config: { environment: "sandbox" },
+                  config: {},
                   isActive: RESELLER_CHECKOUT_READY_GATEWAYS.has(gateway.id),
                 }));
                 setSaved(false);
@@ -1346,9 +1342,9 @@ function BillingTab() {
 
   return (
     <>
-      <Card title="M-Pesa Integration" desc="Safaricom Daraja API credentials for STK push and C2B payments">
+      <Card title="M-Pesa Integration" desc="Safaricom Daraja API credentials for STK push and C2B payments are managed by Super Admin">
         <p style={{ color: C.muted, fontSize: "0.8rem", lineHeight: 1.55, margin: 0 }}>
-          M-Pesa connection details and callback settings are managed centrally for this platform.
+          Super Admin manages the platform credentials, environment, and callback settings. ISP and reseller accounts configure only where collected payments are deposited.
         </p>
       </Card>
       {getAdminRole() !== "reseller" && <AdminPaymentTestCard currency={currency} />}
@@ -2409,28 +2405,47 @@ const KENYAN_BANK_BUSINESS_NUMBERS: Record<string, string> = {
   "KCB Bank": "533533",
 };
 
+const DARAJA_GATEWAY_CONFIG_IDS = new Set(["mpesa_paybill", "mpesa_till_push", "bank_stk_push"]);
+const DARAJA_AUTH_FIELD_NAMES = new Set([
+  "consumerkey",
+  "consumersecret",
+  "passkey",
+  "shortcode",
+  "businessshortcode",
+  "callbackurl",
+  "environment",
+  "env",
+]);
+
+function sanitizeCachedGatewayFields(value: unknown): Record<string, Record<string, string>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const sanitized: Record<string, Record<string, string>> = {};
+  for (const [gatewayId, rawConfig] of Object.entries(value as Record<string, unknown>)) {
+    if (!rawConfig || typeof rawConfig !== "object" || Array.isArray(rawConfig)) continue;
+    const config: Record<string, string> = {};
+    for (const [key, field] of Object.entries(rawConfig as Record<string, unknown>)) {
+      if (typeof field !== "string") continue;
+      const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (DARAJA_GATEWAY_CONFIG_IDS.has(gatewayId) && DARAJA_AUTH_FIELD_NAMES.has(normalizedKey)) continue;
+      config[key] = field;
+    }
+    sanitized[gatewayId] = config;
+  }
+  return sanitized;
+}
+
 const GATEWAYS: GatewayDef[] = [
   {
     id: "mpesa_paybill", name: "M-Pesa PayBill", category: "Mobile Money", color: "#00a651", icon: Phone,
     fields: [
-      { key: "paybillNumber", label: "PayBill Number", hint: "Enter your reseller collection PayBill" },
-      { key: "accountNumber", label: "Account / Business Number", hint: "Enter your reseller account reference" },
-      { key: "businessShortcode", label: "Daraja Business Shortcode" },
-      { key: "consumerKey", label: "Daraja Consumer Key", secret: true },
-      { key: "consumerSecret", label: "Daraja Consumer Secret", secret: true },
-      { key: "passkey", label: "Daraja Passkey", secret: true },
-      { key: "environment", label: "Environment", type: "select", options: ["sandbox", "production"] },
+      { key: "paybillNumber", label: "PayBill Number", hint: "Enter the collection PayBill number" },
+      { key: "accountNumber", label: "Account / Business Number", hint: "Enter the account or business reference" },
     ],
   },
   {
     id: "mpesa_till_push", name: "M-Pesa Till Push", category: "Mobile Money", color: "#00a651", icon: Phone,
     fields: [
-      { key: "tillNumber", label: "Buy Goods Till Number", hint: "Enter your reseller collection Till" },
-      { key: "businessShortcode", label: "Daraja Business Shortcode" },
-      { key: "consumerKey", label: "Daraja Consumer Key", secret: true },
-      { key: "consumerSecret", label: "Daraja Consumer Secret", secret: true },
-      { key: "passkey", label: "Daraja Passkey", secret: true },
-      { key: "environment", label: "Environment", type: "select", options: ["sandbox", "production"] },
+      { key: "tillNumber", label: "Buy Goods Till Number", hint: "Enter the collection Till number" },
     ],
   },
   {
@@ -2439,11 +2454,6 @@ const GATEWAYS: GatewayDef[] = [
       { key: "bankName", label: "Bank Name", type: "select", options: KENYAN_BANKS },
       { key: "paybillNumber", label: "PayBill Number", hint: "Enter the PayBill number provided by your bank" },
       { key: "accountNumber", label: "Account / Business Number", hint: "Enter the account or business number required by the bank" },
-      { key: "businessShortcode", label: "Daraja Business Shortcode" },
-      { key: "consumerKey", label: "Daraja Consumer Key", secret: true },
-      { key: "consumerSecret", label: "Daraja Consumer Secret", secret: true },
-      { key: "passkey", label: "Daraja Passkey", secret: true },
-      { key: "environment", label: "Environment", type: "select", options: ["sandbox", "production"] },
     ],
   },
   {
@@ -2609,7 +2619,7 @@ function PaymentGatewaysTab() {
     return (
       <>
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
-          Configure your own payment gateway here. Your collection account is independent from the connected ISP; only your assigned router and VLAN scope are shared.
+          Configure your collection destination here. Daraja API credentials are managed by Super Admin; your assigned router and VLAN scope determine where this reseller route applies.
         </div>
         {settingsRequested
           ? <ResellerPaymentGatewayCard />
@@ -2622,7 +2632,9 @@ function PaymentGatewaysTab() {
   const [fields, setFields] = useState<Record<string, Record<string, string>>>(() => {
     try {
       const s = localStorage.getItem("ochola_gw_fields");
-      return s ? JSON.parse(s) : {};
+      const sanitized = sanitizeCachedGatewayFields(s ? JSON.parse(s) : {});
+      localStorage.setItem("ochola_gw_fields", JSON.stringify(sanitized));
+      return sanitized;
     } catch { return {}; }
   });
   const [saved, setSaved] = useState<string | null>(null);
@@ -2650,7 +2662,7 @@ function PaymentGatewaysTab() {
       if (!response.ok || !data.ok) throw new Error(data.error || "Could not load payment gateway settings.");
       const configs = data.configs;
       if (!active || !configs) return;
-      setFields(prev => ({
+      setFields(prev => sanitizeCachedGatewayFields({
         ...prev,
         ...Object.fromEntries(
           Object.entries(configs).map(([gatewayId, config]) => [
@@ -2708,13 +2720,14 @@ function PaymentGatewaysTab() {
   const saveGateway = async (gwId: string) => {
     setSaveError("");
     setSavingGateway(gwId);
-    try { localStorage.setItem("ochola_gw_fields", JSON.stringify(fields)); } catch {}
+    const sanitizedFields = sanitizeCachedGatewayFields(fields);
+    try { localStorage.setItem("ochola_gw_fields", JSON.stringify(sanitizedFields)); } catch {}
     try {
       if (gwId === "bank_stk_push" || gwId === "mpesa_till_push" || gwId === "mpesa_paybill" || gwId === "bank_transfer") {
         const response = await fetch("/api/admin/mpesa-gateway-config", {
           method: "POST",
           headers: await gatewayOtp.headers(),
-          body: JSON.stringify({ adminId: ADMIN_ID, gatewayId: gwId, config: fields[gwId] || {} }),
+          body: JSON.stringify({ adminId: ADMIN_ID, gatewayId: gwId, config: sanitizedFields[gwId] || {} }),
         });
         const data = await response.json() as { ok?: boolean; error?: string };
         if (!response.ok || !data.ok) throw new Error(data.error || "Could not save payment gateway settings.");
@@ -2781,7 +2794,7 @@ function PaymentGatewaysTab() {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
-        Choose a payment gateway to configure. Customer checkout only shows a method when its payment flow is connected and configured.
+        Configure collection destinations here. Daraja API credentials, environment, and callback settings are managed centrally by Super Admin.
       </div>
       <AdminPaymentGatewayCard />
 

@@ -37,6 +37,17 @@ export const DARAJA_GATEWAY_IDS = new Set([
   "bank_stk_push",
 ]);
 
+const DARAJA_AUTH_FIELD_NAMES = new Set([
+  "consumerkey",
+  "consumersecret",
+  "passkey",
+  "shortcode",
+  "businessshortcode",
+  "callbackurl",
+  "environment",
+  "env",
+]);
+
 export const CHECKOUT_READY_GATEWAY_IDS = new Set([
   "mpesa_paybill",
   "mpesa_till_push",
@@ -96,6 +107,13 @@ export function collectionConfig(gatewayId: string, value: unknown): Record<stri
         return [field, source ? (raw[source] as string).trim() : ""];
       })
       .filter(([, value]) => Boolean(value)),
+  );
+}
+
+export function hasDarajaAuthFields(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.keys(value as Record<string, unknown>).some(key =>
+    DARAJA_AUTH_FIELD_NAMES.has(key.toLowerCase().replace(/[^a-z0-9]/g, "")),
   );
 }
 

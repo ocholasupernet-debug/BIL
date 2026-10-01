@@ -19,7 +19,7 @@ test("tests Stripe credentials with a read-only account request", async () => {
   assert.equal(authorization, "Bearer sk_reseller_only");
 });
 
-test("tests a reseller's own Daraja credentials without sending an STK request", async () => {
+test("tests central Daraja credentials without using credentials from reseller config", async () => {
   let requestedUrl = "";
   let authorization = "";
   const fakeFetch: typeof fetch = async (input, init) => {
@@ -30,15 +30,34 @@ test("tests a reseller's own Daraja credentials without sending an STK request",
   const result = await probeResellerGatewayConnection("mpesa_paybill", {
     paybillNumber: "123456",
     accountNumber: "REF",
-    businessShortcode: "654321",
-    consumerKey: "reseller-key",
-    consumerSecret: "reseller-secret",
-    passkey: "reseller-passkey",
-    environment: "sandbox",
-  }, fakeFetch);
+    consumerKey: "ignored-reseller-key",
+    consumerSecret: "ignored-reseller-secret",
+    passkey: "ignored-reseller-passkey",
+  }, fakeFetch, {
+    consumerKey: "platform-key",
+    consumerSecret: "platform-secret",
+    env: "sandbox",
+  });
   assert.equal(result.status, "verified");
   assert.equal(requestedUrl, "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials");
   assert.match(authorization, /^Basic /);
+  assert.equal(authorization, `Basic ${Buffer.from("platform-key:platform-secret").toString("base64")}`);
+});
+
+test("never falls back to reseller Daraja credentials when platform credentials are missing", async () => {
+  let called = false;
+  const result = await probeResellerGatewayConnection("mpesa_paybill", {
+    paybillNumber: "123456",
+    accountNumber: "REF",
+    consumerKey: "reseller-key",
+    consumerSecret: "reseller-secret",
+  }, async () => {
+    called = true;
+    return new Response(JSON.stringify({ access_token: "should-not-be-used" }), { status: 200 });
+  });
+  assert.equal(result.status, "rejected");
+  assert.equal(called, false);
+  assert.match(result.message, /managed by Super Admin/);
 });
 
 test("tests PayPal credentials by requesting an OAuth token without creating a payment", async () => {

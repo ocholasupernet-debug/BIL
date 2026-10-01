@@ -6,6 +6,8 @@ import {
   resellerGatewayCheckoutSupported,
   resellerGatewayConfigComplete,
   resellerDestinationConfigured,
+  hasResellerDarajaCredentials,
+  resellerGatewayCollectionConfig,
 } from "./reseller-payment-gateway.js";
 
 test("uses the known KCB business number", () => {
@@ -30,19 +32,39 @@ test("accepts current and legacy reseller PayBill metadata", () => {
   assert.equal(resellerDestinationConfigured("mpesa_paybill", { paybillNumber: "123456" }), false);
 });
 
-test("requires reseller-owned Daraja credentials before an M-Pesa route is complete", () => {
+test("requires only a collection destination for a Daraja reseller route", () => {
   assert.equal(resellerGatewayConfigComplete("mpesa_paybill", {
     paybillNumber: "123456",
     accountNumber: "REF",
-    businessShortcode: "123456",
-    consumerKey: "key",
-    consumerSecret: "secret",
-    passkey: "passkey",
   }), true);
   assert.equal(resellerGatewayConfigComplete("mpesa_paybill", {
     paybillNumber: "123456",
     accountNumber: "REF",
-  }), false);
+  }), true);
+  assert.equal(resellerGatewayConfigComplete("mpesa_paybill", { paybillNumber: "123456" }), false);
+});
+
+test("strips centrally managed Daraja fields from reseller collection config", () => {
+  const legacyConfig = {
+    paybillNumber: "123456",
+    accountNumber: "REF",
+    business_shortcode: "654321",
+    consumer_key: "old-key",
+    consumerSecret: "old-secret",
+    passkey: "old-passkey",
+    environment: "production",
+    callbackUrl: "https://example.com/callback",
+  };
+  assert.equal(hasResellerDarajaCredentials("mpesa_paybill", legacyConfig), true);
+  assert.deepEqual(resellerGatewayCollectionConfig("mpesa_paybill", legacyConfig), {
+    paybillNumber: "123456",
+    accountNumber: "REF",
+  });
+  assert.deepEqual(resellerGatewayCollectionConfig("mpesa_till_push", {
+    tillNumber: "987654",
+    consumerKey: "old-key",
+    shortcode: "654321",
+  }), { tillNumber: "987654" });
 });
 
 test("allows setup checks for other gateways without enabling their checkout", () => {

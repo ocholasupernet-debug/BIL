@@ -30,6 +30,7 @@ import {
   CHECKOUT_READY_GATEWAY_IDS,
   PAYMENT_GATEWAY_IDS,
   gatewayConfigMap as routingGatewayConfigMap,
+  hasDarajaAuthFields,
   paymentCollectionMode,
   paymentGateway as routingPaymentGateway,
   publicServiceStatus,
@@ -37,6 +38,7 @@ import {
   isGatewayConfigComplete,
   isGatewayCheckoutReady,
   collectionConfig,
+  isDarajaGateway,
   type PaymentService,
   type ServicePaymentConfig,
 } from "../lib/payment-routing.js";
@@ -374,6 +376,56 @@ async function getAdminPaymentSettings(adminId: number | null, options: { useSha
   };
 }
 
+async function scrubLegacyDarajaCredentials(adminId: number): Promise<void> {
+  const [row] = await sbSelect<{
+    payment_gateway_config?: unknown;
+    payment_service_config?: unknown;
+  }>(
+    "isp_admins",
+    `id=eq.${adminId}&select=payment_gateway_config,payment_service_config&limit=1`,
+  );
+  if (!row) return;
+
+  const paymentGatewayConfig = routingGatewayConfigMap(row.payment_gateway_config);
+  let gatewayConfigChanged = false;
+  for (const gatewayId of ["mpesa_paybill", "mpesa_till_push", "bank_stk_push"]) {
+    const config = paymentGatewayConfig[gatewayId];
+    if (config && hasDarajaAuthFields(config)) {
+      paymentGatewayConfig[gatewayId] = collectionConfig(gatewayId, config);
+      gatewayConfigChanged = true;
+    }
+  }
+
+  const rawServiceConfig = row.payment_service_config;
+  const serviceConfig = rawServiceConfig && typeof rawServiceConfig === "object" && !Array.isArray(rawServiceConfig)
+    ? { ...rawServiceConfig as Record<string, unknown> }
+    : null;
+  let serviceConfigChanged = false;
+  if (serviceConfig) {
+    for (const service of ["hotspot", "pppoe", "vlan"]) {
+      const entry = serviceConfig[service];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const record = entry as Record<string, unknown>;
+      const gatewayId = typeof record.gatewayId === "string" ? record.gatewayId : "";
+      if (!isDarajaGateway(gatewayId) || !hasDarajaAuthFields(record.config)) continue;
+      serviceConfig[service] = {
+        ...record,
+        config: collectionConfig(gatewayId, record.config),
+      };
+      serviceConfigChanged = true;
+    }
+  }
+
+  if (!gatewayConfigChanged && !serviceConfigChanged) return;
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (gatewayConfigChanged) updates.payment_gateway_config = paymentGatewayConfig;
+  if (serviceConfigChanged) updates.payment_service_config = serviceConfig;
+  const updated = await sbUpdate("isp_admins", `id=eq.${adminId}`, updates);
+  if (updated.length === 0) {
+    throw new Error("Could not remove legacy ISP-owned Daraja credentials.");
+  }
+}
+
 /* ── GET /api/settings/mpesa ── */
 router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void> => {
   const s = await getMpesaSettings();
@@ -424,6 +476,7 @@ router.get("/admin/payment-gateway", async (req: Request, res: Response): Promis
     return;
   }
   if (!(await requireAdminPaymentChange(req, res, adminId))) return;
+  await scrubLegacyDarajaCredentials(adminId);
   const settings = await getAdminPaymentSettings(adminId);
   res.set("Cache-Control", "no-store").json({
     ok: true,
@@ -439,6 +492,7 @@ router.post("/admin/payment-gateway", async (req: Request, res: Response): Promi
     return;
   }
   if (!(await requireAdminPaymentChange(req, res, adminId))) return;
+  await scrubLegacyDarajaCredentials(adminId);
 
   const updated = await sbUpdate(
     "isp_admins",
@@ -464,6 +518,7 @@ router.get("/admin/payment-routing", async (req: Request, res: Response): Promis
     return;
   }
   if (!(await requireAdminPaymentChange(req, res, adminId))) return;
+  await scrubLegacyDarajaCredentials(adminId);
   const settings = await getAdminPaymentSettings(adminId);
   const sharedConfig = settings.paymentGateway === "mpesa_till_push"
     ? settings.mpesaTillPush
@@ -496,6 +551,7 @@ router.post("/admin/payment-routing", async (req: Request, res: Response): Promi
     return;
   }
   if (!(await requireAdminPaymentChange(req, res, adminId))) return;
+  await scrubLegacyDarajaCredentials(adminId);
   if (req.body?.mode !== "shared" && req.body?.mode !== "separate") {
     res.status(400).json({ ok: false, error: "Choose shared or separate payment collection." });
     return;
@@ -558,6 +614,7 @@ router.get("/admin/bank-stk-push", async (req: Request, res: Response): Promise<
     return;
   }
   if (!(await requireAdminPaymentChange(req, res, adminId))) return;
+  await scrubLegacyDarajaCredentials(adminId);
   const { bankStkPush } = await getAdminPaymentSettings(adminId);
   res.json({ ok: true, config: bankStkPush, configured: isBankStkPushConfigured(bankStkPush) });
 });
@@ -575,6 +632,7 @@ router.post("/admin/bank-stk-push", async (req: Request, res: Response): Promise
     return;
   }
   if (!(await requireAdminPaymentChange(req, res, adminId))) return;
+  await scrubLegacyDarajaCredentials(adminId);
   if (!isBankStkPushConfigured(config)) {
     res.status(400).json({ ok: false, error: "Select a bank and enter its PayBill Number plus Account / Business Number." });
     return;
@@ -613,6 +671,7 @@ router.get("/admin/mpesa-gateway-config", async (req: Request, res: Response): P
     return;
   }
   if (!(await requireAdminPaymentChange(req, res, adminId))) return;
+  await scrubLegacyDarajaCredentials(adminId);
   const { bankStkPush, mpesaTillPush, mpesaPaybill, bankTransfer } = await getAdminPaymentSettings(adminId);
   res.json({
     ok: true,
@@ -644,13 +703,15 @@ router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): 
   const input = rawConfig && typeof rawConfig === "object" && !Array.isArray(rawConfig)
     ? rawConfig as Record<string, unknown>
     : {};
-  const config: Record<string, string> = gatewayId === "bank_transfer"
-    ? collectionConfig(gatewayId, input)
-    : Object.fromEntries(
-      Object.entries(input)
-        .filter(([, value]) => typeof value === "string")
-        .map(([key, value]) => [key, (value as string).trim()]),
-    );
+  if (isDarajaGateway(gatewayId) && hasDarajaAuthFields(input)) {
+    res.status(400).json({
+      ok: false,
+      error: "Daraja API credentials are managed by Super Admin. Enter only the collection account details here.",
+    });
+    return;
+  }
+  await scrubLegacyDarajaCredentials(adminId);
+  const config = collectionConfig(gatewayId, input);
 
   const isValid = gatewayId === "bank_transfer"
     ? isGatewayConfigComplete(gatewayId, config)

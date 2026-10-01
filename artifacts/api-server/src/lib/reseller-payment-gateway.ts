@@ -1,5 +1,10 @@
 import { decryptVpnSecret, encryptVpnSecret, type EncryptedSecret } from "./vpn-crypto.js";
 import { sbSelectStrict } from "./supabase-client.js";
+import {
+  collectionConfig,
+  hasDarajaAuthFields,
+  isDarajaGateway,
+} from "./payment-routing.js";
 
 export const RESELLER_GATEWAY_IDS = [
   "mpesa_paybill", "mpesa_till_push", "bank_stk_push", "airtel", "azampay",
@@ -60,9 +65,26 @@ export function cleanGatewayConfig(value: unknown): Record<string, string> {
   );
 }
 
+export function hasResellerDarajaCredentials(
+  gatewayType: string,
+  config: Record<string, string>,
+): boolean {
+  return isDarajaGateway(gatewayType) && hasDarajaAuthFields(config);
+}
+
+export function resellerGatewayCollectionConfig(
+  gatewayType: string,
+  config: Record<string, string>,
+): Record<string, string> {
+  return isDarajaGateway(gatewayType)
+    ? collectionConfig(gatewayType, config)
+    : cleanGatewayConfig(config);
+}
+
 export function gatewayConfigPreview(gatewayType: string, config: Record<string, string>): Record<string, string> {
   const secrets = SECRET_FIELDS[gatewayType] ?? new Set<string>();
-  return Object.fromEntries(Object.entries(config).filter(([key]) => !secrets.has(key)));
+  const safeConfig = resellerGatewayCollectionConfig(gatewayType, config);
+  return Object.fromEntries(Object.entries(safeConfig).filter(([key]) => !secrets.has(key)));
 }
 
 export function isResellerGatewayTestMetadata(value: unknown): boolean {
@@ -109,9 +131,9 @@ export function resellerDestinationConfigured(
 }
 
 const RESELLER_GATEWAY_REQUIRED_FIELDS: Record<string, string[]> = {
-  mpesa_paybill: ["businessShortcode", "consumerKey", "consumerSecret", "passkey"],
-  mpesa_till_push: ["businessShortcode", "consumerKey", "consumerSecret", "passkey"],
-  bank_stk_push: ["bankName", "businessShortcode", "consumerKey", "consumerSecret", "passkey"],
+  mpesa_paybill: [],
+  mpesa_till_push: [],
+  bank_stk_push: ["bankName"],
   airtel: ["clientId", "clientSecret"],
   azampay: ["appName", "clientId", "clientSecret"],
   custom_paybill: ["paybillNumber", "accountNumber"],

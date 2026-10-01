@@ -2,7 +2,15 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { sbDelete, sbInsert, sbSelect, sbSelectStrict, sbUpdate, sbUpsertStrict, sbDeleteStrict, sbInsertStrict, sbUpdateStrict } from "../lib/supabase-client.js";
 import { getMpesaSettings, getPaymentDestinations, isMpesaConfigured } from "../lib/settings-store.js";
-import { encryptGatewayConfig, gatewayConfigPreview, isResellerGatewayId, type ResellerGatewayRouteRow } from "../lib/reseller-payment-gateway.js";
+import {
+  decryptGatewayConfig,
+  encryptGatewayConfig,
+  gatewayConfigPreview,
+  hasResellerDarajaCredentials,
+  isResellerGatewayId,
+  resellerGatewayCollectionConfig,
+  type ResellerGatewayRouteRow,
+} from "../lib/reseller-payment-gateway.js";
 import { sendPlatformSecurityNotice } from "../lib/platform-email.js";
 import { billingPlatformIncomeSummary } from "../lib/platform-billing-store.js";
 
@@ -71,7 +79,7 @@ router.get("/super-admin/reseller-payment-routes", async (req, res): Promise<voi
       sbSelectStrict<{ id: number; admin_id: number; name: string }>("isp_routers", "select=id,admin_id,name&order=name.asc,id.asc"),
       sbSelectStrict<ResellerGatewayRouteRow>(
         "reseller_payment_gateway_routes",
-        "select=id,admin_id,reseller_id,router_id,port_id,gateway_type,config_preview,is_active,created_at,updated_at&order=updated_at.desc",
+        "select=id,admin_id,reseller_id,router_id,port_id,gateway_type,config_ciphertext,config_preview,is_active,created_at,updated_at&order=updated_at.desc",
       ),
     ]);
     const resellerIds = new Set(resellers.map(row => row.id));
@@ -103,16 +111,34 @@ router.get("/super-admin/reseller-payment-routes", async (req, res): Promise<voi
           label: `${routerNames.get(port.router_id) ?? "Router"} · ${port.interface_name}${port.vlan_tag ? ` · VLAN ${port.vlan_tag}` : ""}`,
           status: port.status,
         })),
-      routes: routes
+      routes: await Promise.all(routes
         .filter(route => resellerIds.has(route.reseller_id))
-        .map(route => ({
+        .map(async route => {
+          const storedConfig = decryptGatewayConfig(route.config_ciphertext);
+          const config = resellerGatewayCollectionConfig(route.gateway_type, storedConfig);
+          if (
+            hasResellerDarajaCredentials(route.gateway_type, storedConfig)
+            || hasResellerDarajaCredentials(route.gateway_type, route.config_preview ?? {})
+          ) {
+            await sbUpdateStrict(
+              "reseller_payment_gateway_routes",
+              `id=eq.${route.id}&reseller_id=eq.${route.reseller_id}`,
+              {
+                config_ciphertext: encryptGatewayConfig(config),
+                config_preview: gatewayConfigPreview(route.gateway_type, config),
+                updated_at: new Date().toISOString(),
+              },
+            );
+          }
+          return {
           id: route.id,
           resellerId: route.reseller_id,
           routerId: route.router_id,
           portId: route.port_id,
           gatewayType: route.gateway_type,
-          config: route.config_preview ?? {},
+          config: gatewayConfigPreview(route.gateway_type, config),
           isActive: route.is_active,
+          };
         })),
     });
   } catch (error) {

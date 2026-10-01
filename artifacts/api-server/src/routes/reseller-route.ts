@@ -44,14 +44,18 @@ import {
   decryptGatewayConfig,
   encryptGatewayConfig,
   gatewayConfigPreview,
+  hasResellerDarajaCredentials,
   bankBusinessNumberFor,
   isResellerGatewayId,
+  resellerGatewayCollectionConfig,
   resellerGatewayCheckoutSupported,
   resellerGatewayConfigComplete,
   resolveResellerGatewayRoute,
   resellerGatewayScope,
   type ResellerGatewayRouteRow,
 } from "../lib/reseller-payment-gateway.js";
+import { getMpesaSettings } from "../lib/settings-store.js";
+import { isDarajaGateway } from "../lib/payment-routing.js";
 import {
   allowResellerGatewayProbe,
   probeResellerGatewayConnection,
@@ -63,6 +67,29 @@ import {
 } from "../services/scriptCompiler.js";
 
 const router: IRouter = Router();
+
+async function cleanStoredResellerDarajaRoute(
+  route: ResellerGatewayRouteRow,
+): Promise<Record<string, string>> {
+  const storedConfig = decryptGatewayConfig(route.config_ciphertext);
+  const config = resellerGatewayCollectionConfig(route.gateway_type, storedConfig);
+  const storedPreview = cleanGatewayConfig(route.config_preview);
+  const preview = gatewayConfigPreview(route.gateway_type, storedPreview);
+  const needsScrub = hasResellerDarajaCredentials(route.gateway_type, storedConfig)
+    || hasResellerDarajaCredentials(route.gateway_type, storedPreview);
+  if (needsScrub) {
+    await sbUpdateStrict(
+      "reseller_payment_gateway_routes",
+      `id=eq.${route.id}&reseller_id=eq.${route.reseller_id}`,
+      {
+        config_ciphertext: encryptGatewayConfig(config),
+        config_preview: preview,
+        updated_at: new Date().toISOString(),
+      },
+    );
+  }
+  return config;
+}
 
 type RouterRow = {
   id: number;
@@ -3834,8 +3861,8 @@ router.get("/reseller/payment-gateways", requireAdmin(), requireTenantPermission
         routers: routers.map((router) => ({ id: router.id, name: router.name, status: router.status })),
         ports: ports.map((port) => ({ id: port.id, routerId: port.router_id, label: portLabels.get(Number(port.id)) })),
       },
-      routes: routes.map((route) => {
-        const config = decryptGatewayConfig(route.config_ciphertext);
+      routes: await Promise.all(routes.map(async (route) => {
+        const config = await cleanStoredResellerDarajaRoute(route);
         return {
           id: route.id,
           gatewayType: route.gateway_type,
@@ -3847,12 +3874,12 @@ router.get("/reseller/payment-gateways", requireAdmin(), requireTenantPermission
             : route.router_id
               ? `Router · ${routerNames.get(Number(route.router_id)) ?? "Assigned router"}`
               : "Reseller default",
-          config: route.config_preview ?? {},
+          config: gatewayConfigPreview(route.gateway_type, config),
           destinationConfigured: resellerGatewayConfigComplete(route.gateway_type, config),
           hasStoredSecrets: Boolean(route.config_ciphertext),
           isActive: route.is_active,
         };
-      }),
+      })),
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load reseller payment gateways." });
@@ -3885,8 +3912,8 @@ router.get("/reseller/payment-gateways/settings", requireAdmin(), requireTenantP
         routers: routers.map((router) => ({ id: router.id, name: router.name, status: router.status })),
         ports: ports.map((port) => ({ id: port.id, routerId: port.router_id, label: portLabels.get(Number(port.id)) })),
       },
-      routes: routes.map((route) => {
-        const config = decryptGatewayConfig(route.config_ciphertext);
+      routes: await Promise.all(routes.map(async (route) => {
+        const config = await cleanStoredResellerDarajaRoute(route);
         return {
           id: route.id,
           gatewayType: route.gateway_type,
@@ -3898,12 +3925,12 @@ router.get("/reseller/payment-gateways/settings", requireAdmin(), requireTenantP
             : route.router_id
               ? `Router · ${routerNames.get(Number(route.router_id)) ?? "Assigned router"}`
               : "Reseller default",
-          config: route.config_preview ?? {},
+          config: gatewayConfigPreview(route.gateway_type, config),
           destinationConfigured: resellerGatewayConfigComplete(route.gateway_type, config),
           hasStoredSecrets: Boolean(route.config_ciphertext),
           isActive: route.is_active,
         };
-      }),
+      })),
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load reseller payment gateways." });
@@ -3940,8 +3967,16 @@ router.post("/reseller/payment-gateways/:routeId/test", requireAdmin(), requireT
       res.status(409).json({ ok: false, error: "This saved route uses an unsupported gateway type." });
       return;
     }
-    const config = decryptGatewayConfig(route.config_ciphertext);
-    const result = await probeResellerGatewayConnection(route.gateway_type, config);
+    const config = await cleanStoredResellerDarajaRoute(route);
+    const centralDarajaSettings = isDarajaGateway(route.gateway_type)
+      ? await getMpesaSettings()
+      : undefined;
+    const result = await probeResellerGatewayConnection(
+      route.gateway_type,
+      config,
+      fetch,
+      centralDarajaSettings,
+    );
     const statusCode = result.status === "rejected" ? 400 : result.status === "unavailable" ? 502 : 200;
     res.status(statusCode).json({ ok: statusCode === 200, ...result });
   } catch (error) {
@@ -3999,9 +4034,18 @@ router.put("/reseller/payment-gateways", requireAdmin(), requireTenantPermission
     );
     const existing = existingRows[0];
     const submitted = cleanGatewayConfig(req.body?.config);
+    if (hasResellerDarajaCredentials(gatewayType, submitted)) {
+      res.status(400).json({
+        ok: false,
+        error: "Daraja API credentials are managed by Super Admin. Enter only your collection details here.",
+      });
+      return;
+    }
     let previous: Record<string, string> = {};
-    if (existing && existing.gateway_type === gatewayType) previous = decryptGatewayConfig(existing.config_ciphertext);
-    const config = { ...previous, ...submitted };
+    if (existing && existing.gateway_type === gatewayType) {
+      previous = await cleanStoredResellerDarajaRoute(existing);
+    }
+    const config = resellerGatewayCollectionConfig(gatewayType, { ...previous, ...submitted });
     const isActive = req.body?.isActive !== false;
     if (isActive && !resellerGatewayCheckoutSupported(gatewayType)) {
       res.status(409).json({
@@ -4013,12 +4057,12 @@ router.put("/reseller/payment-gateways", requireAdmin(), requireTenantPermission
     if (isActive && !resellerGatewayConfigComplete(gatewayType, config)) {
       res.status(400).json({
         ok: false,
-        error: "Complete this reseller’s gateway destination and Daraja credentials before activating the route.",
+        error: "Complete this reseller’s collection destination before activating the route. Daraja credentials are managed by Super Admin.",
       });
       return;
     }
     if (req.body?.isActive !== false && Object.keys(config).length === 0) {
-      res.status(400).json({ ok: false, error: "Add at least one collection account or gateway credential before activating this route." });
+      res.status(400).json({ ok: false, error: "Add the required collection destination or provider details before activating this route." });
       return;
     }
     const payload = {
