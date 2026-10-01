@@ -73,6 +73,9 @@ type AssignedHotspotPort = {
   router_id: number;
   vlan_tag?: string | null;
   handoff_mode?: "services" | "isp_router" | "vlan_services" | null;
+  assigned_reseller_id?: number | null;
+  nas_identifier?: string | null;
+  hotspot_server_name?: string | null;
   interface_name: string;
   bridge_name?: string | null;
   hotspot_enabled: boolean;
@@ -99,6 +102,7 @@ type AssignedHotspotPortDraft = {
   bridgeName: string;
   subnetRange: string;
   bandwidthCapMbps: string;
+  nasIdentifier: string;
 };
 
 function adminApiHeaders(): Headers {
@@ -138,6 +142,7 @@ function draftFromAssignedHotspotPort(port: AssignedHotspotPort): AssignedHotspo
     bridgeName: port.bridge_name ?? "",
     subnetRange: port.subnet_range ?? "",
     bandwidthCapMbps: String(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps ?? 30),
+    nasIdentifier: port.nas_identifier ?? "",
   };
 }
 
@@ -949,6 +954,7 @@ export default function HotspotSettings() {
           bridgeName: draft.bridgeName,
           subnetRange: draft.subnetRange,
           bandwidthCapMbps: Number(draft.bandwidthCapMbps),
+          ...(!isResellerAccount ? { nasIdentifier: draft.nasIdentifier } : {}),
         }),
       });
       const data = await parseApiResponse<{ ok?: boolean; port?: AssignedHotspotPort }>(response, "The assigned hotspot port could not be saved.");
@@ -1482,7 +1488,41 @@ export default function HotspotSettings() {
                             Portal DNS name
                             <input className="hs-input" value={draft.hotspotDnsName} onChange={event => updateAssignedPort(port.id, "hotspotDnsName", event.target.value)} placeholder="hotspot.example.com" />
                           </label>
-                           {isResellerAccount ? (
+                          {port.handoff_mode === "vlan_services" && port.assigned_reseller_id && (
+                            <>
+                              {isResellerAccount ? (
+                                <div style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                                  MikroTik NAS identity
+                                  <div style={{ color: "var(--isp-text)", fontSize: ".76rem", fontWeight: 700 }}>
+                                    {draft.nasIdentifier || "Managed by the ISP administrator"}
+                                  </div>
+                                </div>
+                              ) : (
+                                <label style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                                  MikroTik NAS identity (exact case)
+                                  <input
+                                    className="hs-input"
+                                    value={draft.nasIdentifier}
+                                    maxLength={128}
+                                    pattern="[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}"
+                                    title="Use 1–128 ASCII letters, digits, dots, underscores, colons, or hyphens."
+                                    onChange={event => updateAssignedPort(port.id, "nasIdentifier", event.target.value)}
+                                    placeholder="Router System Identity"
+                                  />
+                                  <span style={{ color: "var(--isp-text-sub)", fontWeight: 400, lineHeight: 1.4 }}>
+                                    Use the router’s System Identity with no spaces. Repeat it on this router’s reseller VLANs; each VLAN is matched by its unique HotSpot server name.
+                                  </span>
+                                </label>
+                              )}
+                              <div style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
+                                HotSpot server name
+                                <div style={{ color: "var(--isp-text)", fontSize: ".76rem", fontWeight: 700 }}>
+                                  {port.hotspot_server_name || "Generated during VLAN provisioning"}
+                                </div>
+                              </div>
+                            </>
+                          )}
+                            {port.handoff_mode === "vlan_services" ? (
                              <div style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
                                Reseller hotspot files
                                <div style={{ color: "var(--isp-text)", fontSize: ".76rem", fontWeight: 700 }}>Generated as login.html + rlogin.html in an isolated VLAN folder.</div>
@@ -1506,6 +1546,11 @@ export default function HotspotSettings() {
                             <input className="hs-input" type="number" min="1" max="100000" value={draft.bandwidthCapMbps} onChange={event => updateAssignedPort(port.id, "bandwidthCapMbps", event.target.value)} />
                           </label>
                         </div>
+                        {port.handoff_mode === "vlan_services" && port.assigned_reseller_id && !draft.nasIdentifier && (
+                          <div className="hs-status hs-status-info" style={{ marginTop: 11 }}>
+                            <Info size={14} /> The ISP administrator must map this router identity before this reseller portal can load scoped plans and payment settings.
+                          </div>
+                        )}
                         {port.provisioning_error && (
                           <div className="hs-status hs-status-error" style={{ marginTop: 11 }}>
                             <AlertCircle size={14} /> <span>{port.provisioning_error}</span>

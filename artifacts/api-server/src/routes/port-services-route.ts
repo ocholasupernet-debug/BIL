@@ -1,12 +1,18 @@
 import { randomBytes } from "node:crypto";
 import { Router, type IRouter, type Request } from "express";
-import { authenticatedAccount, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
+import {
+  authenticatedAccount,
+  authenticatedTenantAdminId,
+  generateVlanHotspotPortalContextToken,
+  requireAdmin,
+} from "../lib/api-auth.js";
 import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { encryptVpnSecret } from "../lib/vpn-crypto.js";
 import { deployRouterFile, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
 import { sbDeleteStrict, sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
+import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import {
   portServiceResourceNames,
@@ -38,6 +44,8 @@ type PortServiceRow = {
   subnet_range: string | null;
   vlan_tag?: string | null;
   handoff_mode?: "services" | "isp_router" | "vlan_services" | null;
+  nas_identifier?: string | null;
+  link_status?: string | null;
   status: string;
 };
 
@@ -904,7 +912,12 @@ router.get("/admin/port-services", requireAdmin(), async (req, res): Promise<voi
       : rows;
     res.json({
       ok: true,
-      ports: visible,
+      ports: visible.map((row) => ({
+        ...row,
+        hotspot_server_name: row.handoff_mode === "vlan_services" && row.assigned_reseller_id
+          ? portServiceResourceNames(row).hotspotServer
+          : null,
+      })),
       hotspotAssets: account.role === "reseller"
         ? getDeployableSource("hotspot", "login.html")
           ? ["login.html", "rlogin.html"]
@@ -1041,6 +1054,48 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
   try {
     const port = portFromLocals(res);
     const account = await authenticatedAccount(req);
+    const hasNasIdentifier = Object.prototype.hasOwnProperty.call(req.body ?? {}, "nasIdentifier");
+    let nasIdentifier = port.nas_identifier ?? null;
+    if (hasNasIdentifier) {
+      if (account?.role === "reseller") {
+        res.status(403).json({ ok: false, error: "Only the ISP administrator can map the MikroTik NAS identity." });
+        return;
+      }
+      const rawNasIdentifier = req.body?.nasIdentifier;
+      if (rawNasIdentifier === null || rawNasIdentifier === "") {
+        nasIdentifier = null;
+      } else if (
+        typeof rawNasIdentifier === "string"
+        && rawNasIdentifier === rawNasIdentifier.trim()
+        && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(rawNasIdentifier)
+      ) {
+        nasIdentifier = rawNasIdentifier;
+      } else {
+        res.status(400).json({ ok: false, error: "NAS identity must be 1–128 letters, digits, dots, underscores, colons, or hyphens." });
+        return;
+      }
+      if (
+        nasIdentifier
+        && (
+          port.handoff_mode !== "vlan_services"
+          || !port.assigned_reseller_id
+          || !port.vlan_tag
+        )
+      ) {
+        res.status(400).json({ ok: false, error: "NAS identities can only be mapped to an assigned reseller VLAN service." });
+        return;
+      }
+      if (nasIdentifier) {
+        const duplicate = await sbSelectStrict<{ id: number }>(
+          "isp_reseller_ports",
+          `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&assigned_reseller_id=eq.${port.assigned_reseller_id}&vlan_tag=eq.${encodeURIComponent(String(port.vlan_tag))}&handoff_mode=eq.vlan_services&nas_identifier=eq.${encodeURIComponent(nasIdentifier)}&id=neq.${port.id}&select=id&limit=1`,
+        );
+        if (duplicate[0]) {
+          res.status(409).json({ ok: false, error: "That NAS identity is already mapped to this reseller VLAN service on the router." });
+          return;
+        }
+      }
+    }
     const identity = await resourceIdentityForPort(port);
     const defaultResources = portServiceResourceNames(port, identity);
     const requestedHotspotFolderPath = req.body?.hotspotFolderPath;
@@ -1112,6 +1167,7 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
         hotspot_folder_path: hotspotFolderPath,
         hotspot_template_path: hotspotFolderPath,
         hotspot_dns_name: hotspotDnsName,
+        ...(hasNasIdentifier ? { nas_identifier: nasIdentifier } : {}),
         pppoe_enabled: pppoeEnabled,
         pppoe_folder_path: pppoeFolderPath,
         pppoe_dns_name: pppoeDnsName,
@@ -1122,7 +1178,18 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
         updated_at: new Date().toISOString(),
       },
     );
-    res.json({ ok: true, port: updated[0] ?? null });
+    const saved = updated[0];
+    res.json({
+      ok: true,
+      port: saved
+        ? {
+          ...saved,
+          hotspot_server_name: saved.handoff_mode === "vlan_services" && saved.assigned_reseller_id
+            ? portServiceResourceNames(saved).hotspotServer
+            : null,
+        }
+        : null,
+    });
   } catch (error) {
     res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to save port service bindings." });
   }
@@ -1158,6 +1225,120 @@ router.delete("/admin/port-services/:portId", requireAdmin(), validatePortAccess
     res.status(502).json({ ok: false, error: `Router cleanup failed; the assignment was kept for retry. ${errorMessage}` });
   }
 });
+
+type ScopedHotspotPlan = {
+  id: number;
+  name: string;
+  price: number;
+  validity: number;
+  validity_unit: string;
+  speed_down: number | string | null;
+  speed_up: number | string | null;
+  data_limit_mb: number | string | null;
+};
+
+function injectHotspotRuntimeConfig(
+  html: string,
+  config: Record<string, unknown>,
+): string {
+  const script = `<script>window.__HOTSPOT_CONFIG__=${JSON.stringify(config).replace(/</g, "\\u003c")};</script>`;
+  const existing = /<script\b[^>]*>\s*window\.__HOTSPOT_CONFIG__\s*=\s*(\{[\s\S]*?\})\s*;?\s*<\/script>/i;
+  if (existing.test(html)) return html.replace(existing, script);
+  if (/<\/head\s*>/i.test(html)) return html.replace(/<\/head\s*>/i, `${script}\n</head>`);
+  if (/<html\b[^>]*>/i.test(html)) return html.replace(/<html\b[^>]*>/i, (tag) => `${tag}\n${script}`);
+  return `${script}\n${html}`;
+}
+
+async function buildScopedResellerPortalHtml(
+  port: PortServiceRow,
+  portalHtml: string,
+  apiBase: string,
+): Promise<string> {
+  const resellerId = Number(port.assigned_reseller_id);
+  if (
+    port.handoff_mode !== "vlan_services"
+    || !Number.isSafeInteger(resellerId)
+    || resellerId < 1
+    || !port.vlan_tag
+    || !port.nas_identifier
+  ) {
+    throw new Error("Map the shared MikroTik identity to this assigned reseller VLAN before deploying its portal.");
+  }
+
+  const [resellers, parentAdmins] = await Promise.all([
+    sbSelectStrict<{ id: number }>(
+      "isp_admins",
+      `id=eq.${resellerId}&parent_id=eq.${port.admin_id}&role=eq.reseller&is_active=is.true&select=id&limit=1`,
+    ),
+    sbSelectStrict<{ id: number }>(
+      "isp_admins",
+      `id=eq.${port.admin_id}&parent_id=is.null&is_active=is.true&select=id&limit=1`,
+    ),
+  ]);
+  if (!resellers[0] || !parentAdmins[0]) {
+    throw new Error("The assigned reseller is no longer active under this ISP.");
+  }
+
+  const [plans, portsWithIdentity] = await Promise.all([
+    sbSelectStrict<ScopedHotspotPlan>(
+      "isp_plans",
+      `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&owner_reseller_id=eq.${resellerId}&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit,speed_down,speed_up,data_limit_mb&order=price.asc,name.asc`,
+    ),
+    sbSelectStrict<{ id: number }>(
+      "isp_reseller_ports",
+      `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&assigned_reseller_id=eq.${resellerId}&vlan_tag=eq.${encodeURIComponent(String(port.vlan_tag))}&handoff_mode=eq.vlan_services&nas_identifier=eq.${encodeURIComponent(port.nas_identifier)}&id=neq.${port.id}&select=id&limit=1`,
+    ),
+  ]);
+  if (portsWithIdentity[0]) {
+    throw new Error("This NAS identity and VLAN assignment are already mapped to another service.");
+  }
+
+  const embeddedConfigMatch = portalHtml.match(
+    /<script\b[^>]*>\s*window\.__HOTSPOT_CONFIG__\s*=\s*(\{[\s\S]*?\})\s*;?\s*<\/script>/i,
+  );
+  let embeddedConfig: Record<string, unknown> = {};
+  if (embeddedConfigMatch) {
+    try {
+      const parsed = JSON.parse(embeddedConfigMatch[1]) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("The portal configuration must be a JSON object.");
+      }
+      embeddedConfig = parsed as Record<string, unknown>;
+    } catch {
+      throw new Error("The reseller portal contains an invalid embedded configuration.");
+    }
+  }
+
+  const config: Record<string, unknown> = {
+    ...embeddedConfig,
+    apiBase,
+    adminId: port.admin_id,
+    resellerId,
+    routerId: port.router_id,
+    portId: port.id,
+    previewOnly: false,
+    portalContextToken: generateVlanHotspotPortalContextToken({
+      adminId: port.admin_id,
+      resellerId,
+      routerId: port.router_id,
+      portId: port.id,
+    }),
+    plans: plans.map((plan) => ({
+      ...plan,
+      price: Number(plan.price),
+    })),
+  };
+  logger.info({
+    event: "hotspot.portal_deploy",
+    nasIdentifier: port.nas_identifier,
+    hotspotServerName: portServiceResourceNames(port).hotspotServer,
+    mappedResellerId: resellerId,
+    routerId: port.router_id,
+    portId: port.id,
+    loadedPlans: plans.length,
+  }, "Prepared signed reseller Hotspot portal for its assigned VLAN");
+  return injectHotspotRuntimeConfig(portalHtml, config);
+}
 
 async function executePortServiceDeployment(
   port: PortServiceRow,
@@ -1225,7 +1406,12 @@ async function executePortServiceDeployment(
   }
 
   const sharedPortalDirectory = resources.hotspotDirectory;
-  const hotspotDestination = portalHtml
+  const scopedResellerVlan = port.hotspot_enabled
+    && port.handoff_mode === "vlan_services"
+    && !!port.assigned_reseller_id;
+  const hotspotDestination = scopedResellerVlan
+    ? `${sharedPortalDirectory}/login.html`
+    : portalHtml
     ? `${sharedPortalDirectory}/login.html`
     : hotspotSource ? `${sharedPortalDirectory}/${sourceNameFromPath(hotspotSource)}` : null;
   const pppoeDestination = pppoeSource ? `${sharedPortalDirectory}/${sourceNameFromPath(pppoeSource)}` : null;
@@ -1238,7 +1424,29 @@ async function executePortServiceDeployment(
     await deployApprovedSource(found.creds, sourceOrigin, sourcePath, destinationPath);
     deployedDestinations.add(destinationPath);
   };
-  if (portalHtml && hotspotDestination) {
+  if (scopedResellerVlan && hotspotDestination) {
+    const source = getDeployableSource("hotspot", "login.html");
+    if (!source && !portalHtml) {
+      throw new Error("The default reseller Hotspot portal asset is unavailable.");
+    }
+    const signedPortalHtml = await buildScopedResellerPortalHtml(
+      port,
+      portalHtml || source!.content.toString("utf8"),
+      sourceOrigin,
+    );
+    await deployPortalContent(found.creds, sourceOrigin, signedPortalHtml, hotspotDestination);
+    deployedDestinations.add(hotspotDestination);
+    const rloginDestination = `${sharedPortalDirectory}/rlogin.html`;
+    const rloginSource = getDeployableSource("hotspot", "rlogin.html");
+    if (!rloginSource) throw new Error("The reseller Hotspot redirect asset is unavailable.");
+    await deployPortalContent(
+      found.creds,
+      sourceOrigin,
+      addVlanIdentityToRlogin(rloginSource.content.toString("utf8")),
+      rloginDestination,
+    );
+    deployedDestinations.add(rloginDestination);
+  } else if (portalHtml && hotspotDestination) {
     await deployPortalContent(found.creds, sourceOrigin, portalHtml, hotspotDestination);
     deployedDestinations.add(hotspotDestination);
     const rloginDestination = `${sharedPortalDirectory}/rlogin.html`;

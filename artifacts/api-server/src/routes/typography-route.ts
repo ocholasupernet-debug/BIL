@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { requireAdmin } from "../lib/api-auth.js";
 import { sbSelect, sbUpdate } from "../lib/supabase-client.js";
+import { logger } from "../lib/logger.js";
 import { TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
@@ -113,20 +114,33 @@ async function readPortalAppearance(id: number): Promise<{
 /* Public by design: these values contain no account or credential data and are
    needed by router-served captive portals before a customer can sign in. */
 router.get("/public/typography", async (req: Request, res: Response): Promise<void> => {
-  const id = Number(req.query.adminId);
-  if (!Number.isSafeInteger(id) || id <= 0) {
+  const responseAdminId = req.hotspotPortalContext?.adminId ?? Number(req.query.adminId);
+  const preferenceOwnerId = req.hotspotPortalContext?.resellerId ?? responseAdminId;
+  if (
+    !Number.isSafeInteger(responseAdminId) || responseAdminId <= 0
+    || !Number.isSafeInteger(preferenceOwnerId) || preferenceOwnerId <= 0
+  ) {
     res.status(400).json({ ok: false, error: "A valid ISP context is required." });
     return;
   }
   try {
     const [result, appearance] = await Promise.all([
-      readTypography(id),
-      readPortalAppearance(id),
+      readTypography(preferenceOwnerId),
+      readPortalAppearance(preferenceOwnerId),
     ]);
+    if (req.hotspotPortalContext) {
+      logger.info({
+        event: "hotspot.portal_theme",
+        incomingNasId: req.hotspotNasIdentifier ?? null,
+        hotspotServerName: req.hotspotServerName ?? null,
+        mappedResellerId: preferenceOwnerId,
+        loadedTheme: "reseller-typography-and-appearance",
+      }, "Loaded typography and appearance for the mapped reseller Hotspot portal");
+    }
     res.set("Cache-Control", "no-store");
     res.json({
       ok: true,
-      adminId: id,
+      adminId: responseAdminId,
       ...result.preferences,
       accentColor: appearance.accentColor,
       portalBackground: appearance.portalBackground,

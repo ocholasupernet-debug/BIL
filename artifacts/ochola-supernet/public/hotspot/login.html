@@ -480,6 +480,8 @@ var COLORS=[
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
+var ROUTER_NAS_IDENTIFIER="$(identity)";
+var ROUTER_HOTSPOT_SERVER_NAME="$(server-name)";
 var EMBEDDED_PLANS=[];
  var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
 var ROUTER_MAC="$(mac)";
@@ -489,6 +491,18 @@ var ROUTER_CHAP_CHALLENGE="$(chap-challenge)";
   var PORTAL_ACCENT="#d96835", PORTAL_BACKGROUND="midnight", PORTAL_PACKAGE_SHAPE="rounded", PORTAL_PREVIEW_ONLY=false;
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
 var PORTAL_QUERY=new URLSearchParams(window.location.search);
+function portalQueryIdentifier(names,routerValue){
+  var values=[];
+  names.forEach(function(name){PORTAL_QUERY.getAll(name).forEach(function(value){values.push(value);});});
+  if(values.length){
+    var distinct=Array.from(new Set(values));
+    if(distinct.length!==1)return "__invalid__";
+    return distinct[0];
+  }
+  return String(routerValue||"");
+}
+var PORTAL_NAS_IDENTIFIER=portalQueryIdentifier(["nasid","nas-id","nas_identifier"],ROUTER_NAS_IDENTIFIER);
+var PORTAL_HOTSPOT_SERVER_NAME=portalQueryIdentifier(["server","server-name","hotspot_server_name","hotspotServerName"],ROUTER_HOTSPOT_SERVER_NAME);
 var mpesaReconnectHome=document.getElementById("portalRecoveryCards");
 var mpesaReconnectSection=document.getElementById("mpesaReconnectSection");
 if(mpesaReconnectHome&&mpesaReconnectSection){
@@ -518,6 +532,31 @@ function darkenHex(value){
   return "#"+[r,g,b].map(function(part){return ("0"+part.toString(16)).slice(-2);}).join("");
 }
 function apiUrl(path){return PORTAL_API_BASE?PORTAL_API_BASE+path:path;}
+var originalPortalFetch=window.fetch.bind(window);
+window.fetch=function(input,init){
+  var token=EMBEDDED_CONFIG&&typeof EMBEDDED_CONFIG.portalContextToken==="string"
+    ? EMBEDDED_CONFIG.portalContextToken.trim():"";
+  var requestUrl;
+  try{
+    requestUrl=new URL(input instanceof Request?input.url:String(input),window.location.href);
+  }catch(_error){
+    return originalPortalFetch(input,init);
+  }
+  var apiOrigin;
+  try{apiOrigin=new URL(PORTAL_API_BASE||window.location.origin,window.location.href).origin;}
+  catch(_error){apiOrigin=window.location.origin;}
+  if(requestUrl.origin!==apiOrigin||!requestUrl.pathname.startsWith("/api/")){
+    return originalPortalFetch(input,init);
+  }
+  var headers=new Headers(input instanceof Request?input.headers:undefined);
+  new Headers(init&&init.headers).forEach(function(value,key){headers.set(key,value);});
+  if(token)headers.set("X-Hotspot-Portal-Context",token);
+  if(token||PORTAL_QUERY.has("nasid")||PORTAL_QUERY.has("server")){
+    headers.set("X-Hotspot-NAS-Identifier",PORTAL_NAS_IDENTIFIER);
+    headers.set("X-Hotspot-Server-Name",PORTAL_HOTSPOT_SERVER_NAME);
+  }
+  return originalPortalFetch(input,Object.assign({},init||{},{headers:headers}));
+};
 function setPortalText(id,value){
   var element=document.getElementById(id);
   if(element&&typeof value==="string")element.textContent=value;
@@ -717,15 +756,34 @@ function loadPortalTypography(done){
       served by the public API; reseller bundles do not include a local
       typography.json file. */
    applyPortalConfig(EMBEDDED_CONFIG);
-   var typographyUrl=PORTAL_API_BASE?apiUrl("/api/public/typography"):"";
-   var request=typographyUrl?fetch(typographyUrl,{cache:"no-store"})
-    .then(function(r){return r.ok?r.json():null;})
-    .then(function(data){
-      if(data&&Number.isSafeInteger(Number(data.adminId)))PORTAL_ADMIN_ID=Number(data.adminId);
-      applyPortalTypography(data);
-      applyPortalConfig(EMBEDDED_CONFIG);
-    })
-     .catch(function(){return null;}):Promise.resolve(null);
+   var adminQuery=PORTAL_ADMIN_ID>0?"?adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"";
+   var brandingUrl=PORTAL_API_BASE?apiUrl("/api/public/hotspot-branding"+adminQuery):"";
+   var typographyUrl=PORTAL_API_BASE?apiUrl("/api/public/typography"+adminQuery):"";
+   var brandingRequest=brandingUrl?fetch(brandingUrl,{cache:"no-store"})
+     .then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):Promise.resolve(null);
+   var typographyRequest=typographyUrl?fetch(typographyUrl,{cache:"no-store"})
+     .then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):Promise.resolve(null);
+   var request=Promise.all([brandingRequest,typographyRequest]).then(function(results){
+     var brandingData=results[0], typographyData=results[1];
+     var brandingSettings=brandingData&&brandingData.branding&&brandingData.branding.settings;
+     if(brandingSettings&&typeof brandingSettings==="object"&&!Array.isArray(brandingSettings)){
+       var merged=Object.assign({},EMBEDDED_CONFIG||{},brandingSettings);
+       if(EMBEDDED_CONFIG){
+         merged.adminId=EMBEDDED_CONFIG.adminId;
+         merged.resellerId=EMBEDDED_CONFIG.resellerId;
+         merged.routerId=EMBEDDED_CONFIG.routerId;
+         merged.portId=EMBEDDED_CONFIG.portId;
+         merged.portalContextToken=EMBEDDED_CONFIG.portalContextToken;
+         merged.apiBase=EMBEDDED_CONFIG.apiBase||PORTAL_API_BASE;
+         merged.plans=EMBEDDED_CONFIG.plans||EMBEDDED_PLANS;
+       }
+       applyPortalConfig(merged);
+     }
+     if(typographyData&&Number.isSafeInteger(Number(typographyData.adminId))){
+       PORTAL_ADMIN_ID=Number(typographyData.adminId);
+     }
+     applyPortalTypography(typographyData);
+   });
   var timeout=new Promise(function(resolve){setTimeout(function(){resolve(null);},5000);});
   Promise.race([request,timeout]).then(function(){if(typeof done==="function")done();});
 }

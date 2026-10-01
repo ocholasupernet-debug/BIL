@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { requireAdmin } from "../lib/api-auth.js";
 import { sbSelect, sbUpsertStrict } from "../lib/supabase-client.js";
+import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
 const HOSTNAME = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
@@ -94,13 +95,24 @@ router.put("/admin/hotspot-branding", requireAdmin(), async (req: Request, res: 
 
 router.get("/public/hotspot-branding", async (req: Request, res: Response): Promise<void> => {
   const id = req.hotspotPortalContext?.resellerId ?? Number(req.query.adminId);
+  const responseAdminId = req.hotspotPortalContext?.adminId ?? id;
   if (!Number.isSafeInteger(id) || id < 1) {
     res.status(400).json({ ok: false, error: "A valid ISP context is required." });
     return;
   }
   try {
     res.set("Cache-Control", "no-store");
-    res.json({ ok: true, adminId: id, branding: await read(id) });
+    const branding = await read(id);
+    if (req.hotspotPortalContext) {
+      logger.info({
+        event: "hotspot.portal_theme",
+        incomingNasId: req.hotspotNasIdentifier ?? null,
+        hotspotServerName: req.hotspotServerName ?? null,
+        mappedResellerId: id,
+        loadedTheme: Object.keys(branding.settings).length > 0 ? "reseller-custom" : "reseller-default",
+      }, "Loaded theme for the mapped reseller Hotspot portal");
+    }
+    res.json({ ok: true, adminId: responseAdminId, branding });
   } catch {
     res.status(503).json({ ok: false, error: "Hotspot branding is temporarily unavailable." });
   }

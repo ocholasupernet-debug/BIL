@@ -19,6 +19,7 @@ const servicePort = {
   router_id: 31,
   assigned_reseller_id: 19,
   handoff_mode: "vlan_services",
+  nas_identifier: "shared-router",
   interface_name: "ether4",
   bridge_name: "br-reseller-43",
   reseller_id: 19,
@@ -27,6 +28,13 @@ const servicePort = {
   status: "active",
   link_status: "active",
   hotspot_enabled: true,
+};
+const siblingServicePort = {
+  ...servicePort,
+  id: 44,
+  assigned_reseller_id: 20,
+  vlan_tag: "144",
+  interface_name: "ether5",
 };
 
 const assignedPlan = {
@@ -171,18 +179,22 @@ test("signed reseller portal requests stay within their assigned service", async
     },
     { default: plansRouter },
     { default: settingsRouter },
+    { default: brandingRouter },
+    { default: typographyRouter },
   ] = await Promise.all([
     import("../lib/api-auth.js"),
     import("./customers.js"),
     import("./mpesa-route.js"),
     import("./plans.js"),
     import("./settings-route.js"),
+    import("./hotspot-branding-route.js"),
+    import("./typography-route.js"),
   ]);
 
   const app = express();
   app.use(express.json());
   app.use(resolveVlanHotspotPortalRequest);
-  app.use("/api", customersRouter, mpesaRouter, plansRouter, settingsRouter);
+  app.use("/api", customersRouter, mpesaRouter, plansRouter, settingsRouter, brandingRouter, typographyRouter);
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve, reject) => {
     server.once("listening", resolve);
@@ -273,15 +285,11 @@ test("signed reseller portal requests stay within their assigned service", async
 
     let rows: Record<string, unknown>[] = [];
     if (table === "isp_reseller_ports") {
-      if (query.has("assigned_reseller_id")) {
-        if (matches(servicePort, query)) rows = [servicePort];
-      } else if (matches(servicePort, query)) {
-        rows = [servicePort];
-      }
+      rows = [servicePort, siblingServicePort].filter(row => matches(row, query));
     } else if (table === "isp_admins") {
       const admins = [
-        { id: 7, parent_id: null, role: "isp_admin", is_active: true, name: "Parent ISP", payment_gateway: "mpesa_till_push", payment_gateway_config: {}, payment_collection_mode: "separate", payment_service_config: {} },
-        { id: 19, parent_id: 7, role: "reseller", is_active: true, name: "Assigned reseller" },
+        { id: 7, parent_id: null, role: "isp_admin", is_active: true, name: "Parent ISP", subdomain: "parent-isp", font_family: "DM Sans", font_style: "normal", font_weight: 500, font_size: 18, payment_gateway: "mpesa_till_push", payment_gateway_config: {}, payment_collection_mode: "separate", payment_service_config: {} },
+        { id: 19, parent_id: 7, role: "reseller", is_active: true, name: "Assigned reseller", subdomain: "assigned-reseller", font_family: "Roboto", font_style: "italic", font_weight: 600, font_size: 20 },
       ];
       rows = admins.filter(row => matches(row, query));
     } else if (table === "isp_routers") {
@@ -303,6 +311,16 @@ test("signed reseller portal requests stay within their assigned service", async
       ] : transactions).filter(row => matches(row, query));
     } else if (table === "isp_customers") {
       rows = customers.filter(row => matches(row, query));
+    } else if (table === "isp_hotspot_branding") {
+      rows = [
+        { admin_id: 7, portal_hostname: "parent.example.test", settings: { ispName: "Parent ISP Theme" } },
+        { admin_id: 19, portal_hostname: "reseller.example.test", settings: { ispName: "Assigned Reseller Theme" } },
+      ].filter(row => matches(row, query));
+    } else if (table === "isp_dashboard_preferences") {
+      rows = [
+        { admin_id: 7, accent_color: "#123456", portal_background: "midnight", portal_package_shape: "rounded" },
+        { admin_id: 19, accent_color: "#e14b2f", portal_background: "ocean", portal_package_shape: "pill" },
+      ].filter(row => matches(row, query));
     } else if (table === "platform_secure_settings" || table === "reseller_payment_gateway_routes") {
       rows = [];
     }
@@ -320,9 +338,17 @@ test("signed reseller portal requests stay within their assigned service", async
     method?: string;
     body?: Record<string, unknown>;
     token?: string | null;
+    nasIdentifier?: string;
+    serverName?: string;
   } = {}) => {
     const headers = new Headers();
     if (options.token !== null) headers.set("X-Hotspot-Portal-Context", options.token ?? scopeToken);
+    if (options.nasIdentifier !== undefined || options.token !== null) {
+      headers.set("X-Hotspot-NAS-Identifier", options.nasIdentifier ?? servicePort.nas_identifier);
+    }
+    if (options.serverName !== undefined || options.token !== null) {
+      headers.set("X-Hotspot-Server-Name", options.serverName ?? "HS_RS19_VLAN143");
+    }
     if (options.body) headers.set("Content-Type", "application/json");
     return originalFetch(`${origin}${path}`, {
       method: options.method ?? "GET",
@@ -436,6 +462,36 @@ test("signed reseller portal requests stay within their assigned service", async
     assert.equal(dbRequests.filter(row => row.table === "isp_routers").length, 0);
   });
 
+  await t.test("shared-router NAS identity must match the exact VLAN HotSpot server", async () => {
+    clearRequests();
+    const wrongCase = await request("/api/plans?type=hotspot", { nasIdentifier: "Shared-Router" });
+    assert.equal(wrongCase.status, 403);
+    assert.equal(dbRequests.some(row => row.table === "isp_plans"), false);
+    assertNoRouterOrWrites();
+
+    clearRequests();
+    const wrongServer = await request("/api/plans?type=hotspot", { serverName: "HS_RS19_VLAN144" });
+    assert.equal(wrongServer.status, 403);
+    assert.equal(dbRequests.some(row => row.table === "isp_plans"), false);
+    assertNoRouterOrWrites();
+
+    clearRequests();
+    const siblingVlanServer = await request("/api/plans?type=hotspot", { serverName: "HS_RS20_VLAN144" });
+    assert.equal(siblingVlanServer.status, 403);
+    assert.equal(dbRequests.some(row => row.table === "isp_plans"), false);
+    assertNoRouterOrWrites();
+
+    clearRequests();
+    const missingIdentity = await request("/api/plans?type=hotspot", {
+      token: null,
+      nasIdentifier: "shared-router",
+      serverName: "HS_RS19_VLAN143",
+    });
+    assert.equal(missingIdentity.status, 403);
+    assert.equal(dbRequests.some(row => row.table === "isp_plans"), false);
+    assertNoRouterOrWrites();
+  });
+
   await t.test("an old portal context is rejected after its port is reassigned", async () => {
     servicePort.assigned_reseller_id = 20;
     clearRequests();
@@ -460,6 +516,38 @@ test("signed reseller portal requests stay within their assigned service", async
       && row.rawQuery.includes("router_id=eq.31")
       && row.rawQuery.includes("port_id=eq.43")
       && row.rawQuery.includes("owner_reseller_id=eq.19")));
+  });
+
+  await t.test("portal appearance and typography load from the mapped reseller", async () => {
+    clearRequests();
+    const brandingResponse = await request("/api/public/hotspot-branding?adminId=7");
+    assert.equal(brandingResponse.status, 200);
+    const branding = await brandingResponse.json() as {
+      adminId: number;
+      branding: { settings: { ispName?: string } };
+    };
+    assert.equal(branding.adminId, 7);
+    assert.equal(branding.branding.settings.ispName, "Assigned Reseller Theme");
+    assert.ok(dbRequests.some(row => row.table === "isp_hotspot_branding"
+      && row.rawQuery.includes("admin_id=eq.19")));
+
+    clearRequests();
+    const typographyResponse = await request("/api/public/typography?adminId=7");
+    assert.equal(typographyResponse.status, 200);
+    const typography = await typographyResponse.json() as {
+      adminId: number;
+      fontFamily: string;
+      accentColor: string;
+      portalBackground: string;
+    };
+    assert.equal(typography.adminId, 7);
+    assert.equal(typography.fontFamily, "Roboto");
+    assert.equal(typography.accentColor, "#e14b2f");
+    assert.equal(typography.portalBackground, "ocean");
+    assert.ok(dbRequests.some(row => row.table === "isp_admins"
+      && row.rawQuery.includes("id=eq.19")));
+    assert.ok(dbRequests.some(row => row.table === "isp_dashboard_preferences"
+      && row.rawQuery.includes("admin_id=eq.19")));
   });
 
   await t.test("paid activation resolves the assigned VLAN Hotspot resource identity", async () => {
@@ -869,6 +957,20 @@ test("signed reseller portal requests stay within their assigned service", async
     clearRequests();
     const settings = await request("/api/settings/mpesa?routerId=31&portId=43");
     assert.equal(settings.status, 200);
+    const settingsBody = await settings.json() as {
+      configured: boolean;
+      settings: {
+        shortcode: string;
+        paymentGateway: string;
+        destinationConfigured: boolean;
+        adminTillPushConfigured: boolean;
+      };
+    };
+    assert.equal(settingsBody.configured, false);
+    assert.equal(settingsBody.settings.paymentGateway, "");
+    assert.equal(settingsBody.settings.destinationConfigured, false);
+    assert.equal(settingsBody.settings.adminTillPushConfigured, false);
+    assert.equal(settingsBody.settings.shortcode, "");
     assert.ok(dbRequests.some(row => row.table === "reseller_payment_gateway_routes"
       && row.rawQuery.includes("reseller_id=eq.19")
       && row.rawQuery.includes("router_id.eq.31")

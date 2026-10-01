@@ -509,7 +509,7 @@ export function AdminLayout({
   const { isVisible }                 = useAdminPageVisibility();
   const currentFeatureKey             = getAdminFeatureKeyForPath(location);
   const currentPageAuthFeatureKey     = getAdminPageAuthFeatureKeyForPath(location) ?? currentFeatureKey;
-  const isOverviewFeature             = !currentPageAuthFeatureKey || currentPageAuthFeatureKey === "overview";
+  const isOverviewFeature             = !currentPageAuthFeatureKey || currentPageAuthFeatureKey === "overview" || currentPageAuthFeatureKey === "overview.dashboard";
   const requiresReauthGate            = !isOverviewFeature && !isImpersonating();
   const reauthCheckPending            = requiresReauthGate && (reauthCheckedFeature !== currentPageAuthFeatureKey || reauthStatus === "checking");
   const pageIsVisible                 = !currentFeatureKey || isVisible(currentFeatureKey);
@@ -741,7 +741,8 @@ export function AdminLayout({
     let cancelled = false;
     const feature = currentPageAuthFeatureKey;
     setReauthError("");
-    if (!feature || feature === "overview" || isImpersonating()) {
+    const overviewFeature = !feature || feature === "overview" || feature === "overview.dashboard";
+    if (overviewFeature || isImpersonating()) {
       setReauthUntil(0);
       setReauthMethod("none");
       setReauthStatus("not-required");
@@ -781,7 +782,6 @@ export function AdminLayout({
       applyMethodDecision(cachedPolicy.methods[feature]);
       return;
     }
-
     const check = async () => {
       try {
         const policyCache = await loadPasswordReauthPolicyCache();

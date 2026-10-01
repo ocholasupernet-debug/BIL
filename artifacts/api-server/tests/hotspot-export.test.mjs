@@ -320,12 +320,22 @@ test("default reseller portal deployment embeds the assigned router and port sco
   assert.match(deploy, /routerId: scope\.routerId/);
   assert.match(deploy, /portId: scope\.portId/);
   assert.match(deploy, /portalContextToken:\s*generateVlanHotspotPortalContextToken/);
+  assert.match(deploy, /const sourceNameForContent = sourceName/);
+  assert.match(deploy, /addVlanIdentityToRlogin/);
   assert.match(deploy, /overwrite: true/);
   assert.match(provision, /admin_id=eq\.\$\{port\.admin_id\}&router_id=eq\.\$\{port\.router_id\}&port_id=eq\.\$\{port\.id\}/);
 
   const login = await readFile(new URL("../../ochola-supernet/src/pages/portal/HotspotLogin.tsx", import.meta.url), "utf8");
   assert.match(login, /portalContextToken/);
   assert.match(login, /X-Hotspot-Portal-Context/);
+  assert.match(login, /X-Hotspot-NAS-Identifier/);
+  assert.match(login, /X-Hotspot-Server-Name/);
+
+  const routerPortal = await readFile(new URL("../../ochola-supernet/public/hotspot/login.html", import.meta.url), "utf8");
+  assert.match(routerPortal, /\$\(identity\)/);
+  assert.match(routerPortal, /\$\(server-name\)/);
+  assert.match(routerPortal, /X-Hotspot-NAS-Identifier/);
+  assert.match(routerPortal, /X-Hotspot-Server-Name/);
 });
 
 test("hotspot checkout carries and validates the service scope", async () => {

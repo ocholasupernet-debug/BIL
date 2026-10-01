@@ -1,6 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import type { Request, Response, NextFunction } from "express";
 import { sbSelect, sbSelectStrict } from "./supabase-client.js";
+import { logger } from "./logger.js";
+import { portServiceResourceNames, type PortServiceResourceInput } from "./port-service-resources.js";
 import { getTenantSubdomainFromRequest } from "./tenant-host.js";
 import {
   getAdminApiReauthFeature,
@@ -17,6 +19,8 @@ declare global {
       authUser?: ApiTokenPayload;
       tenantSubdomain?: string | null;
       hotspotPortalContext?: VlanHotspotPortalContext;
+      hotspotNasIdentifier?: string;
+      hotspotServerName?: string;
     }
   }
 }
@@ -462,6 +466,52 @@ function applyPortalScopeIds(
   return true;
 }
 
+const ROUTEROS_PORTAL_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+
+function portalIdentifierFromRequest(
+  req: Request,
+  headerName: string,
+  queryNames: string[],
+): { value: string | null; valid: boolean } {
+  const query = req.query as Record<string, unknown>;
+  const provided = [
+    req.get(headerName),
+    ...queryNames.map((name) => query[name]),
+  ].filter((value) => value !== undefined && value !== null && value !== "");
+  if (!provided.length) return { value: null, valid: true };
+  if (provided.some((value) => typeof value !== "string")) return { value: null, valid: false };
+  const values = provided as string[];
+  if (values.some((value) => (
+    value !== value.trim() || !ROUTEROS_PORTAL_IDENTIFIER_PATTERN.test(value)
+  ))) return { value: null, valid: false };
+  if (new Set(values).size !== 1) return { value: null, valid: false };
+  return { value: values[0], valid: true };
+}
+
+type VlanPortalNasMappingRow = PortServiceResourceInput & {
+  admin_id: number;
+  nas_identifier: string | null;
+  status: string;
+  link_status: string | null;
+  hotspot_enabled: boolean;
+};
+
+async function findVlanPortalNasMappings(
+  nasIdentifier: string,
+  hotspotServerName: string,
+): Promise<VlanPortalNasMappingRow[]> {
+  const rows = await sbSelectStrict<VlanPortalNasMappingRow>(
+    "isp_reseller_ports",
+    `nas_identifier=eq.${encodeURIComponent(nasIdentifier)}&handoff_mode=eq.vlan_services&status=eq.active&link_status=eq.active&hotspot_enabled=is.true&select=id,admin_id,reseller_id,assigned_reseller_id,router_id,interface_name,bridge_name,vlan_tag,handoff_mode,nas_identifier,status,link_status,hotspot_enabled&limit=1000`,
+  );
+  return rows.filter((row) => (
+    Number.isSafeInteger(row.assigned_reseller_id)
+    && Number(row.assigned_reseller_id) > 0
+    && !!row.vlan_tag
+    && portServiceResourceNames(row).hotspotServer === hotspotServerName
+  ));
+}
+
 /**
  * Verify the signed VLAN portal context against the current reseller-port
  * assignment. When present, the signed scope becomes authoritative for the
@@ -472,8 +522,52 @@ export async function resolveVlanHotspotPortalRequest(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
+  const nasIdentifier = portalIdentifierFromRequest(
+    req,
+    "x-hotspot-nas-identifier",
+    ["nasid", "nas-id", "nas_identifier"],
+  );
+  const hotspotServer = portalIdentifierFromRequest(
+    req,
+    "x-hotspot-server-name",
+    ["server", "server-name", "hotspot_server_name", "hotspotServerName"],
+  );
+  if (!nasIdentifier.valid || !hotspotServer.valid) {
+    logger.warn({
+      event: "hotspot.nas_mapping",
+      reason: "invalid_identifier",
+    }, "Rejected malformed Hotspot NAS or server identifier");
+    res.status(400).json({ ok: false, error: "The Hotspot router or service identity is invalid." });
+    return;
+  }
+
   const token = String(req.get("x-hotspot-portal-context") ?? "").trim();
   if (!token) {
+    if (nasIdentifier.value || hotspotServer.value) {
+      let mappedResellerId: number | null = null;
+      let reason = "signed_scope_missing";
+      if (nasIdentifier.value && hotspotServer.value) {
+        try {
+          const mappings = await findVlanPortalNasMappings(nasIdentifier.value, hotspotServer.value);
+          if (mappings.length === 1) mappedResellerId = Number(mappings[0].assigned_reseller_id);
+          else if (mappings.length > 1) reason = "ambiguous_mapping";
+          else reason = "mapping_not_found";
+        } catch {
+          reason = "mapping_lookup_failed";
+        }
+      } else {
+        reason = "composite_identity_missing";
+      }
+      logger.warn({
+        event: "hotspot.nas_mapping",
+        incomingNasId: nasIdentifier.value,
+        hotspotServerName: hotspotServer.value,
+        mappedResellerId,
+        reason,
+      }, "Rejected Hotspot identity without a signed reseller portal scope");
+      res.status(403).json({ ok: false, error: "This reseller Hotspot portal requires a verified service scope." });
+      return;
+    }
     next();
     return;
   }
@@ -483,12 +577,22 @@ export async function resolveVlanHotspotPortalRequest(
     res.status(403).json({ ok: false, error: "This Hotspot portal scope is invalid." });
     return;
   }
+  if (!nasIdentifier.value || !hotspotServer.value) {
+    logger.warn({
+      event: "hotspot.nas_mapping",
+      mappedResellerId: payload.resellerId,
+      reason: "composite_identity_missing",
+    }, "Rejected reseller Hotspot scope without its RouterOS service identity");
+    res.status(403).json({ ok: false, error: "The MikroTik router and Hotspot service identity are required." });
+    return;
+  }
 
   try {
-    const [ports, resellers, parentAdmins] = await Promise.all([
+    const [mappings, ports, resellers, parentAdmins] = await Promise.all([
+      findVlanPortalNasMappings(nasIdentifier.value, hotspotServer.value),
       sbSelectStrict<{ id: number }>(
         "isp_reseller_ports",
-        `id=eq.${payload.portId}&admin_id=eq.${payload.adminId}&router_id=eq.${payload.routerId}&assigned_reseller_id=eq.${payload.resellerId}&handoff_mode=eq.vlan_services&status=eq.active&link_status=eq.active&hotspot_enabled=is.true&select=id&limit=1`,
+        `id=eq.${payload.portId}&admin_id=eq.${payload.adminId}&router_id=eq.${payload.routerId}&assigned_reseller_id=eq.${payload.resellerId}&nas_identifier=eq.${encodeURIComponent(nasIdentifier.value)}&handoff_mode=eq.vlan_services&status=eq.active&link_status=eq.active&hotspot_enabled=is.true&select=id&limit=1`,
       ),
       sbSelectStrict<{ id: number }>(
         "isp_admins",
@@ -499,7 +603,25 @@ export async function resolveVlanHotspotPortalRequest(
         `id=eq.${payload.adminId}&parent_id=is.null&is_active=is.true&select=id&limit=1`,
       ),
     ]);
-    if (!ports[0] || !resellers[0] || !parentAdmins[0]) {
+    const mappedPort = mappings.length === 1 ? mappings[0] : null;
+    if (
+      !mappedPort
+      || mappedPort.id !== payload.portId
+      || mappedPort.admin_id !== payload.adminId
+      || mappedPort.router_id !== payload.routerId
+      || mappedPort.assigned_reseller_id !== payload.resellerId
+      || !ports[0]
+      || !resellers[0]
+      || !parentAdmins[0]
+    ) {
+      logger.warn({
+        event: "hotspot.nas_mapping",
+        incomingNasId: nasIdentifier.value,
+        hotspotServerName: hotspotServer.value,
+        mappedResellerId: mappedPort?.assigned_reseller_id ?? null,
+        requestedResellerId: payload.resellerId,
+        reason: mappings.length > 1 ? "ambiguous_mapping" : "scope_mapping_mismatch",
+      }, "Rejected Hotspot NAS identity that does not match the signed reseller service");
       res.status(403).json({ ok: false, error: "This reseller Hotspot portal assignment is no longer active." });
       return;
     }
@@ -522,8 +644,25 @@ export async function resolveVlanHotspotPortalRequest(
     }
 
     req.hotspotPortalContext = payload;
+    req.hotspotNasIdentifier = nasIdentifier.value;
+    req.hotspotServerName = hotspotServer.value;
+    logger.info({
+      event: "hotspot.nas_mapping",
+      incomingNasId: nasIdentifier.value,
+      hotspotServerName: hotspotServer.value,
+      mappedResellerId: payload.resellerId,
+      routerId: payload.routerId,
+      portId: payload.portId,
+    }, "Verified Hotspot NAS identity against the assigned reseller VLAN");
     next();
   } catch {
+    logger.warn({
+      event: "hotspot.nas_mapping",
+      incomingNasId: nasIdentifier.value,
+      hotspotServerName: hotspotServer.value,
+      mappedResellerId: payload.resellerId,
+      reason: "mapping_verification_unavailable",
+    }, "Could not verify the Hotspot NAS identity");
     res.status(503).json({ ok: false, error: "The Hotspot portal assignment could not be verified." });
   }
 }

@@ -37,6 +37,7 @@ import {
   withVlanIngressModeLock,
   type VlanIngressMode,
 } from "../lib/port-service-resources.js";
+import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
 import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
 import { RESERVED_SUBDOMAINS, TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 import { resellerTenantHostname, resellerTenantOrigin } from "../lib/reseller-portal-hostname.js";
@@ -356,14 +357,16 @@ async function deployDefaultResellerPortalFile(
     }>;
   },
 ): Promise<void> {
-  // RouterOS can enter a hotspot through either login.html or rlogin.html.
-  // The reseller fallback must show the same payment-first portal; serving the
-  // generic credential-only rlogin page makes a new customer stop at a
-  // username/password form before they can choose a plan.
-  const sourceNameForContent = sourceName === "rlogin.html" ? "login.html" : sourceName;
+  // RouterOS uses rlogin.html as the redirect handoff and login.html as the
+  // payment-first portal. Keep both files distinct so the redirect can carry
+  // the router identity and per-VLAN HotSpot server name.
+  const sourceNameForContent = sourceName;
   const source = getDeployableSource("hotspot", sourceNameForContent);
   if (!source) throw new Error(`The default reseller portal asset "${sourceName}" is unavailable.`);
   let content = source.content;
+  if (scope && sourceNameForContent === "rlogin.html") {
+    content = Buffer.from(addVlanIdentityToRlogin(content.toString("utf8")), "utf8");
+  }
   if (scope && sourceNameForContent === "login.html") {
     const config = JSON.stringify({
       apiBase: apiOrigin,
@@ -829,13 +832,13 @@ async function provisionVlanResellerServices(
       apiOrigin,
       sourceName,
       destinationPath,
-      sourceName === "login.html"
-        ? {
+      {
           adminId: port.admin_id,
           resellerId: Number(port.assigned_reseller_id),
           routerId: port.router_id,
           portId: port.id,
-          plans: (await sbSelectStrict<{
+          plans: sourceName === "login.html"
+            ? (await sbSelectStrict<{
             id: number;
             name: string;
             price: number | string;
@@ -850,9 +853,9 @@ async function provisionVlanResellerServices(
           )).map(plan => ({
             ...plan,
             price: Number(plan.price),
-          })),
-        }
-        : undefined,
+          }))
+            : [],
+      },
     );
   }
   await ensureNamed("/ip/dhcp-server/print", resources.hotspotDhcp, [

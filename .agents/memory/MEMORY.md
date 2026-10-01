@@ -6,7 +6,6 @@
 - [GitHub connector blob encoding](github-connector-blob-encoding.md) — Use readFile UTF-8 for large blobs, upload sequentially, and verify each returned SHA.
 - [GitHub connector workflow writes](github-connector-workflow-writes.md) — Workflow Contents APIs can be filtered; inspect through Git tree/blob and verify refs after branch writes.
 - [GitHub workflow SSH heredocs](github-workflow-heredoc.md) — Heredoc terminators in Actions SSH scripts must align exactly with the YAML block indentation.
-- [GitHub workflow validation](github-workflow-validation.md) — A no-job Actions failure can be a duplicate YAML key; validate workflow mappings before releasing.
 - [Git tree shell transport](github-tree-shell-transport.md) — Shell output can lose tabs, NUL records, or truncate trees; compare compact paths and verify changed blobs individually.
 - [RouterOS collector transport](routeros-collector-transport.md) — RouterOS HTTP fetch cannot use file upload mode; send bounded POST bodies and reject truncated file reads.
 - [VPN control plane](vpn-control-plane.md) — Encrypt client secrets, redact command payloads, and persist verified RouterOS resource references before follow-up mutations.
@@ -26,6 +25,7 @@
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
 - [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
 - [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.
+- [RouterOS HotSpot identity variables](routeros-hotspot-identity-macros.md) — Pair supported router-wide identity and per-service server-name macros; do not rely on nas-id.
 - [RouterOS version dispatch](routeros-version-dispatch.md) — Read the installed major version locally; never let RouterOS 7 receive or parse the RouterOS 6 child path.
 - [Router VPN fallback contract](router-management-vpn-fallback.md) — Keep fallback protocol material server-side, isolate child scripts, and treat intermediate protocol failures as recoverable.
 - [Captive portal API origins](captive-portal-api-origins.md) — Portal assets must carry a public tenant API origin; never expose an internal localhost address to router-served clients.

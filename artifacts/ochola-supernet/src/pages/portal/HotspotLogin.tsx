@@ -138,15 +138,35 @@ function readHotspotRuntimeConfig(): HotspotRuntimeConfig {
 
 const HOTSPOT_RUNTIME_CONFIG = readHotspotRuntimeConfig();
 
+function portalRouterIdentifier(names: string[]): { value: string; supplied: boolean } {
+  if (typeof window === "undefined") return { value: "", supplied: false };
+  const query = new URLSearchParams(window.location.search);
+  const values = names.flatMap(name => query.getAll(name));
+  if (!values.length) return { value: "", supplied: false };
+  const distinct = [...new Set(values)];
+  const value = distinct.length === 1 && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(distinct[0])
+    ? distinct[0]
+    : "__invalid__";
+  return { value, supplied: true };
+}
+
+const HOTSPOT_NAS_IDENTIFIER = portalRouterIdentifier(["nasid", "nas-id", "nas_identifier"]);
+const HOTSPOT_SERVER_NAME = portalRouterIdentifier(["server", "server-name", "hotspot_server_name", "hotspotServerName"]);
+
 function hotspotApiUrl(path: string): string {
   return `${HOTSPOT_RUNTIME_CONFIG.apiBase}${path}`;
 }
 
 function hotspotPortalFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const token = HOTSPOT_RUNTIME_CONFIG.portalContextToken;
-  if (!token) return fetch(input, init);
-  const headers = new Headers(init.headers);
-  headers.set("X-Hotspot-Portal-Context", token);
+  if (!token && !HOTSPOT_NAS_IDENTIFIER.supplied && !HOTSPOT_SERVER_NAME.supplied) return fetch(input, init);
+  const headers = new Headers(input instanceof Request ? input.headers : undefined);
+  new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+  if (token) headers.set("X-Hotspot-Portal-Context", token);
+  if (token || HOTSPOT_NAS_IDENTIFIER.supplied || HOTSPOT_SERVER_NAME.supplied) {
+    headers.set("X-Hotspot-NAS-Identifier", HOTSPOT_NAS_IDENTIFIER.value);
+    headers.set("X-Hotspot-Server-Name", HOTSPOT_SERVER_NAME.value);
+  }
   return fetch(input, { ...init, headers });
 }
 

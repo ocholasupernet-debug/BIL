@@ -16,6 +16,7 @@ create table if not exists public.isp_reseller_ports (
   reseller_id           bigint not null references public.isp_admins(id) on delete cascade,
   router_id             bigint not null references public.isp_routers(id) on delete cascade,
   interface_name        text not null,
+  nas_identifier        text collate "C",
   bridge_name           text,
   hotspot_enabled       boolean not null default false,
   hotspot_template_path text,

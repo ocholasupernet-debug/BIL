@@ -25,6 +25,7 @@ import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { authenticatedAccount, extractToken, validateToken } from "../lib/api-auth.js";
 import { adminHasPermission } from "../lib/platform-permissions.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
+import { logger } from "../lib/logger.js";
 import { hasGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import {
   CHECKOUT_READY_GATEWAY_IDS,
@@ -441,29 +442,51 @@ router.get("/settings/mpesa", async (req: Request, res: Response): Promise<void>
         portalScope?.routerId ?? positiveQueryId(req.query.routerId),
         portalScope?.portId ?? positiveQueryId(req.query.portId),
       );
-  const paymentGateway = portalRoute?.paymentGateway ?? adminPaymentGateway;
-  const destinationConfigured = portalRoute?.destinationConfigured ?? (
-    paymentGateway === "mpesa_till_push"
-      ? !!mpesaTillPush.tillNumber
-      : paymentGateway === "mpesa_paybill"
-        ? !!(mpesaPaybill.paybillNumber && mpesaPaybill.accountNumber)
-        : paymentGateway === "bank_stk_push"
-          ? isBankStkPushConfigured(bankStkPush)
-          : false
-  );
+  const paymentGateway = portalScope
+    ? portalRoute?.paymentGateway ?? ""
+    : portalRoute?.paymentGateway ?? adminPaymentGateway;
+  const destinationConfigured = portalScope
+    ? portalRoute?.destinationConfigured === true
+    : portalRoute?.destinationConfigured ?? (
+      paymentGateway === "mpesa_till_push"
+        ? !!mpesaTillPush.tillNumber
+        : paymentGateway === "mpesa_paybill"
+          ? !!(mpesaPaybill.paybillNumber && mpesaPaybill.accountNumber)
+          : paymentGateway === "bank_stk_push"
+            ? isBankStkPushConfigured(bankStkPush)
+            : false
+    );
+  if (portalScope) {
+    logger.info({
+      event: "hotspot.payment_gateway",
+      incomingNasId: req.hotspotNasIdentifier ?? null,
+      hotspotServerName: req.hotspotServerName ?? null,
+      mappedResellerId: portalScope.resellerId,
+      loadedGateway: paymentGateway || "unavailable",
+      destinationConfigured,
+    }, "Loaded payment gateway for the mapped reseller Hotspot service");
+  }
   res.json({
     ok: true,
-    configured: isMpesaConfigured(s),
+    configured: portalScope
+      ? isMpesaConfigured(s) && destinationConfigured
+      : isMpesaConfigured(s),
     settings: {
-      shortcode:      s.shortcode,
+      shortcode:      portalScope ? "" : s.shortcode,
       env:            s.env,
       hasTillNumber:  paymentGateway === "mpesa_till_push" && destinationConfigured,
       destinationConfigured,
       paymentGateway,
-      bankStkPushConfigured: isBankStkPushConfigured(bankStkPush),
-      adminTillPushConfigured: !!mpesaTillPush.tillNumber,
-      adminPaybillConfigured: !!(mpesaPaybill.paybillNumber && mpesaPaybill.accountNumber),
-      paymentCollectionMode: collectionMode,
+      bankStkPushConfigured: portalScope
+        ? paymentGateway === "bank_stk_push" && destinationConfigured
+        : isBankStkPushConfigured(bankStkPush),
+      adminTillPushConfigured: portalScope
+        ? paymentGateway === "mpesa_till_push" && destinationConfigured
+        : !!mpesaTillPush.tillNumber,
+      adminPaybillConfigured: portalScope
+        ? paymentGateway === "mpesa_paybill" && destinationConfigured
+        : !!(mpesaPaybill.paybillNumber && mpesaPaybill.accountNumber),
+      paymentCollectionMode: portalScope ? "separate" : collectionMode,
     },
   });
 });
