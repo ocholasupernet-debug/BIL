@@ -44,6 +44,9 @@ module.exports = {
       cwd: "./",
       instances: 1,
       exec_mode: "fork",
+      // VLAN provisioning makes sequential RouterOS API calls. Let an active
+      // request drain before PM2 replaces this single-fork API process.
+      kill_timeout: 330_000,
 
       // ── Mode 1: With nginx ────────────────────────────────────────────
       // Nginx proxies tenant requests to this process, so the API must also

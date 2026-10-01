@@ -8,7 +8,7 @@ import {
 } from "../lib/api-auth.js";
 import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { encryptVpnSecret } from "../lib/vpn-crypto.js";
-import { deployRouterFile, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
+import { deployRouterFile, readRouterSystemIdentity, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
 import { sbDeleteStrict, sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
@@ -23,6 +23,13 @@ import { getRouterCreds } from "./mikrotik-route.js";
 import { validatePortAccess } from "./reseller-route.js";
 
 const router: IRouter = Router();
+const NAS_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
+
+export function isValidNasIdentifier(value: unknown): value is string {
+  return typeof value === "string"
+    && value === value.trim()
+    && NAS_IDENTIFIER_PATTERN.test(value);
+}
 
 type PortServiceRow = {
   id: number;
@@ -1064,11 +1071,7 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
       const rawNasIdentifier = req.body?.nasIdentifier;
       if (rawNasIdentifier === null || rawNasIdentifier === "") {
         nasIdentifier = null;
-      } else if (
-        typeof rawNasIdentifier === "string"
-        && rawNasIdentifier === rawNasIdentifier.trim()
-        && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(rawNasIdentifier)
-      ) {
+      } else if (isValidNasIdentifier(rawNasIdentifier)) {
         nasIdentifier = rawNasIdentifier;
       } else {
         res.status(400).json({ ok: false, error: "NAS identity must be 1–128 letters, digits, dots, underscores, colons, or hyphens." });
@@ -1260,9 +1263,9 @@ async function buildScopedResellerPortalHtml(
     || !Number.isSafeInteger(resellerId)
     || resellerId < 1
     || !port.vlan_tag
-    || !port.nas_identifier
+    || !isValidNasIdentifier(port.nas_identifier)
   ) {
-    throw new Error("Map the shared MikroTik identity to this assigned reseller VLAN before deploying its portal.");
+    throw new Error("A valid MikroTik System Identity could not be mapped to this assigned reseller VLAN.");
   }
 
   const [resellers, parentAdmins] = await Promise.all([
@@ -1340,6 +1343,75 @@ async function buildScopedResellerPortalHtml(
   return injectHotspotRuntimeConfig(portalHtml, config);
 }
 
+async function mapLiveRouterIdentityToVlan(
+  port: PortServiceRow,
+  creds: RouterCredentials,
+): Promise<PortServiceRow> {
+  const resellerId = Number(port.assigned_reseller_id);
+  const vlanTag = String(port.vlan_tag ?? "");
+  if (
+    port.handoff_mode !== "vlan_services"
+    || !Number.isSafeInteger(resellerId)
+    || resellerId < 1
+    || !vlanTag
+  ) {
+    throw new Error("A reseller VLAN assignment is required before mapping the router identity.");
+  }
+
+  let liveIdentity: string;
+  try {
+    liveIdentity = await readRouterSystemIdentity(creds);
+  } catch (error) {
+    if (isValidNasIdentifier(port.nas_identifier)) {
+      logger.warn({
+        event: "hotspot.nas_mapping",
+        routerId: port.router_id,
+        portId: port.id,
+      }, "Using the saved NAS identity because the live MikroTik identity could not be read");
+      return port;
+    }
+    const detail = error instanceof Error ? ` ${error.message}` : "";
+    throw new Error(
+      `Could not read the MikroTik System Identity automatically.${detail} Enter the exact identity manually or restore RouterOS API access, then retry.`,
+    );
+  }
+
+  if (!isValidNasIdentifier(liveIdentity)) {
+    throw new Error(
+      "The MikroTik System Identity contains unsupported characters. Use 1–128 letters, digits, dots, underscores, colons, or hyphens.",
+    );
+  }
+  if (port.nas_identifier === liveIdentity) return port;
+
+  const duplicate = await sbSelectStrict<{ id: number }>(
+    "isp_reseller_ports",
+    `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&assigned_reseller_id=eq.${resellerId}&vlan_tag=eq.${encodeURIComponent(vlanTag)}&handoff_mode=eq.vlan_services&nas_identifier=eq.${encodeURIComponent(liveIdentity)}&id=neq.${port.id}&select=id&limit=1`,
+  );
+  if (duplicate[0]) {
+    throw new Error("This MikroTik identity is already mapped to the same reseller VLAN service.");
+  }
+
+  const previousMappingFilter = port.nas_identifier == null
+    ? "nas_identifier=is.null"
+    : `nas_identifier=eq.${encodeURIComponent(port.nas_identifier)}`;
+  const updated = await sbUpdateStrict<PortServiceRow>(
+    "isp_reseller_ports",
+    `id=eq.${port.id}&admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&assigned_reseller_id=eq.${resellerId}&vlan_tag=eq.${encodeURIComponent(vlanTag)}&handoff_mode=eq.vlan_services&${previousMappingFilter}`,
+    {
+      nas_identifier: liveIdentity,
+      updated_at: new Date().toISOString(),
+    },
+  );
+  if (updated[0]) return updated[0];
+
+  const latest = await sbSelectStrict<PortServiceRow>(
+    "isp_reseller_ports",
+    `id=eq.${port.id}&admin_id=eq.${port.admin_id}&select=*&limit=1`,
+  );
+  if (latest[0]?.nas_identifier === liveIdentity) return latest[0];
+  throw new Error("This VLAN assignment changed while its router identity was being mapped. Refresh and retry portal deployment.");
+}
+
 async function executePortServiceDeployment(
   port: PortServiceRow,
   portalHtml: string,
@@ -1348,6 +1420,12 @@ async function executePortServiceDeployment(
   const found = await getRouterCreds(port.router_id, port.admin_id);
   if (!found) throw new Error("Router credentials are unavailable for this port.");
 
+  const scopedResellerVlan = port.hotspot_enabled
+    && port.handoff_mode === "vlan_services"
+    && !!port.assigned_reseller_id;
+  const portalPort = scopedResellerVlan
+    ? await mapLiveRouterIdentityToVlan(port, found.creds)
+    : port;
   const identity = await resourceIdentityForPort(port);
   const resources = portServiceResourceNames(port, identity);
   const hotspotSource = port.hotspot_enabled
@@ -1406,9 +1484,6 @@ async function executePortServiceDeployment(
   }
 
   const sharedPortalDirectory = resources.hotspotDirectory;
-  const scopedResellerVlan = port.hotspot_enabled
-    && port.handoff_mode === "vlan_services"
-    && !!port.assigned_reseller_id;
   const hotspotDestination = scopedResellerVlan
     ? `${sharedPortalDirectory}/login.html`
     : portalHtml
@@ -1430,7 +1505,7 @@ async function executePortServiceDeployment(
       throw new Error("The default reseller Hotspot portal asset is unavailable.");
     }
     const signedPortalHtml = await buildScopedResellerPortalHtml(
-      port,
+      portalPort,
       portalHtml || source!.content.toString("utf8"),
       sourceOrigin,
     );

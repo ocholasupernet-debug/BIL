@@ -26,7 +26,7 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
+const server = app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
@@ -123,3 +123,38 @@ app.listen(port, (err) => {
     logger.info({ intervalSeconds: 60 }, "[user-snapshots] scheduled refresh worker started");
   }
 });
+
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 320_000;
+let shutdownStarted = false;
+
+function shutdown(signal: NodeJS.Signals): void {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  logger.info(
+    { signal, timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS },
+    "API shutdown started; waiting for in-flight requests to finish",
+  );
+
+  const forceExitTimer = setTimeout(() => {
+    logger.error(
+      { signal, timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS },
+      "API shutdown drain timed out; forcing exit",
+    );
+    process.exit(1);
+  }, SHUTDOWN_DRAIN_TIMEOUT_MS);
+  forceExitTimer.unref();
+
+  server.close((error) => {
+    clearTimeout(forceExitTimer);
+    if (error) {
+      logger.error({ err: error, signal }, "API shutdown failed while closing the HTTP server");
+      process.exit(1);
+      return;
+    }
+    logger.info({ signal }, "API shutdown completed after in-flight requests drained");
+    process.exit(0);
+  });
+}
+
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));

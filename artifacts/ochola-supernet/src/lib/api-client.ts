@@ -16,7 +16,7 @@ export async function parseJsonResponse<T>(response: Response): Promise<T> {
     const preview = responseText.replace(/\s+/g, " ").trim().slice(0, 120);
     throw new Error(
       `API returned non-JSON data (HTTP ${response.status}).`
-      + (preview ? ` Check the API address. Response: ${preview}` : ""),
+      + (preview ? ` Response: ${preview}` : ""),
     );
   }
 }

@@ -1,4 +1,4 @@
-- [VPS deployment verification](vps-deployment-verification.md) — Use the latest successful release branch and SHA as the baseline; verify live behavior after one deploy run.
+- [VPS deployment verification](vps-deployment-verification.md) — Verify the deployed commit and live behavior; drain in-flight API work before single-fork VPS restarts.
 - [Theme token cascade](theme-token-cascade.md) — Update the final legacy token layer too; later root declarations can silently override the primary design system.
 - [VPS SSH key fallback](vps-ssh-key-fallback.md) — Production SSH may require the versioned deployment-key fallback; validate key format before diagnosing remote service failures.
 - [Wildcard certificate deployment](wildcard-certificate-deployment.md) — Install a separately supplied SAN certificate through encrypted Actions secrets; never commit its private key.
@@ -85,7 +85,7 @@
 - [Hotspot template macro contract](hotspot-template-macro-contract.md) — Keep required RouterOS tokens in exported templates, even when local fallbacks make the preview readable.
 - [Reseller Daraja bridge](reseller-daraja-bridge.md) — Use global encrypted Daraja credentials; reseller rows hold only destinations and callback settlement credits earnings atomically.
 - [Immutable billing boundary](immutable-billing-boundary.md) — Dashboard revenue comes from the append-only ledger; platform renewal payments settle invoices but never count as sales.
-- [Reseller connection approval](reseller-connection-approval.md) — Account approval is independent of handoff provisioning; deleting a handoff must not revoke the approved account link.
+- [Reseller connection approval](reseller-connection-approval.md) — Either side can clear an approved link only after non-disabled handoffs are removed; request deletion stays separate.
 - [Reseller XPON handoff boundary](reseller-xpon-handoff.md) — ISP-router physical/VLAN handoffs use Ethernet link state and never configure reseller-owned MikroTik services.
 - [Reseller live-data boundary](reseller-live-data-boundary.md) — Verify tenant ownership and assigned-port ownership before fetching live router data or calculating reseller totals.
 - [Reseller consumption reporting](reseller-consumption-reporting.md) — Cumulative customer usage is not a historical monthly series; label cohort charts honestly until snapshots exist.

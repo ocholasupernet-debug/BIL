@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
-import { AlertTriangle, Banknote, CheckCircle2, Copy, Gauge, LockKeyhole, PauseCircle, PlayCircle, Plus, ReceiptText, RefreshCw, Router as RouterIcon, ShieldCheck, Users, WalletCards } from "lucide-react";
+import { AlertTriangle, Banknote, CheckCircle2, Copy, Gauge, LockKeyhole, PauseCircle, PlayCircle, Plus, ReceiptText, RefreshCw, Router as RouterIcon, ShieldCheck, Trash2, Users, WalletCards } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID, getAdminApiToken, getAdminRole } from "@/lib/supabase";
+import { parseJsonResponse } from "@/lib/api-client";
 import { NetworkTabs } from "./network/NetworkTabs";
 
 type RouterOption = { id: number; name: string; status?: string };
@@ -66,7 +67,7 @@ function authHeaders(): HeadersInit {
 
 async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { ...init, headers: { ...authHeaders(), ...(init?.headers ?? {}) } });
-  const body = await response.json() as T & { error?: string };
+  const body = await parseJsonResponse<T & { error?: string }>(response);
   if (!response.ok) throw new Error(body.error || "Request failed.");
   return body;
 }
@@ -229,6 +230,23 @@ function AdminResellerManagement() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to update the connection request.");
+    } finally { setRequestBusy(null); }
+  };
+  const deleteConnectionRequest = async (request: ConnectionRequest) => {
+    const clearsConnection = request.status === "approved";
+    const confirmation = clearsConnection
+      ? "Clear this approved reseller connection? This keeps the reseller account and its data, but disconnects it from your ISP. Assigned or incomplete handoffs must be removed or safely disabled first."
+      : `Delete this ${request.status} connection request from your ISP inbox? This does not delete the reseller account.`;
+    if (!window.confirm(confirmation)) return;
+    setRequestBusy(request.id); setError(""); setSuccess("");
+    try {
+      const result = await apiJson<{ message?: string }>(`/api/isp/reseller-connection-requests/${request.id}`, {
+        method: "DELETE",
+      });
+      setSuccess(result.message || (clearsConnection ? "Reseller connection cleared." : "Connection request deleted."));
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to delete the reseller connection request.");
     } finally { setRequestBusy(null); }
   };
   const copyCredential = (value: string) => {
@@ -491,6 +509,8 @@ function AdminResellerManagement() {
             {connectionRequests.map((request) => {
               const reseller = requestResellers.find((candidate) => candidate.id === request.reseller_id);
               const assignment = assignments.find((candidate) => (candidate.assigned_reseller_id ?? candidate.reseller_id) === request.reseller_id);
+              const canResumeVlanPush = assignment?.handoff_mode === "vlan_services"
+                && ["failed", "pending", "provisioning"].includes(assignment.status);
               const busy = requestBusy === request.id;
               return <div key={request.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, flexWrap: "wrap", padding: "12px 13px", border: "1px solid var(--isp-border)", borderRadius: 9 }}>
                 <div>
@@ -498,14 +518,36 @@ function AdminResellerManagement() {
                   <div style={{ color: "var(--isp-text-muted)", fontSize: 12, marginTop: 4 }}>@{reseller?.username || "unknown"} · {reseller?.email || "No email"} · Requested {new Date(request.created_at).toLocaleString()}</div>
                   {request.note && <div style={{ color: "var(--isp-text)", fontSize: 12, marginTop: 7 }}>“{request.note}”</div>}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                   <span className={`isp-badge ${request.status === "approved" ? "isp-badge-green" : request.status === "rejected" ? "isp-badge-red" : "isp-badge-amber"}`}>{request.status}</span>
                   {request.status === "pending" && <>
                     <button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "approve")} style={{ border: "1px solid rgba(22,163,74,.25)", borderRadius: 8, padding: "8px 10px", background: "rgba(22,163,74,.09)", color: "#15803d", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy && requestBusy === request.id ? "Approving…" : "Approve connection"}</button>
-                    <button type="button" disabled={busy || linkSaving === assignment?.id} onClick={() => assignment?.status === "failed" ? void retryVlanPush(assignment.id) : openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{busy || linkSaving === assignment?.id ? "Working…" : assignment?.status === "failed" ? "Push VLAN again" : "Assign VLAN / approve"}</button>
+                    <button
+                      type="button"
+                      disabled={busy || linkSaving === assignment?.id}
+                      onClick={() => canResumeVlanPush && assignment ? void retryVlanPush(assignment.id) : openAssignment(request.id)}
+                      style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}
+                    >
+                      {busy || linkSaving === assignment?.id
+                        ? "Working…"
+                        : canResumeVlanPush
+                          ? assignment?.status === "failed" ? "Push VLAN again" : "Resume VLAN push"
+                          : "Assign VLAN / approve"}
+                    </button>
                     <button type="button" disabled={busy} onClick={() => void respondToConnectionRequest(request.id, "reject")} style={{ border: "1px solid rgba(220,38,38,.25)", borderRadius: 8, padding: "8px 10px", background: "rgba(239,68,68,.08)", color: "#b91c1c", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>Reject</button>
                   </>}
-                  {request.status === "approved" && <button type="button" onClick={() => openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: "pointer" }}>{assignment ? "Assign another VLAN" : "Assign VLAN / reseller"}</button>}
+                  {request.status === "approved" && <button type="button" disabled={busy} onClick={() => openAssignment(request.id)} style={{ border: 0, borderRadius: 8, padding: "8px 10px", background: "var(--isp-accent)", color: "#fff", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}>{assignment ? "Assign another VLAN" : "Assign VLAN / reseller"}</button>}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void deleteConnectionRequest(request)}
+                    title={request.status === "approved" ? "Clear this approved connection" : "Delete this connection request"}
+                    aria-label={`${request.status === "approved" ? "Clear connection for" : "Delete request from"} ${reseller?.company_name || reseller?.name || `reseller ${request.reseller_id}`}`}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid rgba(220,38,38,.28)", borderRadius: 8, padding: "8px 10px", background: "rgba(239,68,68,.08)", color: "#b91c1c", fontWeight: 800, cursor: busy ? "wait" : "pointer" }}
+                  >
+                    <Trash2 size={14} />
+                    {busy ? (request.status === "approved" ? "Clearing…" : "Deleting…") : request.status === "approved" ? "Clear connection" : "Delete request"}
+                  </button>
                 </div>
               </div>;
             })}
@@ -679,14 +721,18 @@ function AdminResellerManagement() {
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 7, alignItems: "center" }}>
                         {port.handoff_mode === "vlan_services" && (
                           <>
-                            {(port.status === "failed" || port.provisioning_error) && (
+                            {(port.status === "failed" || port.provisioning_error || port.status === "pending" || port.status === "provisioning") && (
                               <button
                                 type="button"
                                 disabled={busy}
                                 onClick={() => void retryVlanPush(port.id)}
                                 style={{ border: 0, borderRadius: 8, padding: "7px 9px", background: "var(--isp-accent)", color: "#fff", cursor: busy ? "wait" : "pointer", fontSize: 12, fontWeight: 750 }}
                               >
-                                {linkSaving === port.id ? "Pushing…" : "Push again"}
+                                {linkSaving === port.id
+                                  ? "Pushing…"
+                                  : port.status === "pending" || port.status === "provisioning"
+                                    ? "Resume push"
+                                    : "Push again"}
                               </button>
                             )}
                             <button

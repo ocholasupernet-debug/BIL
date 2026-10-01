@@ -67,6 +67,7 @@ import {
   compileResellerPaymentNoticeNatComment,
   compileResellerSuspension,
 } from "../services/scriptCompiler.js";
+import { planIspResellerConnectionRemoval } from "../lib/reseller-connection-removal.js";
 
 const router: IRouter = Router();
 
@@ -133,6 +134,8 @@ type ResellerPortRow = {
   link_provisioning_error?: string | null;
   status: string;
   provisioning_error: string | null;
+  created_at?: string;
+  updated_at?: string;
   handoff_interface?: string | null;
   vlan_ingress_mode?: VlanIngressMode | null;
   router?: { id: number; name: string; host: string; vpn_ip: string | null };
@@ -1946,6 +1949,140 @@ router.post("/isp/reseller-connection-requests/:requestId", requireAdmin(), asyn
   }
 });
 
+router.delete("/isp/reseller-connection-requests/:requestId", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Reseller accounts cannot delete ISP connection requests." });
+      return;
+    }
+    const requestId = Number(req.params.requestId);
+    if (!Number.isSafeInteger(requestId) || requestId <= 0) {
+      res.status(400).json({ ok: false, error: "Provide a valid reseller connection request." });
+      return;
+    }
+    const requestRows = await sbSelectStrict<ResellerConnectionRequestRow>(
+      "isp_reseller_connection_requests",
+      `id=eq.${requestId}&isp_admin_id=eq.${account.id}&select=id,reseller_id,isp_admin_id,status&limit=1`,
+    );
+    const request = requestRows[0];
+    if (!request) {
+      res.status(404).json({ ok: false, error: "This ISP's reseller connection request was not found." });
+      return;
+    }
+
+    let reseller: { id: number; parent_id: number | null; status: string | null } | undefined;
+    let assignments: { id: number; status: string }[] = [];
+    let otherApprovedIspIds: number[] = [];
+    if (request.status === "approved") {
+      const [resellerRows, handoffs] = await Promise.all([
+        sbSelectStrict<{ id: number; parent_id: number | null; status: string | null }>(
+          "isp_admins",
+          `id=eq.${request.reseller_id}&role=eq.reseller&select=id,parent_id,status&limit=1`,
+        ),
+        sbSelectStrict<{ id: number; status: string }>(
+          "isp_reseller_ports",
+          `admin_id=eq.${account.id}&or=(assigned_reseller_id.eq.${request.reseller_id},reseller_id.eq.${request.reseller_id})&status=neq.disabled&select=id,status&limit=1`,
+        ),
+      ]);
+      reseller = resellerRows[0];
+      assignments = handoffs;
+      if (reseller?.parent_id === account.id) {
+        const otherApproved = await sbSelectStrict<{ isp_admin_id: number }>(
+          "isp_reseller_connection_requests",
+          `reseller_id=eq.${request.reseller_id}&isp_admin_id=neq.${account.id}&status=eq.approved&select=isp_admin_id&order=updated_at.desc&limit=1000`,
+        );
+        otherApprovedIspIds = otherApproved.map((row) => row.isp_admin_id);
+      }
+    }
+
+    const plan = planIspResellerConnectionRemoval({
+      status: request.status,
+      ispAdminId: account.id,
+      currentParentId: reseller?.parent_id ?? null,
+      otherApprovedIspIds,
+      hasNonDisabledHandoffs: assignments.length > 0,
+    });
+    if (!plan.allowed) {
+      res.status(409).json({ ok: false, error: plan.error });
+      return;
+    }
+
+    let parentUpdated = false;
+    if (plan.updateParent && reseller) {
+      const relinked = await sbUpdateStrict(
+        "isp_admins",
+        `id=eq.${reseller.id}&role=eq.reseller&parent_id=eq.${account.id}`,
+        {
+          parent_id: plan.nextParentId,
+          status: plan.nextParentId ? "active" : "pending",
+          updated_at: new Date().toISOString(),
+        },
+      );
+      if (!relinked[0]) {
+        res.status(409).json({ ok: false, error: "The reseller account changed while this connection was being cleared. Refresh and try again." });
+        return;
+      }
+      parentUpdated = true;
+    }
+
+    const restoreParent = async (): Promise<boolean> => {
+      if (!parentUpdated || !reseller) return true;
+      const parentFilter = plan.nextParentId === null
+        ? "parent_id=is.null"
+        : `parent_id=eq.${plan.nextParentId}`;
+      const restored = await sbUpdateStrict(
+        "isp_admins",
+        `id=eq.${reseller.id}&role=eq.reseller&${parentFilter}`,
+        {
+          parent_id: reseller.parent_id,
+          status: reseller.status ?? (reseller.parent_id ? "active" : "pending"),
+          updated_at: new Date().toISOString(),
+        },
+      ).catch(() => []);
+      return Boolean(restored[0]);
+    };
+
+    try {
+      const deleted = request.status === "approved"
+        ? await sbDeleteStrict(
+          "isp_reseller_connection_requests",
+          `reseller_id=eq.${request.reseller_id}&isp_admin_id=eq.${account.id}&status=eq.approved`,
+        )
+        : await sbDeleteStrict(
+          "isp_reseller_connection_requests",
+          `id=eq.${request.id}&isp_admin_id=eq.${account.id}&status=eq.${request.status}`,
+        );
+      if (!deleted.length) {
+        const restored = await restoreParent();
+        res.status(409).json({
+          ok: false,
+          error: restored
+            ? "This request changed before it could be deleted. Refresh and try again."
+            : "The request changed and the reseller connection could not be restored automatically. Review the reseller link before retrying.",
+        });
+        return;
+      }
+    } catch (error) {
+      const restored = await restoreParent();
+      if (!restored) {
+        throw new Error("The request could not be deleted and the reseller connection could not be restored automatically. Review the reseller link before retrying.");
+      }
+      throw error;
+    }
+
+    res.json({
+      ok: true,
+      connectionCleared: plan.clearConnection,
+      message: plan.clearConnection
+        ? "The approved ISP connection was cleared. The reseller account and its data were kept."
+        : "The reseller connection request was deleted. The reseller account was kept.",
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : "Unable to delete the reseller connection request." });
+  }
+});
+
 router.delete("/reseller/connections/:ispAdminId", requireAdmin(), async (req, res): Promise<void> => {
   try {
     const account = await currentAccount(req);
@@ -2204,7 +2341,7 @@ router.post("/isp/reseller-connection-requests/:requestId/handoff", requireAdmin
         : null,
       bandwidth_cap_mbps: cap,
       reseller_bandwidth_cap: cap,
-      status: handoffMode === "vlan_services" ? "pending" : "active",
+      status: handoffMode === "vlan_services" ? "provisioning" : "active",
       provisioning_error: null,
       link_status: "pending" as const,
       handoff_mode: handoffMode as "isp_router" | "vlan_services",
@@ -2580,6 +2717,13 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
       res.status(409).json({ ok: false, error: "Only VLAN service assignments can be pushed to the MikroTik." });
       return;
     }
+    if (port.status === "pending" || port.status === "provisioning") {
+      const lastUpdatedAt = Date.parse(port.updated_at ?? port.created_at ?? "");
+      if (!Number.isFinite(lastUpdatedAt) || Date.now() - lastUpdatedAt < 6 * 60 * 1000) {
+        res.status(409).json({ ok: false, error: "This VLAN service is still marked as provisioning. Wait a few minutes, then resume it if it remains pending." });
+        return;
+      }
+    }
     const ingressOverride = req.body?.ingressInterface === undefined
       ? undefined
       : normalizedHandoffInterface(req.body.ingressInterface);
@@ -2587,7 +2731,26 @@ router.post("/admin/reseller-handoffs/:portId/push", requireAdmin(), async (req,
       res.status(400).json({ ok: false, error: "The XPON VLAN ingress interface is not a valid RouterOS interface." });
       return;
     }
+    const expectedUpdatedAt = port.updated_at;
+    if (!expectedUpdatedAt) {
+      res.status(409).json({ ok: false, error: "This VLAN assignment has no update timestamp. Refresh the reseller list before retrying." });
+      return;
+    }
     const target = await tenantRouter(port.admin_id, port.router_id);
+    const claimed = await sbUpdateStrict<ResellerPortRow>(
+      "isp_reseller_ports",
+      `id=eq.${port.id}&admin_id=eq.${port.admin_id}&status=eq.${encodeURIComponent(port.status)}&updated_at=eq.${encodeURIComponent(expectedUpdatedAt)}`,
+      {
+        status: "provisioning",
+        link_status: "active",
+        provisioning_error: null,
+        updated_at: new Date().toISOString(),
+      },
+    );
+    if (!claimed[0]) {
+      res.status(409).json({ ok: false, error: "Another VLAN push started or this assignment changed. Refresh the reseller list before retrying." });
+      return;
+    }
     try {
       const handoffInterface = await provisionVlanResellerServices(
         target,

@@ -1494,12 +1494,12 @@ export default function HotspotSettings() {
                                 <div style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
                                   MikroTik NAS identity
                                   <div style={{ color: "var(--isp-text)", fontSize: ".76rem", fontWeight: 700 }}>
-                                    {draft.nasIdentifier || "Managed by the ISP administrator"}
+                                    {draft.nasIdentifier || "Detected during ISP portal deployment"}
                                   </div>
                                 </div>
                               ) : (
                                 <label style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
-                                  MikroTik NAS identity (exact case)
+                                  MikroTik NAS identity (auto-detected; manual fallback)
                                   <input
                                     className="hs-input"
                                     value={draft.nasIdentifier}
@@ -1507,10 +1507,10 @@ export default function HotspotSettings() {
                                     pattern="[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}"
                                     title="Use 1–128 ASCII letters, digits, dots, underscores, colons, or hyphens."
                                     onChange={event => updateAssignedPort(port.id, "nasIdentifier", event.target.value)}
-                                    placeholder="Router System Identity"
+                                    placeholder="Detected from router on deployment"
                                   />
                                   <span style={{ color: "var(--isp-text-sub)", fontWeight: 400, lineHeight: 1.4 }}>
-                                    Use the router’s System Identity with no spaces. Repeat it on this router’s reseller VLANs; each VLAN is matched by its unique HotSpot server name.
+                                    Read from the router during portal deployment. A saved value is used if the identity cannot be read; the unique HotSpot server name still identifies each VLAN.
                                   </span>
                                 </label>
                               )}
@@ -1548,7 +1548,7 @@ export default function HotspotSettings() {
                         </div>
                         {port.handoff_mode === "vlan_services" && port.assigned_reseller_id && !draft.nasIdentifier && (
                           <div className="hs-status hs-status-info" style={{ marginTop: 11 }}>
-                            <Info size={14} /> The ISP administrator must map this router identity before this reseller portal can load scoped plans and payment settings.
+                            <Info size={14} /> The next portal deployment will detect and map the router identity automatically. If it cannot be read, the ISP administrator can enter it here.
                           </div>
                         )}
                         {port.provisioning_error && (

@@ -837,6 +837,21 @@ export async function runRouterCommand(
   return withConn(creds, (conn) => runRouterCommandOnConnection(conn, creds, command));
 }
 
+export async function readRouterSystemIdentity(creds: RouterCredentials): Promise<string> {
+  return withReadConn(creds, async (conn) => {
+    const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 15_000);
+    const rows = await withTimeout(
+      conn.write(["/system/identity/print", "=.proplist=name"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const identity = String(Array.isArray(rows) ? rows[0]?.name ?? "" : "");
+    if (!identity || identity !== identity.trim()) {
+      throw new Error("MikroTik System Identity read did not return a valid value.");
+    }
+    return identity;
+  });
+}
+
 /**
  * Multiport Hotspot servers own their address pool. Reconcile the pool before
  * creating a paid user so a stale or partially deployed router does not leave

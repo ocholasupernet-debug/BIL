@@ -11,6 +11,7 @@ import {
   resolveHotspotClientIpByMac,
   fetchBridgePortLayout,
   pingRouter,
+  readRouterSystemIdentity,
   testConnection,
   fetchWireless,
   createWirelessVirtualAp,
@@ -89,6 +90,27 @@ function routerCredentials(port: number, alternateUsernames?: string[]) {
     requestTimeoutMs: 1_000,
   };
 }
+
+test("System Identity lookup falls back to the management account", async () => {
+  await withMockRouterApi((username, command) => {
+    if (username === savedAccount) {
+      throw new Error("not enough permissions (RouterOS 7 policy)");
+    }
+    if (command[0] === "/system/identity/print") return [{ name: "edge-router-7" }];
+    return [];
+  }, async ({ port, connectedUsers, commands }) => {
+    const identity = await readRouterSystemIdentity(
+      routerCredentials(port, [managementAccount]),
+    );
+
+    assert.equal(identity, "edge-router-7");
+    assert.deepEqual(connectedUsers, [savedAccount, managementAccount]);
+    assert.deepEqual(
+      commands.map(({ command }) => command[0]),
+      ["/system/identity/print", "/system/identity/print"],
+    );
+  });
+});
 
 test("a matching paid hotspot session is reused without disconnecting it", async () => {
   await withMockRouterApi((_username, command) => {

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildDualServiceCommands,
+  isValidNasIdentifier,
   normalizeApprovedAssetPath,
   routerIdentityProperty,
   routerSetArguments,
@@ -30,6 +31,14 @@ const port = {
   status: "active",
   provisioning_error: null,
 };
+
+test("NAS identity accepts the exact supported RouterOS identity format", () => {
+  assert.equal(isValidNasIdentifier("edge-router.7:api_1"), true);
+  assert.equal(isValidNasIdentifier(""), false);
+  assert.equal(isValidNasIdentifier(" edge-router"), false);
+  assert.equal(isValidNasIdentifier("edge router"), false);
+  assert.equal(isValidNasIdentifier("x".repeat(129)), false);
+});
 
 test("a port service gets isolated Hotspot and PPPoE resources", () => {
   const commands = buildDualServiceCommands(
