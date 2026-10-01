@@ -39,6 +39,7 @@ import {
 } from "../lib/port-service-resources.js";
 import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
 import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
+import { buildVlanHotspotProfileConfig } from "../lib/vlan-hotspot-profile.js";
 import { RESERVED_SUBDOMAINS, TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 import { resellerTenantHostname, resellerTenantOrigin } from "../lib/reseller-portal-hostname.js";
 import {
@@ -874,21 +875,18 @@ async function provisionVlanResellerServices(
     disabled: "no",
     comment: `${commentPrefix}_hotspot_dhcp`,
   });
-  await ensureNamed("/ip/hotspot/profile/print", resources.hotspotProfile, [
-    "/ip/hotspot/profile/add",
-    `=name=${resources.hotspotProfile}`,
-    `=hotspot-address=${gateway}`,
-    `=html-directory=${resources.hotspotDirectory}`,
-    `=dns-name=${hotspotDnsName}`,
-    "=login-by=http-chap,http-pap,cookie",
-    `=comment=${commentPrefix}_hotspot_profile`,
-  ], {
-    "hotspot-address": gateway,
-    "html-directory": resources.hotspotDirectory,
-    "dns-name": hotspotDnsName,
-    "login-by": "http-chap,http-pap,cookie",
-    comment: `${commentPrefix}_hotspot_profile`,
+  const hotspotProfileConfig = buildVlanHotspotProfileConfig({
+    name: resources.hotspotProfile,
+    gateway,
+    htmlDirectory: resources.hotspotDirectory,
+    dnsName: hotspotDnsName,
   });
+  await ensureNamed(
+    "/ip/hotspot/profile/print",
+    resources.hotspotProfile,
+    hotspotProfileConfig.addCommand,
+    hotspotProfileConfig.expectedProperties,
+  );
   await ensureNamed("/ip/dns/static/print", hotspotDnsName, [
     "/ip/dns/static/add",
     `=name=${hotspotDnsName}`,
