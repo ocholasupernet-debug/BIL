@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  getAdminApiReauthFeature,
   normalizePlatformAuthPolicy,
   validatePlatformAuthPolicy,
 } from "./platform-auth-security.js";
@@ -40,6 +41,55 @@ test("page policy accepts one method per role and page, including email OTP", ()
   assert.equal(policy.pageMethods.isp_admin["network.routers"], "whatsapp");
   assert.equal(policy.pageMethods.reseller["network.routers"], "email");
   assert.equal(policy.pageMethods.reseller["billing.transactions"], "none");
+});
+
+test("settings tabs receive independent policies while legacy Settings policy is preserved", () => {
+  const legacy = normalizePlatformAuthPolicy({
+    otp_all_enabled: false,
+    otp_whatsapp_enabled: false,
+    otp_sms_enabled: false,
+    otp_email_enabled: false,
+    password_reauth: {
+      isp_admin: { "admin.settings": "password" },
+      reseller: { "admin.settings": "whatsapp" },
+    },
+  });
+  const settingsKeys = [
+    "settings.profile",
+    "settings.billing",
+    "settings.gateways",
+    "settings.dashboard",
+    "settings.typography",
+    "settings.sms",
+    "settings.network",
+    "settings.hotspot",
+    "settings.security",
+    "settings.notifications",
+    "settings.system",
+    "settings.plugins",
+  ];
+
+  for (const key of settingsKeys) {
+    assert.equal(legacy.pageMethods.isp_admin[key], "password");
+    assert.equal(legacy.pageMethods.reseller[key], "whatsapp");
+  }
+
+  const independent = validatePlatformAuthPolicy({
+    otp: { allEnabled: false, channels: { whatsapp: false, sms: false, email: false } },
+    pageMethods: {
+      isp_admin: { "admin.settings": "password", "settings.billing": "none" },
+      reseller: {},
+    },
+  });
+  assert.ok(independent);
+  assert.equal(independent.pageMethods.isp_admin["settings.profile"], "password");
+  assert.equal(independent.pageMethods.isp_admin["settings.billing"], "none");
+  assert.equal(independent.pageMethods.isp_admin["settings.gateways"], "password");
+});
+
+test("settings API reauthentication maps M-Pesa endpoints to Billing & M-Pesa", () => {
+  assert.equal(getAdminApiReauthFeature("/api/settings/mpesa?adminTest=true"), "settings.billing");
+  assert.equal(getAdminApiReauthFeature("/api/settings/mpesa/status"), "settings.billing");
 });
 
 test("page policy rejects unknown methods and page keys", () => {

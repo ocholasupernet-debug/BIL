@@ -161,3 +161,29 @@ const ROUTE_FEATURES: Array<{ prefix: string; featureKey: string }> = [
 export function getAdminFeatureKeyForPath(pathname: string): string | null {
   return ROUTE_FEATURES.find(route => pathname === route.prefix || pathname.startsWith(`${route.prefix}/`) || pathname.startsWith(`${route.prefix}?`))?.featureKey ?? null;
 }
+
+const SETTINGS_AUTH_TABS = new Set([
+  "profile",
+  "billing",
+  "gateways",
+  "dashboard",
+  "typography",
+  "sms",
+  "network",
+  "hotspot",
+  "security",
+  "notifications",
+  "system",
+  "plugins",
+]);
+
+export function getAdminPageAuthFeatureKeyForPath(path: string): string | null {
+  const queryIndex = path.indexOf("?");
+  const pathname = (queryIndex < 0 ? path : path.slice(0, queryIndex)).replace(/\/+$/, "") || "/";
+  if (pathname === "/admin/settings") {
+    const query = queryIndex < 0 ? "" : path.slice(queryIndex + 1);
+    const requestedTab = new URLSearchParams(query).get("tab") || "profile";
+    return SETTINGS_AUTH_TABS.has(requestedTab) ? `settings.${requestedTab}` : "settings.profile";
+  }
+  return getAdminFeatureKeyForPath(pathname);
+}

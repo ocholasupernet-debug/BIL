@@ -21,7 +21,10 @@ import {
   stopImpersonation,
 } from "@/lib/supabase";
 import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
-import { getAdminFeatureKeyForPath } from "@/lib/admin-page-visibility";
+import {
+  getAdminFeatureKeyForPath,
+  getAdminPageAuthFeatureKeyForPath,
+} from "@/lib/admin-page-visibility";
 import { Logo } from "@/components/Logo";
 import { AdminInstallButton } from "@/components/pwa/AdminInstallButton";
 
@@ -505,9 +508,10 @@ export function AdminLayout({
   const queryClient                   = useQueryClient();
   const { isVisible }                 = useAdminPageVisibility();
   const currentFeatureKey             = getAdminFeatureKeyForPath(location);
-  const isOverviewFeature             = !currentFeatureKey || currentFeatureKey === "overview";
+  const currentPageAuthFeatureKey     = getAdminPageAuthFeatureKeyForPath(location) ?? currentFeatureKey;
+  const isOverviewFeature             = !currentPageAuthFeatureKey || currentPageAuthFeatureKey === "overview";
   const requiresReauthGate            = !isOverviewFeature && !isImpersonating();
-  const reauthCheckPending             = requiresReauthGate && (reauthCheckedFeature !== currentFeatureKey || reauthStatus === "checking");
+  const reauthCheckPending            = requiresReauthGate && (reauthCheckedFeature !== currentPageAuthFeatureKey || reauthStatus === "checking");
   const pageIsVisible                 = !currentFeatureKey || isVisible(currentFeatureKey);
   const isVpnSurface                  = location.startsWith("/admin/vpn");
 
@@ -561,14 +565,14 @@ export function AdminLayout({
       const response = await fetch("/api/auth/admin/reauth", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAdminApiToken()}` },
-        body: JSON.stringify({ feature: currentFeatureKey, password: reauthPassword }),
+        body: JSON.stringify({ feature: currentPageAuthFeatureKey, password: reauthPassword }),
       });
       const data = await response.json();
       if (!response.ok || !data.token || !Number.isFinite(data.expiresAt)) {
         throw new Error(data.error || "The password check could not be completed.");
       }
       localStorage.setItem("ochola_api_token", data.token);
-      sessionStorage.setItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentFeatureKey}_password`, String(data.expiresAt));
+      sessionStorage.setItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentPageAuthFeatureKey}_password`, String(data.expiresAt));
       window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: ADMIN_ID } }));
       setReauthUntil(data.expiresAt);
       setReauthPassword("");
@@ -591,7 +595,7 @@ export function AdminLayout({
       const response = await fetch("/api/auth/admin/page-otp/request", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAdminApiToken()}` },
-        body: JSON.stringify({ feature: currentFeatureKey, method: reauthMethod }),
+        body: JSON.stringify({ feature: currentPageAuthFeatureKey, method: reauthMethod }),
       });
       const data = await response.json();
       if (!response.ok || !data.ok || typeof data.challengeId !== "string") {
@@ -617,7 +621,7 @@ export function AdminLayout({
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAdminApiToken()}` },
         body: JSON.stringify({
-          feature: currentFeatureKey,
+          feature: currentPageAuthFeatureKey,
           method: reauthMethod,
           challengeId: reauthChallengeId,
           code: reauthCode,
@@ -629,7 +633,7 @@ export function AdminLayout({
       }
       localStorage.setItem("ochola_api_token", data.token);
       sessionStorage.setItem(
-        `ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentFeatureKey}_${reauthMethod}`,
+        `ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentPageAuthFeatureKey}_${reauthMethod}`,
         String(data.expiresAt),
       );
       window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: ADMIN_ID } }));
@@ -735,7 +739,7 @@ export function AdminLayout({
 
   useEffect(() => {
     let cancelled = false;
-    const feature = currentFeatureKey;
+    const feature = currentPageAuthFeatureKey;
     setReauthError("");
     if (!feature || feature === "overview" || isImpersonating()) {
       setReauthUntil(0);
@@ -794,19 +798,19 @@ export function AdminLayout({
     };
     void check();
     return () => { cancelled = true; };
-  }, [currentFeatureKey, reauthRetryKey]);
+  }, [currentPageAuthFeatureKey, reauthRetryKey]);
 
   useEffect(() => {
     if (reauthStatus !== "verified" || !reauthUntil) return;
     const timer = window.setInterval(() => {
       if (Date.now() >= reauthUntil) {
-        sessionStorage.removeItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentFeatureKey}_${reauthMethod}`);
+        sessionStorage.removeItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentPageAuthFeatureKey}_${reauthMethod}`);
         setReauthStatus("required");
         setReauthUntil(0);
       }
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [currentFeatureKey, reauthMethod, reauthStatus, reauthUntil]);
+  }, [currentPageAuthFeatureKey, reauthMethod, reauthStatus, reauthUntil]);
 
   const toggleExpand = (name: string) =>
     setExpanded(p => p.includes(name) ? p.filter(n => n !== name) : [...p, name]);

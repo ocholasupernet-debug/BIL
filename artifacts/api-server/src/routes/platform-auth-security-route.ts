@@ -1,12 +1,12 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { extractToken, validateToken } from "../lib/api-auth.js";
 import {
+  ADMIN_PAGE_AUTH_CATALOG,
   getPlatformAuthPolicy,
   recordPlatformAuthAudit,
   savePlatformAuthPolicy,
   validatePlatformAuthPolicy,
 } from "../lib/platform-auth-security.js";
-import { ADMIN_PAGE_VISIBILITY_CATALOG } from "../lib/admin-page-visibility.js";
 import { activeSuperAdminName } from "./super-admin-auth-route.js";
 
 const router: IRouter = Router();
@@ -43,7 +43,7 @@ router.get("/auth/public-security-policy", async (_req: Request, res: Response):
 router.get("/super-admin/auth-security-policy", async (req: Request, res: Response): Promise<void> => {
   if (!requireSuperAdmin(req, res)) return;
   try {
-    res.json({ ok: true, policy: await getPlatformAuthPolicy(), catalog: ADMIN_PAGE_VISIBILITY_CATALOG });
+    res.json({ ok: true, policy: await getPlatformAuthPolicy(), catalog: ADMIN_PAGE_AUTH_CATALOG });
   } catch {
     res.status(503).json({ ok: false, error: "Authentication security settings could not be loaded." });
   }
@@ -111,12 +111,12 @@ router.get("/auth/admin/password-recheck-policy", async (req: Request, res: Resp
     const role = admin.role as "isp_admin" | "reseller";
     const method = policy.pageMethods[role][feature] ?? "none";
     const methods = Object.fromEntries(
-      ADMIN_PAGE_VISIBILITY_CATALOG
+      ADMIN_PAGE_AUTH_CATALOG
         .flatMap(section => section.pages)
         .map(page => [page.key, policy.pageMethods[role][page.key] ?? "none"]),
     );
     const policies = Object.fromEntries(
-      ADMIN_PAGE_VISIBILITY_CATALOG
+      ADMIN_PAGE_AUTH_CATALOG
         .flatMap(section => section.pages)
         .map(page => [page.key, (policy.pageMethods[role][page.key] ?? "none") !== "none"]),
     );

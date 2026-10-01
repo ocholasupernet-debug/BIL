@@ -1,6 +1,6 @@
 import {
   ADMIN_PAGE_VISIBILITY_CATALOG,
-  ADMIN_PAGE_VISIBILITY_KEYS,
+  type AdminVisibilitySection,
 } from "./admin-page-visibility.js";
 import {
   insertPlatformAuthAudit,
@@ -8,6 +8,37 @@ import {
   upsertPlatformAuthPolicy,
   type PlatformAuthPolicyRow,
 } from "./platform-auth-store.js";
+
+const SETTINGS_AUTH_PAGES = [
+  { key: "settings.profile", label: "ISP Profile", description: "Company identity, portal branding, and support details." },
+  { key: "settings.billing", label: "Billing & M-Pesa", description: "Billing preferences and M-Pesa configuration." },
+  { key: "settings.gateways", label: "Payment Gateways", description: "Payment gateway connections and routing." },
+  { key: "settings.dashboard", label: "Dashboard Page Builder", description: "Configure the customer dashboard page." },
+  { key: "settings.typography", label: "Desired Font", description: "Choose the application font and typography." },
+  { key: "settings.sms", label: "SMS & Email", description: "Configure SMS, email, and delivery settings." },
+  { key: "settings.network", label: "Network", description: "Configure network-related ISP settings." },
+  { key: "settings.hotspot", label: "Hotspot", description: "Configure hotspot behavior and portal defaults." },
+  { key: "settings.security", label: "Security", description: "Configure security and account protections." },
+  { key: "settings.notifications", label: "Notifications", description: "Configure system and customer notifications." },
+  { key: "settings.system", label: "System", description: "Manage system, storage, and backup settings." },
+  { key: "settings.plugins", label: "Plugins", description: "Manage optional platform plugins." },
+];
+
+const LEGACY_SETTINGS_AUTH_KEY = "admin.settings";
+
+export const ADMIN_PAGE_AUTH_CATALOG: AdminVisibilitySection[] = [
+  ...ADMIN_PAGE_VISIBILITY_CATALOG
+    .map(section => section.key === "admin"
+      ? { ...section, pages: section.pages.filter(page => page.key !== LEGACY_SETTINGS_AUTH_KEY) }
+      : section)
+    .filter(section => section.pages.length > 0),
+  {
+    key: "settings",
+    label: "Settings",
+    description: "Each settings page has its own verification policy.",
+    pages: SETTINGS_AUTH_PAGES,
+  },
+];
 
 export type OtpChannel = "whatsapp" | "sms" | "email";
 export type AdminPolicyRole = "isp_admin" | "reseller";
@@ -35,8 +66,18 @@ export const PLATFORM_AUTH_POLICY_DEFAULTS: PlatformAuthPolicy = {
 };
 
 const ALL_PAGE_KEYS = new Set(
-  ADMIN_PAGE_VISIBILITY_CATALOG.flatMap(section => section.pages.map(page => page.key)),
+  ADMIN_PAGE_AUTH_CATALOG.flatMap(section => section.pages.map(page => page.key)),
 );
+const SETTINGS_AUTH_PAGE_KEYS = SETTINGS_AUTH_PAGES.map(page => page.key);
+
+function parsePageAuthMethod(value: unknown): PageAuthMethod | null {
+  if (typeof value === "boolean") return value ? "password" : "none";
+  if (
+    value === "none" || value === "password" ||
+    value === "whatsapp" || value === "sms" || value === "email"
+  ) return value;
+  return null;
+}
 
 function sanitizeMatrix(raw: unknown): PageAuthMethodMatrix {
   const result: PageAuthMethodMatrix = { isp_admin: {}, reseller: {} };
@@ -45,15 +86,18 @@ function sanitizeMatrix(raw: unknown): PageAuthMethodMatrix {
   for (const role of ADMIN_POLICY_ROLES) {
     const roleValue = source[role];
     if (!roleValue || typeof roleValue !== "object" || Array.isArray(roleValue)) continue;
-    for (const [key, value] of Object.entries(roleValue as Record<string, unknown>)) {
+    const rolePages = roleValue as Record<string, unknown>;
+    for (const [key, value] of Object.entries(rolePages)) {
       if (!ALL_PAGE_KEYS.has(key)) continue;
-      if (typeof value === "boolean") {
-        result[role][key] = value ? "password" : "none";
-      } else if (
-        value === "none" || value === "password" ||
-        value === "whatsapp" || value === "sms" || value === "email"
-      ) {
-        result[role][key] = value;
+      const method = parsePageAuthMethod(value);
+      if (method) result[role][key] = method;
+    }
+    const legacySettingsMethod = parsePageAuthMethod(rolePages[LEGACY_SETTINGS_AUTH_KEY]);
+    if (legacySettingsMethod) {
+      for (const key of SETTINGS_AUTH_PAGE_KEYS) {
+        if (!Object.prototype.hasOwnProperty.call(rolePages, key)) {
+          result[role][key] = legacySettingsMethod;
+        }
       }
     }
   }
@@ -116,17 +160,23 @@ export function validatePlatformAuthPolicy(input: unknown): PlatformAuthPolicy |
   for (const role of ADMIN_POLICY_ROLES) {
     const roleInput = matrix[role];
     if (!roleInput || typeof roleInput !== "object" || Array.isArray(roleInput)) return null;
-    for (const [key, value] of Object.entries(roleInput as Record<string, unknown>)) {
-      if (!ALL_PAGE_KEYS.has(key)) return null;
-      if (typeof value === "boolean") {
-        normalized[role][key] = value ? "password" : "none";
-      } else if (
-        value === "none" || value === "password" ||
-        value === "whatsapp" || value === "sms" || value === "email"
-      ) {
-        normalized[role][key] = value;
+    const rolePages = roleInput as Record<string, unknown>;
+    let legacySettingsMethod: PageAuthMethod | null = null;
+    for (const [key, value] of Object.entries(rolePages)) {
+      if (key !== LEGACY_SETTINGS_AUTH_KEY && !ALL_PAGE_KEYS.has(key)) return null;
+      const method = parsePageAuthMethod(value);
+      if (!method) return null;
+      if (key === LEGACY_SETTINGS_AUTH_KEY) {
+        legacySettingsMethod = method;
       } else {
-        return null;
+        normalized[role][key] = method;
+      }
+    }
+    if (legacySettingsMethod) {
+      for (const key of SETTINGS_AUTH_PAGE_KEYS) {
+        if (!Object.prototype.hasOwnProperty.call(rolePages, key)) {
+          normalized[role][key] = legacySettingsMethod;
+        }
       }
     }
   }
@@ -157,7 +207,7 @@ export async function recordPlatformAuthAudit(input: {
 }
 
 export function isSupportedPasswordReauthFeature(feature: string): boolean {
-  return ADMIN_PAGE_VISIBILITY_KEYS.has(feature) && feature !== "overview" && ALL_PAGE_KEYS.has(feature);
+  return feature === LEGACY_SETTINGS_AUTH_KEY || ALL_PAGE_KEYS.has(feature);
 }
 
 const API_REAUTH_PREFIXES: Array<[string, string]> = [
@@ -203,9 +253,9 @@ const API_REAUTH_PREFIXES: Array<[string, string]> = [
   ["/logs", "admin.logs"],
   ["/sms", "admin.extras"],
   ["/whatsapp", "admin.extras"],
-  ["/settings", "admin.settings"],
-  ["/admin-settings", "admin.settings"],
-  ["/storage-governance", "admin.settings"],
+  ["/settings/mpesa", "settings.billing"],
+  ["/admin-settings", "settings.profile"],
+  ["/storage-governance", "settings.system"],
   ["/radius", "admin.radius"],
   ["/static-pages", "admin.pages"],
 ];
