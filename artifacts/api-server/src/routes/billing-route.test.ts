@@ -48,7 +48,28 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     };
   };
   const requests: { path: string; method: string; key: string | null; prefer: string | null; body?: Record<string, unknown> }[] = [];
-  let accountCreatedAt = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - 1, 26, 12)).toISOString();
+  const now = new Date();
+  const currentBillingPeriod = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  // 21:00 UTC on the 24th is midnight at the start of the 25th in Nairobi.
+  const cutoffDate = new Date(Date.UTC(
+    currentBillingPeriod.getUTCFullYear(),
+    currentBillingPeriod.getUTCMonth() - 1,
+    24,
+    21,
+  ));
+  const beforeCutoffDate = new Date(Date.UTC(
+    currentBillingPeriod.getUTCFullYear(),
+    currentBillingPeriod.getUTCMonth() - 1,
+    24,
+    12,
+  ));
+  const afterCutoffDate = new Date(Date.UTC(
+    currentBillingPeriod.getUTCFullYear(),
+    currentBillingPeriod.getUTCMonth() - 1,
+    26,
+    12,
+  ));
+  let accountCreatedAt = beforeCutoffDate.toISOString();
   let invoice: Record<string, unknown> | null = null;
 
   globalThis.fetch = async (input, init) => {
@@ -122,12 +143,35 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     assert.ok(requests.filter(row => row.path.endsWith("/isp_admins")).every(row => row.key === "billing-test-anon"));
     assert.ok(requests.filter(row => !row.path.endsWith("/isp_admins")).every(row => row.key === "billing-test-service"));
 
-    accountCreatedAt = new Date().toISOString();
+    accountCreatedAt = cutoffDate.toISOString();
     const newlyCreatedAccountPreview = await originalFetch(`${endpoint}/current`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     assert.equal(newlyCreatedAccountPreview.status, 200);
-    assert.equal((await newlyCreatedAccountPreview.json() as { eligible: boolean }).eligible, true);
+    assert.equal(
+      (await newlyCreatedAccountPreview.json() as { eligible: boolean }).eligible,
+      false,
+      "accounts created on the 25th of the previous month should not see the current renewal banner",
+    );
+
+    accountCreatedAt = afterCutoffDate.toISOString();
+    const afterCutoffAccountPreview = await originalFetch(`${endpoint}/current`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(afterCutoffAccountPreview.status, 200);
+    assert.equal((await afterCutoffAccountPreview.json() as { eligible: boolean }).eligible, false);
+
+    accountCreatedAt = new Date(Date.UTC(
+      currentBillingPeriod.getUTCFullYear(),
+      currentBillingPeriod.getUTCMonth(),
+      1,
+      12,
+    )).toISOString();
+    const currentMonthAccountPreview = await originalFetch(`${endpoint}/current`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(currentMonthAccountPreview.status, 200);
+    assert.equal((await currentMonthAccountPreview.json() as { eligible: boolean }).eligible, false);
 
     const prepared = await originalFetch(`${endpoint}/renew`, {
       method: "POST",

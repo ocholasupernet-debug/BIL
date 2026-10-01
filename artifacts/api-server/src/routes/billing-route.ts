@@ -30,6 +30,7 @@ type AccountRow = {
   name: string | null;
   phone: string | null;
   payment_phone: string | null;
+  created_at: string | null;
 };
 
 function utcMonthStart(date = new Date()): string {
@@ -49,6 +50,23 @@ function dueDate(periodStart: string, day: number): string {
     .toISOString().slice(0, 10);
 }
 
+function eligibleForRenewalBanner(createdAt: string | null, billingPeriod: string): boolean {
+  const created = createdAt ? new Date(createdAt) : null;
+  const period = new Date(`${billingPeriod}T00:00:00.000Z`);
+  if (!created || !Number.isFinite(created.getTime()) || !Number.isFinite(period.getTime())) return false;
+
+  const cutoff = new Date(Date.UTC(period.getUTCFullYear(), period.getUTCMonth() - 1, 25))
+    .toISOString().slice(0, 10);
+  const localDateParts = new Map(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Nairobi",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(created).map(({ type, value }) => [type, value]));
+  const createdDate = `${localDateParts.get("year")}-${localDateParts.get("month")}-${localDateParts.get("day")}`;
+  return createdDate < cutoff;
+}
+
 async function billingConfig(): Promise<BillingConfig> {
   const rows = await billingSelect<BillingConfig>(
     "platform_billing_config",
@@ -63,7 +81,7 @@ async function currentAccount(req: Request): Promise<AccountRow | null> {
   if (!account) return null;
   const rows = await sbSelectStrict<AccountRow>(
     "isp_admins",
-    `id=eq.${encodeURIComponent(account.id)}&is_active=is.true&select=id,parent_id,role,name,phone,payment_phone&limit=1`,
+    `id=eq.${encodeURIComponent(account.id)}&is_active=is.true&select=id,parent_id,role,name,phone,payment_phone,created_at&limit=1`,
   );
   return rows[0] ?? null;
 }
@@ -133,12 +151,13 @@ router.get("/billing/current", requireAdmin(), async (req: Request, res: Respons
       return;
     }
     const result = await currentInvoice(account);
+    const billingPeriod = String(result.invoice?.billing_period ?? utcMonthStart());
     const invoice = result.invoice
       ? { ...result.invoice, status: activeBillingStatus(result.invoice) }
       : null;
     res.json({
       ok: true,
-      eligible: !!invoice,
+      eligible: !!invoice && eligibleForRenewalBanner(account.created_at, billingPeriod),
       paymentsAvailable: supabaseServiceRoleConfigured,
       account: { id: account.id, role: account.role, name: account.name },
       invoice,
