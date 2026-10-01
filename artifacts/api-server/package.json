@@ -11,6 +11,7 @@
     "test:router-script": "tsx --test tests/router-script-generation.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:migration": "node --test tests/router-migration.test.mjs",
+    "test:tenant-vouchers": "node --test tests/tenant-vouchers.test.mjs",
     "test:vpn-fallback": "node --test tests/router-vpn-fallback.test.mjs",
     "test:pppoe-portal": "node --test tests/pppoe-portal-reference.test.mjs",
     "test:pppoe-portal-live": "node --test tests/pppoe-portal-live-staging.test.mjs",

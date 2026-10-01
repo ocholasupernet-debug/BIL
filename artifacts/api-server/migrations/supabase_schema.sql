@@ -759,6 +759,35 @@ create unique index if not exists isp_vouchers_code_admin_idx on isp_vouchers(ad
 create index if not exists isp_vouchers_admin_id_idx          on isp_vouchers(admin_id);
 create index if not exists isp_vouchers_status_idx            on isp_vouchers(status);
 
+-- Tenant-owned index for hotspot voucher credentials stored in FreeRADIUS.
+create table if not exists isp_radius_vouchers (
+  id             bigserial primary key,
+  admin_id       bigint not null references isp_admins(id) on delete cascade,
+  code           text not null unique,
+  plan_id        bigint references isp_plans(id) on delete set null,
+  plan_name      text not null,
+  router_id      bigint,
+  router_name    text not null default 'Any',
+  price          numeric(12,2) not null default 0,
+  validity_mins  integer not null default 0,
+  expires_at     timestamptz,
+  created_at     timestamptz not null default now()
+);
+create index if not exists isp_radius_vouchers_admin_created_idx
+  on isp_radius_vouchers(admin_id, created_at desc);
+
+-- Tenant-owned index for MAC bypass credentials stored in FreeRADIUS.
+create table if not exists isp_hotspot_mac_bypasses (
+  id          bigserial primary key,
+  admin_id    bigint not null references isp_admins(id) on delete cascade,
+  username    text not null unique,
+  mac_address text not null,
+  ip_address  text,
+  created_at  timestamptz not null default now()
+);
+create index if not exists isp_hotspot_mac_bypasses_admin_created_idx
+  on isp_hotspot_mac_bypasses(admin_id, created_at desc);
+
 -- IP address pools (per router)
 create table if not exists isp_ip_pools (
   id          bigserial primary key,

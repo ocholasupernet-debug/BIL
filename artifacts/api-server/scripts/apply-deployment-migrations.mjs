@@ -107,6 +107,8 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_sms_integration.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_registration_contact_reuse_limit.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_platform_auth_security_controls.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_account_scoped_hotspot_vouchers.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_account_scoped_hotspot_bindings.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
 

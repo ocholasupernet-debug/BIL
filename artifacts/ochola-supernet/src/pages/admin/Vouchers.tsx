@@ -1,7 +1,8 @@
 import React, { useState, useMemo, useCallback, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
-import { supabase, ADMIN_ID } from "@/lib/supabase";
+import { ADMIN_ID } from "@/lib/supabase";
+import { adminApiHeaders } from "@/lib/admin-router-context";
 import {
   Plus, Search, Printer, Copy, Trash2, Loader2, CheckCircle2,
   Ticket, Wifi, X, Download, RefreshCw, Filter, Eye, EyeOff,
@@ -30,13 +31,6 @@ interface DbPlanLite {
 interface DbRouterLite { id: number; name: string; host: string; status: string; }
 
 /* ─────────────────────────── Helpers ─────────────────────────── */
-function genCode(prefix: string): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const seg = (n: number) => Array.from({ length: n }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
-  const raw = `${seg(4)}-${seg(4)}`;
-  return prefix ? `${prefix.toUpperCase()}-${raw}` : raw;
-}
-
 function fmtValidity(mins: number): string {
   if (mins < 60) return `${mins} min`;
   if (mins < 1440) return `${mins / 60}h`;
@@ -49,105 +43,66 @@ function fmtDate(d: string) {
   return new Date(d).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "2-digit" });
 }
 
-/* ─────────────────────────── DB Functions ─────────────────────── */
-async function fetchPlans(): Promise<DbPlanLite[]> {
-  const { data, error } = await supabase.from("isp_plans").select("id,name,type,price,validity,speed_down,speed_up,router_id").eq("admin_id", ADMIN_ID).eq("type", "hotspot").is("port_id", null).order("price", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+function previewCode(prefix: string): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const segment = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+  return `${prefix ? `${prefix.toUpperCase()}-` : ""}${segment()}-${segment()}`;
 }
 
-async function fetchRouters(): Promise<DbRouterLite[]> {
-  const { data, error } = await supabase.from("isp_routers").select("id,name,host,status").eq("admin_id", ADMIN_ID).not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
-  if (error) throw error;
-  return data ?? [];
+/* ─────────────────────────── DB Functions ─────────────────────── */
+interface VoucherConfig {
+  plans: DbPlanLite[];
+  routers: DbRouterLite[];
+  companyName: string;
+}
+
+async function voucherApi<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(adminApiHeaders());
+  if (init.headers) new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+  const response = await fetch(path, { ...init, headers, cache: "no-store" });
+  const body = await response.json().catch(() => null) as { error?: string } | T | null;
+  if (!response.ok) {
+    throw new Error(body && typeof body === "object" && "error" in body
+      ? String(body.error)
+      : `Voucher request failed (${response.status}).`);
+  }
+  return body as T;
+}
+
+async function fetchVoucherConfig(): Promise<VoucherConfig> {
+  return voucherApi<VoucherConfig>("/api/vouchers/hotspot/config");
 }
 
 async function fetchVouchers(): Promise<VoucherRow[]> {
-  // Fetch from radcheck where attribute = 'Cleartext-Password'
-  const { data: checks, error: checkErr } = await supabase
-    .from("radcheck")
-    .select("id,username,value,attribute")
-    .eq("attribute", "Cleartext-Password")
-    .order("id", { ascending: false });
-  if (checkErr) throw checkErr;
-  if (!checks || checks.length === 0) return [];
-
-  const usernames = checks.map(c => c.username);
-
-  // Fetch plan linkage from radusergroup
-  const { data: groups } = await supabase.from("radusergroup").select("username,groupname").in("username", usernames);
-  const groupMap: Record<string, string> = {};
-  (groups ?? []).forEach(g => { groupMap[g.username] = g.groupname; });
-
-  // Fetch metadata from radcheck (custom attributes)
-  const { data: meta } = await supabase.from("radcheck").select("username,attribute,value").in("username", usernames).in("attribute", ["Isp-Price", "Isp-Router-Id", "Isp-Router-Name", "Isp-Validity-Mins", "Expiration", "Isp-Created-At"]);
-  const metaMap: Record<string, Record<string, string>> = {};
-  (meta ?? []).forEach(m => {
-    if (!metaMap[m.username]) metaMap[m.username] = {};
-    metaMap[m.username][m.attribute] = m.value;
-  });
-
-  // Fetch used status from radacct
-  const { data: acct } = await supabase.from("radacct").select("username").in("username", usernames);
-  const usedSet = new Set((acct ?? []).map(a => a.username));
-
-  return checks.map(c => {
-    const m = metaMap[c.username] ?? {};
-    return {
-      code: c.username,
-      plan_name: groupMap[c.username] ?? m["Isp-Plan-Name"] ?? "—",
-      router_id: m["Isp-Router-Id"] ? Number(m["Isp-Router-Id"]) : null,
-      router_name: m["Isp-Router-Name"] ?? "—",
-      price: m["Isp-Price"] ? Number(m["Isp-Price"]) : 0,
-      validity_mins: m["Isp-Validity-Mins"] ? Number(m["Isp-Validity-Mins"]) : 0,
-      expiry: m["Expiration"] ?? null,
-      used: usedSet.has(c.username),
-      created_at: m["Isp-Created-At"] ?? new Date().toISOString(),
-    };
-  });
+  return voucherApi<VoucherRow[]>("/api/vouchers/hotspot");
 }
 
-async function createVouchers(batch: {
-  codes: string[];
-  plan: DbPlanLite;
-  router: DbRouterLite | null;
+interface VoucherGenerationInput {
+  quantity: number;
+  planId: number;
+  routerId: number | null;
+  prefix: string;
   expiryDate: string | null;
-}): Promise<void> {
-  const { codes, plan, router, expiryDate } = batch;
-  const now = new Date().toISOString();
-  const validityMins = plan.validity * (plan.validity <= 30 && plan.name.toLowerCase().includes("min") ? 1 : 1440);
+}
 
-  const checkRows: { username: string; attribute: string; op: string; value: string }[] = [];
-  const groupRows: { username: string; groupname: string; priority: number }[] = [];
-
-  for (const code of codes) {
-    checkRows.push({ username: code, attribute: "Cleartext-Password", op: ":=", value: code });
-    checkRows.push({ username: code, attribute: "Isp-Price", op: ":=", value: String(plan.price) });
-    checkRows.push({ username: code, attribute: "Isp-Router-Id", op: ":=", value: router ? String(router.id) : "0" });
-    checkRows.push({ username: code, attribute: "Isp-Router-Name", op: ":=", value: router?.name ?? "Any" });
-    checkRows.push({ username: code, attribute: "Isp-Plan-Name", op: ":=", value: plan.name });
-    checkRows.push({ username: code, attribute: "Isp-Validity-Mins", op: ":=", value: String(plan.validity * 1440) });
-    checkRows.push({ username: code, attribute: "Isp-Created-At", op: ":=", value: now });
-    if (expiryDate) {
-      checkRows.push({ username: code, attribute: "Expiration", op: ":=", value: expiryDate });
-    }
-    groupRows.push({ username: code, groupname: plan.name, priority: 1 });
-  }
-
-  const { error: e1 } = await supabase.from("radcheck").insert(checkRows);
-  if (e1) throw e1;
-  const { error: e2 } = await supabase.from("radusergroup").insert(groupRows);
-  if (e2) throw e2;
+async function createVouchers(input: VoucherGenerationInput): Promise<{ created: number; codes: string[] }> {
+  return voucherApi("/api/vouchers/hotspot/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 async function deleteVoucher(code: string): Promise<void> {
-  await supabase.from("radcheck").delete().eq("username", code);
-  await supabase.from("radusergroup").delete().eq("username", code);
+  await voucherApi(`/api/vouchers/hotspot/${encodeURIComponent(code)}`, { method: "DELETE" });
 }
 
-async function deleteVouchers(codes: string[]): Promise<void> {
-  await supabase.from("radcheck").delete().in("username", codes);
-  await supabase.from("radusergroup").delete().in("username", codes);
+async function deleteVouchers(codes: string[]): Promise<{ deleted: number }> {
+  return voucherApi("/api/vouchers/hotspot/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ codes }),
+  });
 }
 
 /* ─────────────────────────── Print Component ─────────────────── */
@@ -180,7 +135,7 @@ function GenerateModal({
   plans: DbPlanLite[];
   routers: DbRouterLite[];
   onClose: () => void;
-  onGenerate: (batch: { codes: string[]; plan: DbPlanLite; router: DbRouterLite | null; expiryDate: string | null }) => void;
+  onGenerate: (batch: VoucherGenerationInput) => void;
 }) {
   const [selectedPlanId, setSelectedPlanId] = useState(plans[0]?.id ?? 0);
   const [selectedRouterId, setSelectedRouterId] = useState<number | "all">("all");
@@ -195,8 +150,13 @@ function GenerateModal({
   const handleGenerate = async () => {
     if (!plan) return;
     setGenerating(true);
-    const codes = Array.from({ length: qty }, () => genCode(prefix));
-    onGenerate({ codes, plan, router, expiryDate: expiryDate || null });
+    onGenerate({
+      quantity: qty,
+      planId: plan.id,
+      routerId: router?.id ?? null,
+      prefix,
+      expiryDate: expiryDate || null,
+    });
   };
 
   return (
@@ -295,7 +255,7 @@ function GenerateModal({
           {/* Preview code */}
           <div style={{ background: "var(--isp-inner-card)", borderRadius: 8, padding: "0.75rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
             <span style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>Sample code:</span>
-            <code style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-accent)", letterSpacing: "0.12em" }}>{genCode(prefix)}</code>
+            <code style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-accent)", letterSpacing: "0.12em" }}>{previewCode(prefix)}</code>
           </div>
 
           {/* Actions */}
@@ -375,17 +335,13 @@ export default function Vouchers() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const { data: adminInfo } = useQuery({
-    queryKey: ["admin_info", ADMIN_ID],
-    queryFn: async () => {
-      const { data } = await supabase.from("isp_admins").select("name").eq("id", ADMIN_ID).single();
-      return data as { name: string } | null;
-    },
+  const { data: voucherConfig, isLoading: configLoading } = useQuery({
+    queryKey: ["hotspot_voucher_config", ADMIN_ID],
+    queryFn: fetchVoucherConfig,
   });
-  const companyName = adminInfo?.name ?? "ISP";
-
-  const { data: plans   = [], isLoading: plansLoading   } = useQuery({ queryKey: ["isp_plans_hotspot", ADMIN_ID],  queryFn: fetchPlans   });
-  const { data: routers = [], isLoading: routersLoading } = useQuery({ queryKey: ["isp_routers", ADMIN_ID],        queryFn: fetchRouters });
+  const plans = voucherConfig?.plans ?? [];
+  const routers = voucherConfig?.routers ?? [];
+  const companyName = voucherConfig?.companyName ?? "ISP";
   const { data: vouchers = [], isLoading: vouchersLoading, refetch } = useQuery({
     queryKey: ["vouchers", ADMIN_ID],
     queryFn: fetchVouchers,
@@ -395,10 +351,10 @@ export default function Vouchers() {
   /* ─── Generate mutation ─── */
   const generateMutation = useMutation({
     mutationFn: createVouchers,
-    onSuccess: (_, vars) => {
+    onSuccess: result => {
       qc.invalidateQueries({ queryKey: ["vouchers", ADMIN_ID] });
       setShowGenerate(false);
-      showToast(`${vars.codes.length} voucher${vars.codes.length !== 1 ? "s" : ""} created successfully`);
+      showToast(`${result.created} voucher${result.created !== 1 ? "s" : ""} created successfully`);
     },
     onError: (e: Error) => showToast(`Error: ${e.message}`, false),
   });
@@ -413,7 +369,7 @@ export default function Vouchers() {
   /* ─── Delete bulk ─── */
   const deleteBulkMutation = useMutation({
     mutationFn: deleteVouchers,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["vouchers", ADMIN_ID] }); setSelected(new Set()); showToast(`Deleted ${selected.size} vouchers`); },
+    onSuccess: result => { qc.invalidateQueries({ queryKey: ["vouchers", ADMIN_ID] }); setSelected(new Set()); showToast(`Deleted ${result.deleted} vouchers`); },
     onError:   (e: Error) => showToast(`Error: ${e.message}`, false),
   });
 
@@ -457,7 +413,7 @@ export default function Vouchers() {
   const printTarget = selected.size > 0 ? selectedVouchers : filtered;
 
   const planNames = [...new Set(vouchers.map(v => v.plan_name).filter(n => n !== "—"))];
-  const isLoading = vouchersLoading || plansLoading || routersLoading;
+  const isLoading = vouchersLoading || configLoading;
 
   return (
     <AdminLayout>
@@ -477,7 +433,7 @@ export default function Vouchers() {
       )}
 
       {/* Generate Modal */}
-      {showGenerate && !plansLoading && !routersLoading && (
+      {showGenerate && !configLoading && (
         <GenerateModal
           plans={plans}
           routers={routers}
@@ -547,7 +503,7 @@ export default function Vouchers() {
         </div>
 
         {/* ── Router Quick View ── */}
-        {!routersLoading && routers.length > 0 && (
+        {!configLoading && routers.length > 0 && (
           <div style={{ borderRadius: 10, background: "var(--isp-section)", border: "1px solid var(--isp-border)", padding: "0.875rem 1.25rem" }}>
             <div style={{ fontSize: "0.8rem", fontWeight: 700, color: "var(--isp-text-muted)", marginBottom: "0.625rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Hotspot Routers</div>
             <div style={{ display: "flex", gap: "0.625rem", flexWrap: "wrap" }}>

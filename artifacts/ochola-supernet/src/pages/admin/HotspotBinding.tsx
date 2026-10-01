@@ -3,7 +3,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
-import { supabase, ADMIN_ID } from "@/lib/supabase";
+import { ADMIN_ID } from "@/lib/supabase";
+import { adminApiHeaders } from "@/lib/admin-router-context";
 import {
   Wifi, Plus, Trash, RefreshCw, Search, X, ShieldCheck,
   Loader2, CheckCircle2, AlertTriangle, Monitor, Users,
@@ -72,93 +73,62 @@ function fmtBytes(bytes: number): string {
   return `${n.toFixed(1)} ${units[i]}`;
 }
 
-/* ══════════════════════════ DB helpers ══════════════════════════ */
-async function fetchCustomersWithMac(): Promise<DbCustomer[]> {
-  const { data, error } = await supabase
-    .from("isp_customers")
-    .select("id,name,username,mac_address,ip_address,type,status,expires_at")
-    .eq("admin_id", ADMIN_ID)
-    .not("mac_address", "is", null);
-  if (error) throw error;
-  return (data ?? []).filter(c => c.mac_address);
+/* ══════════════════════════ Tenant-scoped API helpers ══════════════════════════ */
+interface HotspotBindingConfig {
+  customers: DbCustomer[];
+  allCustomers: DbCustomer[];
+  bypasses: RadCheck[];
+  bypassIps: RadCheck[];
+  routers: RouterLite[];
 }
-async function fetchBypassEntries(): Promise<RadCheck[]> {
-  const { data, error } = await supabase
-    .from("radcheck")
-    .select("id,username,attribute,op,value")
-    .eq("attribute", "Auth-Type")
-    .eq("value", "Accept");
-  if (error) throw error;
-  return data ?? [];
+
+async function hotspotBindingApi<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(adminApiHeaders());
+  if (init.headers) new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+  const response = await fetch(path, { ...init, headers, cache: "no-store" });
+  const body = await response.json().catch(() => null) as { error?: string } | T | null;
+  if (!response.ok) {
+    throw new Error(body && typeof body === "object" && "error" in body
+      ? String(body.error)
+      : `Hotspot binding request failed (${response.status}).`);
+  }
+  return body as T;
 }
-async function fetchBypassIps(): Promise<RadCheck[]> {
-  const { data, error } = await supabase
-    .from("radcheck")
-    .select("id,username,attribute,op,value")
-    .eq("attribute", "Framed-IP-Address")
-    .ilike("username", "bypass:%");
-  if (error) throw error;
-  return data ?? [];
+
+async function fetchBindingConfig(): Promise<HotspotBindingConfig> {
+  return hotspotBindingApi("/api/hotspot-bindings");
 }
-async function fetchRouters(): Promise<RouterLite[]> {
-  const { data, error } = await supabase.from("isp_routers").select("id,name,host,status").eq("admin_id", ADMIN_ID).not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
-  if (error) throw error;
-  return data ?? [];
-}
+
 async function fetchSessions(active: boolean): Promise<RadAcct[]> {
-  let q = supabase.from("radacct")
-    .select("radacctid,username,nasipaddress,callingstationid,framedipaddress,acctstarttime,acctstoptime,acctinputoctets,acctoutputoctets,acctsessiontime,acctterminatecause")
-    .order("acctstarttime", { ascending: false })
-    .limit(100);
-  if (active) q = q.is("acctstoptime", null);
-  else q = q.not("acctstoptime", "is", null);
-  const { data, error } = await q;
-  if (error) throw error;
-  return data ?? [];
+  return hotspotBindingApi(`/api/hotspot-bindings/sessions?active=${active}`);
 }
 
 async function addUserMacBinding(customerId: number, mac: string): Promise<void> {
-  // Update the customer record
-  const { error: custErr } = await supabase
-    .from("isp_customers")
-    .update({ mac_address: mac, updated_at: new Date().toISOString() })
-    .eq("id", customerId);
-  if (custErr) throw custErr;
-
-  // Fetch the customer username
-  const { data: cust } = await supabase.from("isp_customers").select("username,pppoe_username,type").eq("id", customerId).single();
-  if (!cust) return;
-  const radUser = cust.type === "pppoe" ? (cust.pppoe_username || cust.username) : cust.username;
-  if (!radUser) return;
-
-  // Upsert Calling-Station-Id in radcheck
-  const { data: existing } = await supabase.from("radcheck")
-    .select("id").eq("username", radUser).eq("attribute", "Calling-Station-Id").single();
-  if (existing) {
-    await supabase.from("radcheck").update({ value: mac }).eq("id", existing.id);
-  } else {
-    await supabase.from("radcheck").insert({ username: radUser, attribute: "Calling-Station-Id", op: ":=", value: mac });
-  }
+  await hotspotBindingApi("/api/hotspot-bindings/user", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ customerId, mac }),
+  });
 }
 
 async function addBypassBinding(mac: string, ip: string | null): Promise<void> {
-  const key = `bypass:${mac.replace(/:/g, "-")}`;
-  await supabase.from("radcheck").insert({ username: key, attribute: "Auth-Type", op: ":=", value: "Accept" });
-  if (ip) {
-    await supabase.from("radcheck").insert({ username: key, attribute: "Framed-IP-Address", op: ":=", value: ip });
-  }
+  await hotspotBindingApi("/api/hotspot-bindings/bypass", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mac, ip }),
+  });
 }
 
-async function removeBinding(b: Binding): Promise<void> {
-  if (b.source === "isp_customers" && b.customerId) {
-    await supabase.from("isp_customers").update({ mac_address: null }).eq("id", b.customerId);
-    // Remove Calling-Station-Id from radcheck for that user
-    if (b.username) {
-      await supabase.from("radcheck").delete().eq("username", b.username).eq("attribute", "Calling-Station-Id");
-    }
-  } else if (b.source === "radcheck" && b.radcheckIds?.length) {
-    await supabase.from("radcheck").delete().in("id", b.radcheckIds);
-  }
+async function removeBinding(binding: Binding): Promise<void> {
+  await hotspotBindingApi("/api/hotspot-bindings", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      source: binding.source,
+      customerId: binding.customerId,
+      mac: binding.mac,
+    }),
+  });
 }
 
 /* ══════════════════════════ Compose Bindings list ══════════════════════════ */
@@ -336,7 +306,7 @@ function SessionsTab() {
   const [search, setSearch] = useState("");
 
   const { data: sessions = [], isLoading, refetch, isFetching } = useQuery({
-    queryKey: ["radacct", showActive],
+    queryKey: ["radacct", ADMIN_ID, showActive],
     queryFn: () => fetchSessions(showActive),
     refetchInterval: 30_000,
   });
@@ -480,16 +450,16 @@ export default function HotspotBinding() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const { data: customers = [], isLoading: loadingCust }    = useQuery({ queryKey: ["isp_customers_mac"], queryFn: fetchCustomersWithMac, refetchInterval: 60_000 });
-  const { data: allCustomers = [] }                          = useQuery({ queryKey: ["isp_customers_all"],  queryFn: async () => {
-    const { data } = await supabase.from("isp_customers").select("id,name,username,mac_address,ip_address,type,status,expires_at").eq("admin_id", ADMIN_ID);
-    return (data ?? []) as DbCustomer[];
-  }});
-  const { data: bypasses = [],   isLoading: loadingByp }    = useQuery({ queryKey: ["radcheck_bypass"],    queryFn: fetchBypassEntries, refetchInterval: 60_000 });
-  const { data: bypassIps = [] }                             = useQuery({ queryKey: ["radcheck_bypass_ip"], queryFn: fetchBypassIps, refetchInterval: 60_000 });
-  const { data: routers  = [] }                              = useQuery({ queryKey: ["isp_routers"],        queryFn: fetchRouters });
-
-  const isLoading = loadingCust || loadingByp;
+  const { data: bindingConfig, isLoading } = useQuery({
+    queryKey: ["hotspot_binding_config", ADMIN_ID],
+    queryFn: fetchBindingConfig,
+    refetchInterval: 60_000,
+  });
+  const customers = bindingConfig?.customers ?? [];
+  const allCustomers = bindingConfig?.allCustomers ?? [];
+  const bypasses = bindingConfig?.bypasses ?? [];
+  const bypassIps = bindingConfig?.bypassIps ?? [];
+  const routers = bindingConfig?.routers ?? [];
   const bindings  = useMemo(() => composeBindings(customers, bypasses, bypassIps, routers), [customers, bypasses, bypassIps, routers]);
 
   const filtered = useMemo(() => {
@@ -515,9 +485,7 @@ export default function HotspotBinding() {
       else await addBypassBinding(mac, ip || null);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["isp_customers_mac"] });
-      qc.invalidateQueries({ queryKey: ["radcheck_bypass"] });
-      qc.invalidateQueries({ queryKey: ["radcheck_bypass_ip"] });
+      qc.invalidateQueries({ queryKey: ["hotspot_binding_config", ADMIN_ID] });
       setShowAdd(false);
       showToast("Binding added successfully");
     },
@@ -527,9 +495,7 @@ export default function HotspotBinding() {
   const deleteMutation = useMutation({
     mutationFn: removeBinding,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["isp_customers_mac"] });
-      qc.invalidateQueries({ queryKey: ["radcheck_bypass"] });
-      qc.invalidateQueries({ queryKey: ["radcheck_bypass_ip"] });
+      qc.invalidateQueries({ queryKey: ["hotspot_binding_config", ADMIN_ID] });
       setDeleting(null);
       showToast("Binding removed");
     },
@@ -601,7 +567,7 @@ export default function HotspotBinding() {
             </p>
           </div>
           <div style={{ display: "flex", gap: "0.625rem" }}>
-            <button onClick={() => { qc.invalidateQueries({ queryKey: ["isp_customers_mac"] }); qc.invalidateQueries({ queryKey: ["radcheck_bypass"] }); }}
+            <button onClick={() => { qc.invalidateQueries({ queryKey: ["hotspot_binding_config", ADMIN_ID] }); qc.invalidateQueries({ queryKey: ["radacct", ADMIN_ID] }); }}
               style={{ padding: "0.5rem 0.75rem", borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.375rem", fontFamily: "inherit", fontWeight: 600, fontSize: "0.8rem" }}>
               <RefreshCw size={13} style={{ animation: isLoading ? "spin 1s linear infinite" : "none" }} />
             </button>
