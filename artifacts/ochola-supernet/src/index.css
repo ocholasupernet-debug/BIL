@@ -4595,7 +4595,32 @@ table:not([role="grid"]) td [data-technical="true"] {
 }
 @media (max-width: 520px) {
   .dashboard-kpi-grid,
-  .dashboard-stat-grid,
+  .dashboard-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .dashboard-kpi,
+  .dashboard-stat {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+  }
+  .dashboard-kpi { padding: 10px; }
+  .dashboard-kpi-icon { width: 30px; height: 30px; }
+  .dashboard-kpi-copy,
+  .dashboard-stat-copy { width: 100%; flex: 0 0 auto; }
+  .dashboard-kpi-label,
+  .dashboard-stat-label {
+    overflow: visible;
+    line-height: 1.25;
+    text-overflow: clip;
+    white-space: normal;
+  }
+  .dashboard-kpi-value { overflow-wrap: anywhere; font-size: 1rem; white-space: normal; }
+  .dashboard-stat {
+    position: relative;
+    padding: 10px;
+  }
+  .dashboard-stat-icon { width: 27px; height: 27px; }
+  .dashboard-stat-arrow { position: absolute; top: 9px; right: 9px; }
   .dashboard-telemetry-totals,
   .reseller-dashboard .reseller-stat-grid,
   .sa-command-grid { grid-template-columns: minmax(0, 1fr); }
