@@ -40,6 +40,7 @@ import {
 import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
 import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
 import { buildVlanHotspotProfileConfig } from "../lib/vlan-hotspot-profile.js";
+import { buildVlanHotspotServerConfig } from "../lib/vlan-hotspot-server.js";
 import { RESERVED_SUBDOMAINS, TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 import { resellerTenantHostname, resellerTenantOrigin } from "../lib/reseller-portal-hostname.js";
 import {
@@ -893,21 +894,18 @@ async function provisionVlanResellerServices(
     `=address=${gateway}`,
     `=comment=${commentPrefix}_hotspot_dns`,
   ]);
-  await ensureNamed("/ip/hotspot/print", resources.hotspotServer, [
-    "/ip/hotspot/add",
-    `=name=${resources.hotspotServer}`,
-    `=interface=${vlanInterface}`,
-    `=profile=${resources.hotspotProfile}`,
-    `=address-pool=${resources.hotspotPool}`,
-    "=disabled=no",
-    `=comment=${commentPrefix}_hotspot_server`,
-  ], {
-    interface: vlanInterface,
+  const hotspotServerConfig = buildVlanHotspotServerConfig({
+    name: resources.hotspotServer,
+    interfaceName: vlanInterface,
     profile: resources.hotspotProfile,
-    "address-pool": resources.hotspotPool,
-    disabled: "no",
-    comment: `${commentPrefix}_hotspot_server`,
+    addressPool: resources.hotspotPool,
   });
+  await ensureNamed(
+    "/ip/hotspot/print",
+    resources.hotspotServer,
+    hotspotServerConfig.addCommand,
+    hotspotServerConfig.expectedProperties,
+  );
   const gardenRows = await runRouterCommand(creds, [
     "/ip/hotspot/walled-garden/ip/print",
     "=.proplist=comment",
