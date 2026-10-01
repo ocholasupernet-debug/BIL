@@ -343,6 +343,19 @@ router.delete("/super-admin/routers/:id", async (req, res): Promise<void> => {
       return;
     }
 
+    const migrationJobs = await sbSelectStrict<{ id: number }>(
+      "router_migration_jobs",
+      `or=(source_router_id.eq.${routerId},target_router_id.eq.${routerId})&select=id&limit=1`,
+    );
+    if (migrationJobs.length > 0) {
+      res.status(409).json({
+        ok: false,
+        error: "This router is referenced by migration job history and cannot be deleted. The router record must remain to preserve that history.",
+        code: "router_migration_job_reference",
+      });
+      return;
+    }
+
     const childTables = [
       "isp_ip_pools",
       "isp_ppp_secrets",

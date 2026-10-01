@@ -246,6 +246,6 @@ export async function sbDeleteStrict<T>(
     method: "DELETE",
     headers: headers({ Prefer: "return=representation" }),
   });
-  if (!res.ok) throw await supabaseFailure(res, "the VPN persistence change");
+  if (!res.ok) throw await supabaseFailure(res, `deletion from ${table}`);
   return res.json() as Promise<T[]>;
 }
