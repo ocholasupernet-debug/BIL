@@ -2,6 +2,8 @@ import { createHmac, randomUUID } from "node:crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
 import {
   extractToken,
+  generateAdminSessionToken,
+  generatePasswordSetupToken,
   generateToken,
   requireAdmin,
   validateToken,
@@ -16,6 +18,7 @@ import {
   sbUpdateStrict,
 } from "../lib/supabase-client.js";
 import { getTenantSubdomainFromRequest, RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
+import { isOtpChannelEnabled } from "../lib/platform-auth-security.js";
 import { activeSuperAdminName } from "./super-admin-auth-route.js";
 import {
   checkWhatsAppConnection,
@@ -178,6 +181,10 @@ router.post(
   requireAdmin(),
   requireTenantPermission("Manage Gateways"),
   async (req, res): Promise<void> => {
+    if (!await isOtpChannelEnabled("whatsapp")) {
+      res.status(503).json({ ok: false, error: "WhatsApp OTP is disabled by the Super Admin." });
+      return;
+    }
     const actor = await gatewaySettingsOtpActor(req, res);
     if (!actor) return;
     const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : "";
@@ -223,6 +230,10 @@ router.post(
   requireAdmin(),
   requireTenantPermission("Manage Gateways"),
   async (req, res): Promise<void> => {
+    if (!await isOtpChannelEnabled("whatsapp")) {
+      res.status(503).json({ ok: false, error: "WhatsApp OTP is disabled by the Super Admin." });
+      return;
+    }
     const actor = await gatewaySettingsOtpActor(req, res);
     if (!actor) return;
     const challengeId = typeof req.body?.challengeId === "string" ? req.body.challengeId.trim() : "";
@@ -275,12 +286,17 @@ router.get("/super-admin/whatsapp/settings", async (req, res): Promise<void> => 
 
 router.get("/whatsapp/public-config", async (_req, res): Promise<void> => {
   try {
-    const settings = await getWhatsAppSettings();
+    const [settings, globallyEnabled] = await Promise.all([
+      getWhatsAppSettings(),
+      isOtpChannelEnabled("whatsapp"),
+    ]);
     res.set("Cache-Control", "no-store").json({
       ok: true,
-      loginEnabled: isWhatsAppFeatureEnabled(settings, "login"),
-      registrationVerificationEnabled: isWhatsAppFeatureEnabled(settings, "registrationVerification"),
-      passwordRecoveryEnabled: isWhatsAppFeatureEnabled(settings, "passwordRecovery"),
+      loginEnabled: globallyEnabled && isWhatsAppFeatureEnabled(settings, "login"),
+      registrationVerificationEnabled: globallyEnabled && isWhatsAppFeatureEnabled(settings, "registrationVerification"),
+      // Account password resets are intentionally restricted to Super Admin.
+      passwordRecoveryEnabled: false,
+      otpChannelEnabled: globallyEnabled,
       defaultCountryCode: settings.defaultCountryCode,
     });
   } catch (error) {
@@ -290,6 +306,7 @@ router.get("/whatsapp/public-config", async (_req, res): Promise<void> => {
       loginEnabled: false,
       registrationVerificationEnabled: false,
       passwordRecoveryEnabled: false,
+      otpChannelEnabled: false,
       defaultCountryCode: process.env.WHATSAPP_DEFAULT_COUNTRY_CODE || "254",
     });
   }
@@ -380,6 +397,10 @@ router.post("/super-admin/whatsapp/test", async (req, res): Promise<void> => {
 router.post("/auth/whatsapp/request-otp", async (req, res): Promise<void> => {
   const purpose = req.body?.purpose as OtpPurpose;
   const accountType = req.body?.accountType;
+  if (!await isOtpChannelEnabled("whatsapp")) {
+    res.status(503).json({ ok: false, error: "WhatsApp OTP is disabled by the Super Admin." });
+    return;
+  }
   if (!["login", "registration", "recovery"].includes(purpose)) {
     res.status(400).json({ ok: false, error: "Choose a supported WhatsApp verification flow." });
     return;
@@ -388,13 +409,13 @@ router.post("/auth/whatsapp/request-otp", async (req, res): Promise<void> => {
     res.status(400).json({ ok: false, error: "Choose an account type." });
     return;
   }
+  if (purpose === "recovery") {
+    res.status(403).json({ ok: false, error: "Only a Super Admin can reset an account password." });
+    return;
+  }
 
   const settings = await getWhatsAppSettings();
-  const feature: WhatsAppFeature = purpose === "login"
-    ? "login"
-    : purpose === "recovery"
-      ? "passwordRecovery"
-      : "registrationVerification";
+  const feature: WhatsAppFeature = purpose === "login" ? "login" : "registrationVerification";
   if (!isWhatsAppFeatureEnabled(settings, feature)) {
     res.status(503).json({ ok: false, error: "WhatsApp verification is not enabled." });
     return;
@@ -468,6 +489,10 @@ router.post("/auth/whatsapp/request-otp", async (req, res): Promise<void> => {
 });
 
 router.post("/auth/whatsapp/verify-otp", async (req, res): Promise<void> => {
+  if (!await isOtpChannelEnabled("whatsapp")) {
+    res.status(503).json({ ok: false, error: "WhatsApp OTP is disabled by the Super Admin." });
+    return;
+  }
   const challengeId = typeof req.body?.challengeId === "string" ? req.body.challengeId.trim() : "";
   const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
   if (!/^[0-9a-f-]{36}$/i.test(challengeId) || !/^\d{6}$/.test(code)) {
@@ -547,12 +572,14 @@ router.post("/auth/whatsapp/verify-otp", async (req, res): Promise<void> => {
     phone_verified: true,
     phone_verified_at: new Date().toISOString(),
   });
-  const token = generateToken(accountType === "admin" ? "a" : "c", String(accountId));
+  const token = accountType === "admin"
+    ? generateAdminSessionToken(String(accountId), Number(account.auth_version ?? 1))
+    : generateToken("c", String(accountId));
   if (accountType === "admin" && account.must_change_password === true) {
     res.set("Cache-Control", "no-store").json({
       ok: true,
       requiresPasswordSetup: true,
-      setupToken: generateToken("p", String(accountId)),
+      setupToken: generatePasswordSetupToken(String(accountId), Number(account.auth_version ?? 1)),
       admin: publicAccount({ ...account, phone_verified: true }),
     });
     return;
@@ -567,59 +594,8 @@ router.post("/auth/whatsapp/verify-otp", async (req, res): Promise<void> => {
   });
 });
 
-router.post("/auth/whatsapp/reset-password", async (req, res): Promise<void> => {
-  const resetToken = typeof req.body?.resetToken === "string" ? req.body.resetToken.trim() : "";
-  const password = typeof req.body?.password === "string" ? req.body.password : "";
-  if (!resetToken || resetToken.length > 100 || password.length < 6 || password.length > 200) {
-    res.status(400).json({ ok: false, error: "Use a valid reset session and a password with at least 6 characters." });
-    return;
-  }
-
-  let consumed: { accountType: AccountType | null; accountId: number | null } | null;
-  try {
-    const rows = await sbRpc<{
-      consumed: boolean;
-      account_type: AccountType | null;
-      account_id: number | null;
-    }>("consume_whatsapp_action_token", {
-      p_token_hash: hashWhatsAppActionToken(resetToken),
-      p_phone_e164: "",
-      p_purpose: "recovery",
-    });
-    const row = rows[0];
-    consumed = row?.consumed
-      ? { accountType: row.account_type, accountId: row.account_id }
-      : null;
-  } catch {
-    res.status(503).json({ ok: false, error: "Password recovery is temporarily unavailable." });
-    return;
-  }
-  if (!consumed?.accountType || !consumed.accountId) {
-    respondInvalidOtp(res);
-    return;
-  }
-
-  const table = consumed.accountType === "admin" ? "isp_admins" : "isp_customers";
-  try {
-    const updated = await sbUpdateStrict(
-      table,
-      `id=eq.${encodeURIComponent(String(consumed.accountId))}`,
-      {
-        password: await hashIspAdminPassword(password),
-        ...(consumed.accountType === "admin" ? { updated_at: new Date().toISOString() } : {}),
-      },
-    );
-    if (!updated[0]) {
-      res.status(409).json({ ok: false, error: "The account could not be updated. Request a new recovery code." });
-      return;
-    }
-    res.set("Cache-Control", "no-store").json({
-      ok: true,
-      message: "Password updated. Sign in with your new password.",
-    });
-  } catch {
-    res.status(503).json({ ok: false, error: "The password could not be updated. Request a new recovery code." });
-  }
+router.post("/auth/whatsapp/reset-password", (_req, res): void => {
+  res.status(403).json({ ok: false, error: "Only a Super Admin can reset an account password." });
 });
 
 router.get("/whatsapp/webhook", async (req, res): Promise<void> => {

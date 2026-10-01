@@ -105,14 +105,23 @@ export function isLoggedIn(): boolean {
 }
 
 /* ─── Impersonation helpers ─── */
-export function startImpersonation(id: number, username: string, name: string) {
+export function startImpersonation(
+  id: number,
+  username: string,
+  name: string,
+  role: string,
+  apiToken: string,
+  sessionId: string,
+  expiresAt: string,
+) {
   try {
-    // Save the impersonation marker so the admin layout can show the banner
     localStorage.setItem("ochola_impersonating", "true");
     localStorage.setItem("ochola_impersonate_name", name);
     localStorage.setItem("ochola_impersonate_username", username);
+    localStorage.setItem("ochola_impersonation_session_id", sessionId);
+    localStorage.setItem("ochola_impersonation_expires_at", expiresAt);
   } catch {}
-  setAdminAuth(id, username, name);
+  setAdminAuth(id, username, name, role, apiToken);
 }
 
 export function stopImpersonation() {
@@ -121,12 +130,14 @@ export function stopImpersonation() {
     localStorage.removeItem("ochola_impersonating");
     localStorage.removeItem("ochola_impersonate_name");
     localStorage.removeItem("ochola_impersonate_username");
+    localStorage.removeItem("ochola_impersonation_session_id");
+    localStorage.removeItem("ochola_impersonation_expires_at");
     localStorage.removeItem("ochola_admin_id");
     localStorage.removeItem("ochola_admin_username");
     localStorage.removeItem("ochola_admin_name");
     localStorage.removeItem("ochola_admin_display_name");
-    localStorage.removeItem("ochola_api_token");
     localStorage.removeItem("ochola_admin_role");
+    localStorage.removeItem("ochola_api_token");
     window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: null } }));
   } catch {}
 }
@@ -137,6 +148,10 @@ export function isImpersonating(): boolean {
 
 export function getImpersonatedName(): string {
   try { return localStorage.getItem("ochola_impersonate_name") || ""; } catch { return ""; }
+}
+
+export function getImpersonationSessionId(): string {
+  try { return localStorage.getItem("ochola_impersonation_session_id") || ""; } catch { return ""; }
 }
 
 /* ─── Payment gateway preference ─── */

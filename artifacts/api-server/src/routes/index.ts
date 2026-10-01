@@ -38,6 +38,8 @@ import routerLoadBalancingRouter from "./router-load-balancing-route.js";
 import platformEmailRouter from "./platform-email-route.js";
 import routerMigrationsRouter from "./router-migrations-route.js";
 import routerUserSnapshotsRouter from "./router-user-snapshots-route.js";
+import platformAuthSecurityRouter from "./platform-auth-security-route.js";
+import superAdminAccountAccessRouter from "./super-admin-account-access-route.js";
 
 const router: IRouter = Router();
 
@@ -80,5 +82,7 @@ router.use(dashboardPreferencesRouter);
   router.use(platformEmailRouter);
   router.use(routerMigrationsRouter);
   router.use(routerUserSnapshotsRouter);
+  router.use(platformAuthSecurityRouter);
+  router.use(superAdminAccountAccessRouter);
 
 export default router;

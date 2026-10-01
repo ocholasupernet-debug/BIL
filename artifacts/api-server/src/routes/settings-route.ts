@@ -15,6 +15,7 @@ import {
   savePaymentDestinations,
   isMpesaConfigured,
   normaliseRegistrationFee,
+  normaliseRegistrationWhatsappNumber,
   upsertPaymentDestination,
   type PaymentDestinationType,
   type MpesaSettings,
@@ -840,6 +841,13 @@ router.post("/super-admin/payment-destinations", async (req: Request, res: Respo
     const renewalDestinationId = typeof req.body?.renewalDestinationId === "string"
       ? req.body.renewalDestinationId.trim()
       : "";
+    const registrationWhatsappNumber = req.body?.registrationWhatsappNumber === undefined
+      ? current.registrationWhatsappNumber
+      : normaliseRegistrationWhatsappNumber(req.body.registrationWhatsappNumber);
+    if (!registrationWhatsappNumber) {
+      res.status(400).json({ ok: false, error: "Enter a WhatsApp number in international format, such as +254798088650." });
+      return;
+    }
     const registrationFee = normaliseRegistrationFee(req.body?.registrationFee);
     if (req.body?.registrationFee !== undefined &&
         registrationFee !== req.body.registrationFee) {
@@ -862,11 +870,17 @@ router.post("/super-admin/payment-destinations", async (req: Request, res: Respo
         }
       }
     }
-    const next = { ...current, registrationFee, registrationDestinationId, renewalDestinationId };
+    const next = {
+      ...current,
+      registrationFee,
+      registrationDestinationId,
+      renewalDestinationId,
+      registrationWhatsappNumber,
+    };
     savePaymentDestinations(next);
     void sendPlatformSecurityNotice(
       "Platform payment destinations changed",
-      "The Super Admin changed the selected platform payment destinations or registration fee.",
+      "The Super Admin changed platform payment destinations, the registration fee, or registration support contact.",
     );
     res.json({ ok: true, ...next, registrationFee: { amount: next.registrationFee, currency: "KES" } });
     return;

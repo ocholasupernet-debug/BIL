@@ -26,6 +26,7 @@ const NAV: NavSection[] = [
     items: [
       { name: "ISP Admins", href: "/super-admin/admins", icon: Users },
       { name: "Roles & Permissions", href: "/super-admin/roles", icon: ShieldCheck },
+      { name: "OTP & password checks", href: "/super-admin/auth-security", icon: Lock },
       { name: "Impersonate Admin", href: "/super-admin/impersonate", icon: LogIn },
     ],
   },
@@ -71,6 +72,7 @@ const PAGE_CONTEXT: { prefix: string; title: string }[] = [
   { prefix: "/super-admin/dashboard", title: "Platform overview" },
   { prefix: "/super-admin/admins", title: "ISP admins" },
   { prefix: "/super-admin/roles", title: "Roles and permissions" },
+  { prefix: "/super-admin/auth-security", title: "OTP and password security" },
   { prefix: "/super-admin/impersonate", title: "Impersonate admin" },
   { prefix: "/super-admin/routers", title: "Routers" },
   { prefix: "/super-admin/limits", title: "System limits" },

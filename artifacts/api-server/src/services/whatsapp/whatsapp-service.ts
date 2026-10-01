@@ -13,7 +13,7 @@ import {
   sbUpdate,
   supabaseServiceRoleConfigured,
 } from "../../lib/supabase-client.js";
-import { generateToken } from "../../lib/api-auth.js";
+import { generatePasswordSetupToken } from "../../lib/api-auth.js";
 import { logger } from "../../lib/logger.js";
 import { RESERVED_SUBDOMAINS, TENANT_BASE_DOMAIN } from "../../lib/tenant-host.js";
 import {
@@ -711,6 +711,7 @@ export function createWhatsAppWelcomeSetupUrl(
   adminId: number,
   subdomainValue: unknown,
   mustChangePassword: boolean,
+  authVersion = 1,
 ): string {
   const subdomain = cleanString(subdomainValue, 63).toLowerCase();
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(subdomain) ||
@@ -722,7 +723,7 @@ export function createWhatsAppWelcomeSetupUrl(
   const url = new URL(path, `https://${subdomain}.${TENANT_BASE_DOMAIN}`);
   if (mustChangePassword) {
     url.hash = new URLSearchParams({
-      setupToken: generateToken("p", String(adminId)),
+      setupToken: generatePasswordSetupToken(String(adminId), authVersion),
     }).toString();
   }
   return url.toString();
@@ -844,6 +845,7 @@ export async function processWhatsAppOutboxBatch(limit = 10): Promise<number> {
                   Number(item.admin_id),
                   admin?.subdomain,
                   admin?.must_change_password === true || admin?.must_change_password === "true",
+                  Number(admin?.auth_version ?? 1),
                 ),
               ]
             : item.event_type === "account_activated" ||

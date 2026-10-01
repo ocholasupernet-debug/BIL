@@ -91,6 +91,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_router_manual_vpn_config.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_manual_api_config.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_admin_settings_persistence.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_restore_default_gateway_access.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_shared_hotspot_resource_names.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_immutable_revenue_billing.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_revenue_summary_africa_nairobi.sql", import.meta.url)),
@@ -105,6 +106,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_whatsapp_security_events.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_sms_integration.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_registration_contact_reuse_limit.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_platform_auth_security_controls.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
 

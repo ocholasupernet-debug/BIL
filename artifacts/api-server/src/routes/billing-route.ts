@@ -17,7 +17,6 @@ import {
 const router: IRouter = Router();
 
 type BillingConfig = {
-  cutoff_day: number;
   due_day: number;
   sales_threshold: number;
   low_sales_fee: number;
@@ -28,7 +27,6 @@ type AccountRow = {
   id: number;
   parent_id: number | null;
   role: string;
-  created_at: string;
   name: string | null;
   phone: string | null;
   payment_phone: string | null;
@@ -54,7 +52,7 @@ function dueDate(periodStart: string, day: number): string {
 async function billingConfig(): Promise<BillingConfig> {
   const rows = await billingSelect<BillingConfig>(
     "platform_billing_config",
-    "id=eq.1&select=cutoff_day,due_day,sales_threshold,low_sales_fee,high_sales_fee&limit=1",
+    "id=eq.1&select=due_day,sales_threshold,low_sales_fee,high_sales_fee&limit=1",
   );
   if (!rows[0]) throw new Error("Platform billing configuration is not available.");
   return rows[0];
@@ -65,7 +63,7 @@ async function currentAccount(req: Request): Promise<AccountRow | null> {
   if (!account) return null;
   const rows = await sbSelectStrict<AccountRow>(
     "isp_admins",
-    `id=eq.${encodeURIComponent(account.id)}&is_active=is.true&select=id,parent_id,role,created_at,name,phone,payment_phone&limit=1`,
+    `id=eq.${encodeURIComponent(account.id)}&is_active=is.true&select=id,parent_id,role,name,phone,payment_phone&limit=1`,
   );
   return rows[0] ?? null;
 }
@@ -81,12 +79,6 @@ async function currentInvoice(
     `account_id=eq.${account.id}&billing_period=eq.${period}&select=*&limit=1`,
   );
   if (existing[0]) return { invoice: existing[0], config };
-
-  const created = new Date(account.created_at);
-  const eligible = Number.isFinite(created.getTime())
-    && created < new Date(`${period}T00:00:00.000Z`)
-    && created.getUTCDate() <= config.cutoff_day;
-  if (!eligible) return { invoice: null, config };
 
   const salesStart = previousMonthStart(period);
   const ledgerRows = await billingSelect<{ amount: number | string; payment_method: string | null }>(

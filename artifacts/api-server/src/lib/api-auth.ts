@@ -2,6 +2,13 @@ import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import type { Request, Response, NextFunction } from "express";
 import { sbSelect, sbSelectStrict } from "./supabase-client.js";
 import { getTenantSubdomainFromRequest } from "./tenant-host.js";
+import {
+  getAdminApiReauthFeature,
+  isPasswordReauthRequired,
+  recordPlatformAuthAudit,
+  type AdminPolicyRole,
+} from "./platform-auth-security.js";
+import { getActiveSuperAdminAccessActor } from "./platform-auth-store.js";
 
 declare global {
   namespace Express {
@@ -28,6 +35,26 @@ export interface ApiTokenPayload {
   type: ApiTokenType;
   uid: string;
   time: number;
+  impersonationSessionId?: string;
+  authVersion?: number;
+  reauthGrants?: PasswordReauthProof[];
+}
+
+export interface PasswordReauthProof {
+  uid: string;
+  role: AdminPolicyRole;
+  feature: string;
+  expiresAt: number;
+  nonce: string;
+}
+
+interface AuthenticatedAdmin {
+  id: number;
+  parent_id: number | null;
+  subdomain: string | null;
+  role: string | null;
+  is_active: boolean;
+  auth_version: number | null;
 }
 
 export interface PaymentIntentPayload {
@@ -75,14 +102,64 @@ export function generateToken(type: ApiTokenType, uid: string): string {
   return `${type}.${uid}.${time}.${hash}`;
 }
 
+export function generatePasswordSetupToken(uid: string, authVersion: number): string {
+  if (!TOKEN_SIGNING_SECRET) throw new Error("Server token signing is not configured.");
+  const time = Math.floor(Date.now() / 1000);
+  const encoded = Buffer.from(JSON.stringify({
+    authVersion: Number.isSafeInteger(authVersion) && authVersion > 0 ? authVersion : 1,
+  }), "utf8").toString("base64url");
+  const body = `p.${uid}.${time}.s${encoded}`;
+  const hash = createHmac("sha256", TOKEN_SIGNING_SECRET).update(body).digest("hex");
+  return `${body}.${hash}`;
+}
+
+export function generateImpersonationToken(uid: string, sessionId: string): string {
+  return generateAdminSessionToken(uid, 1, { impersonationSessionId: sessionId });
+}
+
+export function generateAdminSessionToken(
+  uid: string,
+  authVersion: number,
+  extras: { impersonationSessionId?: string; reauthGrants?: PasswordReauthProof[] } = {},
+): string {
+  if (!TOKEN_SIGNING_SECRET) throw new Error("Server token signing is not configured.");
+  const time = Math.floor(Date.now() / 1000);
+  const encoded = Buffer.from(JSON.stringify({
+    authVersion: Number.isSafeInteger(authVersion) && authVersion > 0 ? authVersion : 1,
+    ...(extras.impersonationSessionId ? { impersonationSessionId: extras.impersonationSessionId } : {}),
+    ...(extras.reauthGrants?.length ? { reauthGrants: extras.reauthGrants } : {}),
+  }), "utf8").toString("base64url");
+  const body = `a.${uid}.${time}.s${encoded}`;
+  const hash = createHmac("sha256", TOKEN_SIGNING_SECRET).update(body).digest("hex");
+  return `${body}.${hash}`;
+}
+
 export function validateToken(token: string): ApiTokenPayload | null {
   if (!TOKEN_SIGNING_SECRET || !token) return null;
 
   const parts = token.split(".");
-  if (parts.length !== 4) return null;
-
-  const [type, uid, timeStr, hash] = parts;
-  if (type !== "a" && type !== "c" && type !== "p") return null;
+  if (parts.length !== 4 && parts.length !== 5) return null;
+  const [rawType, uid, timeStr] = parts;
+  const rawClaims = parts.length === 5 ? parts[3] : undefined;
+  const hash = parts.at(-1)!;
+  if (
+    (rawType !== "a" && rawType !== "c" && rawType !== "p") ||
+    (parts.length === 5 && ((rawType !== "a" && rawType !== "p") || !rawClaims?.startsWith("s")))
+  ) return null;
+  let claims: { authVersion?: number; impersonationSessionId?: string; reauthGrants?: PasswordReauthProof[] } = {};
+  if (rawClaims) {
+    try {
+      claims = JSON.parse(Buffer.from(rawClaims.slice(1), "base64url").toString("utf8"));
+      if (
+        !Number.isSafeInteger(claims.authVersion) ||
+        (claims.authVersion ?? 0) < 1 ||
+        (claims.impersonationSessionId !== undefined && !/^[0-9a-f-]{36}$/i.test(claims.impersonationSessionId)) ||
+        (claims.reauthGrants !== undefined && !Array.isArray(claims.reauthGrants))
+      ) return null;
+    } catch {
+      return null;
+    }
+  }
 
   const time = parseInt(timeStr, 10);
   if (isNaN(time)) return null;
@@ -92,15 +169,70 @@ export function validateToken(token: string): ApiTokenPayload | null {
 
   if (time !== 0) {
     const ageMs = (nowS - time) * 1000;
-    if (ageMs > (type === "p" ? PASSWORD_SETUP_TOKEN_TTL_MS : TOKEN_TTL_MS)) return null;
+    if (ageMs > (rawType === "p" ? PASSWORD_SETUP_TOKEN_TTL_MS : TOKEN_TTL_MS)) return null;
   }
 
-  const expected = createHmac("sha256", TOKEN_SIGNING_SECRET)
-    .update(`${type}.${uid}.${time}`)
-    .digest("hex");
-  if (hash !== expected) return null;
+  const body = parts.slice(0, -1).join(".");
+  const expected = createHmac("sha256", TOKEN_SIGNING_SECRET).update(body).digest("hex");
+  const expectedBuffer = Buffer.from(expected, "hex");
+  const actualBuffer = Buffer.from(hash, "hex");
+  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) return null;
 
-  return { type: type as ApiTokenType, uid, time };
+  return {
+    type: rawType as ApiTokenType,
+    uid,
+    time,
+    ...(claims.authVersion ? { authVersion: claims.authVersion } : {}),
+    ...(claims.impersonationSessionId ? { impersonationSessionId: claims.impersonationSessionId } : {}),
+    ...(claims.reauthGrants ? { reauthGrants: claims.reauthGrants } : {}),
+  };
+}
+
+export function generatePasswordReauthProof(
+  uid: string,
+  role: AdminPolicyRole,
+  feature: string,
+): { proof: string; expiresAt: number } {
+  if (!TOKEN_SIGNING_SECRET) throw new Error("Server token signing is not configured.");
+  const payload: PasswordReauthProof = {
+    uid,
+    role,
+    feature,
+    expiresAt: Date.now() + 5 * 60 * 1000,
+    nonce: randomBytes(18).toString("base64url"),
+  };
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const signature = createHmac("sha256", TOKEN_SIGNING_SECRET).update(encoded).digest("base64url");
+  return { proof: `${encoded}.${signature}`, expiresAt: payload.expiresAt };
+}
+
+export function validatePasswordReauthProof(token: string): PasswordReauthProof | null {
+  if (!TOKEN_SIGNING_SECRET || typeof token !== "string" || token.length > 4096) return null;
+  const [encoded, signature, extra] = token.split(".");
+  if (!encoded || !signature || extra !== undefined) return null;
+  const expected = createHmac("sha256", TOKEN_SIGNING_SECRET).update(encoded).digest();
+  let supplied: Buffer;
+  try {
+    supplied = Buffer.from(signature, "base64url");
+  } catch {
+    return null;
+  }
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as PasswordReauthProof;
+    if (
+      typeof parsed.uid !== "string" ||
+      (parsed.role !== "isp_admin" && parsed.role !== "reseller") ||
+      typeof parsed.feature !== "string" ||
+      !Number.isFinite(parsed.expiresAt) ||
+      parsed.expiresAt <= Date.now() ||
+      parsed.expiresAt > Date.now() + 5 * 60 * 1000 + 30_000 ||
+      typeof parsed.nonce !== "string"
+    ) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 export function generatePaymentIntent(payload: Omit<PaymentIntentPayload, "issuedAt" | "nonce">): string {
@@ -397,31 +529,82 @@ export function requireAdmin() {
       return;
     }
 
-    /* The superadmin UI keeps its privileged token while impersonating an ISP
-       admin. Tenant-scoped routes need the selected tenant ID, but only a
-       validated superadmin token may provide this override. */
-    const rawImpersonatedId = req.headers["x-impersonated-admin-id"];
-    const impersonatedId = Array.isArray(rawImpersonatedId) ? rawImpersonatedId[0] : rawImpersonatedId;
-    if (
-      payload.uid === "superadmin" &&
-      typeof impersonatedId === "string" &&
-      /^[1-9]\d*$/.test(impersonatedId) &&
-      Number.isSafeInteger(Number(impersonatedId))
-    ) {
-      req.authUser = { ...payload, uid: String(Number(impersonatedId)) };
-    } else {
-      req.authUser = payload;
+    let authenticatedAdmin: AuthenticatedAdmin | null = null;
+    if (payload.uid !== "superadmin") {
+      try {
+        const adminRows = await sbSelectStrict<AuthenticatedAdmin>(
+          "isp_admins",
+          `id=eq.${encodeURIComponent(payload.uid)}&select=id,parent_id,subdomain,role,is_active,auth_version&limit=1`,
+        );
+        authenticatedAdmin = adminRows[0] ?? null;
+      } catch {
+        res.status(503).json({ ok: false, error: "Administrator session status could not be checked." });
+        return;
+      }
+      if (!authenticatedAdmin || authenticatedAdmin.is_active !== true) {
+        res.status(401).json({ ok: false, error: "This administrator account is inactive or no longer exists." });
+        return;
+      }
+      if ((payload.authVersion ?? 1) !== Number(authenticatedAdmin.auth_version ?? 1)) {
+        res.status(401).json({ ok: false, error: "Your security credentials changed. Sign in again." });
+        return;
+      }
+    }
+
+    let impersonationActor: string | null = null;
+    if (payload.impersonationSessionId) {
+      try {
+        impersonationActor = await getActiveSuperAdminAccessActor(
+          payload.impersonationSessionId,
+          payload.uid,
+        );
+      } catch {
+        res.status(503).json({ ok: false, error: "The Super Admin access session could not be checked." });
+        return;
+      }
+      if (!impersonationActor) {
+        res.status(401).json({ ok: false, error: "The Super Admin access session has expired or ended." });
+        return;
+      }
+    }
+    req.authUser = payload;
+
+    const feature = getAdminApiReauthFeature(String(req.originalUrl || req.path || ""));
+    if (feature && !impersonationActor && authenticatedAdmin) {
+      try {
+        const role = authenticatedAdmin.role;
+        if (role !== "isp_admin" && role !== "reseller") {
+          res.status(403).json({ ok: false, error: "This account cannot use administrator pages." });
+          return;
+        }
+        if (await isPasswordReauthRequired(role as AdminPolicyRole, feature)) {
+          const validProof = (payload.reauthGrants ?? []).some(proof =>
+            proof.uid === payload.uid &&
+            proof.role === role &&
+            proof.feature === feature &&
+            Number.isFinite(proof.expiresAt) &&
+            proof.expiresAt > Date.now(),
+          );
+          if (!validProof) {
+            res.status(428).json({
+              ok: false,
+              code: "PASSWORD_REAUTH_REQUIRED",
+              feature,
+              error: "Re-enter your current password to continue.",
+            });
+            return;
+          }
+        }
+      } catch {
+        res.status(503).json({ ok: false, error: "The password re-check policy could not be verified." });
+        return;
+      }
     }
 
     const tenantSubdomain = getTenantSubdomainFromRequest(req);
     req.tenantSubdomain = tenantSubdomain;
     if (tenantSubdomain && req.authUser.uid !== "superadmin") {
-      const sessionRows = await sbSelect<{ id: number; parent_id: number | null; subdomain: string | null }>(
-        "isp_admins",
-        `id=eq.${encodeURIComponent(req.authUser.uid)}&is_active=is.true&select=id,parent_id,subdomain&limit=1`,
-      );
-      const session = sessionRows[0];
-      const tenantId = session?.parent_id ?? session?.id;
+      const tenantId = authenticatedAdmin?.parent_id ?? authenticatedAdmin?.id;
       const tenantRows = tenantId
         ? await sbSelect<{ id: number; parent_id: number | null }>(
             "isp_admins",
@@ -433,6 +616,23 @@ export function requireAdmin() {
       );
       if (!sameLinkedTenant) {
         res.status(403).json({ ok: false, error: "This session does not belong to the requested ISP subdomain." });
+        return;
+      }
+    }
+
+    if (impersonationActor && !["GET", "HEAD", "OPTIONS"].includes(req.method.toUpperCase())) {
+      try {
+        await recordPlatformAuthAudit({
+          actorName: impersonationActor,
+          action: "impersonated_admin_api_write",
+          targetAdminId: Number(payload.uid),
+          impersonationSessionId: payload.impersonationSessionId,
+          details: { method: req.method, path: (req.originalUrl || req.path).split("?")[0] },
+          sourceIp: req.ip ?? req.socket.remoteAddress,
+          userAgent: req.get("user-agent"),
+        });
+      } catch {
+        res.status(503).json({ ok: false, error: "This change was blocked because the access audit could not be recorded." });
         return;
       }
     }

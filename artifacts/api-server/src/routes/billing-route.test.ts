@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import express from "express";
+import { Pool } from "pg";
 
 test("billing-only access reads safely but cannot start an unsettled payment", async () => {
   process.env.SESSION_SECRET = "billing-test-session-secret";
   process.env.VITE_SUPABASE_URL = "https://billing-test.supabase.co";
   process.env.VITE_SUPABASE_KEY = "billing-test-anon";
   process.env.BILLING_SUPABASE_SERVICE_KEY = "billing-test-service";
+  const originalDatabaseUrl = process.env.SUPABASE_DB_URL;
+  process.env.SUPABASE_DB_URL = "postgres://billing-test:billing-test@127.0.0.1:5432/billing_test";
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   delete process.env.SUPABASE_SERVICE_KEY;
 
-  const [{ default: billingRouter }, { default: mpesaRouter }, { generateToken }] = await Promise.all([
+  const [{ default: billingRouter }, { default: mpesaRouter }, { generateAdminSessionToken }] = await Promise.all([
     import("./billing-route.js"),
     import("./mpesa-route.js"),
     import("../lib/api-auth.js"),
@@ -27,7 +30,25 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const originalFetch = globalThis.fetch;
+  const poolPrototype = Pool.prototype as unknown as {
+    query: (...args: unknown[]) => Promise<{ rows: unknown[]; rowCount: number }>;
+  };
+  const originalPoolQuery = poolPrototype.query;
+  poolPrototype.query = async sql => {
+    assert.match(String(sql), /platform_auth_security_policy/);
+    return {
+      rows: [{
+        otp_all_enabled: false,
+        otp_whatsapp_enabled: false,
+        otp_sms_enabled: false,
+        otp_email_enabled: false,
+        password_reauth: {},
+      }],
+      rowCount: 1,
+    };
+  };
   const requests: { path: string; method: string; key: string | null; prefer: string | null; body?: Record<string, unknown> }[] = [];
+  let accountCreatedAt = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - 1, 26, 12)).toISOString();
   let invoice: Record<string, unknown> | null = null;
 
   globalThis.fetch = async (input, init) => {
@@ -46,8 +67,8 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     let rows: Record<string, unknown>[] = [];
     if (url.pathname.endsWith("/isp_admins")) {
       if (url.searchParams.get("id") === "eq.42") {
-        rows = [{ id: 42, parent_id: null, role: "isp_admin", account_tier: "isp_admin",
-          created_at: "2025-01-01T00:00:00Z", name: "Test account", phone: null, payment_phone: null }];
+        rows = [{ id: 42, parent_id: null, role: "isp_admin", account_tier: "isp_admin", is_active: true, auth_version: 1,
+          created_at: accountCreatedAt, name: "Test account", phone: null, payment_phone: null }];
       }
     } else if (url.pathname.endsWith("/platform_billing_config")) {
       rows = [{ cutoff_day: 25, due_day: 5, sales_threshold: 8000, low_sales_fee: 500, high_sales_fee: 1400 }];
@@ -74,15 +95,15 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
   };
 
   const endpoint = `http://127.0.0.1:${address.port}/api/billing`;
-  const token = generateToken("a", "42");
+  const token = generateAdminSessionToken("42", 1);
   try {
     const unauthorized = await originalFetch(`${endpoint}/current`);
     assert.equal(unauthorized.status, 401);
     assert.equal(requests.length, 0);
     const wrongAccount = await originalFetch(`${endpoint}/current`, {
-      headers: { Authorization: `Bearer ${generateToken("a", "43")}` },
+      headers: { Authorization: `Bearer ${generateAdminSessionToken("43", 1)}` },
     });
-    assert.equal(wrongAccount.status, 403);
+    assert.equal(wrongAccount.status, 401);
     assert.ok(requests.every(row => row.path.endsWith("/isp_admins")));
     requests.length = 0;
 
@@ -100,6 +121,13 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     assert.ok(requests.every(row => row.method === "GET"));
     assert.ok(requests.filter(row => row.path.endsWith("/isp_admins")).every(row => row.key === "billing-test-anon"));
     assert.ok(requests.filter(row => !row.path.endsWith("/isp_admins")).every(row => row.key === "billing-test-service"));
+
+    accountCreatedAt = new Date().toISOString();
+    const newlyCreatedAccountPreview = await originalFetch(`${endpoint}/current`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(newlyCreatedAccountPreview.status, 200);
+    assert.equal((await newlyCreatedAccountPreview.json() as { eligible: boolean }).eligible, true);
 
     const prepared = await originalFetch(`${endpoint}/renew`, {
       method: "POST",
@@ -120,8 +148,18 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     assert.match((await stk.json() as { error: string }).error, /unavailable/);
     assert.ok(requests.filter(row => row.path.endsWith("/platform_billing_invoices")).every(row => row.key === "billing-test-service"));
     assert.ok(requests.every(row => row.method === "GET"), "no transaction or payment prompt may be created");
+
+    invoice = { id: 91, account_id: 42, status: "paid", amount_due: 500, due_date: "2026-09-05" };
+    const paidCurrent = await originalFetch(`${endpoint}/current`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(paidCurrent.status, 200);
+    assert.equal((await paidCurrent.json() as { invoice: { status: string } }).invoice.status, "paid");
   } finally {
     globalThis.fetch = originalFetch;
+    poolPrototype.query = originalPoolQuery;
+    if (originalDatabaseUrl === undefined) delete process.env.SUPABASE_DB_URL;
+    else process.env.SUPABASE_DB_URL = originalDatabaseUrl;
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
 });

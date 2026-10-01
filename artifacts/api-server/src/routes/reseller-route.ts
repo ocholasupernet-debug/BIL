@@ -3125,7 +3125,7 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
       is_active: true,
       status: "active",
       earnings_balance: 0,
-      must_change_password: false,
+      must_change_password: true,
     });
     resellerId = Number(resellerRows[0]?.id);
     resellerSubdomain = String(resellerRows[0]?.subdomain ?? "").trim().toLowerCase();

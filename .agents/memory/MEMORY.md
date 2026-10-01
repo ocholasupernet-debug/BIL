@@ -96,3 +96,4 @@
 - [Async port deployment](async-port-deployment.md) — Long-running assigned-port RouterOS work must return quickly and expose persisted completion status.
 - [Reseller portal hostname boundary](reseller-portal-hostname-boundary.md) — Fetch portal files from the ISP origin, but embed the reseller tenant/API origin and apply the reseller Hotspot DNS to RouterOS.
 - [Reseller VLAN access handoff](reseller-vlan-access-handoff.md) — Identify the live physical ingress before assigning an untagged reseller VLAN access port; preserve the legacy native VLAN explicitly.
+- [Platform auth storage and revocation](platform-auth-storage-revocation.md) — Keep auth control tables on the privileged database path and bind admin/setup sessions to the account auth version.

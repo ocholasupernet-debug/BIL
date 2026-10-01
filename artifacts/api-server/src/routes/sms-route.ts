@@ -4,12 +4,13 @@ import { sbRpc, sbSelect, sbUpdateStrict } from "../lib/supabase-client.js";
 import { logger } from "../lib/logger.js";
 import { checkRegistrationContactCapacity } from "../lib/registration-contact-capacity.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
-import { generateToken } from "../lib/api-auth.js";
+import { generateAdminSessionToken, generatePasswordSetupToken, generateToken } from "../lib/api-auth.js";
 import { activeSuperAdminName } from "./super-admin-auth-route.js";
 import {
   getTenantSubdomainFromRequest,
   RESERVED_SUBDOMAINS,
 } from "../lib/tenant-host.js";
+import { isOtpChannelEnabled } from "../lib/platform-auth-security.js";
 import {
   createSmsActionToken,
   consumeSmsActionToken,
@@ -89,15 +90,19 @@ function pub(a: Record<string, unknown>) {
 }
 router.get("/sms/public-config", async (_q, res) => {
   try {
-    const s = await getSmsSettings();
+    const [s, globallyEnabled] = await Promise.all([
+      getSmsSettings(),
+      isOtpChannelEnabled("sms"),
+    ]);
     res.set("Cache-Control", "no-store").json({
       ok: true,
-      loginEnabled: isSmsFeatureEnabled(s, "login"),
-      registrationVerificationEnabled: isSmsFeatureEnabled(
+      loginEnabled: globallyEnabled && isSmsFeatureEnabled(s, "login"),
+      registrationVerificationEnabled: globallyEnabled && isSmsFeatureEnabled(
         s,
         "registrationVerification",
       ),
-      passwordRecoveryEnabled: isSmsFeatureEnabled(s, "passwordRecovery"),
+      passwordRecoveryEnabled: false,
+      otpChannelEnabled: globallyEnabled,
       defaultCountryCode: s.defaultCountryCode,
     });
   } catch {
@@ -106,6 +111,7 @@ router.get("/sms/public-config", async (_q, res) => {
       loginEnabled: false,
       registrationVerificationEnabled: false,
       passwordRecoveryEnabled: false,
+      otpChannelEnabled: false,
       defaultCountryCode: "254",
     });
   }
@@ -185,6 +191,8 @@ router.post("/super-admin/sms/test", async (req, res) => {
 router.post("/auth/sms/request-otp", async (req, res) => {
   const purpose = req.body?.purpose as Purpose,
     type = req.body?.accountType as AccountType;
+  if (!await isOtpChannelEnabled("sms"))
+    return void res.status(503).json({ ok: false, error: "SMS OTP is disabled by the Super Admin." });
   if (
     !["login", "registration", "recovery"].includes(purpose) ||
     (purpose !== "registration" && !["admin", "customer"].includes(type))
@@ -192,13 +200,10 @@ router.post("/auth/sms/request-otp", async (req, res) => {
     return void res
       .status(400)
       .json({ ok: false, error: "Choose a supported SMS verification flow." });
+  if (purpose === "recovery")
+    return void res.status(403).json({ ok: false, error: "Only a Super Admin can reset an account password." });
   const s = await getSmsSettings();
-  const feature =
-    purpose === "login"
-      ? "login"
-      : purpose === "recovery"
-        ? "passwordRecovery"
-        : "registrationVerification";
+  const feature = purpose === "login" ? "login" : "registrationVerification";
   if (!isSmsFeatureEnabled(s, feature))
     return void res
       .status(503)
@@ -262,6 +267,8 @@ router.post("/auth/sms/request-otp", async (req, res) => {
 });
 router.post("/auth/sms/verify-otp", async (req, res) => {
   res.set("Cache-Control", "no-store");
+  if (!await isOtpChannelEnabled("sms"))
+    return void res.status(503).json({ ok: false, error: "SMS OTP is disabled by the Super Admin." });
   const id = String(req.body?.challengeId || ""),
     code = String(req.body?.code || "");
   if (!/^[0-9a-f-]{36}$/i.test(id) || !/^\d{6}$/.test(code))
@@ -325,43 +332,19 @@ router.post("/auth/sms/verify-otp", async (req, res) => {
     return void res.set("Cache-Control", "no-store").json({
       ok: true,
       requiresPasswordSetup: true,
-      setupToken: generateToken("p", String(c.account_id)),
+      setupToken: generatePasswordSetupToken(String(c.account_id), Number(found.auth_version ?? 1)),
       admin: pub(verified),
     });
   return void res.set("Cache-Control", "no-store").json({
     ok: true,
-    token: generateToken(
-      c.account_type === "admin" ? "a" : "c",
-      String(c.account_id),
-    ),
+    token: c.account_type === "admin"
+      ? generateAdminSessionToken(String(c.account_id), Number(found.auth_version ?? 1))
+      : generateToken("c", String(c.account_id)),
     accountType: c.account_type,
     [c.account_type === "admin" ? "admin" : "customer"]: pub(verified),
   });
 });
-router.post("/auth/sms/reset-password", async (req, res) => {
-  const token = String(req.body?.resetToken || ""),
-    password = String(req.body?.password || "");
-  if (!token || password.length < 6 || password.length > 200)
-    return void res.status(400).json({
-      ok: false,
-      error:
-        "Use a valid reset session and a password with at least 6 characters.",
-    });
-  const c = await consumeSmsActionToken(token, "", "recovery");
-  if (!c?.accountType || !c.accountId)
-    return void res
-      .status(401)
-      .json({ ok: false, error: "The code is invalid or has expired." });
-  const table = c.accountType === "admin" ? "isp_admins" : "isp_customers";
-  await sbUpdateStrict(table, `id=eq.${c.accountId}`, {
-    password: await hashIspAdminPassword(password),
-    ...(c.accountType === "admin"
-      ? { updated_at: new Date().toISOString() }
-      : {}),
-  });
-  res.set("Cache-Control", "no-store").json({
-    ok: true,
-    message: "Password updated. Sign in with your new password.",
-  });
+router.post("/auth/sms/reset-password", (_req, res) => {
+  res.status(403).json({ ok: false, error: "Only a Super Admin can reset an account password." });
 });
 export default router;

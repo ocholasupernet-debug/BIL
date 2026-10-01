@@ -166,6 +166,7 @@ export default function SuperAdminPaymentGateways() {
   const [mpesaSaving, setMpesaSaving] = useState(false);
   const [destinations, setDestinations] = useState<PaymentDestination[]>([]);
   const [registrationFee, setRegistrationFee] = useState("500");
+  const [registrationWhatsappNumber, setRegistrationWhatsappNumber] = useState("+254798088650");
   const [registrationDestinationId, setRegistrationDestinationId] = useState("");
   const [renewalDestinationId, setRenewalDestinationId] = useState("");
   const [destinationForm, setDestinationForm] = useState(emptyDestination);
@@ -191,11 +192,13 @@ export default function SuperAdminPaymentGateways() {
   const applyDestinationData = (data: {
     destinations?: PaymentDestination[];
     registrationFee?: { amount?: number; currency?: string };
+    registrationWhatsappNumber?: string;
     registrationDestinationId?: string;
     renewalDestinationId?: string;
   }) => {
     setDestinations(data.destinations ?? []);
     setRegistrationFee(String(data.registrationFee?.amount ?? 500));
+    setRegistrationWhatsappNumber(data.registrationWhatsappNumber ?? "+254798088650");
     setRegistrationDestinationId(data.registrationDestinationId ?? "");
     setRenewalDestinationId(data.renewalDestinationId ?? "");
   };
@@ -383,6 +386,12 @@ export default function SuperAdminPaymentGateways() {
       setDestinationSaving(false);
       return;
     }
+    const supportNumber = registrationWhatsappNumber.trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(supportNumber)) {
+      setDestinationError("Enter the registration WhatsApp number in international format, such as +254798088650.");
+      setDestinationSaving(false);
+      return;
+    }
     try {
       const response = await fetch("/api/super-admin/payment-destinations", {
         method: "POST",
@@ -390,6 +399,7 @@ export default function SuperAdminPaymentGateways() {
         body: JSON.stringify({
           action: "select",
           registrationFee: amount,
+          registrationWhatsappNumber: supportNumber,
           registrationDestinationId,
           renewalDestinationId,
           replacePassword: registrationReplacePassword,
@@ -526,7 +536,7 @@ export default function SuperAdminPaymentGateways() {
           )}
           {destinationSaved && (
             <div style={{ color: "#86efac", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 8, padding: "9px 11px", fontSize: "0.75rem", marginBottom: 14 }}>
-              Registration payment settings saved.
+              Registration and support settings saved.
             </div>
           )}
 
@@ -543,7 +553,17 @@ export default function SuperAdminPaymentGateways() {
                 onChange={e => { setRegistrationFee(e.target.value); setDestinationSaved(false); }}
               />
             </Field>
-            <div />
+            <Field label="Registration WhatsApp support" hint="Use international format, including the country code.">
+              <input
+                style={inp}
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder="+254798088650"
+                value={registrationWhatsappNumber}
+                onChange={e => { setRegistrationWhatsappNumber(e.target.value); setDestinationSaved(false); }}
+              />
+            </Field>
             <Field label="Destination type">
               <select value={destinationForm.type} onChange={e => setDestinationForm(form => ({ ...form, type: e.target.value as DestinationType }))} style={inp}>
                 <option value="paybill">PayBill</option>
@@ -573,7 +593,7 @@ export default function SuperAdminPaymentGateways() {
           <div style={{ maxWidth: 380 }}>
             <SecretField
               label="Replacement passcode"
-              hint="Required to add, edit, delete, or select a registration payment setting."
+              hint="Required to update registration payment settings or the registration support number."
               value={registrationReplacePassword}
               onChange={value => setRegistrationReplacePassword(value)}
             />

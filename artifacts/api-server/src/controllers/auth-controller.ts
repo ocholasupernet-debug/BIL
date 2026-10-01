@@ -6,7 +6,7 @@ import {
   REGISTRATION_CONTACT_LIMIT_MESSAGE,
 } from "../lib/registration-contact-capacity.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
-import { apiTokenSigningConfigured, generateToken } from "../lib/api-auth.js";
+import { apiTokenSigningConfigured, generateAdminSessionToken } from "../lib/api-auth.js";
 import { RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
 
 export type UnifiedRegistrationRole = "isp_admin" | "reseller";
@@ -34,16 +34,17 @@ export async function registerAccount(req: Request, res: Response): Promise<void
   const rawName = req.body?.name;
   const rawEmail = req.body?.email;
   const rawPassword = req.body?.password;
+  const rawConfirmPassword = req.body?.confirmPassword;
   const rawRole = req.body?.role;
   // businessName is the public contract; subdomain_prefix remains accepted
   // for the already-deployed browser client during the contract transition.
   const rawBusinessName = req.body?.businessName ?? req.body?.subdomain_prefix;
-  if (!rawName || !rawEmail || !rawPassword || !rawRole || !rawBusinessName) {
+  if (!rawName || !rawEmail || !rawPassword || !rawConfirmPassword || !rawRole || !rawBusinessName) {
     res.status(400).json({
       success: false,
       ok: false,
-      message: "All fields (name, email, password, role, businessName) are mandatory.",
-      error: "All fields (name, email, password, role, businessName) are mandatory.",
+      message: "All fields (name, email, password, password confirmation, role, businessName) are mandatory.",
+      error: "All fields (name, email, password, password confirmation, role, businessName) are mandatory.",
     });
     return;
   }
@@ -51,6 +52,7 @@ export async function registerAccount(req: Request, res: Response): Promise<void
   const name = cleanText(rawName, 120);
   const email = cleanText(rawEmail, 254).toLowerCase();
   const password = typeof req.body?.password === "string" ? req.body.password : "";
+  const confirmPassword = typeof req.body?.confirmPassword === "string" ? req.body.confirmPassword : "";
   const role = req.body?.role as UnifiedRegistrationRole;
   const businessName = cleanText(rawBusinessName, 120).toLowerCase();
   const subdomainPrefix = businessName.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 63);
@@ -65,6 +67,10 @@ export async function registerAccount(req: Request, res: Response): Promise<void
   }
   if (password.length < 8 || password.length > 200) {
     res.status(400).json({ success: false, ok: false, error: "Choose a password with at least 8 characters." });
+    return;
+  }
+  if (password !== confirmPassword) {
+    res.status(400).json({ success: false, ok: false, error: "The password and confirmation do not match." });
     return;
   }
   if (role !== "isp_admin" && role !== "reseller") {
@@ -185,7 +191,7 @@ export async function registerAccount(req: Request, res: Response): Promise<void
     earnings_balance: Number(account.earnings_balance ?? 0),
     company_name: account.company_name ?? businessName,
   };
-  const token = generateToken("a", String(account.id));
+  const token = generateAdminSessionToken(String(account.id), 1);
   const assignedUrl = `https://${account.subdomain}.isplatty.org`;
   res.status(201).json({
     success: true,

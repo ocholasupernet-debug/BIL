@@ -236,13 +236,17 @@ export interface PaymentDestinationSettings {
   registrationFee: number;
   registrationDestinationId: string;
   renewalDestinationId: string;
+  registrationWhatsappNumber: string;
   destinations: PaymentDestination[];
 }
+
+export const DEFAULT_REGISTRATION_WHATSAPP_NUMBER = "+254798088650";
 
 const EMPTY_DESTINATIONS: PaymentDestinationSettings = {
   registrationFee: 500,
   registrationDestinationId: "",
   renewalDestinationId: "",
+  registrationWhatsappNumber: DEFAULT_REGISTRATION_WHATSAPP_NUMBER,
   destinations: [],
 };
 
@@ -255,6 +259,12 @@ export function normaliseRegistrationFee(value: unknown): number {
     value <= MAX_REGISTRATION_FEE
     ? value
     : EMPTY_DESTINATIONS.registrationFee;
+}
+
+export function normaliseRegistrationWhatsappNumber(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const number = value.trim().replace(/[\s()-]/g, "");
+  return /^\+[1-9]\d{7,14}$/.test(number) ? number : null;
 }
 
 function isDestinationType(value: unknown): value is PaymentDestinationType {
@@ -290,6 +300,8 @@ export function getPaymentDestinations(): PaymentDestinationSettings {
     registrationFee: normaliseRegistrationFee(stored.registrationFee),
     registrationDestinationId: validIds.has(stored.registrationDestinationId) ? stored.registrationDestinationId : "",
     renewalDestinationId: validIds.has(stored.renewalDestinationId) ? stored.renewalDestinationId : "",
+    registrationWhatsappNumber:
+      normaliseRegistrationWhatsappNumber(stored.registrationWhatsappNumber) ?? DEFAULT_REGISTRATION_WHATSAPP_NUMBER,
     destinations,
   };
 }
@@ -299,6 +311,8 @@ export function savePaymentDestinations(settings: PaymentDestinationSettings): v
   data.paymentDestinations = {
     ...settings,
     registrationFee: normaliseRegistrationFee(settings.registrationFee),
+    registrationWhatsappNumber:
+      normaliseRegistrationWhatsappNumber(settings.registrationWhatsappNumber) ?? DEFAULT_REGISTRATION_WHATSAPP_NUMBER,
   };
   writeFile(data);
   logger.info("[settings-store] payment destinations saved");
@@ -409,6 +423,7 @@ export function deletePaymentDestination(id: string): PaymentDestinationSettings
     registrationFee: current.registrationFee,
     registrationDestinationId: current.registrationDestinationId === id ? "" : current.registrationDestinationId,
     renewalDestinationId: current.renewalDestinationId === id ? "" : current.renewalDestinationId,
+    registrationWhatsappNumber: current.registrationWhatsappNumber,
     destinations: current.destinations.filter(row => row.id !== id),
   };
   savePaymentDestinations(next);

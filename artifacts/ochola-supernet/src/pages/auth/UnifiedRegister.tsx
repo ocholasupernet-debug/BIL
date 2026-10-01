@@ -36,6 +36,7 @@ export default function UnifiedRegister() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [subdomainPrefix, setSubdomainPrefix] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -57,6 +58,10 @@ export default function UnifiedRegister() {
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
+    if (password !== confirmPassword) {
+      setError("The password and confirmation do not match.");
+      return;
+    }
     setIsSubmitting(true);
 
     try {
@@ -67,6 +72,7 @@ export default function UnifiedRegister() {
           name: name.trim(),
           email: email.trim().toLowerCase(),
           password,
+          confirmPassword,
           role,
           businessName: subdomainPrefix,
           subdomain_prefix: subdomainPrefix,
@@ -179,6 +185,14 @@ export default function UnifiedRegister() {
               <button type="button" className="unified-register-password-toggle" onClick={() => setShowPassword((visible) => !visible)} aria-label={showPassword ? "Hide password" : "Show password"}>
                 {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
               </button>
+            </div>
+          </div>
+
+          <div className="unified-register-field">
+            <label htmlFor="register-confirm-password">Confirm password</label>
+            <div className="unified-register-input-wrap">
+              <LockKeyhole size={17} aria-hidden="true" />
+              <input id="register-confirm-password" required minLength={10} type={showPassword ? "text" : "password"} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder="Enter the same password again" />
             </div>
           </div>
 

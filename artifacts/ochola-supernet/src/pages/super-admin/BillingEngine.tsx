@@ -116,14 +116,8 @@ export default function SuperAdminBillingEngine() {
 
         <Section title="ISP & reseller platform renewal" icon={DollarSign}>
           <p style={{ color: C.sub, fontSize: "0.76rem", lineHeight: 1.6, margin: "0 0 20px" }}>
-            Accounts created on or before the cutoff are assessed from the immutable previous-month sales ledger. The invoice is created on the 1st and is due on the configured day.
+            All active ISP and reseller accounts enter the monthly renewal cycle on the 1st, regardless of registration date. Fees use the immutable previous-month sales ledger and are due on the configured day.
           </p>
-          <Row label="Registration cutoff day" hint="Accounts created on or before this day enter recurring billing">
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <input style={{ ...inp, width: 90 }} type="number" min="1" max="28" value={platform.cutoff_day} onChange={e => platformSet("cutoff_day", e.target.value)} />
-              <span style={{ color: C.sub, fontSize: "0.82rem" }}>day of month</span>
-            </div>
-          </Row>
           <Row label="Payment deadline" hint="Banner countdown ends at the end of this day">
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <input style={{ ...inp, width: 90 }} type="number" min="1" max="28" value={platform.due_day} onChange={e => platformSet("due_day", e.target.value)} />

@@ -21,9 +21,9 @@ const PERMISSIONS: { category: string; perms: string[] }[] = [
 
 const DEFAULT_MATRIX: Record<string, Record<string, boolean>> = {
   "Super Admin":  Object.fromEntries(PERMISSIONS.flatMap(c => c.perms).map(p => [p, true])),
-  "ISP Admin":    Object.fromEntries(PERMISSIONS.flatMap(c => c.perms).map(p => [p, !["Manage Gateways","System Limits","Delete Admins","Manage Backups"].includes(p)])),
+  "ISP Admin":    Object.fromEntries(PERMISSIONS.flatMap(c => c.perms).map(p => [p, !["System Limits","Delete Admins","Manage Backups"].includes(p)])),
   "Sub Admin":    Object.fromEntries(PERMISSIONS.flatMap(c => c.perms).map(p => [p, ["View Customers","Edit Customers","View Routers","View Plans","View Vouchers","Generate Vouchers","View Reports","View Transactions"].includes(p)])),
-  "Reseller":     Object.fromEntries(PERMISSIONS.flatMap(c => c.perms).map(p => [p, ["View Customers","Create Customers","View Plans","View Vouchers","Generate Vouchers","View Transactions"].includes(p)])),
+  "Reseller":     Object.fromEntries(PERMISSIONS.flatMap(c => c.perms).map(p => [p, ["View Customers","Create Customers","View Plans","View Vouchers","Generate Vouchers","View Transactions","Manage Gateways"].includes(p)])),
   "Support":      Object.fromEntries(PERMISSIONS.flatMap(c => c.perms).map(p => [p, ["View Customers","View Routers","View Plans","View Vouchers","View Reports","View Transactions","View Logs"].includes(p)])),
 };
 

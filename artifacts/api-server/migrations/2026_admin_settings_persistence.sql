@@ -106,8 +106,9 @@ from (values
   ('isp_admin', 'View Transactions', true), ('isp_admin', 'Create Invoices', true),
   ('isp_admin', 'Issue Refunds', true), ('isp_admin', 'Configure Billing', true),
   ('isp_admin', 'View Reports', true), ('isp_admin', 'Export Reports', true),
-  ('isp_admin', 'Custom Reports', true), ('isp_admin', 'View Settings', true),
-  ('isp_admin', 'Edit Settings', true), ('isp_admin', 'View Logs', true),
+   ('isp_admin', 'Custom Reports', true), ('isp_admin', 'View Settings', true),
+   ('isp_admin', 'Edit Settings', true), ('isp_admin', 'Manage Gateways', true),
+   ('isp_admin', 'View Logs', true),
   ('isp_admin', 'Manage API Keys', true), ('isp_admin', 'Automation', true)
 ) as seeded(role_name, permission_key, enabled)
 on conflict (role_name, permission_key) do nothing;
@@ -119,8 +120,8 @@ select role_name, permission_key,
       ('View Customers', 'Edit Customers', 'View Routers', 'View Plans',
        'View Vouchers', 'Generate Vouchers', 'View Reports', 'View Transactions')
     when role_name = 'reseller' then permission_key in
-      ('View Customers', 'Create Customers', 'View Plans', 'View Vouchers',
-       'Generate Vouchers', 'View Transactions')
+       ('View Customers', 'Create Customers', 'View Plans', 'View Vouchers',
+        'Generate Vouchers', 'View Transactions', 'Manage Gateways')
     when role_name = 'support' then permission_key in
       ('View Customers', 'View Routers', 'View Plans', 'View Vouchers',
        'View Reports', 'View Transactions', 'View Logs')

@@ -148,6 +148,7 @@ router.get("/registration/config", async (_req: Request, res: Response): Promise
   res.json({
     ok: true,
     registrationFee: { amount: destinations.registrationFee, currency: "KES" },
+    registrationWhatsappNumber: destinations.registrationWhatsappNumber,
     registrationAvailable: (destination?.type === "bank" && schemaReady) || automaticPaymentAvailable || manualPaybillAvailable,
     manualPaymentRequired: destination?.type === "bank" && schemaReady,
     manualPaybillAvailable,

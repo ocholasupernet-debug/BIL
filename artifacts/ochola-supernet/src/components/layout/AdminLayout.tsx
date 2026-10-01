@@ -5,11 +5,21 @@ import {
   LayoutDashboard, Users, Ticket, Package, CreditCard,
   Network, Settings, Bell, Wifi, Shield, FolderOpen,
   Sliders, BookOpen, LogOut, Webhook, ChevronRight,
-  CheckSquare, Search, Sun, Moon, Menu,
+  CheckSquare, Search, Sun, Moon, Menu, KeyRound, X, ShieldAlert,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useBrand } from "@/context/BrandContext";
-import { ADMIN_ID, clearAdminAuth, getAdminApiToken, getAdminName, getAdminRole } from "@/lib/supabase";
+import {
+  ADMIN_ID,
+  clearAdminAuth,
+  getAdminApiToken,
+  getAdminName,
+  getAdminRole,
+  getImpersonatedName,
+  getImpersonationSessionId,
+  isImpersonating,
+  stopImpersonation,
+} from "@/lib/supabase";
 import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import { getAdminFeatureKeyForPath } from "@/lib/admin-page-visibility";
 import { Logo } from "@/components/Logo";
@@ -241,7 +251,9 @@ function PlatformBillingBanner() {
       if (!response.ok) return;
       const data = await response.json() as PlatformBillingState;
       setState(data);
-      if (data.invoice?.payment_phone && !phone) setPhone(data.invoice.payment_phone);
+      if (data.invoice?.payment_phone) {
+        setPhone(currentPhone => currentPhone || data.invoice!.payment_phone!);
+      }
     } catch {
       // The dashboard remains usable when the optional billing banner is unavailable.
     }
@@ -250,7 +262,11 @@ function PlatformBillingBanner() {
   useEffect(() => {
     void load();
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
+    const refreshTimer = window.setInterval(() => void load(), 30_000);
+    return () => {
+      window.clearInterval(timer);
+      window.clearInterval(refreshTimer);
+    };
   }, [token, role]);
 
   if (role === "superadmin" || !state?.eligible || !state.invoice || state.invoice.status === "paid") return null;
@@ -373,6 +389,20 @@ export function AdminLayout({
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 768);
   const [expanded, setExpanded]       = useState<string[]>([]);
   const [notice, setNotice] = useState("");
+  const [reauthStatus, setReauthStatus] = useState<"checking" | "not-required" | "required" | "verified" | "failed">("checking");
+  const [reauthUntil, setReauthUntil] = useState(0);
+  const [reauthPassword, setReauthPassword] = useState("");
+  const [reauthBusy, setReauthBusy] = useState(false);
+  const [reauthError, setReauthError] = useState("");
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordNotice, setPasswordNotice] = useState("");
+  const [endingAccess, setEndingAccess] = useState(false);
+  const [reauthRetryKey, setReauthRetryKey] = useState(0);
   const { toggle, isDark }            = useTheme();
   const brand                         = useBrand();
   const adminName                     = getAdminName();
@@ -416,9 +446,105 @@ export function AdminLayout({
     .filter(section => section.items.length > 0);
 
   const handleLogout = () => {
+    if (isImpersonating()) {
+      void handleEndAccess();
+      return;
+    }
     clearAdminAuth();
     queryClient.clear();
     setLocation("/admin/login");
+  };
+
+  const handlePasswordRecheck = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setReauthBusy(true);
+    setReauthError("");
+    try {
+      const response = await fetch("/api/auth/admin/reauth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAdminApiToken()}` },
+        body: JSON.stringify({ feature: currentFeatureKey, password: reauthPassword }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.token || !Number.isFinite(data.expiresAt)) {
+        throw new Error(data.error || "The password check could not be completed.");
+      }
+      localStorage.setItem("ochola_api_token", data.token);
+      sessionStorage.setItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentFeatureKey}`, String(data.expiresAt));
+      window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: ADMIN_ID } }));
+      setReauthUntil(data.expiresAt);
+      setReauthPassword("");
+      setReauthStatus("verified");
+    } catch (cause) {
+      setReauthError(cause instanceof Error ? cause.message : "The password check could not be completed.");
+    } finally {
+      setReauthBusy(false);
+    }
+  };
+
+  const handleChangePassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setPasswordError("");
+    setPasswordNotice("");
+    if (newPassword !== confirmNewPassword) {
+      setPasswordError("The new password and confirmation do not match.");
+      return;
+    }
+    if (newPassword.length < 10 || newPassword.length > 200) {
+      setPasswordError("Choose a password with at least 10 characters.");
+      return;
+    }
+    setPasswordBusy(true);
+    try {
+      const response = await fetch("/api/auth/admin/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAdminApiToken()}` },
+        body: JSON.stringify({ currentPassword, password: newPassword, confirmPassword: confirmNewPassword }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Your password could not be changed.");
+      if (data.token) localStorage.setItem("ochola_api_token", data.token);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setPasswordNotice(data.message || "Your password has been changed.");
+      setReauthUntil(0);
+      setReauthStatus("not-required");
+      try {
+        Object.keys(sessionStorage).filter(key => key.startsWith("ochola_reauth_")).forEach(key => sessionStorage.removeItem(key));
+      } catch {}
+      window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: ADMIN_ID } }));
+      setChangePasswordOpen(false);
+      setLocation("/admin/dashboard");
+    } catch (cause) {
+      setPasswordError(cause instanceof Error ? cause.message : "Your password could not be changed.");
+    } finally {
+      setPasswordBusy(false);
+    }
+  };
+
+  const handleEndAccess = async () => {
+    const sessionId = getImpersonationSessionId();
+    if (!sessionId) {
+      setNotice("The access session ID is missing. Sign out to end this local session.");
+      return;
+    }
+    setEndingAccess(true);
+    try {
+      const response = await fetch(`/api/super-admin/admin-access/${encodeURIComponent(sessionId)}/end`, {
+        method: "POST",
+        headers: { "x-sa-token": localStorage.getItem("ochola_superadmin_token") || "" },
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "The access session could not be ended.");
+      stopImpersonation();
+      queryClient.clear();
+      setLocation("/super-admin/impersonate");
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : "The access session could not be ended.");
+    } finally {
+      setEndingAccess(false);
+    }
   };
 
   useEffect(() => {
@@ -445,6 +571,60 @@ export function AdminLayout({
       setLocation(`/admin/dashboard?disabled=${encodeURIComponent(currentFeatureKey ?? "page")}`);
     }
   }, [currentFeatureKey, pageIsVisible, setLocation]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const feature = currentFeatureKey;
+    setReauthError("");
+    if (!feature || feature === "overview" || isImpersonating()) {
+      setReauthUntil(0);
+      setReauthStatus("not-required");
+      return;
+    }
+    setReauthStatus("checking");
+    const check = async () => {
+      try {
+        const response = await fetch(`/api/auth/admin/password-recheck-policy?feature=${encodeURIComponent(feature)}`, {
+          headers: { Authorization: `Bearer ${getAdminApiToken()}` },
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Password security policy could not be checked.");
+        if (cancelled) return;
+        if (data.required !== true) {
+          setReauthUntil(0);
+          setReauthStatus("not-required");
+          return;
+        }
+        const cacheKey = `ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${feature}`;
+        const storedExpiry = Number(sessionStorage.getItem(cacheKey) || 0);
+        if (Number.isFinite(storedExpiry) && storedExpiry > Date.now()) {
+          setReauthUntil(storedExpiry);
+          setReauthStatus("verified");
+        } else {
+          setReauthUntil(0);
+          setReauthStatus("required");
+        }
+      } catch (cause) {
+        if (cancelled) return;
+        setReauthError(cause instanceof Error ? cause.message : "Password security policy could not be checked.");
+        setReauthStatus("failed");
+      }
+    };
+    void check();
+    return () => { cancelled = true; };
+  }, [currentFeatureKey, reauthRetryKey]);
+
+  useEffect(() => {
+    if (reauthStatus !== "verified" || !reauthUntil) return;
+    const timer = window.setInterval(() => {
+      if (Date.now() >= reauthUntil) {
+        sessionStorage.removeItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentFeatureKey}`);
+        setReauthStatus("required");
+        setReauthUntil(0);
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [currentFeatureKey, reauthStatus, reauthUntil]);
 
   const toggleExpand = (name: string) =>
     setExpanded(p => p.includes(name) ? p.filter(n => n !== name) : [...p, name]);
@@ -615,6 +795,12 @@ export function AdminLayout({
 
             <AdminInstallButton />
 
+            {getAdminRole() !== "superadmin" && !isImpersonating() && (
+              <button className="header-btn" onClick={() => { setChangePasswordOpen(true); setPasswordError(""); setPasswordNotice(""); }} title="Change your password" aria-label="Change your password">
+                <KeyRound size={15} />
+              </button>
+            )}
+
             <button className="header-btn" onClick={toggle} title={isDark ? "Switch to light" : "Switch to dark"} aria-label={isDark ? "Switch to light theme" : "Switch to dark theme"}>
               {isDark ? <Sun size={15} /> : <Moon size={15} />}
             </button>
@@ -641,14 +827,71 @@ export function AdminLayout({
 
         {/* Page content */}
         <main className={`admin-content ${isVpnSurface ? "admin-vpn-surface" : ""}`}>
+          {isImpersonating() && (
+            <div role="status" style={{ marginBottom: 16, border: "1px solid rgba(249,115,22,0.45)", background: "rgba(124,45,18,0.2)", color: "#fed7aa", borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <span><ShieldAlert size={15} style={{ verticalAlign: "middle", marginRight: 7 }} />Audited Super Admin access as <strong>{getImpersonatedName()}</strong>. Session expires at {new Date(localStorage.getItem("ochola_impersonation_expires_at") || Date.now()).toLocaleTimeString()}.</span>
+              <button type="button" onClick={() => void handleEndAccess()} disabled={endingAccess} style={{ border: "1px solid rgba(254,215,170,0.5)", borderRadius: 7, padding: "7px 11px", background: "rgba(124,45,18,0.45)", color: "#ffedd5", fontWeight: 700, cursor: "pointer" }}>
+                {endingAccess ? "Ending…" : "End access"}
+              </button>
+            </div>
+          )}
           {notice && (
             <div role="status" style={{ marginBottom: 18, border: "1px solid rgba(245,158,11,0.35)", background: "rgba(245,158,11,0.1)", color: "#fbbf24", borderRadius: 10, padding: "11px 14px", fontSize: 14, fontWeight: 600 }}>
               {notice}
             </div>
           )}
           <PlatformBillingBanner />
-          {children}
+          {currentFeatureKey && currentFeatureKey !== "overview" && !isImpersonating() && reauthStatus !== "verified" && reauthStatus !== "not-required" ? (
+            <div role="dialog" aria-modal="true" aria-labelledby="reauth-title" style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(5,10,20,0.78)", display: "grid", placeItems: "center", padding: 20 }}>
+              <form onSubmit={handlePasswordRecheck} style={{ width: "min(100%, 420px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
+                <h2 id="reauth-title" style={{ margin: "0 0 8px", fontSize: 19 }}>{reauthStatus === "checking" ? "Checking page security…" : reauthStatus === "failed" ? "Unable to check security policy" : "Confirm your password"}</h2>
+                {reauthStatus === "checking" ? (
+                  <p style={{ color: "var(--isp-text-muted)" }}>Verifying whether this page requires a fresh password check…</p>
+                ) : reauthStatus === "failed" ? (
+                  <>
+                    <p role="alert" style={{ color: "#dc2626" }}>{reauthError}</p>
+                    <button type="button" onClick={() => setReauthRetryKey(value => value + 1)} style={{ border: 0, borderRadius: 8, padding: "10px 14px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer" }}>Try again</button>
+                  </>
+                ) : (
+                  <>
+                    <p style={{ color: "var(--isp-text-muted)", fontSize: 14 }}>The Super Admin requires a current-password check before this page can load. This check lasts five minutes.</p>
+                    <label htmlFor="page-reauth-password" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>Current password</label>
+                    <input id="page-reauth-password" type="password" autoComplete="current-password" value={reauthPassword} onChange={event => setReauthPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+                    {reauthError && <p role="alert" style={{ color: "#dc2626", fontSize: 13 }}>{reauthError}</p>}
+                    <button type="submit" disabled={reauthBusy || !reauthPassword} style={{ marginTop: 14, border: 0, borderRadius: 8, padding: "10px 15px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer", opacity: reauthBusy || !reauthPassword ? 0.6 : 1 }}>
+                      {reauthBusy ? "Checking…" : "Continue to page"}
+                    </button>
+                  </>
+                )}
+              </form>
+            </div>
+          ) : (
+            children
+          )}
         </main>
+
+        {changePasswordOpen && (
+          <div role="dialog" aria-modal="true" aria-labelledby="change-password-title" style={{ position: "fixed", inset: 0, zIndex: 110, background: "rgba(5,10,20,0.78)", display: "grid", placeItems: "center", padding: 20 }}>
+            <form onSubmit={handleChangePassword} style={{ width: "min(100%, 440px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <h2 id="change-password-title" style={{ margin: 0, fontSize: 19 }}>Change password</h2>
+                <button type="button" aria-label="Close password change" onClick={() => setChangePasswordOpen(false)} style={{ border: 0, background: "transparent", color: "var(--isp-text-muted)", cursor: "pointer" }}><X size={18} /></button>
+              </div>
+              <p style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>Enter your current password, then choose and confirm a new password of at least 10 characters.</p>
+              <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>Current password</label>
+              <input type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", marginBottom: 12, border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+              <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>New password</label>
+              <input type="password" autoComplete="new-password" minLength={10} value={newPassword} onChange={event => setNewPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", marginBottom: 12, border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+              <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>Confirm new password</label>
+              <input type="password" autoComplete="new-password" minLength={10} value={confirmNewPassword} onChange={event => setConfirmNewPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+              {passwordError && <p role="alert" style={{ color: "#dc2626", fontSize: 13 }}>{passwordError}</p>}
+              {passwordNotice && <p role="status" style={{ color: "#15803d", fontSize: 13 }}>{passwordNotice}</p>}
+              <button type="submit" disabled={passwordBusy} style={{ marginTop: 15, border: 0, borderRadius: 8, padding: "10px 15px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer", opacity: passwordBusy ? 0.6 : 1 }}>
+                {passwordBusy ? "Saving…" : "Update password"}
+              </button>
+            </form>
+          </div>
+        )}
       </div>
     </div>
   );

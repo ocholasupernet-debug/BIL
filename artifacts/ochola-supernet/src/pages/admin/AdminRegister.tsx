@@ -29,6 +29,25 @@ interface RegistrationDestination {
   instructions?: string;
 }
 
+function RegistrationSupportLink({ number }: { number: string }) {
+  const whatsappNumber = number.replace(/\D/g, "");
+  if (!whatsappNumber) return null;
+  const message = encodeURIComponent("Hello, I need help with my registration.");
+  return (
+    <p style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)", lineHeight: 1.5, margin: "16px 0 0", textAlign: "center" }}>
+      Having trouble with registration?{" "}
+      <a
+        href={`https://wa.me/${whatsappNumber}?text=${message}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ color: "var(--isp-accent)", fontWeight: 700, textDecoration: "underline", textUnderlineOffset: 3 }}
+      >
+        WhatsApp {number}
+      </a>
+    </p>
+  );
+}
+
 export default function AdminRegister() {
   const [, setLocation] = useLocation();
 
@@ -63,6 +82,7 @@ export default function AdminRegister() {
   const [paymentMode, setPaymentMode] = useState<"stk" | "paybill">("stk");
   const [manualPaybillAvailable, setManualPaybillAvailable] = useState(false);
   const [registrationFee, setRegistrationFee] = useState({ amount: 500, currency: "KES" });
+  const [registrationWhatsappNumber, setRegistrationWhatsappNumber] = useState("+254798088650");
   const [registrationDestination, setRegistrationDestination] = useState<RegistrationDestination | null>(null);
   const [manualPayment, setManualPayment] = useState<RegistrationDestination | null>(null);
   const [manualReference, setManualReference] = useState("");
@@ -168,6 +188,7 @@ export default function AdminRegister() {
       .then(async response => {
         const data = await response.json() as {
           registrationFee?: { amount?: number; currency?: string };
+          registrationWhatsappNumber?: string;
           automaticPaymentAvailable?: boolean;
           manualPaymentRequired?: boolean;
           manualPaybillAvailable?: boolean;
@@ -175,6 +196,9 @@ export default function AdminRegister() {
         };
         if (data.registrationFee?.amount && data.registrationFee.currency) {
           setRegistrationFee({ amount: data.registrationFee.amount, currency: data.registrationFee.currency });
+        }
+        if (typeof data.registrationWhatsappNumber === "string") {
+          setRegistrationWhatsappNumber(data.registrationWhatsappNumber);
         }
         setRegistrationDestination(data.destination ?? null);
         setManualPaybillAvailable(data.manualPaybillAvailable === true);
@@ -388,6 +412,7 @@ export default function AdminRegister() {
             >
               Go to Workspace <ArrowRight size={16} />
             </a>
+            <RegistrationSupportLink number={registrationWhatsappNumber} />
           </div>
         </div>
       </div>
@@ -408,6 +433,7 @@ export default function AdminRegister() {
           <p style={{ fontSize: "0.78rem", color: "var(--isp-text-sub)", lineHeight: 1.55 }}>
              Enter your M-Pesa PIN on your phone. Your {accountTypeLabel} account will be created only after the payment is confirmed.
           </p>
+          <RegistrationSupportLink number={registrationWhatsappNumber} />
         </div>
         <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
       </div>
@@ -469,6 +495,7 @@ export default function AdminRegister() {
             <button type="button" onClick={() => setManualCheckNow(value => value + 1)} title="Check payment status"><RefreshCw size={15} /></button>
           </div>
           {manualPayment.instructions && isPaybill && <p style={{ fontSize: "0.76rem", color: "var(--isp-text-sub)", lineHeight: 1.5, margin: "14px 0 0" }}>{manualPayment.instructions}</p>}
+          <RegistrationSupportLink number={registrationWhatsappNumber} />
         </div>
       </div>
     );
@@ -546,23 +573,6 @@ export default function AdminRegister() {
                <div className="register-heading-meta"><ShieldCheck size={14} /> Secure onboarding with verified M-Pesa payments</div>
             </div>
 
-            <div className="register-fee-card">
-              <div className="register-fee-icon"><CreditCard size={18} /></div>
-              <div className="register-fee-copy">
-                <div><strong>One-time account setup</strong><span>Secure activation fee</span></div>
-                <b>{displayFee}</b>
-              </div>
-              <div className="register-fee-note">
-                {registrationDestination?.type === "bank"
-                  ? <>Pay manually to <strong>{registrationDestination.name}</strong> ({registrationDestination.number}) before activation.</>
-                   : paymentMode === "paybill" && registrationDestination?.type === "paybill"
-                   ? <>Pay manually through M-Pesa PayBill <strong>{registrationDestination.number}</strong> using your company name as the account number.</>
-                  : registrationDestination
-                  ? <>An M-Pesa prompt will use <strong>{registrationDestination.name}</strong> ({registrationDestination.number}){registrationDestination.accountReference ? ` · ${registrationDestination.accountReference}` : ""}</>
-                  : "A payment destination must be configured before registration."}
-              </div>
-            </div>
-
             <form onSubmit={handleSubmit} className="register-form">
               <div>
                 <label className="register-label">Choose account type</label>
@@ -590,9 +600,6 @@ export default function AdminRegister() {
                     <span className="register-option-radio" />
                   </button>
                 </div>
-                <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>
-                  Both account types use the same one-time setup fee.
-                </p>
               </div>
               <div className="register-form-section">
                  <div className="register-section-heading"><span>01</span><div><strong>Your <em>workspace</em></strong><small>Tell us about your company</small></div></div>
@@ -783,12 +790,13 @@ export default function AdminRegister() {
               ? <>Continue to bank payment instructions <ArrowRight size={16} /></>
                : paymentMode === "paybill"
                ? <>Continue to PayBill instructions <ArrowRight size={16} /></>
-              : <>Pay {displayFee} &amp; Create Account <ArrowRight size={16} /></>}
+              : <>Continue to secure payment <ArrowRight size={16} /></>}
           </button>
+          <RegistrationSupportLink number={registrationWhatsappNumber} />
 
           {!paymentReady && (
             <p style={{ fontSize: "0.75rem", color: "#B45309", textAlign: "center", margin: "-6px 0 0" }}>
-              Registration payments are not configured yet. Please contact support.
+              Registration payments are not configured yet. Contact registration support using the WhatsApp link above.
             </p>
           )}
 

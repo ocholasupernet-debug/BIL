@@ -50,6 +50,8 @@ export const ADMIN_PAGE_VISIBILITY_CATALOG: AdminVisibilitySection[] = [
     description: "Routers, connectivity, access points, and network configuration.",
     pages: [
       { key: "network.routers", label: "Routers", description: "Connected MikroTik routers and router status." },
+      { key: "network.files", label: "Files", description: "Manage router and installation files." },
+      { key: "network.resellers", label: "Resellers", description: "Manage linked reseller accounts and assigned ports." },
       { key: "network.self-install", label: "Self Install", description: "Install and register a new router." },
       { key: "network.replace-router", label: "Replace Router", description: "Replace an existing router while preserving its setup." },
       { key: "network.migration", label: "Migration & Recovery", description: "Migrate and recover RouterOS configurations." },

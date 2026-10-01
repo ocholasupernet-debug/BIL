@@ -59,6 +59,7 @@ import SuperAdminWhatsApp from "./pages/super-admin/WhatsApp";
 import SuperAdminSMS from "./pages/super-admin/SMS";
 import SuperAdminSystemLimits from "./pages/super-admin/SystemLimits";
 import SuperAdminImpersonate from "./pages/super-admin/Impersonate";
+import SuperAdminAuthSecurity from "./pages/super-admin/AuthSecurity";
 import SuperAdminStorage from "./pages/super-admin/Storage";
 import VpnDashboard from "./pages/vpn/VpnDashboard";
 import VpnRemoteAccess from "./pages/vpn/RemoteAccess";
@@ -209,6 +210,7 @@ function Router() {
       <Route path="/super-admin/dashboard"      component={SuperAdminDashboard}        />
       <Route path="/super-admin/admins"         component={SuperAdminAdmins}           />
       <Route path="/super-admin/roles"          component={SuperAdminRoles}            />
+      <Route path="/super-admin/auth-security"  component={SuperAdminAuthSecurity}     />
       <Route path="/super-admin/settings"       component={SuperAdminSystemSettings}   />
       <Route path="/super-admin/payments"       component={SuperAdminPaymentGateways}  />
       <Route path="/super-admin/payment-packages" component={SuperAdminPaymentsPackages} />
