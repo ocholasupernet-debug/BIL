@@ -37,6 +37,7 @@ import {
   withVlanIngressModeLock,
   type VlanIngressMode,
 } from "../lib/port-service-resources.js";
+import { summarizeVlanHotspotDiagnostics } from "../lib/vlan-hotspot-diagnostics.js";
 import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
 import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
 import { buildVlanHotspotProfileConfig } from "../lib/vlan-hotspot-profile.js";
@@ -3000,6 +3001,11 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
       leaseRows,
       hotspotHostRows,
       arpRows,
+      hotspotServerRows,
+      hotspotProfileRows,
+      hotspotFileRows,
+      hotspotHostSummaryRows,
+      captivePortalOptionRows,
     ] = await Promise.all([
       read(["/interface/bridge/print", "=.proplist=.id,name,disabled,running,vlan-filtering,frame-types,ingress-filtering", `?name=${parentBridge}`]),
       read(["/interface/bridge/port/print", "=.proplist=.id,interface,bridge,disabled,running,hw,edge,point-to-point", `?bridge=${parentBridge}`]),
@@ -3007,11 +3013,65 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
       read(["/interface/vlan/print", "=.proplist=.id,name,vlan-id,interface,disabled,running", `?name=${vlanInterface}`]),
       read(["/ip/address/print", "=.proplist=.id,address,interface,disabled,comment", `?interface=${vlanInterface}`]),
       read(["/ip/dhcp-server/print", "=.proplist=.id,name,interface,address-pool,disabled,running", `?name=${resources.hotspotDhcp}`]),
-      read(["/ip/dhcp-server/network/print", "=.proplist=.id,address,gateway,dns-server,comment", `?address=${network.network}`]),
+      read(["/ip/dhcp-server/network/print", "=.proplist=.id,address,gateway,dns-server,dhcp-option,comment", `?address=${network.network}`]),
       read(["/ip/dhcp-server/lease/print", "=.proplist=.id,address,mac-address,host-name,status,server,active-address,active-mac-address,expires-after", `?server=${resources.hotspotDhcp}`]),
       read(["/ip/hotspot/host/print", "=.proplist=.id,address,mac-address,server,bridge-port,uptime", `?server=${resources.hotspotServer}`]),
       read(["/ip/arp/print", "=.proplist=.id,address,mac-address,interface,complete,disabled", `?interface=${vlanInterface}`]),
+      read(["/ip/hotspot/print", "=.proplist=name,interface,profile,address-pool,disabled"]),
+      read(["/ip/hotspot/profile/print", "=.proplist=name,html-directory,dns-name,hotspot-address,login-by"]),
+      read(["/file/print", "=.proplist=name"]),
+      read(["/ip/hotspot/host/print", "=.proplist=server"]),
+      read(["/ip/dhcp-server/option/print", "=.proplist=name,code,value", "?code=114"]),
     ]);
+    const relevantHotspotInterfaces = new Set([
+      vlanInterface,
+      parentBridge,
+      String(port.interface_name ?? "").trim(),
+      String(port.handoff_interface ?? "").trim(),
+    ].filter(Boolean));
+    const relevantHotspotServerRows = hotspotServerRows.filter(row =>
+      row.name === resources.hotspotServer
+      || relevantHotspotInterfaces.has(String(row.interface ?? "").trim()),
+    );
+    const relevantHotspotServerNames = new Set(
+      relevantHotspotServerRows.map(row => String(row.name ?? "").trim()).filter(Boolean),
+    );
+    const relevantHotspotProfileNames = new Set([
+      resources.hotspotProfile,
+      ...relevantHotspotServerRows
+        .map(row => String(row.profile ?? "").trim())
+        .filter(Boolean),
+    ]);
+    const hotspotSnapshot = summarizeVlanHotspotDiagnostics({
+      expectedServerName: resources.hotspotServer,
+      expectedProfileName: resources.hotspotProfile,
+      expectedDirectory: resources.hotspotDirectory,
+      storedDnsName: validPortalHostname(port.hotspot_dns_name) ?? null,
+      servers: relevantHotspotServerRows,
+      profiles: hotspotProfileRows,
+      files: hotspotFileRows,
+      hosts: hotspotHostSummaryRows.filter(row =>
+        relevantHotspotServerNames.has(String(row.server ?? "").trim()),
+      ),
+    });
+    const hotspotDnsNames = [...new Set([
+      hotspotSnapshot.expected.storedDnsName,
+      ...hotspotProfileRows
+        .filter(profile => relevantHotspotProfileNames.has(String(profile.name ?? "").trim()))
+        .map(profile => validPortalHostname(profile["dns-name"]) ?? null),
+    ].filter((name): name is string => Boolean(name)))];
+    const hotspotDnsRows = (await Promise.all(hotspotDnsNames.map(name =>
+      read(["/ip/dns/static/print", "=.proplist=.id,name,address,disabled,comment", `?name=${name}`]),
+    ))).flat();
+    const referencedPortalOptionNames = new Set([
+      `${resources.commentPrefix}_captive_portal`,
+      ...dhcpNetworkRows.flatMap(row =>
+        String(row["dhcp-option"] ?? "").split(",").map(name => name.trim()).filter(Boolean),
+      ),
+    ]);
+    const relevantCaptivePortalOptions = captivePortalOptionRows.filter(row =>
+      referencedPortalOptionNames.has(String(row.name ?? "").trim()),
+    );
     const [aggregateQueueResult, customerQueueResult] = await Promise.allSettled([
       read(["/queue/simple/print", "=.proplist=.id,name,target,parent,max-limit,disabled,bytes,packets", `?name=${resources.parentQueue}`]),
       read(["/queue/simple/print", "=.proplist=.id,name,target,parent,max-limit,disabled,bytes,packets", `?parent=${resources.parentQueue}`]),
@@ -3037,6 +3097,7 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
         subnet: network.network,
         gateway: network.gateway,
         hotspotServer: resources.hotspotServer,
+        storedHotspotDnsName: hotspotSnapshot.expected.storedDnsName,
         hotspotDhcp: resources.hotspotDhcp,
       },
       router: {
@@ -3059,6 +3120,9 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
       dhcpNetworks: dhcpNetworkRows,
       leases: leaseRows,
       hotspotHosts: hotspotHostRows,
+      hotspot: hotspotSnapshot,
+      captivePortalOptions: relevantCaptivePortalOptions,
+      hotspotDnsEntries: hotspotDnsRows,
       arp: arpRows,
       aggregateQueue: aggregateQueueRows[0] ? {
         id: aggregateQueueRows[0][".id"] ?? null,
