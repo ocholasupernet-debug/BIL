@@ -460,6 +460,15 @@ function PlatformBillingBanner() {
 }
 
 type PageAuthMethod = "none" | "password" | "whatsapp" | "sms" | "email";
+type RouterPagePasswordStatus = "unknown" | "checking" | "missing" | "configured";
+const ROUTER_PAGE_AUTH_FEATURE = "network.routers";
+
+function pageReauthSessionKey(adminId: string | number, role: string, feature: string, method: PageAuthMethod): string {
+  const routerPasswordVersion = feature === ROUTER_PAGE_AUTH_FEATURE && method === "password"
+    ? "_independent-v1"
+    : "";
+  return `ochola_reauth_${adminId}_${role}_${feature}_${method}${routerPasswordVersion}`;
+}
 
 export function AdminLayout({
   children,
@@ -483,6 +492,9 @@ export function AdminLayout({
   const [reauthResendSeconds, setReauthResendSeconds] = useState(0);
   const [reauthBusy, setReauthBusy] = useState(false);
   const [reauthError, setReauthError] = useState("");
+  const [routerPagePasswordStatus, setRouterPagePasswordStatus] = useState<RouterPagePasswordStatus>("unknown");
+  const [newRouterPagePassword, setNewRouterPagePassword] = useState("");
+  const [confirmRouterPagePassword, setConfirmRouterPagePassword] = useState("");
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -511,7 +523,16 @@ export function AdminLayout({
   const currentPageAuthFeatureKey     = getAdminPageAuthFeatureKeyForPath(location) ?? currentFeatureKey;
   const isOverviewFeature             = !currentPageAuthFeatureKey || currentPageAuthFeatureKey === "overview" || currentPageAuthFeatureKey === "overview.dashboard";
   const requiresReauthGate            = !isOverviewFeature && !isImpersonating();
-  const reauthCheckPending            = requiresReauthGate && (reauthCheckedFeature !== currentPageAuthFeatureKey || reauthStatus === "checking");
+  const usesRouterPagePassword        = currentPageAuthFeatureKey === ROUTER_PAGE_AUTH_FEATURE && reauthMethod === "password";
+  const routerPagePasswordSetupNeeded = usesRouterPagePassword && routerPagePasswordStatus === "missing";
+  const routerPagePasswordStatusPending = usesRouterPagePassword &&
+    reauthStatus === "required" &&
+    (routerPagePasswordStatus === "unknown" || routerPagePasswordStatus === "checking");
+  const reauthCheckPending            = requiresReauthGate && (
+    reauthCheckedFeature !== currentPageAuthFeatureKey ||
+    reauthStatus === "checking" ||
+    routerPagePasswordStatusPending
+  );
   const pageIsVisible                 = !currentFeatureKey || isVisible(currentFeatureKey);
   const isVpnSurface                  = location.startsWith("/admin/vpn");
 
@@ -572,13 +593,61 @@ export function AdminLayout({
         throw new Error(data.error || "The password check could not be completed.");
       }
       localStorage.setItem("ochola_api_token", data.token);
-      sessionStorage.setItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentPageAuthFeatureKey}_password`, String(data.expiresAt));
+      sessionStorage.setItem(
+        pageReauthSessionKey(ADMIN_ID, getAdminRole(), currentPageAuthFeatureKey ?? "", "password"),
+        String(data.expiresAt),
+      );
       window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: ADMIN_ID } }));
       setReauthUntil(data.expiresAt);
       setReauthPassword("");
       setReauthStatus("verified");
     } catch (cause) {
       setReauthError(cause instanceof Error ? cause.message : "The password check could not be completed.");
+    } finally {
+      setReauthBusy(false);
+    }
+  };
+
+  const handleRouterPagePasswordSetup = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setReauthError("");
+    if (newRouterPagePassword.length < 10 || newRouterPagePassword.length > 200) {
+      setReauthError("Choose a password with at least 10 characters.");
+      return;
+    }
+    if (newRouterPagePassword !== confirmRouterPagePassword) {
+      setReauthError("The Routers page passwords do not match.");
+      return;
+    }
+
+    setReauthBusy(true);
+    try {
+      const response = await fetch("/api/auth/admin/router-page-password/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAdminApiToken()}` },
+        body: JSON.stringify({
+          password: newRouterPagePassword,
+          confirmPassword: confirmRouterPagePassword,
+        }),
+      });
+      const data = await response.json() as { ok?: boolean; token?: string; expiresAt?: number; error?: string };
+      const expiresAt = Number(data.expiresAt);
+      if (!response.ok || !data.ok || !data.token || !Number.isFinite(expiresAt)) {
+        throw new Error(data.error || "The Routers page password could not be created.");
+      }
+      localStorage.setItem("ochola_api_token", data.token);
+      sessionStorage.setItem(
+        pageReauthSessionKey(ADMIN_ID, getAdminRole(), ROUTER_PAGE_AUTH_FEATURE, "password"),
+        String(data.expiresAt),
+      );
+      window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: ADMIN_ID } }));
+      setRouterPagePasswordStatus("configured");
+      setNewRouterPagePassword("");
+      setConfirmRouterPagePassword("");
+      setReauthUntil(expiresAt);
+      setReauthStatus("verified");
+    } catch (cause) {
+      setReauthError(cause instanceof Error ? cause.message : "The Routers page password could not be created.");
     } finally {
       setReauthBusy(false);
     }
@@ -633,7 +702,7 @@ export function AdminLayout({
       }
       localStorage.setItem("ochola_api_token", data.token);
       sessionStorage.setItem(
-        `ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentPageAuthFeatureKey}_${reauthMethod}`,
+        pageReauthSessionKey(ADMIN_ID, getAdminRole(), currentPageAuthFeatureKey ?? "", reauthMethod),
         String(data.expiresAt),
       );
       window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: ADMIN_ID } }));
@@ -728,7 +797,7 @@ export function AdminLayout({
 
   useEffect(() => {
     const disabled = new URLSearchParams(location.split("?")[1] ?? "").get("disabled");
-    setNotice(disabled ? "That admin page is currently disabled by the Super Admin." : "");
+    setNotice(disabled ? "That page is currently unavailable." : "");
   }, [location]);
 
   useEffect(() => {
@@ -741,8 +810,7 @@ export function AdminLayout({
     let cancelled = false;
     const feature = currentPageAuthFeatureKey;
     setReauthError("");
-    const overviewFeature = !feature || feature === "overview" || feature === "overview.dashboard";
-    if (overviewFeature || isImpersonating()) {
+    if (!feature || feature === "overview" || feature === "overview.dashboard" || isImpersonating()) {
       setReauthUntil(0);
       setReauthMethod("none");
       setReauthStatus("not-required");
@@ -763,7 +831,7 @@ export function AdminLayout({
         setReauthStatus("not-required");
         setReauthCheckedFeature(feature);
       } else {
-        const cacheKey = `ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${feature}_${method}`;
+        const cacheKey = pageReauthSessionKey(ADMIN_ID, getAdminRole(), feature, method);
         let storedExpiry = 0;
         try { storedExpiry = Number(sessionStorage.getItem(cacheKey) || 0); } catch {}
         if (Number.isFinite(storedExpiry) && storedExpiry > Date.now()) {
@@ -799,12 +867,47 @@ export function AdminLayout({
     void check();
     return () => { cancelled = true; };
   }, [currentPageAuthFeatureKey, reauthRetryKey]);
+  useEffect(() => {
+    let cancelled = false;
+    const appliesToRouterPassword =
+      currentPageAuthFeatureKey === ROUTER_PAGE_AUTH_FEATURE &&
+      reauthMethod === "password";
+    if (!appliesToRouterPassword) {
+      setRouterPagePasswordStatus("unknown");
+      setNewRouterPagePassword("");
+      setConfirmRouterPagePassword("");
+      return;
+    }
+    if (reauthStatus !== "required") return;
+
+    setRouterPagePasswordStatus("checking");
+    setReauthError("");
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/admin/router-page-password/status", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${getAdminApiToken()}` },
+        });
+        const data = await response.json() as { ok?: boolean; configured?: boolean; error?: string };
+        if (!response.ok || !data.ok || typeof data.configured !== "boolean") {
+          throw new Error(data.error || "The Routers page password status could not be checked.");
+        }
+        if (cancelled) return;
+        setRouterPagePasswordStatus(data.configured ? "configured" : "missing");
+      } catch (cause) {
+        if (cancelled) return;
+        setReauthError(cause instanceof Error ? cause.message : "The Routers page password status could not be checked.");
+        setReauthStatus("failed");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentPageAuthFeatureKey, reauthMethod, reauthStatus, reauthRetryKey]);
 
   useEffect(() => {
     if (reauthStatus !== "verified" || !reauthUntil) return;
     const timer = window.setInterval(() => {
       if (Date.now() >= reauthUntil) {
-        sessionStorage.removeItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentPageAuthFeatureKey}_${reauthMethod}`);
+        sessionStorage.removeItem(pageReauthSessionKey(ADMIN_ID, getAdminRole(), currentPageAuthFeatureKey ?? "", reauthMethod));
         setReauthStatus("required");
         setReauthUntil(0);
       }
@@ -830,7 +933,7 @@ export function AdminLayout({
       <div className="admin-shell" style={{ minHeight: "100vh", alignItems: "center", justifyContent: "center", padding: 32 }}>
         <div style={{ maxWidth: 480, textAlign: "center", color: "var(--isp-text)" }}>
           <h1 style={{ fontSize: "1.35rem", marginBottom: 8 }}>Page unavailable</h1>
-          <p style={{ color: "var(--isp-text-muted)" }}>This page has been disabled by the Super Admin. Redirecting to your Dashboard…</p>
+          <p style={{ color: "var(--isp-text-muted)" }}>This page is currently unavailable. Redirecting to your Dashboard…</p>
         </div>
       </div>
     );
@@ -1015,7 +1118,7 @@ export function AdminLayout({
         <main className={`admin-content ${isVpnSurface ? "admin-vpn-surface" : ""}`} aria-busy={reauthCheckPending}>
           {isImpersonating() && (
             <div role="status" style={{ marginBottom: 16, border: "1px solid rgba(249,115,22,0.45)", background: "rgba(124,45,18,0.2)", color: "#fed7aa", borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-              <span><ShieldAlert size={15} style={{ verticalAlign: "middle", marginRight: 7 }} />Audited Super Admin access as <strong>{getImpersonatedName()}</strong>. Session expires at {new Date(localStorage.getItem("ochola_impersonation_expires_at") || Date.now()).toLocaleTimeString()}.</span>
+              <span><ShieldAlert size={15} style={{ verticalAlign: "middle", marginRight: 7 }} />Session expires at {new Date(localStorage.getItem("ochola_impersonation_expires_at") || Date.now()).toLocaleTimeString()}.</span>
               <button type="button" onClick={() => void handleEndAccess()} disabled={endingAccess} style={{ border: "1px solid rgba(254,215,170,0.5)", borderRadius: 7, padding: "7px 11px", background: "rgba(124,45,18,0.45)", color: "#ffedd5", fontWeight: 700, cursor: "pointer" }}>
                 {endingAccess ? "Ending…" : "End access"}
               </button>
@@ -1029,14 +1132,18 @@ export function AdminLayout({
           <PlatformBillingBanner />
           {requiresReauthGate && !reauthCheckPending && reauthStatus !== "verified" && reauthStatus !== "not-required" ? (
             <div role="dialog" aria-modal="true" aria-labelledby="reauth-title" style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(5,10,20,0.78)", display: "grid", placeItems: "center", padding: 20 }}>
-              <form onSubmit={reauthMethod === "password" ? handlePasswordRecheck : handlePageOtpVerify} style={{ width: "min(100%, 420px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
+              <form onSubmit={routerPagePasswordSetupNeeded ? handleRouterPagePasswordSetup : reauthMethod === "password" ? handlePasswordRecheck : handlePageOtpVerify} style={{ width: "min(100%, 420px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
                 <h2 id="reauth-title" style={{ margin: "0 0 8px", fontSize: 19 }}>
                   {reauthStatus === "checking"
                     ? "Checking page security…"
                     : reauthStatus === "failed"
                       ? "Unable to check security policy"
                       : reauthMethod === "password"
-                        ? "Confirm your password"
+                        ? routerPagePasswordSetupNeeded
+                          ? "Create a Routers page password"
+                          : usesRouterPagePassword
+                            ? "Enter your Routers page password"
+                            : "Confirm your password"
                         : `Verify with ${reauthMethod === "email" ? "email" : reauthMethod === "whatsapp" ? "WhatsApp" : "SMS"}`}
                 </h2>
                 {reauthStatus === "checking" ? (
@@ -1049,13 +1156,26 @@ export function AdminLayout({
                 ) : (
                   <>
                     <p style={{ color: "var(--isp-text-muted)", fontSize: 14 }}>
-                      The Super Admin requires this check before the page can load. Verification lasts five minutes.
+                      {routerPagePasswordSetupNeeded
+                        ? "Set a password for the Routers page."
+                        : usesRouterPagePassword
+                          ? "Enter your Routers page password to continue."
+                          : "Enter your password to continue."}
                     </p>
                     {reauthMethod === "password" ? (
-                      <>
-                        <label htmlFor="page-reauth-password" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>Current password</label>
-                        <input id="page-reauth-password" type="password" autoComplete="current-password" value={reauthPassword} onChange={event => setReauthPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
-                      </>
+                      routerPagePasswordSetupNeeded ? (
+                        <>
+                          <label htmlFor="router-page-new-password" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>New Routers page password</label>
+                          <input id="router-page-new-password" type="password" autoComplete="new-password" minLength={10} maxLength={200} value={newRouterPagePassword} onChange={event => setNewRouterPagePassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+                          <label htmlFor="router-page-confirm-password" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>Confirm Routers page password</label>
+                          <input id="router-page-confirm-password" type="password" autoComplete="new-password" minLength={10} maxLength={200} value={confirmRouterPagePassword} onChange={event => setConfirmRouterPagePassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+                        </>
+                      ) : (
+                        <>
+                          <label htmlFor="page-reauth-password" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>{usesRouterPagePassword ? "Routers page password" : "Current password"}</label>
+                          <input id="page-reauth-password" type="password" autoComplete={usesRouterPagePassword ? "off" : "current-password"} value={reauthPassword} onChange={event => setReauthPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+                        </>
+                      )
                     ) : reauthChallengeId ? (
                       <>
                         <p style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>
@@ -1089,13 +1209,17 @@ export function AdminLayout({
                     <button
                       type={reauthMethod !== "password" && !reauthChallengeId ? "button" : "submit"}
                       onClick={reauthMethod !== "password" && !reauthChallengeId ? () => void handlePageOtpRequest() : undefined}
-                      disabled={reauthBusy || (reauthMethod === "password" && !reauthPassword) || (reauthMethod !== "password" && !!reauthChallengeId && reauthCode.length !== 6)}
+                      disabled={reauthBusy || (reauthMethod === "password" && (routerPagePasswordSetupNeeded
+                        ? !newRouterPagePassword || !confirmRouterPagePassword
+                        : !reauthPassword)) || (reauthMethod !== "password" && !!reauthChallengeId && reauthCode.length !== 6)}
                       style={{ marginTop: 14, border: 0, borderRadius: 8, padding: "10px 15px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer", opacity: reauthBusy ? 0.6 : 1 }}
                     >
                       {reauthBusy
-                        ? reauthChallengeId ? "Verifying…" : "Sending…"
+                        ? reauthMethod === "password"
+                          ? routerPagePasswordSetupNeeded ? "Creating…" : "Checking…"
+                          : reauthChallengeId ? "Verifying…" : "Sending…"
                         : reauthMethod === "password"
-                          ? "Continue to page"
+                          ? routerPagePasswordSetupNeeded ? "Create password and continue" : "Continue to page"
                           : reauthChallengeId
                             ? "Verify code"
                             : "Send verification code"}

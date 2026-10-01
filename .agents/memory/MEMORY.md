@@ -97,4 +97,7 @@
 - [Async port deployment](async-port-deployment.md) — Long-running assigned-port RouterOS work must return quickly and expose persisted completion status.
 - [Reseller portal hostname boundary](reseller-portal-hostname-boundary.md) — Fetch portal files from the ISP origin, but embed the reseller tenant/API origin and apply the reseller Hotspot DNS to RouterOS.
 - [Reseller VLAN access handoff](reseller-vlan-access-handoff.md) — Identify the live physical ingress before assigning an untagged reseller VLAN access port; preserve the legacy native VLAN explicitly.
-- [Platform auth storage and revocation](platform-auth-storage-revocation.md) — Keep auth control tables on the privileged database path and bind admin/setup sessions to the account auth version.
+- [Settings page verification](settings-page-verification.md) — Keep the Settings visibility group separate from the independent verification identity of each tab.
+- [Page-verification credential changes](page-verification-credential-changes.md) — Version the browser verification cache when a page changes credential identity so an older credential grant cannot carry over.
+- [Canvas action validation](canvas-action-validation.md) — Keep iframe update actions literal, cap suggestion labels at 60 characters, and attach three suggestions when marking design frames live.
+- [Tenant-facing role copy](tenant-facing-role-copy.md) — Keep platform-role disclosures out of ISP/reseller-facing copy while preserving internal authorization and privileged-only surfaces.

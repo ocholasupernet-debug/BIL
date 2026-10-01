@@ -1089,3 +1089,16 @@ create index if not exists nas_nasname_idx on nas(nasname);
 insert into isp_admins (name, username, email, subdomain, status, plan_name)
 values ('Default Admin', 'admin', 'admin@example.com', 'default', 'active', 'basic')
 on conflict (username) do nothing;
+
+create table if not exists public.isp_admin_router_page_passwords (
+  admin_id bigint primary key references public.isp_admins(id) on delete cascade,
+  password_hash text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.isp_admin_router_page_passwords enable row level security;
+revoke all on table public.isp_admin_router_page_passwords from anon;
+revoke all on table public.isp_admin_router_page_passwords from authenticated;
+grant select, insert, update, delete
+  on table public.isp_admin_router_page_passwords to service_role;

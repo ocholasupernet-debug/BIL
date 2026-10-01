@@ -193,7 +193,7 @@ router.post("/auth/sms/request-otp", async (req, res) => {
   const purpose = req.body?.purpose as Purpose,
     type = req.body?.accountType as AccountType;
   if (!await isOtpChannelEnabled("sms"))
-    return void res.status(503).json({ ok: false, error: "SMS OTP is disabled by the Super Admin." });
+    return void res.status(503).json({ ok: false, error: "SMS verification is currently unavailable." });
   if (
     !["login", "registration", "recovery"].includes(purpose) ||
     (purpose !== "registration" && !["admin", "customer"].includes(type))
@@ -202,7 +202,7 @@ router.post("/auth/sms/request-otp", async (req, res) => {
       .status(400)
       .json({ ok: false, error: "Choose a supported SMS verification flow." });
   if (purpose === "recovery")
-    return void res.status(403).json({ ok: false, error: "Only a Super Admin can reset an account password." });
+    return void res.status(403).json({ ok: false, error: "Password recovery is not available here." });
   const s = await getSmsSettings();
   const feature = purpose === "login" ? "login" : "registrationVerification";
   if (!isSmsFeatureEnabled(s, feature))
@@ -269,7 +269,7 @@ router.post("/auth/sms/request-otp", async (req, res) => {
 router.post("/auth/sms/verify-otp", async (req, res) => {
   res.set("Cache-Control", "no-store");
   if (!await isOtpChannelEnabled("sms"))
-    return void res.status(503).json({ ok: false, error: "SMS OTP is disabled by the Super Admin." });
+    return void res.status(503).json({ ok: false, error: "SMS verification is currently unavailable." });
   const id = String(req.body?.challengeId || ""),
     code = String(req.body?.code || "");
   if (!/^[0-9a-f-]{36}$/i.test(id) || !/^\d{6}$/.test(code))
@@ -349,6 +349,6 @@ router.post("/auth/sms/verify-otp", async (req, res) => {
   });
 });
 router.post("/auth/sms/reset-password", (_req, res) => {
-  res.status(403).json({ ok: false, error: "Only a Super Admin can reset an account password." });
+  res.status(403).json({ ok: false, error: "Password recovery is not available here." });
 });
 export default router;

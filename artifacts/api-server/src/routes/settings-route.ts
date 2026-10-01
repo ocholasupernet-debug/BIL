@@ -91,7 +91,7 @@ function isValidLiveCallback(value: string): boolean {
 async function requireAdminPaymentChange(req: Request, res: Response, adminId: number): Promise<boolean> {
   const auth = validateToken(extractToken(req));
   if (!auth || auth.type !== "a") {
-    res.status(401).json({ ok: false, error: "Your ISP Admin session is missing or expired. Sign in again; Super Admin approval is not required." });
+    res.status(401).json({ ok: false, error: "Your admin session is missing or expired. Sign in again." });
     return false;
   }
   const account = auth.uid === "superadmin" ? null : await accountFromRequest(req);
@@ -137,7 +137,7 @@ function requireSuperAdminReplacementPasscode(req: Request, res: Response): bool
   if (!replacementPasscode) {
     res.status(503).json({
       ok: false,
-      error: "Payment settings are locked until SUPERADMIN_PASSWORD is configured securely.",
+      error: "Payment settings are temporarily unavailable. Contact support.",
     });
     return false;
   }
@@ -729,7 +729,7 @@ router.post("/admin/mpesa-gateway-config", async (req: Request, res: Response): 
   if (isDarajaGateway(gatewayId) && hasDarajaAuthFields(input)) {
     res.status(400).json({
       ok: false,
-      error: "Daraja API credentials are managed by Super Admin. Enter only the collection account details here.",
+      error: "Daraja API credentials are managed separately. Enter only the collection account details here.",
     });
     return;
   }
@@ -794,7 +794,7 @@ router.get("/settings/mpesa/status", async (_req: Request, res: Response): Promi
 router.post("/settings/mpesa", (req: Request, res: Response): void => {
   res.status(403).json({
     ok: false,
-    error: "M-Pesa credentials can only be changed from Super Admin → Payment Gateways.",
+    error: "M-Pesa credentials are managed separately from this page.",
   });
 });
 
@@ -850,7 +850,7 @@ router.post("/super-admin/mpesa", async (req: Request, res: Response): Promise<v
   if (!replacementPasscode) {
     res.status(503).json({
       ok: false,
-      error: "M-Pesa settings are locked until SUPERADMIN_PASSWORD is configured securely.",
+      error: "M-Pesa settings are temporarily unavailable. Contact support.",
     });
     return;
   }

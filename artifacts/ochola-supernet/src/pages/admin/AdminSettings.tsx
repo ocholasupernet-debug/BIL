@@ -362,7 +362,7 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
               <form onSubmit={submitPassword} className="mt-5 space-y-3">
                 {!passwordConfigured && !passwordSetupOpen ? (
                   <>
-                    <p className="text-sm text-slate-400">Create a separate password for payment settings. Only a Super Admin can reset it.</p>
+                    <p className="text-sm text-slate-400">Create a separate password for payment settings.</p>
                     {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
                     <div className="flex justify-between gap-2 pt-2">
                       <button type="button" onClick={cancel} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
@@ -991,10 +991,10 @@ function ResellerPaymentTestCard() {
     || status === "pending";
 
   return (
-    <Card title="Test Reseller Gateways" desc="STK prompts use Super Admin Daraja settings and the selected reseller collection account. Connection checks do not send payments.">
+    <Card title="Test Reseller Gateways" desc="STK prompts use platform Daraja settings and the selected reseller collection account. Connection checks do not send payments.">
       {selectedRoute && promptGateway && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "9px 11px", borderRadius: 8, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", color: "#fbbf24", fontSize: "0.72rem", lineHeight: 1.45 }}>
-          This STK test uses Daraja settings managed by Super Admin and this route’s collection account. In live mode, approving the prompt charges the phone. Test payments do not activate service or count toward reseller revenue.
+          This STK test uses platform Daraja settings and this route’s collection account. In live mode, approving the prompt charges the phone. Test payments do not activate service or count toward reseller revenue.
         </div>
       )}
       <Field label="Reseller payment route">
@@ -1119,7 +1119,7 @@ function AdminPaymentGatewayCard() {
   };
 
   return (
-    <Card title="Active Payment Gateway" desc="Switch this ISP’s payment gateway anytime — no Super Admin approval or passcode required">
+      <Card title="Active Payment Gateway" desc="Switch this ISP’s payment gateway anytime">
       <Field label="Payment Gateway">
         <Select value={paymentGateway} onChange={event => { setPaymentGateway(event.target.value); setSaved(false); setError(""); }}>
           {ADMIN_PAYMENT_GATEWAY_OPTIONS.map(option => (
@@ -1292,7 +1292,7 @@ function ResellerPaymentGatewayCard() {
   return (
     <Card title="Payment Gateways" desc="Choose a gateway, configure its collection account, and route it to your reseller services.">
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
-        These routes store collection destinations only. Daraja API credentials are managed by Super Admin. A VLAN-port route takes priority, then its router route, then your reseller default.
+        These routes store collection destinations only. A VLAN-port route takes priority, then its router route, then your reseller default.
       </div>
       <div style={{
         display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8,
@@ -1520,9 +1520,9 @@ function BillingTab() {
 
   return (
     <>
-      <Card title="M-Pesa Integration" desc="Safaricom Daraja API credentials for STK push and C2B payments are managed by Super Admin">
+      <Card title="M-Pesa Integration" desc="Safaricom Daraja API settings for STK push and C2B payments">
         <p style={{ color: C.muted, fontSize: "0.8rem", lineHeight: 1.55, margin: 0 }}>
-          Super Admin manages the platform credentials, environment, and callback settings. ISP and reseller accounts configure only where collected payments are deposited.
+          Configure where collected payments are deposited here.
         </p>
       </Card>
       {getAdminRole() !== "reseller" && <AdminPaymentTestCard currency={currency} />}
@@ -1606,9 +1606,9 @@ function SmsEmailTab() {
         </p>
       </Card>
 
-      <Card title="Email / SMTP" desc="Managed centrally by the Super Admin">
+      <Card title="Email / SMTP" desc="Managed centrally">
         <p style={{ color: C.muted, fontSize: "0.84rem", lineHeight: 1.6, margin: 0 }}>
-          SMTP credentials and delivery are configured in Super Admin → System Settings. The shared service currently sends account-registration confirmations and platform security alerts.
+          SMTP credentials and delivery are configured outside this page. The shared service currently sends account-registration confirmations and platform security alerts.
         </p>
       </Card>
 
@@ -2774,7 +2774,7 @@ function PaymentSettingsLoadPrompt({ onLoad }: { onLoad: () => void }) {
       desc="Load your saved gateway details and payment routing when you are ready."
     >
       <p style={{ color: C.muted, fontSize: "0.75rem", lineHeight: 1.5, margin: "0 0 14px" }}>
-        Loading these settings does not change them. Access is granted for ten minutes using the verification method selected by the Super Admin.
+        Loading these settings does not change them. Access is granted for ten minutes using the verification method set for this page.
       </p>
       <Row>
         <button
@@ -2797,7 +2797,7 @@ function PaymentGatewaysTab() {
     return (
       <>
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
-          Configure your collection destination here. Daraja API credentials are managed by Super Admin; your assigned router and VLAN scope determine where this reseller route applies.
+          Configure your collection destination here. Your assigned router and VLAN scope determine where this reseller route applies.
         </div>
         {settingsRequested
           ? <ResellerPaymentGatewayCard />
@@ -2972,7 +2972,7 @@ function PaymentGatewaysTab() {
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.muted, background: "rgba(37,99,235,0.06)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "10px 12px", marginBottom: 20, fontSize: "0.74rem", lineHeight: 1.45 }}>
-        Configure collection destinations here. Daraja API credentials, environment, and callback settings are managed centrally by Super Admin.
+        Configure collection destinations here. Payment credentials, environment, and callback settings are handled separately.
       </div>
       <AdminPaymentGatewayCard />
 

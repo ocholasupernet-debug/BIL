@@ -1513,7 +1513,7 @@ router.post("/mpesa/reseller-test", requireAdmin(), requireTenantPermission("Man
     const platformSettings = await getMpesaSettings();
     const settings = platformSettings;
     if (!isMpesaConfigured(settings)) {
-      res.status(503).json({ ok: false, error: "Daraja API credentials are managed by Super Admin and are not configured yet." });
+      res.status(503).json({ ok: false, error: "M-Pesa payments are not available right now. Please contact support." });
       return;
     }
     if (!supabaseServiceRoleConfigured) {
@@ -1947,7 +1947,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
   if (!isMpesaConfigured(cfg)) {
     res.status(503).json({
       ok: false,
-      error: "M-Pesa credentials are not configured. Configure them in Super Admin → Payment Gateways.",
+      error: "M-Pesa payments are not configured. Please contact support.",
     });
     return;
   }
@@ -2323,8 +2323,8 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       ok: false,
       demo: true,
       error: resellerRoute
-        ? "Daraja API credentials are managed by Super Admin and are not configured yet."
-        : "M-Pesa is not configured. Ask the Super Admin to complete Payment Gateways.",
+        ? "M-Pesa payments are not available right now. Please contact support."
+        : "M-Pesa payments are not configured. Please contact support.",
     });
     return;
   }
