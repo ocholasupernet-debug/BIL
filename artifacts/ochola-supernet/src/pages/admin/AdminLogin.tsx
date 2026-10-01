@@ -585,9 +585,9 @@ export default function AdminLogin() {
                   <>
                     <div>
                       <label style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>New password</label>
-                      <input type="password" autoComplete="new-password" value={newPassword} onChange={event => setNewPassword(event.target.value)} minLength={10} style={inputStyle} />
+                      <input type="password" autoComplete="new-password" value={newPassword} onChange={event => setNewPassword(event.target.value)} minLength={6} style={inputStyle} />
                     </div>
-                    <button type="button" onClick={() => void saveRecoveredPassword()} disabled={otpLoading || newPassword.length < 10} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || newPassword.length < 10 ? 0.6 : 1 }}>
+                    <button type="button" onClick={() => void saveRecoveredPassword()} disabled={otpLoading || newPassword.length < 6} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || newPassword.length < 6 ? 0.6 : 1 }}>
                       {otpLoading ? "Updating…" : "Reset password"}
                     </button>
                   </>

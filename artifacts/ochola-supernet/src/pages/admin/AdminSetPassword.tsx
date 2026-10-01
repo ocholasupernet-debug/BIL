@@ -32,7 +32,7 @@ export default function AdminSetPassword() {
   const getStrength = (pw: string) => {
     if (pw.length === 0) return 0;
     if (pw.length < 6) return 1;
-    if (pw.length < 10) return 2;
+    if (pw.length < 8) return 2;
     const hasUpper = /[A-Z]/.test(pw);
     const hasNum   = /[0-9]/.test(pw);
     const hasSym   = /[^a-zA-Z0-9]/.test(pw);
@@ -47,8 +47,8 @@ export default function AdminSetPassword() {
     e.preventDefault();
     setError("");
 
-    if (password.length < 10 || password.toLowerCase() === "admin") {
-      setError("Choose a new password with at least 10 characters.");
+    if (password.length < 8 || password.toLowerCase() === "admin") {
+      setError("Choose a new password with at least 8 characters.");
       return;
     }
     if (password !== confirm) {
@@ -143,7 +143,8 @@ export default function AdminSetPassword() {
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  placeholder="At least 10 characters"
+                  minLength={8}
+                  placeholder="At least 8 characters"
                   style={inputStyle}
                   onFocus={e => { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; }}
                   onBlur={e => { e.target.style.borderColor = "var(--isp-input-border)"; e.target.style.boxShadow = "none"; }}

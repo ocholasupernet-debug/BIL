@@ -52,7 +52,11 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     } else if (url.pathname.endsWith("/platform_billing_config")) {
       rows = [{ cutoff_day: 25, due_day: 5, sales_threshold: 8000, low_sales_fee: 500, high_sales_fee: 1400 }];
     } else if (url.pathname.endsWith("/revenue_ledger")) {
-      rows = [{ amount: 100 }];
+      rows = [
+        { amount: 100, payment_method: "mpesa_hotspot" },
+        { amount: 2500, payment_method: "mpesa_registration" },
+        { amount: 800, payment_method: "manual_registration" },
+      ];
     } else if (url.pathname.endsWith("/platform_billing_invoices")) {
       if (method === "POST") {
         const created = invoice ?? { ...JSON.parse(String(init?.body)) as Record<string, unknown>, id: 91 };
@@ -86,10 +90,11 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
       headers: { Authorization: `Bearer ${token}` },
     });
     assert.equal(preview.status, 200);
-    const previewBody = await preview.json() as { invoice: { id?: number; status: string }; eligible: boolean; paymentsAvailable: boolean };
+     const previewBody = await preview.json() as { invoice: { id?: number; status: string; sales_total: number }; eligible: boolean; paymentsAvailable: boolean };
     assert.equal(previewBody.eligible, true);
     assert.equal(previewBody.paymentsAvailable, false);
     assert.ok(["due", "expired"].includes(previewBody.invoice.status));
+     assert.equal(previewBody.invoice.sales_total, 100, "registration receipts must not increase tenant renewal assessments");
     assert.equal(previewBody.invoice.id, undefined);
     assert.ok(requests.length > 0);
     assert.ok(requests.every(row => row.method === "GET"));

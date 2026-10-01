@@ -570,8 +570,8 @@ router.post("/auth/whatsapp/verify-otp", async (req, res): Promise<void> => {
 router.post("/auth/whatsapp/reset-password", async (req, res): Promise<void> => {
   const resetToken = typeof req.body?.resetToken === "string" ? req.body.resetToken.trim() : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
-  if (!resetToken || resetToken.length > 100 || password.length < 10 || password.length > 200) {
-    res.status(400).json({ ok: false, error: "Use a valid reset session and a password with at least 10 characters." });
+  if (!resetToken || resetToken.length > 100 || password.length < 6 || password.length > 200) {
+    res.status(400).json({ ok: false, error: "Use a valid reset session and a password with at least 6 characters." });
     return;
   }
 

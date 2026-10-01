@@ -142,8 +142,8 @@ router.post("/auth/admin/set-password", async (req: Request, res: Response): Pro
     res.status(400).json({ ok: false, error: "Enter matching passwords." });
     return;
   }
-  if (password.length < 10 || password.toLowerCase() === "admin") {
-    res.status(400).json({ ok: false, error: "Choose a new password with at least 10 characters." });
+  if (password.length < 8 || password.toLowerCase() === "admin") {
+    res.status(400).json({ ok: false, error: "Choose a new password with at least 8 characters." });
     return;
   }
 

@@ -35,6 +35,20 @@ interface PlanRecord {
   admin_id: number | null;
   type: string | null;
 }
+interface PlatformIncomeSummary {
+  registrationToday: number;
+  registrationMonth: number;
+  registrationTotal: number;
+  registrationTransactions: number;
+  renewalToday: number;
+  renewalMonth: number;
+  renewalTotal: number;
+  renewalTransactions: number;
+}
+
+function formatKes(amount: number | undefined): string {
+  return `KES ${new Intl.NumberFormat("en-KE", { maximumFractionDigits: 0 }).format(amount ?? 0)}`;
+}
 
 function isRouterOnline(status: string | null): boolean {
   const normalized = status?.trim().toLowerCase();
@@ -141,12 +155,26 @@ export default function SuperAdminDashboard() {
       return data ?? [];
     },
   });
+  const incomeQuery = useQuery<PlatformIncomeSummary>({
+    queryKey: ["sa_platform_income"],
+    queryFn: async () => {
+      const token = localStorage.getItem("ochola_superadmin_token") || "";
+      const response = await fetch("/api/super-admin/billing/income-summary", {
+        headers: { "x-sa-token": token },
+      });
+      const result = await response.json() as { ok?: boolean; error?: string; summary?: PlatformIncomeSummary };
+      if (!response.ok || !result.ok || !result.summary) {
+        throw new Error(result.error || "Could not load platform income.");
+      }
+      return result.summary;
+    },
+  });
 
   const admins = adminsQuery.data ?? [];
   const routers = routersQuery.data ?? [];
   const customers = customersQuery.data ?? [];
   const plans = plansQuery.data ?? [];
-  const hasError = adminsQuery.isError || routersQuery.isError || customersQuery.isError || plansQuery.isError;
+  const hasError = adminsQuery.isError || routersQuery.isError || customersQuery.isError || plansQuery.isError || incomeQuery.isError;
 
   const activeAdmins = admins.filter((admin) => admin.is_active !== false).length;
   const inactiveAdmins = admins.filter((admin) => admin.is_active === false);
@@ -186,6 +214,7 @@ export default function SuperAdminDashboard() {
       routersQuery.refetch(),
       customersQuery.refetch(),
       plansQuery.refetch(),
+      incomeQuery.refetch(),
     ]).then(() => setLastRefresh(new Date()));
   };
 
@@ -196,7 +225,7 @@ export default function SuperAdminDashboard() {
           <div>
             <p className="sa-eyebrow"><span className="sa-eyebrow-mark" /> Control room</p>
             <h1>Platform overview</h1>
-            <p>One view across tenants, network infrastructure, and the customer base. Counts below are read directly from the platform tables.</p>
+            <p>One view across tenants, network infrastructure, customers, and platform income. Registration and renewal receipts are reported separately from ISP and reseller revenue.</p>
           </div>
           <div className="sa-snapshot" title="Time this dashboard last requested its data">
             <Database size={12} />
@@ -247,6 +276,29 @@ export default function SuperAdminDashboard() {
             tone="amber"
             icon={BarChart3}
             loading={plansQuery.isLoading}
+          />
+        </div>
+
+        <div className="sa-command-grid" style={{ marginTop: 16 }}>
+          <MetricCard
+            label="Registration income · this month"
+            value={incomeQuery.isError ? "—" : formatKes(incomeQuery.data?.registrationMonth)}
+            detail={incomeQuery.isError
+              ? "Income data unavailable"
+              : <><strong>{formatKes(incomeQuery.data?.registrationToday)}</strong> today · {formatKes(incomeQuery.data?.registrationTotal)} all time · {incomeQuery.data?.registrationTransactions ?? 0} payments</>}
+            tone="accent"
+            icon={Users}
+            loading={incomeQuery.isLoading}
+          />
+          <MetricCard
+            label="Renewal income · this month"
+            value={incomeQuery.isError ? "—" : formatKes(incomeQuery.data?.renewalMonth)}
+            detail={incomeQuery.isError
+              ? "Income data unavailable"
+              : <><strong>{formatKes(incomeQuery.data?.renewalToday)}</strong> today · {formatKes(incomeQuery.data?.renewalTotal)} all time · {incomeQuery.data?.renewalTransactions ?? 0} payments</>}
+            tone="green"
+            icon={Activity}
+            loading={incomeQuery.isLoading}
           />
         </div>
 

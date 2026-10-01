@@ -341,11 +341,11 @@ router.post("/auth/sms/verify-otp", async (req, res) => {
 router.post("/auth/sms/reset-password", async (req, res) => {
   const token = String(req.body?.resetToken || ""),
     password = String(req.body?.password || "");
-  if (!token || password.length < 10 || password.length > 200)
+  if (!token || password.length < 6 || password.length > 200)
     return void res.status(400).json({
       ok: false,
       error:
-        "Use a valid reset session and a password with at least 10 characters.",
+        "Use a valid reset session and a password with at least 6 characters.",
     });
   const c = await consumeSmsActionToken(token, "", "recovery");
   if (!c?.accountType || !c.accountId)

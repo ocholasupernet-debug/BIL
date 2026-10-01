@@ -3062,8 +3062,8 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
       res.status(400).json({ ok: false, error: "Enter a valid reseller name and username." });
       return;
     }
-    if (cleanPassword.length < 10) {
-      res.status(400).json({ ok: false, error: "The reseller password must be at least 10 characters." });
+    if (cleanPassword.length < 6) {
+      res.status(400).json({ ok: false, error: "The reseller password must be at least 6 characters." });
       return;
     }
     if (!Number.isSafeInteger(routerNumber) || routerNumber <= 0 || !validInterface(cleanInterface) || !Number.isFinite(cap) || cap <= 0 || cap > 100000) {

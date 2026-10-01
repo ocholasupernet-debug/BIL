@@ -4,6 +4,7 @@ import { sbDelete, sbInsert, sbSelect, sbSelectStrict, sbUpdate, sbUpsertStrict,
 import { getMpesaSettings, getPaymentDestinations, isMpesaConfigured } from "../lib/settings-store.js";
 import { encryptGatewayConfig, gatewayConfigPreview, isResellerGatewayId, type ResellerGatewayRouteRow } from "../lib/reseller-payment-gateway.js";
 import { sendPlatformSecurityNotice } from "../lib/platform-email.js";
+import { billingPlatformIncomeSummary } from "../lib/platform-billing-store.js";
 
 const router: IRouter = Router();
 const PLAN_TYPES = new Set(["hotspot", "pppoe", "static"]);
@@ -321,6 +322,38 @@ router.get("/super-admin/billing/platform-config", async (req, res): Promise<voi
     res.json({ ok: true, config });
   } catch {
     res.status(503).json({ ok: false, error: "Could not load platform billing rules." });
+  }
+});
+
+router.get("/super-admin/billing/income-summary", async (req, res): Promise<void> => {
+  if (!isSuperAdmin(req, res)) return;
+  try {
+    const [summary] = await billingPlatformIncomeSummary<{
+      registration_today: number | string;
+      registration_month: number | string;
+      registration_total: number | string;
+      registration_transactions: number | string;
+      renewal_today: number | string;
+      renewal_month: number | string;
+      renewal_total: number | string;
+      renewal_transactions: number | string;
+    }>();
+    if (!summary) throw new Error("Platform income summary is unavailable.");
+    res.json({
+      ok: true,
+      summary: {
+        registrationToday: Number(summary.registration_today),
+        registrationMonth: Number(summary.registration_month),
+        registrationTotal: Number(summary.registration_total),
+        registrationTransactions: Number(summary.registration_transactions),
+        renewalToday: Number(summary.renewal_today),
+        renewalMonth: Number(summary.renewal_month),
+        renewalTotal: Number(summary.renewal_total),
+        renewalTransactions: Number(summary.renewal_transactions),
+      },
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Could not load platform registration and renewal income." });
   }
 });
 

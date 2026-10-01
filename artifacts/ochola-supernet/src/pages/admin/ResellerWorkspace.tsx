@@ -608,7 +608,7 @@ function AdminResellerManagement() {
               <Field label="Username"><input required style={inputStyle} value={form.username} onChange={(e) => update("username", e.target.value)} /></Field>
               <Field label="Email"><input type="email" style={inputStyle} value={form.email} onChange={(e) => update("email", e.target.value)} /></Field>
               <Field label="Phone"><input style={inputStyle} value={form.phone} onChange={(e) => update("phone", e.target.value)} /></Field>
-              <Field label="Initial password"><input required minLength={10} type="password" style={inputStyle} value={form.password} onChange={(e) => update("password", e.target.value)} /></Field>
+              <Field label="Initial password"><input required minLength={6} type="password" style={inputStyle} value={form.password} onChange={(e) => update("password", e.target.value)} /></Field>
             </div>
             <div style={{ borderTop: "1px solid var(--isp-border)", margin: "22px 0", paddingTop: 20 }}>
               <div style={{ color: "var(--isp-text)", fontWeight: 800, marginBottom: 14 }}>Hardware port binding</div>

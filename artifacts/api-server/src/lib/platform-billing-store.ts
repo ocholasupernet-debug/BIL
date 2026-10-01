@@ -63,3 +63,11 @@ export function billingRevenueSummary<T>(accountId: number): Promise<T[]> {
     body: JSON.stringify({ p_account_id: accountId }),
   });
 }
+
+export function billingPlatformIncomeSummary<T>(): Promise<T[]> {
+  return request<T>("rpc/get_platform_income_summary", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: "{}",
+  });
+}

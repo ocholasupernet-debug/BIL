@@ -89,11 +89,16 @@ async function currentInvoice(
   if (!eligible) return { invoice: null, config };
 
   const salesStart = previousMonthStart(period);
-  const ledgerRows = await billingSelect<{ amount: number | string }>(
+  const ledgerRows = await billingSelect<{ amount: number | string; payment_method: string | null }>(
     "revenue_ledger",
-    `revenue_account_id=eq.${account.id}&occurred_at=gte.${salesStart}T00:00:00.000Z&occurred_at=lt.${period}T00:00:00.000Z&select=amount`,
+    `revenue_account_id=eq.${account.id}&occurred_at=gte.${salesStart}T00:00:00.000Z&occurred_at=lt.${period}T00:00:00.000Z&select=amount,payment_method`,
   );
-  const salesTotal = ledgerRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const platformPaymentMethods = new Set(["mpesa_registration", "manual_registration"]);
+  const salesTotal = ledgerRows.reduce((sum, row) => (
+    platformPaymentMethods.has(row.payment_method ?? "")
+      ? sum
+      : sum + Number(row.amount || 0)
+  ), 0);
   const amountDue = salesTotal > Number(config.sales_threshold)
     ? Number(config.high_sales_fee)
     : Number(config.low_sales_fee);

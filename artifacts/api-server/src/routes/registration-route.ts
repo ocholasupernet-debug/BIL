@@ -317,7 +317,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
         phone_verified_at: registrationVerificationRequired ? new Date().toISOString() : null,
         payment_phone: formattedPaymentPhone, username: INITIAL_ADMIN_USERNAME,
         password: await hashIspAdminPassword(INITIAL_ADMIN_PASSWORD), must_change_password: true,
-        is_active: false, role, subdomain: candidate, status: "pending_payment",
+        is_active: false, role, parent_id: null, subdomain: candidate, status: "pending_payment",
         created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
       });
       pendingAdmin = inserted[0];

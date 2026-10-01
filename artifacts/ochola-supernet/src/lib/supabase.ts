@@ -18,7 +18,12 @@ export const supabase = makeClient();
 
 /* ─── Auth helpers ─── */
 function _getStoredAdminId(): number {
-  try { const v = localStorage.getItem("ochola_admin_id"); return v ? parseInt(v) : 5; } catch { return 5; }
+  try {
+    const value = localStorage.getItem("ochola_admin_id") || "";
+    if (!/^[1-9]\d*$/.test(value)) return 0;
+    const id = Number(value);
+    return Number.isSafeInteger(id) ? id : 0;
+  } catch { return 0; }
 }
 
 export let ADMIN_ID: number = _getStoredAdminId();
@@ -63,7 +68,7 @@ export function isSuperAdmin(): boolean {
 }
 
 export function clearAdminAuth() {
-  ADMIN_ID = 5;
+  ADMIN_ID = 0;
   try {
     localStorage.removeItem("ochola_admin_id");
     localStorage.removeItem("ochola_admin_username");
@@ -111,6 +116,7 @@ export function startImpersonation(id: number, username: string, name: string) {
 }
 
 export function stopImpersonation() {
+  ADMIN_ID = 0;
   try {
     localStorage.removeItem("ochola_impersonating");
     localStorage.removeItem("ochola_impersonate_name");
@@ -120,6 +126,8 @@ export function stopImpersonation() {
     localStorage.removeItem("ochola_admin_name");
     localStorage.removeItem("ochola_admin_display_name");
     localStorage.removeItem("ochola_api_token");
+    localStorage.removeItem("ochola_admin_role");
+    window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: null } }));
   } catch {}
 }
 

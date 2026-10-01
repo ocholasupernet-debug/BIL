@@ -175,7 +175,7 @@ export default function UnifiedRegister() {
             <label htmlFor="register-password">Password</label>
             <div className="unified-register-input-wrap">
               <LockKeyhole size={17} aria-hidden="true" />
-              <input id="register-password" required minLength={10} type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" placeholder="At least 10 characters" />
+              <input id="register-password" required minLength={8} type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" placeholder="At least 8 characters" />
               <button type="button" className="unified-register-password-toggle" onClick={() => setShowPassword((visible) => !visible)} aria-label={showPassword ? "Hide password" : "Show password"}>
                 {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
               </button>

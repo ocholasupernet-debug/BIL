@@ -63,8 +63,8 @@ export async function registerAccount(req: Request, res: Response): Promise<void
     res.status(400).json({ success: false, ok: false, error: "Enter a valid email address." });
     return;
   }
-  if (password.length < 10 || password.length > 200) {
-    res.status(400).json({ success: false, ok: false, error: "Choose a password with at least 10 characters." });
+  if (password.length < 8 || password.length > 200) {
+    res.status(400).json({ success: false, ok: false, error: "Choose a password with at least 8 characters." });
     return;
   }
   if (role !== "isp_admin" && role !== "reseller") {

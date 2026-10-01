@@ -20,6 +20,8 @@
     "test:hotspot-portal-live": "tsx --test tests/hotspot-router-staging.test.ts",
     "test:hotspot-portal-deploy": "tsx --test src/lib/hotspot-portal-deploy.test.ts",
     "test:payment-routing": "node --test tests/payment-routing.test.mjs",
+    "test:platform-income": "node --test tests/platform-income-reporting.test.mjs && tsx --test src/routes/super-admin-billing-route.test.ts",
+    "test:account-policy": "node --test tests/account-safety-password-policy.test.mjs",
     "test:storage-governance": "node --test tests/storage-governance.test.mjs",
     "test:whatsapp": "tsx --test src/services/whatsapp/whatsapp-service.test.ts && node --test tests/whatsapp-integration.test.mjs",
     "test:sms": "tsx --test src/services/sms/sms-service.test.ts && node --test tests/sms-integration.test.mjs"
