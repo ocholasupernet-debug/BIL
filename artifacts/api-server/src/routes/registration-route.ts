@@ -10,6 +10,11 @@ import {
 } from "../lib/settings-store.js";
 import { logger } from "../lib/logger.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
+import {
+  checkRegistrationContactCapacity,
+  isRegistrationContactLimitError,
+  REGISTRATION_CONTACT_LIMIT_MESSAGE,
+} from "../lib/registration-contact-capacity.js";
 import { RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
 import {
   consumeWhatsAppActionToken,
@@ -155,7 +160,7 @@ router.get("/registration/config", async (_req: Request, res: Response): Promise
 });
 
 router.post("/registration/payment", async (req: Request, res: Response): Promise<void> => {
-  const company = typeof req.body?.company === "string" ? req.body.company : "";
+  const company = typeof req.body?.company === "string" ? req.body.company.trim().toLowerCase() : "";
   const displayName = typeof req.body?.displayName === "string" ? req.body.displayName.trim() : "";
   const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
   const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
@@ -240,26 +245,16 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     return;
   }
 
-  const [phoneMatches, e164PhoneMatches] = await Promise.all([
-    sbSelect<{ id: number }>(
-      "isp_admins",
-      `phone=eq.${encodeURIComponent(phone)}&select=id&limit=1`,
-    ),
-    sbSelect<{ id: number }>(
-      "isp_admins",
-      `phone_e164=eq.${encodeURIComponent(phoneE164)}&select=id&limit=1`,
-    ),
-  ]);
-  if (phoneMatches.length || e164PhoneMatches.length) {
-    res.status(409).json({ ok: false, error: "This phone number is already registered." });
+  let contactCapacityAvailable: boolean;
+  try {
+    contactCapacityAvailable = await checkRegistrationContactCapacity(email, phoneE164);
+  } catch (error) {
+    logger.warn({ err: error }, "[registration] contact capacity check failed");
+    res.status(503).json({ ok: false, error: "Registration is temporarily unavailable. Please try again later." });
     return;
   }
-  const emailMatches = await sbSelect<{ id: number }>(
-    "isp_admins",
-    `email=eq.${encodeURIComponent(email)}&select=id&limit=1`,
-  );
-  if (emailMatches.length) {
-    res.status(409).json({ ok: false, error: "This email address is already registered." });
+  if (!contactCapacityAvailable) {
+    res.status(409).json({ ok: false, error: REGISTRATION_CONTACT_LIMIT_MESSAGE });
     return;
   }
 
@@ -327,6 +322,10 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
       });
       pendingAdmin = inserted[0];
     } catch (error) {
+      if (isRegistrationContactLimitError(error)) {
+        res.status(409).json({ ok: false, error: REGISTRATION_CONTACT_LIMIT_MESSAGE });
+        return;
+      }
       if (!String(error).includes("HTTP 409")) throw error;
       /* Another registration won the candidate between SELECT and INSERT. */
     }

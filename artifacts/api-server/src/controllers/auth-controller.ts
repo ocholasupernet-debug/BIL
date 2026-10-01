@@ -1,5 +1,10 @@
 import type { Request, Response } from "express";
 import { sbInsertStrict, sbSelectStrict } from "../lib/supabase-client.js";
+import {
+  checkRegistrationContactCapacity,
+  isRegistrationContactLimitError,
+  REGISTRATION_CONTACT_LIMIT_MESSAGE,
+} from "../lib/registration-contact-capacity.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { apiTokenSigningConfigured, generateToken } from "../lib/api-auth.js";
 import { RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
@@ -47,7 +52,7 @@ export async function registerAccount(req: Request, res: Response): Promise<void
   const email = cleanText(rawEmail, 254).toLowerCase();
   const password = typeof req.body?.password === "string" ? req.body.password : "";
   const role = req.body?.role as UnifiedRegistrationRole;
-  const businessName = cleanText(rawBusinessName, 120);
+  const businessName = cleanText(rawBusinessName, 120).toLowerCase();
   const subdomainPrefix = businessName.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 63);
 
   if (name.length < 2 || /[\u0000-\u001F\u007F]/.test(name)) {
@@ -104,13 +109,16 @@ export async function registerAccount(req: Request, res: Response): Promise<void
     return;
   }
 
-  const duplicateEmailRows = await sbSelectStrict<{ id: number }>(
-    "isp_admins",
-    `email=eq.${encodeURIComponent(email)}&select=id&limit=1`,
-  );
-  if (duplicateEmailRows.length > 0) {
-    const message = "An operator account is already registered utilizing this email address profile.";
-    res.status(400).json({ success: false, ok: false, message, error: message });
+  let contactCapacityAvailable: boolean;
+  try {
+    contactCapacityAvailable = await checkRegistrationContactCapacity(email, null);
+  } catch (error) {
+    console.error("[registration] contact capacity check failed:", error);
+    res.status(503).json({ success: false, ok: false, error: "Registration is temporarily unavailable. Please try again later." });
+    return;
+  }
+  if (!contactCapacityAvailable) {
+    res.status(409).json({ success: false, ok: false, error: REGISTRATION_CONTACT_LIMIT_MESSAGE });
     return;
   }
 
@@ -148,6 +156,10 @@ export async function registerAccount(req: Request, res: Response): Promise<void
   try {
     inserted = await sbInsertStrict("isp_admins", accountPayload);
   } catch (error) {
+    if (isRegistrationContactLimitError(error)) {
+      res.status(409).json({ success: false, ok: false, error: REGISTRATION_CONTACT_LIMIT_MESSAGE });
+      return;
+    }
     if (isUniqueViolation(error)) {
       const message = `The workspace URL prefix 'https://${subdomainPrefix}.isplatty.org' is already reserved by another provider account.`;
       res.status(400).json({ success: false, ok: false, message, error: message });

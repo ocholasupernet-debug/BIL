@@ -9,6 +9,7 @@ import {
 import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { logger } from "../lib/logger.js";
+import { checkRegistrationContactCapacity } from "../lib/registration-contact-capacity.js";
 import {
   sbRpc,
   sbSelect,
@@ -118,14 +119,6 @@ async function findAccountByPhone(
   if (accountType === "admin" && account.is_active !== true) return null;
   if (accountType === "customer" && account.status === "suspended") return null;
   return account;
-}
-
-async function isPhoneAlreadyRegistered(phone: string): Promise<boolean> {
-  const [admins, customers] = await Promise.all([
-    sbSelect<{ id: number }>("isp_admins", `phone_e164=eq.${encodeURIComponent(phone)}&select=id&limit=1`),
-    sbSelect<{ id: number }>("isp_customers", `phone_e164=eq.${encodeURIComponent(phone)}&select=id&limit=1`),
-  ]);
-  return admins.length > 0 || customers.length > 0;
 }
 
 function publicAccount(account: Record<string, unknown>): Record<string, unknown> {
@@ -419,7 +412,11 @@ router.post("/auth/whatsapp/request-otp", async (req, res): Promise<void> => {
   let account: Record<string, unknown> | null = null;
   let sendCode = false;
   if (purpose === "registration") {
-    sendCode = !await isPhoneAlreadyRegistered(phone);
+    try {
+      sendCode = await checkRegistrationContactCapacity(null, phone);
+    } catch (error) {
+      logger.warn({ err: error }, "[whatsapp] registration contact capacity check failed");
+    }
   } else {
     const requestedSubdomain = typeof req.body?.subdomain === "string"
       ? req.body.subdomain.trim().toLowerCase()

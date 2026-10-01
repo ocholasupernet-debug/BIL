@@ -1,6 +1,8 @@
 import { randomUUID, createHmac } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { sbRpc, sbSelect, sbUpdateStrict } from "../lib/supabase-client.js";
+import { logger } from "../lib/logger.js";
+import { checkRegistrationContactCapacity } from "../lib/registration-contact-capacity.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { generateToken } from "../lib/api-auth.js";
 import { activeSuperAdminName } from "./super-admin-auth-route.js";
@@ -79,19 +81,6 @@ async function account(type: AccountType, phone: string, sub: string) {
     a[0].is_active !== false
     ? a[0]
     : null;
-}
-async function phoneAlreadyRegistered(phone: string) {
-  const [admins, customers] = await Promise.all([
-    sbSelect<{ id: number }>(
-      "isp_admins",
-      `phone_e164=eq.${encodeURIComponent(phone)}&select=id&limit=1`,
-    ),
-    sbSelect<{ id: number }>(
-      "isp_customers",
-      `phone_e164=eq.${encodeURIComponent(phone)}&select=id&limit=1`,
-    ),
-  ]);
-  return admins.length > 0 || customers.length > 0;
 }
 function pub(a: Record<string, unknown>) {
   const { password, otp, api_key, apiKey, _password, _otp, _apiKey, ...safe } =
@@ -226,7 +215,11 @@ router.post("/auth/sms/request-otp", async (req, res) => {
   let a: Record<string, unknown> | null = null;
   let sendCode = false;
   if (purpose === "registration") {
-    sendCode = !(await phoneAlreadyRegistered(phone));
+    try {
+      sendCode = await checkRegistrationContactCapacity(null, phone);
+    } catch (error) {
+      logger.warn({ err: error }, "[sms] registration contact capacity check failed");
+    }
   } else {
     const requestedSubdomain =
       typeof req.body?.subdomain === "string"

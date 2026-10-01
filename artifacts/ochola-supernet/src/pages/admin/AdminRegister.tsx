@@ -51,10 +51,6 @@ export default function AdminRegister() {
   const [companyAvailable, setCompanyAvailable] = useState<boolean | null>(null);
   const companyDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [checkingPhone, setCheckingPhone] = useState(false);
-  const [phoneAvailable, setPhoneAvailable] = useState<boolean | null>(null);
-  const phoneDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [registeredUsername, setRegisteredUsername] = useState("");
@@ -168,25 +164,6 @@ export default function AdminRegister() {
   }, [company]);
 
   useEffect(() => {
-    setPhoneAvailable(null);
-    if (phoneDebounceRef.current) clearTimeout(phoneDebounceRef.current);
-    if (phone.trim().length < 7) return;
-
-    phoneDebounceRef.current = setTimeout(async () => {
-      setCheckingPhone(true);
-      const { data } = await supabase
-        .from("isp_admins")
-        .select("id")
-        .eq("phone", phone.trim())
-        .limit(1);
-      setCheckingPhone(false);
-      setPhoneAvailable(!data || data.length === 0);
-    }, 600);
-
-    return () => { if (phoneDebounceRef.current) clearTimeout(phoneDebounceRef.current); };
-  }, [phone]);
-
-  useEffect(() => {
     fetch("/api/registration/config")
       .then(async response => {
         const data = await response.json() as {
@@ -274,9 +251,9 @@ export default function AdminRegister() {
 
   const validate = () => {
     const e: Record<string, string> = {};
-    if (!company || company.length < 2) e.company = "Company name must be at least 2 lowercase letters.";
+    if (!company || company.length < 2) e.company = "Company name must be at least 2 letters.";
     else if (!COMPANY_NAME_PATTERN.test(company)) {
-      e.company = "Use lowercase letters only (a-z), with no spaces, numbers, or symbols.";
+      e.company = "Use letters only, with no spaces, numbers, or symbols.";
     }
     else if (RESERVED_SUBDOMAINS.has(slugify(company))) {
       e.company = "This company name is reserved for platform services. Please choose another name.";
@@ -284,7 +261,6 @@ export default function AdminRegister() {
       e.company = "This company name is already taken";
     }
     if (!phone.trim()) e.phone = "Contact number is required";
-    if (phoneAvailable === false) e.phone = "This phone number is already registered";
     if ((whatsappRegistrationCheck || smsRegistrationCheck) && !phoneVerificationToken) {
       e.phoneVerification = "Verify your contact number by WhatsApp or SMS before continuing.";
     }
@@ -313,7 +289,7 @@ export default function AdminRegister() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          company: company.trim(),
+          company: company.trim().toLowerCase(),
           displayName: displayName.trim(),
           email: email.trim().toLowerCase(),
           phone: phone.trim(),
@@ -345,8 +321,9 @@ export default function AdminRegister() {
       setAwaitingPayment(true);
     } catch (err) {
       const msg = extractMsg(err);
-      if (msg.includes("duplicate") || msg.includes("unique")) {
-        setServerErr("This company name or phone number is already registered. Please use different details.");
+      const normalizedMessage = msg.toLowerCase();
+      if (normalizedMessage.includes("subdomain") || normalizedMessage.includes("workspace url")) {
+        setServerErr("This workspace name is not available. Please choose another company name.");
       } else {
         setServerErr(msg || "Registration failed. Please try again.");
       }
@@ -357,9 +334,7 @@ export default function AdminRegister() {
 
   const canSubmit = !loading
     && companyAvailable !== false
-    && phoneAvailable !== false
     && !checkingCompany
-    && !checkingPhone
     && paymentReady
     && (paymentMode !== "paybill" || manualPaybillAvailable);
 
@@ -629,7 +604,7 @@ export default function AdminRegister() {
               <input
                 type="text"
                 value={company}
-                onChange={e => setCompany(e.target.value)}
+                onChange={e => setCompany(e.target.value.toLowerCase())}
                 placeholder="e.g. ocholanetworks"
                 autoComplete="organization"
                  className="register-input"
@@ -648,7 +623,7 @@ export default function AdminRegister() {
                 {companyAvailable
                   ? "Available"
                   : !COMPANY_NAME_PATTERN.test(company)
-                  ? "Invalid format — lowercase letters only (a-z)"
+                  ? "Invalid format — use letters only"
                   : RESERVED_SUBDOMAINS.has(slugify(company))
                   ? "Reserved platform name — choose another name"
                   : "Already taken — try a different name"}
@@ -671,21 +646,11 @@ export default function AdminRegister() {
                 }}
                placeholder="+254 700 000 000"
                  className="register-input"
-                 style={inputStyle(!!errors.phone, phoneAvailable)}
-                onFocus={e => { if (!errors.phone && phoneAvailable !== false) { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; } }}
+                 style={inputStyle(!!errors.phone, null)}
+                onFocus={e => { if (!errors.phone) { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; } }}
                 onBlur={e => { e.target.style.boxShadow = "none"; }}
               />
-              <div style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)" }}>
-                {checkingPhone && <Loader2 size={15} style={{ color: "var(--isp-text-sub)", animation: "spin 1s linear infinite" }} />}
-                {!checkingPhone && phoneAvailable === true && <CheckCircle2 size={15} style={{ color: "var(--isp-green)" }} />}
-                {!checkingPhone && phoneAvailable === false && <XCircle size={15} style={{ color: "#EF4444" }} />}
-              </div>
             </div>
-            {!errors.phone && phone.trim().length >= 7 && !checkingPhone && phoneAvailable !== null && (
-              <p style={{ fontSize: "0.75rem", marginTop: 6, fontWeight: 500, color: phoneAvailable ? "#16A34A" : "#DC2626" }}>
-                {phoneAvailable ? "Phone available" : "Phone already registered — try signing in instead"}
-              </p>
-            )}
             {errors.phone && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.phone}</p>}
             {(whatsappRegistrationCheck || smsRegistrationCheck) && (
               <div style={{ marginTop: 10, padding: 12, border: "1px solid var(--isp-border)", borderRadius: 10, background: "var(--isp-inner-card)" }}>
@@ -792,7 +757,7 @@ export default function AdminRegister() {
                        />
                      </div>
                      <p style={{ fontSize: "0.72rem", color: "var(--isp-text-sub)", margin: "6px 0 0" }}>
-                       The M-Pesa prompt will be sent here. This number may be reused for multiple ISP registrations.
+                       The M-Pesa prompt will be sent to this number.
                      </p>
                      {errors.paymentPhone && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.paymentPhone}</p>}
                    </div>
