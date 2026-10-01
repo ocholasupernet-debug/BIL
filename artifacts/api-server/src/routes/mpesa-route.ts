@@ -19,7 +19,7 @@ import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-pr
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
 import { extractToken, generatePaymentIntent, requireAdmin, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
 import { requireTenantPermission } from "../lib/tenant-permission.js";
-import { hasWhatsAppGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
+import { hasGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import { planBelongsToOwner } from "../lib/plan-ownership.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import {
@@ -1439,7 +1439,7 @@ router.post("/mpesa/reseller-test", requireAdmin(), requireTenantPermission("Man
   }
   let hasGatewayGrant = false;
   try {
-    hasGatewayGrant = await hasWhatsAppGatewaySettingsGrant({
+    hasGatewayGrant = await hasGatewaySettingsGrant({
       accountId: account.id,
       requestId: String(req.headers["x-whatsapp-gateway-request-id"] ?? ""),
       grant: String(req.headers["x-whatsapp-gateway-grant"] ?? ""),

@@ -869,16 +869,17 @@ export default function Dashboard() {
           </div>
           <div className="transaction-table-wrap">
             <table className="isp-table transaction-table">
-              <thead><tr>{["ID", "Reference", "Amount", "Method", "Status", "Date"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead>
+              <thead><tr>{["Transaction ID", "Amount", "Method", "Status", "Date"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead>
               <tbody>
                 {txLoading ? (
-                  <tr><td colSpan={6}><div className="dashboard-loading dashboard-loading--center"><Loader2 size={16} className="animate-spin" /> Loading transactions…</div></td></tr>
+                  <tr><td colSpan={5}><div className="dashboard-loading dashboard-loading--center"><Loader2 size={16} className="animate-spin" /> Loading transactions…</div></td></tr>
                 ) : recentTxs.length === 0 ? (
-                  <tr><td colSpan={6}><div className="dashboard-empty dashboard-empty--center"><ReceiptText size={19} /><span>No transactions yet.</span></div></td></tr>
+                  <tr><td colSpan={5}><div className="dashboard-empty dashboard-empty--center"><ReceiptText size={19} /><span>No transactions yet.</span></div></td></tr>
                 ) : recentTxs.map((transaction) => (
                   <tr key={transaction.id}>
-                    <td className="table-mono">#{transaction.id}</td>
-                    <td className="table-mono">{transaction.reference || "—"}</td>
+                    <td className="table-mono" title={transaction.reference?.trim() || `#${transaction.id}`}>
+                      {transaction.reference?.trim() || `#${transaction.id}`}
+                    </td>
                     <td className="table-amount">{getCurrencySymbol()} {transaction.amount.toLocaleString()}</td>
                     <td><span className={`isp-badge ${transaction.payment_method === "mpesa" ? "isp-badge-blue" : "isp-badge-amber"}`}>{transaction.payment_method.toUpperCase()}</span></td>
                     <td><span className={`isp-badge ${transaction.status === "completed" ? "isp-badge-green" : "isp-badge-amber"}`}>{transaction.status}</span></td>

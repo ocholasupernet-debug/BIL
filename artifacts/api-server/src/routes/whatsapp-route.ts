@@ -9,12 +9,13 @@ import {
   validateToken,
 } from "../lib/api-auth.js";
 import { requireTenantPermission } from "../lib/tenant-permission.js";
-import { hashIspAdminPassword } from "../lib/passwords.js";
+import { hashIspAdminPassword, verifyIspAdminPassword } from "../lib/passwords.js";
 import { logger } from "../lib/logger.js";
 import { checkRegistrationContactCapacity } from "../lib/registration-contact-capacity.js";
 import {
   sbRpc,
   sbSelect,
+  sbSelectStrict,
   sbUpdateStrict,
 } from "../lib/supabase-client.js";
 import { getTenantSubdomainFromRequest, RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
@@ -49,7 +50,7 @@ import {
   WhatsAppProviderError,
 } from "../services/whatsapp/whatsapp-service.js";
 import {
-  hasWhatsAppGatewaySettingsGrant,
+  createGatewaySettingsGrant,
   issueWhatsAppGatewaySettingsOtp,
   verifyWhatsAppGatewaySettingsOtp,
 } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
@@ -60,6 +61,9 @@ const OTP_TTL_SECONDS = Math.max(
   Math.min(900, Number.parseInt(process.env.WHATSAPP_OTP_TTL_SECONDS ?? "600", 10) || 600),
 );
 const MAX_OTP_ATTEMPTS = 5;
+const GATEWAY_PASSWORD_ATTEMPT_LIMIT = 5;
+const GATEWAY_PASSWORD_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const gatewayPasswordAttempts = new Map<string, { count: number; resetAt: number }>();
 
 type AccountType = "admin" | "customer";
 type OtpPurpose = "login" | "registration" | "recovery";
@@ -129,6 +133,9 @@ function publicAccount(account: Record<string, unknown>): Record<string, unknown
     password: _password,
     otp: _otp,
     api_key: _apiKey,
+    gateway_settings_otp_phone_e164: _gatewaySettingsOtpPhone,
+    gateway_settings_otp_verified_at: _gatewaySettingsOtpVerifiedAt,
+    gateway_settings_password_hash: _gatewaySettingsPasswordHash,
     ...safe
   } = account;
   return safe;
@@ -138,13 +145,21 @@ function respondInvalidOtp(res: Response): void {
   res.status(401).json({ ok: false, error: "The code is invalid or has expired. Request a new code and try again." });
 }
 
-async function gatewaySettingsOtpActor(
+interface GatewaySettingsActor {
+  id: number;
+  otpPhone: string | null;
+  passwordHash: string | null;
+  sessionToken: string;
+}
+
+async function gatewaySettingsActor(
   req: Request,
   res: Response,
-): Promise<{ id: number; phone: string; sessionToken: string } | null> {
+): Promise<GatewaySettingsActor | null> {
   const sessionToken = extractToken(req);
   const auth = validateToken(sessionToken);
-  if (!auth || auth.type !== "a" || auth.uid === "superadmin" || !/^[1-9]\d*$/.test(auth.uid)) {
+  if (!auth || auth.type !== "a" || auth.uid === "superadmin" ||
+      auth.impersonationSessionId || !/^[1-9]\d*$/.test(auth.uid)) {
     res.status(401).json({ ok: false, error: "Sign in to the ISP or reseller account before verifying payment settings." });
     return null;
   }
@@ -153,12 +168,11 @@ async function gatewaySettingsOtpActor(
     res.status(401).json({ ok: false, error: "The signed-in account is invalid." });
     return null;
   }
-  const rows = await sbSelect<Record<string, unknown>>(
+  const rows = await sbSelectStrict<Record<string, unknown>>(
     "isp_admins",
-    `id=eq.${id}&select=id,is_active,phone_e164&limit=1`,
+    `id=eq.${id}&select=id,is_active,gateway_settings_otp_phone_e164,gateway_settings_password_hash&limit=1`,
   );
   const account = rows[0];
-  const phone = typeof account?.phone_e164 === "string" ? account.phone_e164.trim() : "";
   if (!account || account.is_active !== true) {
     res.status(403).json({
       ok: false,
@@ -166,15 +180,69 @@ async function gatewaySettingsOtpActor(
     });
     return null;
   }
-  if (!/^\+[1-9][0-9]{7,14}$/.test(phone)) {
-    res.status(409).json({
-      ok: false,
-      error: "This account does not have a valid stored phone number. Contact your ISP administrator or support to update the account phone before verifying payment settings.",
-    });
-    return null;
-  }
-  return { id, phone, sessionToken };
+  const otpPhone = typeof account.gateway_settings_otp_phone_e164 === "string"
+    ? account.gateway_settings_otp_phone_e164.trim()
+    : "";
+  const passwordHash = typeof account.gateway_settings_password_hash === "string"
+    ? account.gateway_settings_password_hash
+    : "";
+  return {
+    id,
+    otpPhone: /^\+[1-9][0-9]{7,14}$/.test(otpPhone) ? otpPhone : null,
+    passwordHash: passwordHash || null,
+    sessionToken,
+  };
 }
+
+function maskGatewaySettingsPhone(phone: string | null): string | null {
+  return phone ? `${phone.slice(0, 3)}••••${phone.slice(-4)}` : null;
+}
+
+function gatewayPasswordAttemptKey(accountId: number): string {
+  return String(accountId);
+}
+
+function gatewayPasswordIsRateLimited(key: string): boolean {
+  const now = Date.now();
+  const current = gatewayPasswordAttempts.get(key);
+  if (!current || current.resetAt <= now) {
+    gatewayPasswordAttempts.set(key, { count: 0, resetAt: now + GATEWAY_PASSWORD_ATTEMPT_WINDOW_MS });
+    return false;
+  }
+  return current.count >= GATEWAY_PASSWORD_ATTEMPT_LIMIT;
+}
+
+function recordGatewayPasswordFailure(key: string): boolean {
+  const now = Date.now();
+  const current = gatewayPasswordAttempts.get(key);
+  const next = !current || current.resetAt <= now
+    ? { count: 1, resetAt: now + GATEWAY_PASSWORD_ATTEMPT_WINDOW_MS }
+    : { ...current, count: current.count + 1 };
+  gatewayPasswordAttempts.set(key, next);
+  return next.count >= GATEWAY_PASSWORD_ATTEMPT_LIMIT;
+}
+
+router.get(
+  "/auth/whatsapp/gateway-settings/status",
+  requireAdmin(),
+  requireTenantPermission("Manage Gateways"),
+  async (req, res): Promise<void> => {
+    try {
+      const actor = await gatewaySettingsActor(req, res);
+      if (!actor) return;
+      const mode = await isOtpChannelEnabled("whatsapp") ? "whatsapp" : "password";
+      res.set("Cache-Control", "no-store").json({
+        ok: true,
+        mode,
+        otpNumberConfigured: !!actor.otpPhone,
+        otpNumberMasked: maskGatewaySettingsPhone(actor.otpPhone),
+        passwordConfigured: !!actor.passwordHash,
+      });
+    } catch {
+      res.status(503).json({ ok: false, error: "Payment settings verification is unavailable." });
+    }
+  },
+);
 
 router.post(
   "/auth/whatsapp/gateway-settings/request-otp",
@@ -182,20 +250,34 @@ router.post(
   requireTenantPermission("Manage Gateways"),
   async (req, res): Promise<void> => {
     if (!await isOtpChannelEnabled("whatsapp")) {
-      res.status(503).json({ ok: false, error: "WhatsApp OTP is disabled by the Super Admin." });
+      res.status(409).json({ ok: false, error: "Payment settings are using password verification." });
       return;
     }
-    const actor = await gatewaySettingsOtpActor(req, res);
+    const actor = await gatewaySettingsActor(req, res);
     if (!actor) return;
     const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : "";
     if (!/^[0-9a-f-]{36}$/i.test(requestId)) {
       res.status(400).json({ ok: false, error: "Start a new payment settings request and try again." });
       return;
     }
+    const suppliedPhone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+    const whatsAppSettings = await getWhatsAppSettings();
+    const requestedPhone = suppliedPhone
+      ? normalizeWhatsAppPhone(suppliedPhone, whatsAppSettings.defaultCountryCode)
+      : null;
+    if (actor.otpPhone && requestedPhone && requestedPhone !== actor.otpPhone) {
+      res.status(403).json({ ok: false, error: "Only a Super Admin can reset the payment settings OTP number." });
+      return;
+    }
+    const phone = actor.otpPhone ?? requestedPhone;
+    if (!phone) {
+      res.status(400).json({ ok: false, error: "Enter a valid WhatsApp number for payment settings." });
+      return;
+    }
     try {
       const issued = await issueWhatsAppGatewaySettingsOtp({
         accountId: actor.id,
-        phone: actor.phone,
+        phone,
         requestId,
         sessionToken: actor.sessionToken,
         ip: req.ip ?? req.socket.remoteAddress ?? "",
@@ -213,7 +295,7 @@ router.post(
         challengeId: issued.challengeId,
         expiresInSeconds: 300,
         resendAfterSeconds: 60,
-        message: "A verification code was sent to the phone number already stored on this account.",
+        message: "A verification code was sent to the payment settings WhatsApp number.",
       });
     } catch (error) {
       logger.warn(
@@ -231,10 +313,10 @@ router.post(
   requireTenantPermission("Manage Gateways"),
   async (req, res): Promise<void> => {
     if (!await isOtpChannelEnabled("whatsapp")) {
-      res.status(503).json({ ok: false, error: "WhatsApp OTP is disabled by the Super Admin." });
+      res.status(409).json({ ok: false, error: "Payment settings are using password verification." });
       return;
     }
-    const actor = await gatewaySettingsOtpActor(req, res);
+    const actor = await gatewaySettingsActor(req, res);
     if (!actor) return;
     const challengeId = typeof req.body?.challengeId === "string" ? req.body.challengeId.trim() : "";
     const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : "";
@@ -242,13 +324,17 @@ router.post(
     try {
       const result = await verifyWhatsAppGatewaySettingsOtp({
         accountId: actor.id,
-        expectedPhone: actor.phone,
+        expectedPhone: actor.otpPhone,
         challengeId,
         requestId,
         code,
         sessionToken: actor.sessionToken,
       });
       if (result.outcome !== "verified" || !result.grant) {
+        if (result.outcome === "enrollment_conflict") {
+          res.status(409).json({ ok: false, error: "The payment settings OTP number changed. Start verification again." });
+          return;
+        }
         respondInvalidOtp(res);
         return;
       }
@@ -260,6 +346,105 @@ router.post(
     } catch (error) {
       logger.warn({ err: error }, "[whatsapp] gateway settings OTP verification failed");
       res.status(503).json({ ok: false, error: "Verification is temporarily unavailable." });
+    }
+  },
+);
+
+router.post(
+  "/auth/whatsapp/gateway-settings/set-password",
+  requireAdmin(),
+  requireTenantPermission("Manage Gateways"),
+  async (req, res): Promise<void> => {
+    if (await isOtpChannelEnabled("whatsapp")) {
+      res.status(409).json({ ok: false, error: "Payment settings are using WhatsApp verification." });
+      return;
+    }
+    const actor = await gatewaySettingsActor(req, res);
+    if (!actor) return;
+    if (actor.passwordHash) {
+      res.status(409).json({ ok: false, error: "A payment settings password is already set. Only a Super Admin can reset it." });
+      return;
+    }
+    const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : "";
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    const confirmPassword = typeof req.body?.confirmPassword === "string" ? req.body.confirmPassword : "";
+    if (!/^[0-9a-f-]{36}$/i.test(requestId)) {
+      res.status(400).json({ ok: false, error: "Start a new payment settings request and try again." });
+      return;
+    }
+    if (password.length < 10 || password.length > 128 || password !== confirmPassword) {
+      res.status(400).json({ ok: false, error: "Choose a password of at least 10 characters and confirm it." });
+      return;
+    }
+    try {
+      const updated = await sbUpdateStrict(
+        "isp_admins",
+        `id=eq.${actor.id}&is_active=is.true&gateway_settings_password_hash=is.null`,
+        { gateway_settings_password_hash: await hashIspAdminPassword(password) },
+      );
+      if (!updated[0]) {
+        res.status(409).json({ ok: false, error: "A payment settings password is already set. Only a Super Admin can reset it." });
+        return;
+      }
+      gatewayPasswordAttempts.delete(gatewayPasswordAttemptKey(actor.id));
+      const grant = await createGatewaySettingsGrant({
+        accountId: actor.id,
+        requestId,
+        sessionToken: actor.sessionToken,
+      });
+      res.set("Cache-Control", "no-store").json({ ok: true, grant, expiresInSeconds: 600 });
+    } catch {
+      res.status(503).json({ ok: false, error: "The payment settings password could not be saved." });
+    }
+  },
+);
+
+router.post(
+  "/auth/whatsapp/gateway-settings/verify-password",
+  requireAdmin(),
+  requireTenantPermission("Manage Gateways"),
+  async (req, res): Promise<void> => {
+    if (await isOtpChannelEnabled("whatsapp")) {
+      res.status(409).json({ ok: false, error: "Payment settings are using WhatsApp verification." });
+      return;
+    }
+    const actor = await gatewaySettingsActor(req, res);
+    if (!actor) return;
+    const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : "";
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    if (!/^[0-9a-f-]{36}$/i.test(requestId) || !password || password.length > 128) {
+      res.status(400).json({ ok: false, error: "Enter your payment settings password." });
+      return;
+    }
+    if (!actor.passwordHash) {
+      res.status(409).json({ ok: false, error: "Set a payment settings password before continuing." });
+      return;
+    }
+    const attemptKey = gatewayPasswordAttemptKey(actor.id);
+    if (gatewayPasswordIsRateLimited(attemptKey)) {
+      res.status(429).json({ ok: false, error: "Too many incorrect passwords. Try again in 15 minutes." });
+      return;
+    }
+    try {
+      if (!await verifyIspAdminPassword(actor.passwordHash, password)) {
+        const limited = recordGatewayPasswordFailure(attemptKey);
+        res.status(limited ? 429 : 401).json({
+          ok: false,
+          error: limited
+            ? "Too many incorrect passwords. Try again in 15 minutes."
+            : "The payment settings password is incorrect.",
+        });
+        return;
+      }
+      gatewayPasswordAttempts.delete(attemptKey);
+      const grant = await createGatewaySettingsGrant({
+        accountId: actor.id,
+        requestId,
+        sessionToken: actor.sessionToken,
+      });
+      res.set("Cache-Control", "no-store").json({ ok: true, grant, expiresInSeconds: 600 });
+    } catch {
+      res.status(503).json({ ok: false, error: "Payment settings verification is temporarily unavailable." });
     }
   },
 );

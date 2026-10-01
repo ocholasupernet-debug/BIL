@@ -68,10 +68,15 @@ export default function SuperAdminAuthSecurity() {
         await fetch("/api/super-admin/auth-security-policy", {
           method: "PUT",
           headers: tokenHeaders(true),
-          body: JSON.stringify(policy),
+          body: JSON.stringify({ policy }),
         }),
       );
       setPolicy(data.policy);
+      try {
+        Object.keys(sessionStorage)
+          .filter(key => key.startsWith("ochola_page_reauth_policy_"))
+          .forEach(key => sessionStorage.removeItem(key));
+      } catch {}
       setMessage("Security settings saved.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The security settings could not be saved.");
@@ -112,7 +117,7 @@ export default function SuperAdminAuthSecurity() {
               Email (not available yet)
             </label>
           </div>
-          <p style={{ color: "var(--isp-text-muted)", fontSize: 13, marginBottom: 0 }}>OTP is off by default. Both the global switch and a channel switch must be enabled. This only controls OTP verification, not ordinary SMS or WhatsApp support messages. Password recovery by OTP is disabled; only Super Admin can reset account passwords.</p>
+          <p style={{ color: "var(--isp-text-muted)", fontSize: 13, marginBottom: 0 }}>OTP is off by default. Both the global switch and a channel switch must be enabled. For protected payment settings, enabling WhatsApp uses a verified payment OTP number; disabling WhatsApp switches accounts to a separate payment-settings password. Only a Super Admin can reset those payment-settings credentials. This does not affect ordinary support messages.</p>
         </section>
 
         <section style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 14, padding: 20 }}>

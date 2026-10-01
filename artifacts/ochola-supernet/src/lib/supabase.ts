@@ -76,6 +76,9 @@ export function clearAdminAuth() {
     localStorage.removeItem("ochola_admin_display_name");
     localStorage.removeItem("ochola_admin_role");
     localStorage.removeItem("ochola_api_token");
+    Object.keys(sessionStorage)
+      .filter(key => key.startsWith("ochola_page_reauth_policy_"))
+      .forEach(key => sessionStorage.removeItem(key));
     window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: null } }));
   } catch {}
 }

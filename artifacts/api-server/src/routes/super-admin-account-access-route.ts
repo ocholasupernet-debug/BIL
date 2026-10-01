@@ -95,6 +95,66 @@ router.post("/super-admin/admin-access/:id/reset-password", async (req, res): Pr
   }
 });
 
+router.post("/super-admin/admin-access/:id/reset-payment-settings-credentials", async (req, res): Promise<void> => {
+  const actorName = requireSuperAdmin(req, res);
+  if (!actorName) return;
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    res.status(400).json({ ok: false, error: "Choose a valid administrator account." });
+    return;
+  }
+  try {
+    const admins = await sbSelectStrict<{ id: number; name: string | null; username: string | null }>(
+      "isp_admins",
+      `id=eq.${id}&select=id,name,username&limit=1`,
+    );
+    const admin = admins[0];
+    if (!admin) {
+      res.status(404).json({ ok: false, error: "That administrator account was not found." });
+      return;
+    }
+    const auditTime = new Date().toISOString();
+    await sbUpdateStrict(
+      "whatsapp_gateway_settings_otps",
+      `account_id=eq.${id}&invalidated_at=is.null`,
+      { invalidated_at: auditTime },
+    );
+    await sbUpdateStrict(
+      "whatsapp_gateway_settings_grants",
+      `account_id=eq.${id}&revoked_at=is.null`,
+      { revoked_at: auditTime },
+    );
+    const updated = await sbUpdateStrict(
+      "isp_admins",
+      `id=eq.${id}`,
+      {
+        gateway_settings_otp_phone_e164: null,
+        gateway_settings_otp_verified_at: null,
+        gateway_settings_password_hash: null,
+      },
+    );
+    if (!updated[0]) {
+      res.status(404).json({ ok: false, error: "That administrator account could not be reset." });
+      return;
+    }
+    await recordPlatformAuthAudit({
+      actorName,
+      action: "payment_settings_credentials_reset",
+      targetAdminId: id,
+      details: { otpNumberCleared: true, paymentPasswordCleared: true },
+      sourceIp: req.ip ?? req.socket.remoteAddress,
+      userAgent: req.get("user-agent"),
+    });
+    res.json({
+      ok: true,
+      admin: { id, name: admin.name, username: admin.username },
+      message: "Payment settings verification was reset. The account must set it up again.",
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Payment settings verification could not be reset." });
+  }
+});
+
 router.post("/super-admin/admin-access/:id/start", async (req, res): Promise<void> => {
   const actorName = requireSuperAdmin(req, res);
   if (!actorName) return;

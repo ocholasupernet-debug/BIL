@@ -92,7 +92,7 @@ export async function issueWhatsAppGatewaySettingsOtp(input: {
 
 export async function verifyWhatsAppGatewaySettingsOtp(input: {
   accountId: number;
-  expectedPhone: string;
+  expectedPhone: string | null;
   challengeId: string;
   code: string;
   requestId: string;
@@ -117,23 +117,53 @@ export async function verifyWhatsAppGatewaySettingsOtp(input: {
   if (verified[0]?.outcome !== "verified") {
     return { outcome: verified[0]?.outcome ?? "invalid" };
   }
-  if (verified[0]?.phone_e164 !== input.expectedPhone ||
-      !/^\+[1-9][0-9]{7,14}$/.test(input.expectedPhone)) {
+  const challengePhone = verified[0]?.phone_e164 ?? "";
+  if (!/^\+[1-9][0-9]{7,14}$/.test(challengePhone)) {
     return { outcome: "invalid" };
   }
 
-  const updated = await sbUpdateStrict(
-    "isp_admins",
-    `id=eq.${input.accountId}&phone_e164=eq.${encodeURIComponent(input.expectedPhone)}&is_active=is.true`,
-    {
-      phone_verified: true,
-      phone_verified_at: new Date().toISOString(),
-    },
-  );
-  if (!updated[0]) {
-    return { outcome: "invalid" };
+  if (input.expectedPhone) {
+    if (challengePhone !== input.expectedPhone) return { outcome: "invalid" };
+    const current = await sbSelectStrict<{ id: number }>(
+      "isp_admins",
+      `id=eq.${input.accountId}&is_active=is.true&gateway_settings_otp_phone_e164=eq.${encodeURIComponent(input.expectedPhone)}&select=id&limit=1`,
+    );
+    if (!current[0]) return { outcome: "invalid" };
+  } else {
+    const updated = await sbUpdateStrict(
+      "isp_admins",
+      `id=eq.${input.accountId}&is_active=is.true&gateway_settings_otp_phone_e164=is.null`,
+      {
+        gateway_settings_otp_phone_e164: challengePhone,
+        gateway_settings_otp_verified_at: new Date().toISOString(),
+      },
+    );
+    if (!updated[0]) {
+      const current = await sbSelectStrict<{ gateway_settings_otp_phone_e164: string | null }>(
+        "isp_admins",
+        `id=eq.${input.accountId}&is_active=is.true&select=gateway_settings_otp_phone_e164&limit=1`,
+      );
+      if (current[0]?.gateway_settings_otp_phone_e164 !== challengePhone) {
+        return { outcome: "enrollment_conflict" };
+      }
+    }
   }
 
+  const grant = await createGatewaySettingsGrant(input);
+  return { outcome: "verified", grant };
+}
+
+export async function createGatewaySettingsGrant(input: {
+  accountId: number;
+  requestId: string;
+  sessionToken: string;
+}): Promise<string> {
+  if (!Number.isSafeInteger(input.accountId) || input.accountId <= 0 ||
+      !UUID_PATTERN.test(input.requestId) ||
+      !input.sessionToken) {
+    throw new Error("A valid account, request, and session are required for payment settings access.");
+  }
+  const bindingHash = sessionBindingHash(input.sessionToken);
   const grant = randomBytes(32).toString("base64url");
   await sbInsertStrict("whatsapp_gateway_settings_grants", {
     grant_hash: grantHash(grant),
@@ -143,10 +173,10 @@ export async function verifyWhatsAppGatewaySettingsOtp(input: {
     expires_at: new Date(Date.now() + GRANT_TTL_SECONDS * 1000).toISOString(),
     created_at: new Date().toISOString(),
   });
-  return { outcome: "verified", grant };
+  return grant;
 }
 
-export async function hasWhatsAppGatewaySettingsGrant(input: {
+export async function hasGatewaySettingsGrant(input: {
   accountId: number;
   requestId: string;
   grant: string;

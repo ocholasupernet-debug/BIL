@@ -25,6 +25,81 @@ import { getAdminFeatureKeyForPath } from "@/lib/admin-page-visibility";
 import { Logo } from "@/components/Logo";
 import { AdminInstallButton } from "@/components/pwa/AdminInstallButton";
 
+type PasswordReauthPolicyCache = {
+  role: string;
+  fetchedAt: number;
+  policies: Record<string, boolean>;
+};
+
+const PASSWORD_REAUTH_POLICY_CACHE_TTL_MS = 60_000;
+const passwordReauthPolicyRequests = new Map<string, Promise<PasswordReauthPolicyCache>>();
+
+function passwordReauthPolicyCacheKey(): string {
+  return `ochola_page_reauth_policy_${ADMIN_ID}_${getAdminRole()}`;
+}
+
+function readPasswordReauthPolicyCache(): PasswordReauthPolicyCache | null {
+  try {
+    const key = passwordReauthPolicyCacheKey();
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const cached = JSON.parse(raw) as PasswordReauthPolicyCache;
+    const age = Date.now() - cached.fetchedAt;
+    if (
+      cached.role !== getAdminRole() ||
+      !Number.isFinite(cached.fetchedAt) ||
+      age < 0 ||
+      age > PASSWORD_REAUTH_POLICY_CACHE_TTL_MS ||
+      !cached.policies ||
+      typeof cached.policies !== "object" ||
+      Array.isArray(cached.policies)
+    ) {
+      sessionStorage.removeItem(key);
+      return null;
+    }
+    return cached;
+  } catch {
+    return null;
+  }
+}
+
+async function loadPasswordReauthPolicyCache(): Promise<PasswordReauthPolicyCache> {
+  const key = passwordReauthPolicyCacheKey();
+  const pending = passwordReauthPolicyRequests.get(key);
+  if (pending) return pending;
+
+  const request = (async () => {
+    const response = await fetch("/api/auth/admin/password-recheck-policy", {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${getAdminApiToken()}` },
+    });
+    const data = await response.json() as {
+      ok?: boolean;
+      error?: string;
+      role?: string;
+      policies?: Record<string, unknown>;
+    };
+    if (!response.ok || !data.ok || data.role !== getAdminRole() || !data.policies || typeof data.policies !== "object" || Array.isArray(data.policies)) {
+      throw new Error(data.error || "Password security policy could not be checked.");
+    }
+
+    const policies: Record<string, boolean> = {};
+    for (const [feature, required] of Object.entries(data.policies)) {
+      if (typeof required !== "boolean") throw new Error("Password security policy response was invalid.");
+      policies[feature] = required;
+    }
+    const cache = { role: data.role, fetchedAt: Date.now(), policies };
+    try { sessionStorage.setItem(key, JSON.stringify(cache)); } catch {}
+    return cache;
+  })();
+  passwordReauthPolicyRequests.set(key, request);
+  try {
+    return await request;
+  } finally {
+    if (passwordReauthPolicyRequests.get(key) === request) passwordReauthPolicyRequests.delete(key);
+  }
+}
+
 interface NavChild {
   name: string;
   href: string;
@@ -390,6 +465,7 @@ export function AdminLayout({
   const [expanded, setExpanded]       = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const [reauthStatus, setReauthStatus] = useState<"checking" | "not-required" | "required" | "verified" | "failed">("checking");
+  const [reauthCheckedFeature, setReauthCheckedFeature] = useState<string | null>(null);
   const [reauthUntil, setReauthUntil] = useState(0);
   const [reauthPassword, setReauthPassword] = useState("");
   const [reauthBusy, setReauthBusy] = useState(false);
@@ -410,6 +486,9 @@ export function AdminLayout({
   const queryClient                   = useQueryClient();
   const { isVisible }                 = useAdminPageVisibility();
   const currentFeatureKey             = getAdminFeatureKeyForPath(location);
+  const isOverviewFeature             = !currentFeatureKey || currentFeatureKey === "overview" || currentFeatureKey === "overview.dashboard";
+  const requiresReauthGate            = !isOverviewFeature && !isImpersonating();
+  const reauthCheckPending             = requiresReauthGate && (reauthCheckedFeature !== currentFeatureKey || reauthStatus === "checking");
   const pageIsVisible                 = !currentFeatureKey || isVisible(currentFeatureKey);
   const isVpnSurface                  = location.startsWith("/admin/vpn");
 
@@ -576,27 +655,25 @@ export function AdminLayout({
     let cancelled = false;
     const feature = currentFeatureKey;
     setReauthError("");
-    if (!feature || feature === "overview" || isImpersonating()) {
+    const overviewFeature = !feature || feature === "overview" || feature === "overview.dashboard";
+    if (overviewFeature || isImpersonating()) {
       setReauthUntil(0);
       setReauthStatus("not-required");
+      setReauthCheckedFeature(feature ?? null);
+      if (feature === "overview.dashboard" && !isImpersonating()) {
+        void loadPasswordReauthPolicyCache().catch(() => {});
+      }
       return;
     }
-    setReauthStatus("checking");
-    const check = async () => {
-      try {
-        const response = await fetch(`/api/auth/admin/password-recheck-policy?feature=${encodeURIComponent(feature)}`, {
-          headers: { Authorization: `Bearer ${getAdminApiToken()}` },
-        });
-        const data = await response.json();
-        if (!response.ok || !data.ok) throw new Error(data.error || "Password security policy could not be checked.");
-        if (cancelled) return;
-        if (data.required !== true) {
-          setReauthUntil(0);
-          setReauthStatus("not-required");
-          return;
-        }
+
+    const applyPolicyDecision = (required: boolean) => {
+      if (!required) {
+        setReauthUntil(0);
+        setReauthStatus("not-required");
+      } else {
         const cacheKey = `ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${feature}`;
-        const storedExpiry = Number(sessionStorage.getItem(cacheKey) || 0);
+        let storedExpiry = 0;
+        try { storedExpiry = Number(sessionStorage.getItem(cacheKey) || 0); } catch {}
         if (Number.isFinite(storedExpiry) && storedExpiry > Date.now()) {
           setReauthUntil(storedExpiry);
           setReauthStatus("verified");
@@ -604,10 +681,28 @@ export function AdminLayout({
           setReauthUntil(0);
           setReauthStatus("required");
         }
+      }
+      setReauthCheckedFeature(feature);
+    };
+
+    const cachedPolicy = readPasswordReauthPolicyCache();
+    if (cachedPolicy && Object.prototype.hasOwnProperty.call(cachedPolicy.policies, feature)) {
+      applyPolicyDecision(cachedPolicy.policies[feature] === true);
+      return;
+    }
+
+    setReauthCheckedFeature(null);
+    setReauthStatus("checking");
+    const check = async () => {
+      try {
+        const policyCache = await loadPasswordReauthPolicyCache();
+        if (cancelled) return;
+        applyPolicyDecision(policyCache.policies[feature] === true);
       } catch (cause) {
         if (cancelled) return;
         setReauthError(cause instanceof Error ? cause.message : "Password security policy could not be checked.");
         setReauthStatus("failed");
+        setReauthCheckedFeature(feature);
       }
     };
     void check();
@@ -826,7 +921,7 @@ export function AdminLayout({
         </header>
 
         {/* Page content */}
-        <main className={`admin-content ${isVpnSurface ? "admin-vpn-surface" : ""}`}>
+        <main className={`admin-content ${isVpnSurface ? "admin-vpn-surface" : ""}`} aria-busy={reauthCheckPending}>
           {isImpersonating() && (
             <div role="status" style={{ marginBottom: 16, border: "1px solid rgba(249,115,22,0.45)", background: "rgba(124,45,18,0.2)", color: "#fed7aa", borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
               <span><ShieldAlert size={15} style={{ verticalAlign: "middle", marginRight: 7 }} />Audited Super Admin access as <strong>{getImpersonatedName()}</strong>. Session expires at {new Date(localStorage.getItem("ochola_impersonation_expires_at") || Date.now()).toLocaleTimeString()}.</span>
@@ -841,31 +936,40 @@ export function AdminLayout({
             </div>
           )}
           <PlatformBillingBanner />
-          {currentFeatureKey && currentFeatureKey !== "overview" && !isImpersonating() && reauthStatus !== "verified" && reauthStatus !== "not-required" ? (
+          {requiresReauthGate && !reauthCheckPending && reauthStatus !== "verified" && reauthStatus !== "not-required" ? (
             <div role="dialog" aria-modal="true" aria-labelledby="reauth-title" style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(5,10,20,0.78)", display: "grid", placeItems: "center", padding: 20 }}>
               <form onSubmit={handlePasswordRecheck} style={{ width: "min(100%, 420px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
-                <h2 id="reauth-title" style={{ margin: "0 0 8px", fontSize: 19 }}>{reauthStatus === "checking" ? "Checking page security…" : reauthStatus === "failed" ? "Unable to check security policy" : "Confirm your password"}</h2>
-                {reauthStatus === "checking" ? (
-                  <p style={{ color: "var(--isp-text-muted)" }}>Verifying whether this page requires a fresh password check…</p>
-                ) : reauthStatus === "failed" ? (
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 13, marginBottom: 18 }}>
+                  <div aria-hidden="true" style={{ width: 38, height: 38, flex: "0 0 38px", display: "grid", placeItems: "center", borderRadius: 11, background: "color-mix(in srgb, var(--isp-accent) 14%, transparent)", color: "var(--isp-accent)" }}>
+                    <KeyRound size={18} />
+                  </div>
+                  <div>
+                    <h2 id="reauth-title" style={{ margin: "1px 0 6px", fontSize: 19, lineHeight: 1.3 }}>{reauthStatus === "failed" ? "Security verification unavailable" : "Verify your identity"}</h2>
+                    <p style={{ color: "var(--isp-text-muted)", fontSize: 14, lineHeight: 1.5, margin: 0 }}>
+                      {reauthStatus === "failed"
+                        ? "This page is protected, but its security policy could not be confirmed."
+                        : "Enter your current password to continue. Verification remains active for five minutes."}
+                    </p>
+                  </div>
+                </div>
+                {reauthStatus === "failed" ? (
                   <>
-                    <p role="alert" style={{ color: "#dc2626" }}>{reauthError}</p>
-                    <button type="button" onClick={() => setReauthRetryKey(value => value + 1)} style={{ border: 0, borderRadius: 8, padding: "10px 14px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer" }}>Try again</button>
+                    <p role="alert" style={{ color: "#dc2626", fontSize: 13, margin: "0 0 16px" }}>{reauthError}</p>
+                    <button type="button" onClick={() => { setReauthCheckedFeature(null); setReauthStatus("checking"); setReauthRetryKey(value => value + 1); }} style={{ border: 0, borderRadius: 9, padding: "10px 15px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer" }}>Try again</button>
                   </>
                 ) : (
                   <>
-                    <p style={{ color: "var(--isp-text-muted)", fontSize: 14 }}>The Super Admin requires a current-password check before this page can load. This check lasts five minutes.</p>
-                    <label htmlFor="page-reauth-password" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>Current password</label>
-                    <input id="page-reauth-password" type="password" autoComplete="current-password" value={reauthPassword} onChange={event => setReauthPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
-                    {reauthError && <p role="alert" style={{ color: "#dc2626", fontSize: 13 }}>{reauthError}</p>}
-                    <button type="submit" disabled={reauthBusy || !reauthPassword} style={{ marginTop: 14, border: 0, borderRadius: 8, padding: "10px 15px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer", opacity: reauthBusy || !reauthPassword ? 0.6 : 1 }}>
+                    <label htmlFor="page-reauth-password" style={{ display: "block", fontWeight: 600, fontSize: 13, margin: "0 0 7px" }}>Current password</label>
+                    <input id="page-reauth-password" type="password" autoComplete="current-password" value={reauthPassword} onChange={event => setReauthPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 9, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+                    {reauthError && <p role="alert" style={{ color: "#dc2626", fontSize: 13, margin: "8px 0 0" }}>{reauthError}</p>}
+                    <button type="submit" disabled={reauthBusy || !reauthPassword} style={{ marginTop: 15, border: 0, borderRadius: 9, padding: "10px 15px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer", opacity: reauthBusy || !reauthPassword ? 0.6 : 1 }}>
                       {reauthBusy ? "Checking…" : "Continue to page"}
                     </button>
                   </>
                 )}
               </form>
             </div>
-          ) : (
+          ) : reauthCheckPending ? null : (
             children
           )}
         </main>

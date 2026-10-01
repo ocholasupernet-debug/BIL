@@ -11,6 +11,7 @@
 - [RouterOS collector transport](routeros-collector-transport.md) — RouterOS HTTP fetch cannot use file upload mode; send bounded POST bodies and reject truncated file reads.
 - [VPN control plane](vpn-control-plane.md) — Encrypt client secrets, redact command payloads, and persist verified RouterOS resource references before follow-up mutations.
 - [Tenant-scoped admin APIs](tenant-scoped-admin-apis.md) — Most APIs remain tenant-scoped; migration is an intentional authenticated-global exception.
+- [FreeRADIUS tenant ownership](radius-tenant-ownership.md) — Shared RADIUS rows need server-side ownership mapping; leave ambiguous legacy records unassigned.
 - [Migration UI safety flow](migration-ui-safety-flow.md) — Keep tenant scope, two-script order, distinct export review, and the explicit write boundary visible.
 - [RouterOS migration boundary](routeros-migration-boundary.md) — Copy only approved RouterOS configuration; never clone billing data or promote a source during inspection.
 - [Router management VPN pool](router-management-vpn-pool.md) — Keep persistent MikroTik management clients on the isolated 10.8.5.x OpenVPN instance; preserve legacy end-user 10.8.0.x clients.

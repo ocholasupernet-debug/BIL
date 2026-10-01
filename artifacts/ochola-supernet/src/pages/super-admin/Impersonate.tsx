@@ -54,6 +54,8 @@ export default function SuperAdminImpersonate() {
   const [target, setTarget] = useState<Admin | null>(null);
   const [reason, setReason] = useState("");
   const [resetTarget, setResetTarget] = useState<Admin | null>(null);
+  const [paymentResetTarget, setPaymentResetTarget] = useState<Admin | null>(null);
+  const [paymentResetNotice, setPaymentResetNotice] = useState("");
   const [temporaryPassword, setTemporaryPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -96,6 +98,27 @@ export default function SuperAdminImpersonate() {
       await queryClient.invalidateQueries({ queryKey: ["sa_admin_access_audit"] });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The password could not be reset.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetPaymentSettingsCredentials = async (admin: Admin) => {
+    setBusy(true);
+    setError("");
+    setPaymentResetNotice("");
+    try {
+      const data = await readJson<{ message: string }>(
+        await fetch(`/api/super-admin/admin-access/${admin.id}/reset-payment-settings-credentials`, {
+          method: "POST",
+          headers: saHeaders(true),
+          body: JSON.stringify({}),
+        }),
+      );
+      setPaymentResetNotice(data.message);
+      await queryClient.invalidateQueries({ queryKey: ["sa_admin_access_audit"] });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Payment settings verification could not be reset.");
     } finally {
       setBusy(false);
     }
@@ -176,6 +199,9 @@ export default function SuperAdminImpersonate() {
                   <button type="button" style={{ ...styles.button, background: "#334155" }} disabled={busy} onClick={() => { setResetTarget(admin); setTemporaryPassword(""); setNotice(""); setError(""); }}>
                     <KeyRound size={14} /> Reset password
                   </button>
+                  <button type="button" style={{ ...styles.button, background: "#7f1d1d" }} disabled={busy} onClick={() => { setPaymentResetTarget(admin); setPaymentResetNotice(""); setError(""); }}>
+                    <KeyRound size={14} /> Reset payment access
+                  </button>
                 </div>
               </div>
             ))}
@@ -217,6 +243,20 @@ export default function SuperAdminImpersonate() {
                 <button type="button" style={{ ...styles.button, background: "#334155", marginLeft: "auto" }} onClick={() => { setResetTarget(null); setTemporaryPassword(""); }}>Done</button>
               </div>
             )}
+          </section>
+        )}
+
+        {paymentResetTarget && (
+          <section style={{ ...styles.card, borderColor: "rgba(239,68,68,0.45)" }}>
+            <h2 style={{ color: "white", fontSize: 17, margin: "0 0 8px" }}>Reset payment settings access: {paymentResetTarget.fullname || paymentResetTarget.name || paymentResetTarget.username}</h2>
+            <p style={{ color: "#94a3b8", fontSize: 13 }}>This clears the saved payment OTP number and payment-settings password, and revokes active payment-settings grants. The account must set up the method currently selected by Super Admin. The account sign-in password is unchanged.</p>
+            {paymentResetNotice && <p role="status" style={{ color: "#86efac", fontSize: 13 }}>{paymentResetNotice}</p>}
+            <div style={{ display: "flex", gap: 9, justifyContent: "flex-end" }}>
+              <button type="button" style={{ ...styles.button, background: "#334155" }} onClick={() => setPaymentResetTarget(null)}>Close</button>
+              {!paymentResetNotice && <button type="button" style={{ ...styles.button, background: "#b91c1c" }} disabled={busy} onClick={() => void resetPaymentSettingsCredentials(paymentResetTarget)}>
+                {busy ? <Loader2 size={14} /> : <KeyRound size={14} />} Reset payment settings credentials
+              </button>}
+            </div>
           </section>
         )}
 

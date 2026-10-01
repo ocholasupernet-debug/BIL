@@ -10,6 +10,7 @@ test("WhatsApp database migration is included in the external VPS deployment run
   assert.match(runner, /2026_whatsapp_integration\.sql/);
   assert.match(runner, /2026_whatsapp_secure_credentials\.sql/);
   assert.match(runner, /2026_whatsapp_security_events\.sql/);
+  assert.match(runner, /2026_gateway_settings_credentials\.sql/);
 });
 
 test("payment notices remain isolated from payment settlement failures", async () => {
@@ -51,59 +52,74 @@ test("optional public auth config fails closed without breaking existing login s
   assert.match(publicConfig, /passwordRecoveryEnabled:\s*false/);
 });
 
-test("gateway reads and changes require an OTP grant bound to the active session", async () => {
+test("payment gateway reads and changes require an access grant bound to the active session", async () => {
   const migration = await read("../migrations/2026_whatsapp_secure_credentials.sql");
   const settingsRoute = await read("../src/routes/settings-route.ts");
   const resellerRoute = await read("../src/routes/reseller-route.ts");
   const whatsappRoute = await read("../src/routes/whatsapp-route.ts");
+  const mpesaRoute = await read("../src/routes/mpesa-route.ts");
   const settingsPage = await read("../../ochola-supernet/src/pages/admin/AdminSettings.tsx");
   assert.match(migration, /whatsapp_gateway_settings_grants/i);
   assert.match(migration, /session_binding_hash/i);
   assert.match(migration, /auth_request_id/i);
-  assert.match(settingsRoute, /hasWhatsAppGatewaySettingsGrant/);
-  assert.match(resellerRoute, /hasWhatsAppGatewaySettingsGrant/);
+  assert.match(settingsRoute, /hasGatewaySettingsGrant/);
+  assert.match(resellerRoute, /hasGatewaySettingsGrant/);
+  assert.match(mpesaRoute, /hasGatewaySettingsGrant/);
   assert.match(whatsappRoute, /gateway-settings\/request-otp/);
   assert.match(whatsappRoute, /gateway-settings\/verify-otp/);
+  assert.match(whatsappRoute, /gateway-settings\/verify-password/);
   assert.match(settingsPage, /gatewayOtp\.headers\(\)/);
 });
 
-test("gateway settings OTP can verify only the active account's already-stored phone", async () => {
+test("gateway OTP enrolls a separate account payment number without changing the contact phone", async () => {
   const route = await read("../src/routes/whatsapp-route.ts");
   const service = await read("../src/services/whatsapp/whatsapp-gateway-settings-otp.ts");
-  const actor = route.match(/async function gatewaySettingsOtpActor\([\s\S]*?\n\}/)?.[0];
+  const migration = await read("../migrations/2026_gateway_settings_credentials.sql");
+  const actor = route.match(/async function gatewaySettingsActor\([\s\S]*?\n\}/)?.[0];
   const request = route.match(/router\.post\(\s*"\/auth\/whatsapp\/gateway-settings\/request-otp"[\s\S]*?\n\);/)?.[0];
-  assert.ok(actor, "gateway OTP actor should validate the signed-in account");
+  assert.ok(actor, "payment settings actor should validate the signed-in account");
   assert.match(actor, /account\.is_active !== true/);
-  assert.doesNotMatch(actor, /phone_verified\s*!==\s*true/);
-  assert.match(actor, /phone_e164/);
-  assert.match(actor, /valid stored phone number/i);
+  assert.match(actor, /auth\.impersonationSessionId/);
+  assert.match(actor, /gateway_settings_otp_phone_e164/);
+  assert.doesNotMatch(actor, /select=id,is_active,phone_e164/);
   assert.ok(request, "gateway OTP request route should exist");
-  assert.match(request, /phone:\s*actor\.phone/);
-  assert.doesNotMatch(request, /req\.body\??\.phone/);
+  assert.match(request, /actor\.otpPhone\s*\?\?\s*requestedPhone/);
+  assert.match(request, /req\.body\??\.phone/);
 
-  const verify = service.match(/export async function verifyWhatsAppGatewaySettingsOtp\([\s\S]*?(?=\nexport async function hasWhatsAppGatewaySettingsGrant)/)?.[0];
+  const verify = service.match(/export async function verifyWhatsAppGatewaySettingsOtp\([\s\S]*?(?=\nexport async function createGatewaySettingsGrant)/)?.[0];
   assert.ok(verify, "gateway OTP verification should exist");
   const rpcIndex = verify.indexOf('sbRpc<GatewayOtpVerifyRow>("verify_whatsapp_gateway_settings_otp"');
   const verifiedOutcomeIndex = verify.indexOf('verified[0]?.outcome !== "verified"');
-  const phoneCheckIndex = verify.indexOf("verified[0]?.phone_e164 !== input.expectedPhone");
-  const accountUpdateIndex = verify.indexOf("sbUpdateStrict(");
-  const grantInsertIndex = verify.indexOf('sbInsertStrict("whatsapp_gateway_settings_grants"');
+  const phoneCheckIndex = verify.indexOf("challengePhone !== input.expectedPhone");
+  const accountUpdateIndex = verify.indexOf("gateway_settings_otp_phone_e164");
+  const grantIssueIndex = verify.indexOf("createGatewaySettingsGrant(input)");
   assert.ok(rpcIndex >= 0 && rpcIndex < verifiedOutcomeIndex);
   assert.ok(verifiedOutcomeIndex < phoneCheckIndex && phoneCheckIndex < accountUpdateIndex);
-  assert.ok(accountUpdateIndex < grantInsertIndex, "grant is inserted only after successful OTP and stored-phone update");
-  assert.match(verify, /phone_verified:\s*true/);
-  assert.match(verify, /phone_verified_at:/);
-  assert.match(verify, /id=eq\.\$\{input\.accountId\}.*phone_e164=eq\.\$\{encodeURIComponent\(input\.expectedPhone\)\}/);
+  assert.ok(accountUpdateIndex < grantIssueIndex, "grant is issued only after OTP verification and separate-number enrollment");
+  assert.doesNotMatch(verify, /phone_verified:\s*true/);
+  assert.doesNotMatch(verify, /phone_verified_at:/);
+  assert.match(migration, /gateway_settings_otp_phone_e164 text/);
+  assert.match(migration, /gateway_settings_password_hash text/);
 });
 
-test("gateway settings OTP gives recovery guidance when the stored account phone is missing or invalid", async () => {
+test("password mode sets up payment credentials and reserves resets for Super Admin", async () => {
   const route = await read("../src/routes/whatsapp-route.ts");
-  const actor = route.match(/async function gatewaySettingsOtpActor\([\s\S]*?\n\}/)?.[0];
-  assert.ok(actor, "gateway OTP actor should validate the stored account phone");
-  assert.match(actor, /phone\)\)/);
-  assert.match(actor, /status\(409\)/);
-  assert.match(actor, /Contact your ISP administrator or support to update the account phone/);
-  assert.match(actor, /return null/);
+  const resetRoute = await read("../src/routes/super-admin-account-access-route.ts");
+  const securityPage = await read("../../ochola-supernet/src/pages/super-admin/AuthSecurity.tsx");
+  const accountAccessPage = await read("../../ochola-supernet/src/pages/super-admin/Impersonate.tsx");
+  assert.match(route, /isOtpChannelEnabled\("whatsapp"\)\s*\?\s*"whatsapp"\s*:\s*"password"/);
+  assert.match(route, /gateway-settings\/set-password/);
+  assert.match(route, /verifyIspAdminPassword\(actor\.passwordHash,\s*password\)/);
+  assert.match(route, /gateway_settings_password_hash=is\.null/);
+  assert.match(route, /GATEWAY_PASSWORD_ATTEMPT_LIMIT/);
+  assert.match(resetRoute, /activeSuperAdminName/);
+  assert.match(resetRoute, /reset-payment-settings-credentials/);
+  assert.match(resetRoute, /gateway_settings_password_hash:\s*null/);
+  assert.match(resetRoute, /gateway_settings_otp_phone_e164:\s*null/);
+  assert.match(resetRoute, /revoked_at:\s*auditTime/);
+  assert.match(accountAccessPage, /Reset payment access/);
+  assert.match(securityPage, /body:\s*JSON\.stringify\(\{\s*policy\s*\}\)/);
+  assert.match(securityPage, /disabling WhatsApp switches accounts to a separate payment-settings password/i);
 });
 
 test("reseller workspace receives configured route summaries without a settings grant", async () => {

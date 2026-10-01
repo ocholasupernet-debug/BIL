@@ -7,7 +7,7 @@ import {
   requireAdmin,
 } from "../lib/api-auth.js";
 import { requireTenantPermission } from "../lib/tenant-permission.js";
-import { hasWhatsAppGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
+import { hasGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import {
   sbDeleteStrict,
   sbInsertStrict,
@@ -1121,7 +1121,7 @@ async function requireResellerGatewaySettingsGrant(
 ): Promise<boolean> {
   const header = (value: string | string[] | undefined): string =>
     Array.isArray(value) ? value[0] ?? "" : value ?? "";
-  const valid = await hasWhatsAppGatewaySettingsGrant({
+  const valid = await hasGatewaySettingsGrant({
     accountId,
     requestId: header(req.headers["x-whatsapp-gateway-request-id"]),
     grant: header(req.headers["x-whatsapp-gateway-grant"]),
@@ -1130,7 +1130,7 @@ async function requireResellerGatewaySettingsGrant(
   if (!valid) {
     res.status(403).json({
       ok: false,
-      error: "Verify the WhatsApp code to open or update payment gateway settings.",
+      error: "Verify payment settings access to open or update gateway details.",
     });
     return false;
   }

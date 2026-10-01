@@ -15,6 +15,7 @@ const [
   setPassword,
   recoveryUi,
   resellerUi,
+  accountAccessRoute,
 ] = await Promise.all([
   read("../src/controllers/auth-controller.ts"),
   read("../src/routes/api-auth-route.ts"),
@@ -27,6 +28,7 @@ const [
   read("../../ochola-supernet/src/pages/admin/AdminSetPassword.tsx"),
   read("../../ochola-supernet/src/pages/admin/AdminLogin.tsx"),
   read("../../ochola-supernet/src/pages/admin/ResellerWorkspace.tsx"),
+  read("../src/routes/super-admin-account-access-route.ts"),
 ]);
 
 test("registration and first-password setup require eight characters", () => {
@@ -37,13 +39,14 @@ test("registration and first-password setup require eight characters", () => {
   assert.match(setPassword, /minLength=\{8\}/);
 });
 
-test("other administrator and account-password reset paths accept six characters", () => {
-  assert.match(resellerRoute, /cleanPassword\.length < 6/);
-  assert.match(smsRoute, /password\.length < 6/);
-  assert.match(whatsappRoute, /password\.length < 6/);
-  assert.match(recoveryUi, /minLength=\{6\}/);
-  assert.match(recoveryUi, /newPassword\.length < 6/);
-  assert.match(resellerUi, /Initial password[\s\S]*?minLength=\{6\}/);
+test("payment settings password is separate and only Super Admin can reset its credentials", () => {
+  assert.match(whatsappRoute, /password\.length < 10/);
+  assert.match(whatsappRoute, /password !== confirmPassword/);
+  assert.match(whatsappRoute, /A payment settings password is already set\. Only a Super Admin can reset it\./);
+  assert.match(whatsappRoute, /if \(purpose === "recovery"\)[\s\S]*Only a Super Admin can reset an account password/);
+  assert.match(accountAccessRoute, /reset-payment-settings-credentials/);
+  assert.match(accountAccessRoute, /activeSuperAdminName/);
+  assert.match(accountAccessRoute, /gateway_settings_password_hash:\s*null/);
 });
 
 test("new signups start with no parent tenant and unauthenticated UI queries have no tenant ID", () => {

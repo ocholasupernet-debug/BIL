@@ -58,6 +58,15 @@ interface GatewaySettingsAccess {
   grant: string;
 }
 
+type GatewaySettingsMode = "whatsapp" | "password";
+
+interface GatewaySettingsStatus {
+  mode: GatewaySettingsMode;
+  otpNumberConfigured: boolean;
+  otpNumberMasked: string | null;
+  passwordConfigured: boolean;
+}
+
 interface GatewaySettingsOtpContextValue {
   headers: () => Promise<Record<string, string>>;
 }
@@ -74,9 +83,19 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
   const [access, setAccess] = useState<GatewaySettingsAccess | null>(null);
   const [expiresAt, setExpiresAt] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [statusReady, setStatusReady] = useState(false);
+  const [mode, setMode] = useState<GatewaySettingsMode>("password");
+  const [otpNumberConfigured, setOtpNumberConfigured] = useState(false);
+  const [otpNumberMasked, setOtpNumberMasked] = useState<string | null>(null);
+  const [passwordConfigured, setPasswordConfigured] = useState(false);
   const [requestId, setRequestId] = useState("");
   const [challengeId, setChallengeId] = useState("");
   const [code, setCode] = useState("");
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordSetupOpen, setPasswordSetupOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [resendSeconds, setResendSeconds] = useState(0);
   const [error, setError] = useState("");
@@ -99,17 +118,27 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const requestCode = useCallback(async (id: string) => {
+    if (mode !== "whatsapp") return;
+    if (!otpNumberConfigured && !phone.trim()) {
+      setError("Enter a WhatsApp number for payment settings.");
+      return;
+    }
     setLoading(true);
     setError("");
     try {
       const response = await fetch("/api/auth/whatsapp/gateway-settings/request-otp", {
         method: "POST",
         headers: adminApiHeaders(),
-        body: JSON.stringify({ requestId: id }),
+        body: JSON.stringify({
+          requestId: id,
+          ...(!otpNumberConfigured ? { phone: phone.trim() } : {}),
+        }),
       });
       const data = await response.json() as { ok?: boolean; error?: string; challengeId?: string; resendAfterSeconds?: number };
       if (!response.ok || !data.ok || !data.challengeId) {
-        if (response.status === 503 && data.error?.toLowerCase().includes("whatsapp otp is disabled")) {
+        const errorText = data.error?.toLowerCase() ?? "";
+        if ((response.status === 409 && errorText.includes("using password verification")) ||
+            (response.status === 503 && errorText.includes("whatsapp otp is disabled"))) {
           rejectDisabledOtp();
           throw new Error("Payment settings authorization is unavailable.");
         }
@@ -121,24 +150,9 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, [rejectDisabledOtp]);
+  }, [mode, otpNumberConfigured, phone, rejectDisabledOtp]);
 
-  const ensureAccess = useCallback(async (): Promise<GatewaySettingsAccess> => {
-    let whatsappOtpEnabled = false;
-    try {
-      const response = await fetch("/api/whatsapp/public-config", { cache: "no-store" });
-      const config = response.ok
-        ? await response.json() as { otpChannelEnabled?: boolean }
-        : null;
-      whatsappOtpEnabled = config?.otpChannelEnabled === true;
-    } catch {
-      whatsappOtpEnabled = false;
-    }
-    if (!whatsappOtpEnabled) {
-      rejectDisabledOtp();
-      throw new Error("Payment settings authorization is unavailable.");
-    }
-
+  const ensureAccess = useCallback((): Promise<GatewaySettingsAccess> => {
     if (access && expiresAt > Date.now() + 5_000) return Promise.resolve(access);
     if (pendingRef.current) return pendingRef.current;
 
@@ -146,21 +160,39 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
     setRequestId(id);
     setChallengeId("");
     setCode("");
+    setPhone("");
+    setPassword("");
+    setConfirmPassword("");
+    setPasswordSetupOpen(false);
     setResendSeconds(0);
     setError("");
     setDialogOpen(true);
+    setStatusLoading(true);
+    setStatusReady(false);
     const pending = new Promise<GatewaySettingsAccess>((resolve, reject) => {
       resolveRef.current = resolve;
       rejectRef.current = reject;
     });
     pendingRef.current = pending;
-    void requestCode(id).catch(cause => {
-      if (cause instanceof Error && cause.message === "Payment settings authorization is unavailable.") return;
-      setError(cause instanceof Error ? cause.message : "Could not send the WhatsApp verification code.");
-      setResendSeconds(60);
-    });
+    void fetch("/api/auth/whatsapp/gateway-settings/status", { headers: adminApiHeaders() })
+      .then(async response => {
+        const data = await response.json() as {
+          ok?: boolean;
+          error?: string;
+        } & Partial<GatewaySettingsStatus>;
+        if (!response.ok || !data.ok || (data.mode !== "whatsapp" && data.mode !== "password")) {
+          throw new Error(data.error || "Payment settings verification is unavailable.");
+        }
+        setMode(data.mode);
+        setOtpNumberConfigured(data.otpNumberConfigured === true);
+        setOtpNumberMasked(typeof data.otpNumberMasked === "string" ? data.otpNumberMasked : null);
+        setPasswordConfigured(data.passwordConfigured === true);
+        setStatusReady(true);
+      })
+      .catch(cause => setError(cause instanceof Error ? cause.message : "Payment settings verification is unavailable."))
+      .finally(() => setStatusLoading(false));
     return pending;
-  }, [access, expiresAt, requestCode, rejectDisabledOtp]);
+  }, [access, expiresAt]);
 
   useEffect(() => {
     if (resendSeconds <= 0) return;
@@ -177,6 +209,30 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
     };
   }, [ensureAccess]);
 
+  const finishAccess = (grant: string, ttlSeconds: number) => {
+    const nextAccess = { requestId, grant };
+    setAccess(nextAccess);
+    setExpiresAt(Date.now() + ttlSeconds * 1000);
+    setResendSeconds(0);
+    setDialogOpen(false);
+    pendingRef.current = null;
+    resolveRef.current?.(nextAccess);
+    resolveRef.current = null;
+    rejectRef.current = null;
+  };
+
+  const sendCode = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!requestId || loading) return;
+    try {
+      await requestCode(requestId);
+    } catch (cause) {
+      if (cause instanceof Error && cause.message === "Payment settings authorization is unavailable.") return;
+      setError(cause instanceof Error ? cause.message : "Could not send the WhatsApp verification code.");
+      setResendSeconds(60);
+    }
+  };
+
   const verifyCode = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!challengeId || !requestId || !/^\d{6}$/.test(code.trim())) return;
@@ -190,24 +246,52 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
       });
       const data = await response.json() as { ok?: boolean; error?: string; grant?: string; expiresInSeconds?: number };
       if (!response.ok || !data.ok || !data.grant) {
-        if (response.status === 503 && data.error?.toLowerCase().includes("whatsapp otp is disabled")) {
+        const errorText = data.error?.toLowerCase() ?? "";
+        if ((response.status === 409 && errorText.includes("using password verification")) ||
+            (response.status === 503 && errorText.includes("whatsapp otp is disabled"))) {
           rejectDisabledOtp();
           throw new Error("Payment settings authorization is unavailable.");
         }
         throw new Error(data.error || "The WhatsApp verification code was not accepted.");
       }
-      const nextAccess = { requestId, grant: data.grant };
-      setAccess(nextAccess);
-      setExpiresAt(Date.now() + (data.expiresInSeconds ?? 600) * 1000);
-      setResendSeconds(0);
-      setDialogOpen(false);
-      pendingRef.current = null;
-      resolveRef.current?.(nextAccess);
-      resolveRef.current = null;
-      rejectRef.current = null;
+      finishAccess(data.grant, data.expiresInSeconds ?? 600);
     } catch (cause) {
       if (cause instanceof Error && cause.message === "Payment settings authorization is unavailable.") return;
       setError(cause instanceof Error ? cause.message : "The WhatsApp verification code was not accepted.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitPassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!requestId || loading) return;
+    if (!passwordConfigured && password !== confirmPassword) {
+      setError("The new password and confirmation do not match.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const endpoint = passwordConfigured
+        ? "/api/auth/whatsapp/gateway-settings/verify-password"
+        : "/api/auth/whatsapp/gateway-settings/set-password";
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: adminApiHeaders(),
+        body: JSON.stringify({
+          requestId,
+          password,
+          ...(!passwordConfigured ? { confirmPassword } : {}),
+        }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; grant?: string; expiresInSeconds?: number };
+      if (!response.ok || !data.ok || !data.grant) {
+        throw new Error(data.error || "Payment settings verification failed.");
+      }
+      finishAccess(data.grant, data.expiresInSeconds ?? 600);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Payment settings verification failed.");
     } finally {
       setLoading(false);
     }
@@ -221,36 +305,91 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
     rejectRef.current = null;
   };
 
+  const inputClass = "mt-1 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-base text-white outline-none focus:border-cyan-500";
+
   return (
     <GatewaySettingsOtpContext.Provider value={{ headers }}>
       {children}
       {dialogOpen && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/75 p-4" role="presentation">
           <section role="dialog" aria-modal="true" aria-labelledby="gateway-otp-title" className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-6 text-slate-100 shadow-2xl">
-            <h2 id="gateway-otp-title" className="text-lg font-semibold text-white">Verify payment settings</h2>
-            <p className="mt-2 text-sm text-slate-400">Enter the six-digit WhatsApp code sent to the phone number already stored on this ISP or reseller account. Legacy accounts can verify their existing number here; this step cannot enroll or change a phone number. The authorization lasts ten minutes and is tied to this signed-in session. If the stored number is missing or incorrect, contact your ISP administrator or support to recover the account phone first.</p>
-            <form onSubmit={verifyCode} className="mt-5 space-y-3">
-              <label className="block text-sm text-slate-300">WhatsApp verification code
-                <input
-                  autoFocus
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={6}
-                  value={code}
-                  onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                  className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-base tracking-[0.25em] text-white outline-none focus:border-cyan-500"
-                />
-              </label>
-              {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
-              {!challengeId && loading && <p className="text-sm text-slate-400">Sending verification code…</p>}
-              <div className="flex flex-wrap justify-between gap-2 pt-2">
-                <button type="button" onClick={cancel} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => void requestCode(requestId).catch(cause => { setError(cause instanceof Error ? cause.message : "Could not resend the code."); setResendSeconds(60); })} disabled={loading || !requestId || resendSeconds > 0} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300 disabled:opacity-50">{resendSeconds > 0 ? `Resend in ${resendSeconds}s` : "Resend code"}</button>
-                  <button type="submit" disabled={loading || code.trim().length !== 6 || !challengeId} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{loading ? "Checking…" : "Verify"}</button>
+            <h2 id="gateway-otp-title" className="text-lg font-semibold text-white">
+              {statusLoading
+                ? "Payment settings"
+                : mode === "whatsapp"
+                  ? otpNumberConfigured ? "Verify payment settings" : "Set payment settings OTP number"
+                  : passwordConfigured ? "Verify payment settings" : "Set a payment settings password"}
+            </h2>
+            {statusLoading ? (
+              <>
+                <p className="mt-4 text-sm text-slate-400">Checking verification method…</p>
+                <button type="button" onClick={cancel} className="mt-4 rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
+              </>
+            ) : !statusReady ? (
+              <>
+                {error && <p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}
+                <button type="button" onClick={cancel} className="mt-4 rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
+              </>
+            ) : mode === "whatsapp" ? (
+              <form onSubmit={challengeId ? verifyCode : sendCode} className="mt-5 space-y-3">
+                {!challengeId && !otpNumberConfigured && (
+                  <label className="block text-sm text-slate-300">WhatsApp number for payment settings
+                    <input autoFocus type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={event => setPhone(event.target.value)} placeholder="+254…" className={inputClass} />
+                  </label>
+                )}
+                {!challengeId && otpNumberConfigured && (
+                  <p className="text-sm text-slate-400">Send a code to {otpNumberMasked || "your saved WhatsApp number"}.</p>
+                )}
+                {challengeId && (
+                  <label className="block text-sm text-slate-300">Enter WhatsApp OTP
+                    <input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} className={`${inputClass} tracking-[0.25em]`} />
+                  </label>
+                )}
+                {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
+                <div className="flex flex-wrap justify-between gap-2 pt-2">
+                  <button type="button" onClick={cancel} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
+                  <div className="flex gap-2">
+                    {challengeId && resendSeconds === 0 && (
+                      <button type="button" onClick={() => void requestCode(requestId).catch(cause => { setError(cause instanceof Error ? cause.message : "Could not resend the code."); setResendSeconds(60); })} disabled={loading} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300 disabled:opacity-50">Send another code</button>
+                    )}
+                    <button type="submit" disabled={loading || statusLoading || (challengeId ? code.trim().length !== 6 : !otpNumberConfigured && !phone.trim())} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                      {loading ? challengeId ? "Checking…" : "Sending…" : challengeId ? "Send" : "Send code"}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            </form>
+              </form>
+            ) : (
+              <form onSubmit={submitPassword} className="mt-5 space-y-3">
+                {!passwordConfigured && !passwordSetupOpen ? (
+                  <>
+                    <p className="text-sm text-slate-400">Create a separate password for payment settings. Only a Super Admin can reset it.</p>
+                    {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
+                    <div className="flex justify-between gap-2 pt-2">
+                      <button type="button" onClick={cancel} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
+                      <button type="button" onClick={() => { setPasswordSetupOpen(true); setError(""); }} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white">Set a password</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <label className="block text-sm text-slate-300">{passwordConfigured ? "Payment settings password" : "New password"}
+                      <input autoFocus type="password" autoComplete={passwordConfigured ? "current-password" : "new-password"} minLength={10} maxLength={128} value={password} onChange={event => setPassword(event.target.value)} className={inputClass} />
+                    </label>
+                    {!passwordConfigured && (
+                      <label className="block text-sm text-slate-300">Confirm password
+                        <input type="password" autoComplete="new-password" minLength={10} maxLength={128} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} className={inputClass} />
+                      </label>
+                    )}
+                    {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
+                    <div className="flex justify-between gap-2 pt-2">
+                      <button type="button" onClick={cancel} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
+                      <button type="submit" disabled={loading || statusLoading || password.length < 10 || (!passwordConfigured && !confirmPassword)} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                        {loading ? "Checking…" : passwordConfigured ? "Verify & continue" : "Set password & continue"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </form>
+            )}
           </section>
         </div>
       )}
@@ -2635,7 +2774,7 @@ function PaymentSettingsLoadPrompt({ onLoad }: { onLoad: () => void }) {
       desc="Load your saved gateway details and payment routing when you are ready."
     >
       <p style={{ color: C.muted, fontSize: "0.75rem", lineHeight: 1.5, margin: "0 0 14px" }}>
-        Loading these settings does not change them. If your secure access has expired, you will be asked to verify with the WhatsApp number already stored on this account.
+        Loading these settings does not change them. Access is granted for ten minutes using the verification method selected by the Super Admin.
       </p>
       <Row>
         <button

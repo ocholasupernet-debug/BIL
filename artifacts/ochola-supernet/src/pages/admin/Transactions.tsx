@@ -68,7 +68,7 @@ export default function Transactions() {
   const filtered = useMemo(() => {
     return transactions.filter(t => {
       const matchSearch = !searchTerm ||
-        t.reference.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (t.reference ?? "").toLowerCase().includes(searchTerm.toLowerCase()) ||
         (t.notes ?? "").toLowerCase().includes(searchTerm.toLowerCase()) ||
         String(t.id).includes(searchTerm);
       const matchStatus = filterStatus === "all" || t.status === filterStatus;
@@ -102,7 +102,7 @@ export default function Transactions() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search by ID or reference…"
+                placeholder="Search by transaction ID, receipt reference, or notes…"
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 className="w-full bg-background border border-border rounded-xl py-2 pl-9 pr-4 text-sm text-foreground focus:outline-none focus:border-primary"
@@ -129,8 +129,7 @@ export default function Transactions() {
             <table className="w-full text-sm text-left">
               <thead className="bg-background/80 text-muted-foreground text-xs uppercase font-semibold border-b border-border">
                 <tr>
-                  <th className="px-6 py-4">ID</th>
-                  <th className="px-6 py-4">Reference</th>
+                  <th className="px-6 py-4">Transaction ID</th>
                   <th className="px-6 py-4">Amount</th>
                   <th className="px-6 py-4">Method</th>
                   <th className="px-6 py-4">Notes</th>
@@ -141,7 +140,7 @@ export default function Transactions() {
               <tbody className="divide-y divide-border">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-12 text-muted-foreground">
+                    <td colSpan={6} className="text-center py-12 text-muted-foreground">
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                         <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Loading transactions…
                       </div>
@@ -149,14 +148,15 @@ export default function Transactions() {
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="text-center py-12 text-muted-foreground">
+                    <td colSpan={6} className="text-center py-12 text-muted-foreground">
                       {transactions.length === 0 ? "No transactions yet." : "No transactions match your search."}
                     </td>
                   </tr>
                 ) : filtered.map((tx) => (
                   <tr key={tx.id} className="hover:bg-white/5 transition-colors">
-                    <td className="px-6 py-4 text-muted-foreground font-mono">#{tx.id}</td>
-                    <td className="px-6 py-4 font-mono text-xs text-muted-foreground">{tx.reference || "—"}</td>
+                    <td className="px-6 py-4 font-mono text-xs text-muted-foreground" title={tx.reference?.trim() || `#${tx.id}`}>
+                      {tx.reference?.trim() || `#${tx.id}`}
+                    </td>
                     <td className="px-6 py-4 font-bold text-emerald-400">{fmtKsh(tx.amount)}</td>
                     <td className="px-6 py-4">
                       <span className={`text-xs font-bold uppercase tracking-wider ${tx.payment_method === "mpesa" ? "text-emerald-400" : "text-slate-400"}`}>

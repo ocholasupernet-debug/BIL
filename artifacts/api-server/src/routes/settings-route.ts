@@ -25,7 +25,7 @@ import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { authenticatedAccount, extractToken, validateToken } from "../lib/api-auth.js";
 import { adminHasPermission } from "../lib/platform-permissions.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
-import { hasWhatsAppGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
+import { hasGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import {
   CHECKOUT_READY_GATEWAY_IDS,
   PAYMENT_GATEWAY_IDS,
@@ -114,7 +114,7 @@ async function requireAdminPaymentChange(req: Request, res: Response, adminId: n
       res.status(503).json({ ok: false, error: "Permissions could not be verified. Confirm the settings migration has been applied." });
       return false;
     }
-    const validGrant = await hasWhatsAppGatewaySettingsGrant({
+    const validGrant = await hasGatewaySettingsGrant({
       accountId: Number(auth.uid),
       requestId: String(req.headers["x-whatsapp-gateway-request-id"] ?? ""),
       grant: String(req.headers["x-whatsapp-gateway-grant"] ?? ""),
@@ -123,7 +123,7 @@ async function requireAdminPaymentChange(req: Request, res: Response, adminId: n
     if (!validGrant) {
       res.status(403).json({
         ok: false,
-        error: "Verify the WhatsApp code to open or update payment gateway settings.",
+        error: "Verify payment settings access to open or update gateway details.",
       });
       return false;
     }

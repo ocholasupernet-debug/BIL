@@ -2,7 +2,6 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { extractToken, validateToken } from "../lib/api-auth.js";
 import {
   getPlatformAuthPolicy,
-  isOtpChannelEnabled,
   recordPlatformAuthAudit,
   savePlatformAuthPolicy,
   validatePlatformAuthPolicy,
@@ -83,6 +82,7 @@ router.put("/super-admin/auth-security-policy", async (req: Request, res: Respon
 });
 
 router.get("/auth/admin/password-recheck-policy", async (req: Request, res: Response): Promise<void> => {
+  res.setHeader("Cache-Control", "private, no-store");
   const payload = validateToken(extractToken(req));
   if (!payload || payload.type !== "a" || payload.uid === "superadmin") {
     res.status(401).json({ ok: false, error: "Administrator authentication required." });
@@ -109,11 +109,26 @@ router.get("/auth/admin/password-recheck-policy", async (req: Request, res: Resp
       return;
     }
     const required = policy.passwordReauth[admin.role][feature] === true;
-    res.json({ ok: true, feature, required, role: admin.role, otpChannels: {
-      whatsapp: await isOtpChannelEnabled("whatsapp"),
-      sms: await isOtpChannelEnabled("sms"),
-      email: false,
-    } });
+    const policies = Object.fromEntries(
+      ADMIN_PAGE_VISIBILITY_CATALOG
+        .flatMap(section => section.pages)
+        .map(page => [
+          page.key,
+          page.key !== "overview.dashboard" && policy.passwordReauth[admin.role as "isp_admin" | "reseller"][page.key] === true,
+        ]),
+    );
+    res.json({
+      ok: true,
+      feature,
+      required,
+      role: admin.role,
+      policies,
+      otpChannels: {
+        whatsapp: policy.otp.allEnabled && policy.otp.channels.whatsapp,
+        sms: policy.otp.allEnabled && policy.otp.channels.sms,
+        email: false,
+      },
+    });
   } catch {
     res.status(503).json({ ok: false, error: "Authentication security settings could not be checked." });
   }
