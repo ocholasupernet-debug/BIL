@@ -8,6 +8,8 @@ import {
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { apiTokenSigningConfigured, generateAdminSessionToken } from "../lib/api-auth.js";
 import { RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
+import { sendRegistrationConfirmationEmail } from "../lib/platform-email.js";
+import { consumeEmailRegistrationToken } from "../services/email-registration-otp.js";
 
 export type UnifiedRegistrationRole = "isp_admin" | "reseller";
 
@@ -129,6 +131,18 @@ export async function registerAccount(req: Request, res: Response): Promise<void
   }
 
   const passwordHash = await hashIspAdminPassword(password);
+  const emailVerificationToken = typeof req.body?.emailVerificationToken === "string"
+    ? req.body.emailVerificationToken
+    : "";
+  if (!emailVerificationToken || !await consumeEmailRegistrationToken(emailVerificationToken, email)) {
+    res.status(403).json({
+      success: false,
+      ok: false,
+      error: "Verify your email address before creating an account.",
+    });
+    return;
+  }
+
   const accountPayload = {
     name,
     company_name: businessName,
@@ -193,6 +207,7 @@ export async function registerAccount(req: Request, res: Response): Promise<void
   };
   const token = generateAdminSessionToken(String(account.id), 1);
   const assignedUrl = `https://${account.subdomain}.isplatty.org`;
+  void sendRegistrationConfirmationEmail(account.id);
   res.status(201).json({
     success: true,
     ok: true,

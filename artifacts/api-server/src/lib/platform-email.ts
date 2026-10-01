@@ -327,11 +327,13 @@ export async function sendRegistrationConfirmationEmail(adminId: number): Promis
       email: string | null;
       username: string | null;
       subdomain: string | null;
+      role: string | null;
+      must_change_password: boolean | null;
       is_active: boolean;
       status: string | null;
     }>(
       "isp_admins",
-      `id=eq.${adminId}&select=id,name,fullname,email,username,subdomain,is_active,status&limit=1`,
+      `id=eq.${adminId}&select=id,name,fullname,email,username,subdomain,role,must_change_password,is_active,status&limit=1`,
     );
     const admin = admins[0];
     if (
@@ -339,22 +341,48 @@ export async function sendRegistrationConfirmationEmail(adminId: number): Promis
       admin.is_active !== true ||
       admin.status !== "active" ||
       !admin.email ||
+      !admin.subdomain ||
       !isValidEmailAddress(admin.email)
     ) {
       return;
     }
     const company = admin.fullname?.trim() || admin.name?.trim() || "your company";
+    const subdomain = admin.subdomain.trim().toLowerCase();
+    const loginUrl = admin.must_change_password
+      ? `https://${subdomain}.isplatty.org/admin/login?first_login=1&subdomain=${encodeURIComponent(subdomain)}`
+      : `https://${subdomain}.isplatty.org/admin/login`;
+    const isReseller = admin.role === "reseller";
+    const signInDirection = admin.must_change_password
+      ? "Use the temporary sign-in details shown after registration. You will be prompted to set your own password."
+      : "Sign in with the password you created during registration.";
+    const roleSteps = isReseller
+      ? [
+          "Confirm your assigned service port and router with your ISP administrator.",
+          "Review your collection settings, then create or update the packages you offer.",
+        ]
+      : [
+          "Review your company profile and payment collection settings.",
+          "Connect your first router, configure service ports, and add your plans.",
+        ];
     await sendPlatformEmail({
       to: admin.email,
-      subject: "Your OcholaSupernet registration is confirmed",
+      subject: "Welcome to OcholaSupernet — your workspace is ready",
       text: [
-        `Hello ${company},`,
+        `Congratulations, ${company}!`,
         "",
-        "Your registration payment has been confirmed and your OcholaSupernet account is active.",
-        admin.subdomain ? `Company address: ${admin.subdomain}` : "",
+        `Your ${isReseller ? "reseller" : "ISP"} account is active.`,
+        "",
+        "Sign in to your dashboard:",
+        loginUrl,
         admin.username ? `Username: ${admin.username}` : "",
         "",
-        "Sign in using the address provided during registration. For your security, this email does not contain a password.",
+        "Next steps:",
+        `1. ${signInDirection}`,
+        `2. ${roleSteps[0]}`,
+        `3. ${roleSteps[1]}`,
+        "4. Continue setup from your dashboard and add the customers or services you manage.",
+        "",
+        "For your security, this email does not contain a password.",
       ].filter(Boolean).join("\n"),
     });
   } catch {

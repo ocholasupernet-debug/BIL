@@ -84,6 +84,20 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
   const resolveRef = useRef<((value: GatewaySettingsAccess) => void) | null>(null);
   const rejectRef = useRef<((reason: Error) => void) | null>(null);
 
+  const rejectDisabledOtp = useCallback(() => {
+    const reject = rejectRef.current;
+    pendingRef.current = null;
+    resolveRef.current = null;
+    rejectRef.current = null;
+    setAccess(null);
+    setExpiresAt(0);
+    setDialogOpen(false);
+    setChallengeId("");
+    setCode("");
+    setResendSeconds(0);
+    reject?.(new Error("Payment settings authorization is unavailable."));
+  }, []);
+
   const requestCode = useCallback(async (id: string) => {
     setLoading(true);
     setError("");
@@ -95,6 +109,10 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
       });
       const data = await response.json() as { ok?: boolean; error?: string; challengeId?: string; resendAfterSeconds?: number };
       if (!response.ok || !data.ok || !data.challengeId) {
+        if (response.status === 503 && data.error?.toLowerCase().includes("whatsapp otp is disabled")) {
+          rejectDisabledOtp();
+          throw new Error("Payment settings authorization is unavailable.");
+        }
         throw new Error(data.error || "Could not send the WhatsApp verification code.");
       }
       setChallengeId(data.challengeId);
@@ -103,9 +121,24 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [rejectDisabledOtp]);
 
-  const ensureAccess = useCallback((): Promise<GatewaySettingsAccess> => {
+  const ensureAccess = useCallback(async (): Promise<GatewaySettingsAccess> => {
+    let whatsappOtpEnabled = false;
+    try {
+      const response = await fetch("/api/whatsapp/public-config", { cache: "no-store" });
+      const config = response.ok
+        ? await response.json() as { otpChannelEnabled?: boolean }
+        : null;
+      whatsappOtpEnabled = config?.otpChannelEnabled === true;
+    } catch {
+      whatsappOtpEnabled = false;
+    }
+    if (!whatsappOtpEnabled) {
+      rejectDisabledOtp();
+      throw new Error("Payment settings authorization is unavailable.");
+    }
+
     if (access && expiresAt > Date.now() + 5_000) return Promise.resolve(access);
     if (pendingRef.current) return pendingRef.current;
 
@@ -122,11 +155,12 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
     });
     pendingRef.current = pending;
     void requestCode(id).catch(cause => {
+      if (cause instanceof Error && cause.message === "Payment settings authorization is unavailable.") return;
       setError(cause instanceof Error ? cause.message : "Could not send the WhatsApp verification code.");
       setResendSeconds(60);
     });
     return pending;
-  }, [access, expiresAt, requestCode]);
+  }, [access, expiresAt, requestCode, rejectDisabledOtp]);
 
   useEffect(() => {
     if (resendSeconds <= 0) return;
@@ -156,6 +190,10 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
       });
       const data = await response.json() as { ok?: boolean; error?: string; grant?: string; expiresInSeconds?: number };
       if (!response.ok || !data.ok || !data.grant) {
+        if (response.status === 503 && data.error?.toLowerCase().includes("whatsapp otp is disabled")) {
+          rejectDisabledOtp();
+          throw new Error("Payment settings authorization is unavailable.");
+        }
         throw new Error(data.error || "The WhatsApp verification code was not accepted.");
       }
       const nextAccess = { requestId, grant: data.grant };
@@ -168,6 +206,7 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
       resolveRef.current = null;
       rejectRef.current = null;
     } catch (cause) {
+      if (cause instanceof Error && cause.message === "Payment settings authorization is unavailable.") return;
       setError(cause instanceof Error ? cause.message : "The WhatsApp verification code was not accepted.");
     } finally {
       setLoading(false);

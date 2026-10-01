@@ -54,7 +54,6 @@ export default function SuperAdminSystemSettings() {
     dateFormat: "DD/MM/YYYY",
     maintenanceMode: false,
     registrationOpen: true,
-    emailVerification: false,
     autoSuspend: true,
     darkModeDefault: true,
   });
@@ -402,7 +401,10 @@ export default function SuperAdminSystemSettings() {
         <Card title="Platform Flags" icon={Shield}>
           <Toggle on={cfg.maintenanceMode} onChange={v => set("maintenanceMode", v)} label="Maintenance Mode (locks out all ISP admins)" />
           <Toggle on={cfg.registrationOpen} onChange={v => set("registrationOpen", v)} label="Open ISP Registration (allow new signups)" />
-          <Toggle on={cfg.emailVerification} onChange={v => set("emailVerification", v)} label="Require Email Verification on Signup" />
+          <div role="status" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 0", borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+            <span style={{ fontSize: "0.82rem", color: C.sub }}>Email verification for all new sign-ups</span>
+            <strong style={{ fontSize: "0.72rem", color: C.accent, letterSpacing: "0.04em", textTransform: "uppercase" }}>Always required</strong>
+          </div>
           <Toggle on={cfg.autoSuspend} onChange={v => set("autoSuspend", v)} label="Auto-Suspend overdue ISP accounts" />
           <Toggle on={cfg.darkModeDefault} onChange={v => set("darkModeDefault", v)} label="Dark Mode as Default Theme" />
         </Card>

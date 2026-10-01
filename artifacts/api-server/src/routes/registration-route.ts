@@ -26,6 +26,7 @@ import {
   getSmsSettings,
   isSmsFeatureEnabled,
 } from "../services/sms/sms-service.js";
+import { consumeEmailRegistrationToken } from "../services/email-registration-otp.js";
 
 const router: IRouter = Router();
 const INITIAL_ADMIN_USERNAME = "admin";
@@ -305,6 +306,20 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
       });
       return;
     }
+  }
+
+  const emailVerificationToken = typeof req.body?.emailVerificationToken === "string"
+    ? req.body.emailVerificationToken
+    : "";
+  if (
+    !emailVerificationToken ||
+    !await consumeEmailRegistrationToken(emailVerificationToken, email)
+  ) {
+    res.status(403).json({
+      ok: false,
+      error: "Verify your email address before continuing registration.",
+    });
+    return;
   }
 
   let pendingAdmin: { id: number; username: string; subdomain: string } | undefined;

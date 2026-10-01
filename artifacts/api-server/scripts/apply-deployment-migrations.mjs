@@ -70,6 +70,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_registration_payments.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_secure_daraja_settings.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_platform_email_settings.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_email_registration_otp.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_service_payment_routing.sql", import.meta.url)),
   // The base reseller-port table must exist before the additive port-service
   // columns and payment-gateway schema are applied.

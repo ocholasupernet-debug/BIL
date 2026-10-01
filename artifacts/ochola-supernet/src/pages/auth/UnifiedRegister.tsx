@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowRight, Check, Eye, EyeOff, LockKeyhole, Mail, Network, Plug, ShieldCheck, UserRound } from "lucide-react";
 import { useLocation } from "wouter";
 import { Logo } from "@/components/Logo";
@@ -25,6 +25,7 @@ const ROLE_OPTIONS: Array<{
     description: "Manage your own merchant workspace and voucher operations.",
   },
 ];
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function sanitizeSubdomainPrefix(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 63);
@@ -35,6 +36,13 @@ export default function UnifiedRegister() {
   const [role, setRole] = useState<RegistrationRole>("isp_admin");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [emailVerificationChallenge, setEmailVerificationChallenge] = useState("");
+  const [emailVerificationCode, setEmailVerificationCode] = useState("");
+  const [emailVerificationToken, setEmailVerificationToken] = useState("");
+  const [requestingEmailCode, setRequestingEmailCode] = useState(false);
+  const [verifyingEmailCode, setVerifyingEmailCode] = useState(false);
+  const [emailVerificationError, setEmailVerificationError] = useState("");
+  const emailVerificationRequestRef = useRef(0);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [subdomainPrefix, setSubdomainPrefix] = useState("");
@@ -55,9 +63,74 @@ export default function UnifiedRegister() {
     [role],
   );
 
+  const requestEmailVerification = async () => {
+    setEmailVerificationError("");
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!EMAIL_PATTERN.test(normalizedEmail)) {
+      setEmailVerificationError("Enter a valid email address before requesting a code.");
+      return;
+    }
+    const requestId = ++emailVerificationRequestRef.current;
+    setRequestingEmailCode(true);
+    try {
+      const response = await fetch("/api/auth/email-registration/request-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: normalizedEmail }),
+      });
+      const data = await response.json() as { ok?: boolean; challengeId?: string; error?: string };
+      if (!response.ok || !data.ok || !data.challengeId) {
+        throw new Error(data.error || "Could not send an email verification code.");
+      }
+      if (requestId === emailVerificationRequestRef.current) {
+        setEmailVerificationChallenge(data.challengeId);
+        setEmailVerificationCode("");
+        setEmailVerificationToken("");
+      }
+    } catch (cause) {
+      if (requestId === emailVerificationRequestRef.current) {
+        setEmailVerificationError(cause instanceof Error ? cause.message : "Could not send an email verification code.");
+      }
+    } finally {
+      if (requestId === emailVerificationRequestRef.current) setRequestingEmailCode(false);
+    }
+  };
+
+  const verifyRegistrationEmail = async () => {
+    setEmailVerificationError("");
+    const requestId = ++emailVerificationRequestRef.current;
+    setVerifyingEmailCode(true);
+    try {
+      const response = await fetch("/api/auth/email-registration/verify-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          challengeId: emailVerificationChallenge,
+          code: emailVerificationCode,
+        }),
+      });
+      const data = await response.json() as { ok?: boolean; emailVerificationToken?: string; error?: string };
+      if (!response.ok || !data.ok || !data.emailVerificationToken) {
+        throw new Error(data.error || "That email verification code is invalid or expired.");
+      }
+      if (requestId === emailVerificationRequestRef.current) setEmailVerificationToken(data.emailVerificationToken);
+    } catch (cause) {
+      if (requestId === emailVerificationRequestRef.current) {
+        setEmailVerificationError(cause instanceof Error ? cause.message : "Could not verify this email address.");
+      }
+    } finally {
+      if (requestId === emailVerificationRequestRef.current) setVerifyingEmailCode(false);
+    }
+  };
+
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
+    if (!emailVerificationToken) {
+      setError("Verify your email address before creating your workspace.");
+      return;
+    }
     if (password !== confirmPassword) {
       setError("The password and confirmation do not match.");
       return;
@@ -71,6 +144,7 @@ export default function UnifiedRegister() {
         body: JSON.stringify({
           name: name.trim(),
           email: email.trim().toLowerCase(),
+          emailVerificationToken,
           password,
           confirmPassword,
           role,
@@ -173,7 +247,55 @@ export default function UnifiedRegister() {
             <label htmlFor="register-email">Email</label>
             <div className="unified-register-input-wrap">
               <Mail size={17} aria-hidden="true" />
-              <input id="register-email" required type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="you@yourcompany.com" />
+              <input
+                id="register-email"
+                required
+                type="email"
+                value={email}
+                onChange={(event) => {
+                  emailVerificationRequestRef.current += 1;
+                  setEmail(event.target.value);
+                  setEmailVerificationChallenge("");
+                  setEmailVerificationCode("");
+                  setEmailVerificationToken("");
+                  setEmailVerificationError("");
+                  setRequestingEmailCode(false);
+                  setVerifyingEmailCode(false);
+                }}
+                autoComplete="email"
+                placeholder="you@yourcompany.com"
+              />
+            </div>
+            <div className="unified-register-email-verification">
+              {emailVerificationToken ? (
+                <p role="status">Email address verified.</p>
+              ) : (
+                <>
+                  <button type="button" onClick={() => void requestEmailVerification()} disabled={requestingEmailCode || verifyingEmailCode || !email.trim()}>
+                    {requestingEmailCode ? "Sending code…" : emailVerificationChallenge ? "Resend email code" : "Send email verification code"}
+                  </button>
+                  {emailVerificationChallenge && (
+                    <div>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        maxLength={6}
+                        pattern="[0-9]{6}"
+                        value={emailVerificationCode}
+                        onChange={(event) => setEmailVerificationCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                        placeholder="6-digit code"
+                        aria-label="Email verification code"
+                      />
+                      <button type="button" onClick={() => void verifyRegistrationEmail()} disabled={requestingEmailCode || verifyingEmailCode || emailVerificationCode.length !== 6}>
+                        {verifyingEmailCode ? "Checking…" : "Verify"}
+                      </button>
+                    </div>
+                  )}
+                  {emailVerificationError && <p role="alert">{emailVerificationError}</p>}
+                  {!emailVerificationError && <p>{emailVerificationChallenge ? "Enter the 6-digit code sent to your email. It expires in 10 minutes." : "Verify this email address before creating your workspace."}</p>}
+                </>
+              )}
             </div>
           </div>
 
@@ -218,7 +340,7 @@ export default function UnifiedRegister() {
             </p>
           </div>
 
-          <button type="submit" className="unified-register-submit" disabled={isSubmitting}>
+          <button type="submit" className="unified-register-submit" disabled={isSubmitting || !emailVerificationToken}>
             {isSubmitting ? "Creating workspace…" : `Create ${selectedRole.value === "reseller" ? "reseller" : "operator"} workspace`}
             {!isSubmitting && <ArrowRight size={17} />}
           </button>

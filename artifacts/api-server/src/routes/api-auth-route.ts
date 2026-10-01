@@ -20,6 +20,14 @@ import { registerAccount } from "../controllers/auth-controller.js";
 import { logger } from "../lib/logger.js";
 import { recordWhatsAppSignInFailure, type WhatsAppLoginAccountType } from "../services/whatsapp/whatsapp-service.js";
 import { isPasswordReauthRequired, isSupportedPasswordReauthFeature, recordPlatformAuthAudit } from "../lib/platform-auth-security.js";
+import {
+  EmailRegistrationOtpRateLimitError,
+  isEmailRegistrationChallengeId,
+  isEmailRegistrationCode,
+  normalizeRegistrationEmail,
+  requestEmailRegistrationOtp,
+  verifyEmailRegistrationOtp,
+} from "../services/email-registration-otp.js";
 
 const router: IRouter = Router();
 
@@ -55,6 +63,75 @@ async function recordFailedAccountSignIn(
     logger.warn({ err: error, accountType }, "[auth] suspicious sign-in tracking failed");
   }
 }
+
+router.post("/auth/email-registration/request-otp", async (req: Request, res: Response): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store");
+  const email = normalizeRegistrationEmail(req.body?.email);
+  if (!email) {
+    res.status(400).json({ ok: false, error: "Enter a valid email address." });
+    return;
+  }
+
+  try {
+    const result = await requestEmailRegistrationOtp(
+      email,
+      req.ip || req.socket.remoteAddress || "",
+    );
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    if (error instanceof EmailRegistrationOtpRateLimitError) {
+      res.status(429).json({ ok: false, error: error.message });
+      return;
+    }
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[auth] email registration OTP request failed",
+    );
+    res.status(503).json({
+      ok: false,
+      error: "Email verification is currently unavailable. Please try again later.",
+    });
+  }
+});
+
+router.post("/auth/email-registration/verify-otp", async (req: Request, res: Response): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store");
+  const email = normalizeRegistrationEmail(req.body?.email);
+  const challengeId = req.body?.challengeId;
+  const code = req.body?.code;
+  if (!email || !isEmailRegistrationChallengeId(challengeId) || !isEmailRegistrationCode(code)) {
+    res.status(400).json({
+      ok: false,
+      error: "Enter the six-digit code sent to your email.",
+    });
+    return;
+  }
+
+  try {
+    const emailVerificationToken = await verifyEmailRegistrationOtp({
+      email,
+      challengeId,
+      code,
+    });
+    if (!emailVerificationToken) {
+      res.status(400).json({
+        ok: false,
+        error: "That email verification code is invalid or expired. Request a new code and try again.",
+      });
+      return;
+    }
+    res.json({ ok: true, emailVerificationToken, expiresInSeconds: 600 });
+  } catch (error) {
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[auth] email registration OTP verification failed",
+    );
+    res.status(503).json({
+      ok: false,
+      error: "Email verification is currently unavailable. Please try again later.",
+    });
+  }
+});
 
 router.post("/auth/register", registerAccount);
 
