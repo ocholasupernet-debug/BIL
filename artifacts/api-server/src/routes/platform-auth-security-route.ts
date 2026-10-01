@@ -43,7 +43,7 @@ router.get("/auth/public-security-policy", async (_req: Request, res: Response):
 router.get("/super-admin/auth-security-policy", async (req: Request, res: Response): Promise<void> => {
   if (!requireSuperAdmin(req, res)) return;
   try {
-        res.json({ ok: true, policy: await getPlatformAuthPolicy(), catalog: ADMIN_PAGE_VISIBILITY_CATALOG });
+    res.json({ ok: true, policy: await getPlatformAuthPolicy(), catalog: ADMIN_PAGE_VISIBILITY_CATALOG });
   } catch {
     res.status(503).json({ ok: false, error: "Authentication security settings could not be loaded." });
   }
@@ -65,10 +65,10 @@ router.put("/super-admin/auth-security-policy", async (req: Request, res: Respon
       action: "security_policy_updated",
       details: {
         otp: policy.otp,
-        enabledReauthRoles: Object.fromEntries(
-          Object.entries(policy.passwordReauth).map(([role, pages]) => [
+        configuredPageMethods: Object.fromEntries(
+          Object.entries(policy.pageMethods).map(([role, pages]) => [
             role,
-            Object.entries(pages).filter(([, enabled]) => enabled).map(([key]) => key),
+            Object.entries(pages).filter(([, method]) => method !== "none"),
           ]),
         ),
       },
@@ -108,25 +108,30 @@ router.get("/auth/admin/password-recheck-policy", async (req: Request, res: Resp
       res.status(401).json({ ok: false, error: "This administrator account is not active." });
       return;
     }
-    const required = policy.passwordReauth[admin.role][feature] === true;
+    const role = admin.role as "isp_admin" | "reseller";
+    const method = policy.pageMethods[role][feature] ?? "none";
+    const methods = Object.fromEntries(
+      ADMIN_PAGE_VISIBILITY_CATALOG
+        .flatMap(section => section.pages)
+        .map(page => [page.key, policy.pageMethods[role][page.key] ?? "none"]),
+    );
     const policies = Object.fromEntries(
       ADMIN_PAGE_VISIBILITY_CATALOG
         .flatMap(section => section.pages)
-        .map(page => [
-          page.key,
-          page.key !== "overview.dashboard" && policy.passwordReauth[admin.role as "isp_admin" | "reseller"][page.key] === true,
-        ]),
+        .map(page => [page.key, (policy.pageMethods[role][page.key] ?? "none") !== "none"]),
     );
     res.json({
       ok: true,
       feature,
-      required,
-      role: admin.role,
+      method,
+      required: method !== "none",
+      role,
+      methods,
       policies,
       otpChannels: {
         whatsapp: policy.otp.allEnabled && policy.otp.channels.whatsapp,
         sms: policy.otp.allEnabled && policy.otp.channels.sms,
-        email: false,
+        email: policy.otp.allEnabled && policy.otp.channels.email,
       },
     });
   } catch {

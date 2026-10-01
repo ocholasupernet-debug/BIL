@@ -3,11 +3,11 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import {
   extractToken,
   generateAdminSessionToken,
-  generatePasswordSetupToken,
   generateToken,
   requireAdmin,
   validateToken,
 } from "../lib/api-auth.js";
+import { getOtpPasswordSetupToken } from "../lib/admin-password-setup.js";
 import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { hashIspAdminPassword, verifyIspAdminPassword } from "../lib/passwords.js";
 import { logger } from "../lib/logger.js";
@@ -757,18 +757,21 @@ router.post("/auth/whatsapp/verify-otp", async (req, res): Promise<void> => {
     phone_verified: true,
     phone_verified_at: new Date().toISOString(),
   });
-  const token = accountType === "admin"
-    ? generateAdminSessionToken(String(accountId), Number(account.auth_version ?? 1))
-    : generateToken("c", String(accountId));
-  if (accountType === "admin" && account.must_change_password === true) {
+  const setupToken = accountType === "admin"
+    ? await getOtpPasswordSetupToken(account)
+    : null;
+  if (setupToken) {
     res.set("Cache-Control", "no-store").json({
       ok: true,
       requiresPasswordSetup: true,
-      setupToken: generatePasswordSetupToken(String(accountId), Number(account.auth_version ?? 1)),
+      setupToken,
       admin: publicAccount({ ...account, phone_verified: true }),
     });
     return;
   }
+  const token = accountType === "admin"
+    ? generateAdminSessionToken(String(accountId), Number(account.auth_version ?? 1))
+    : generateToken("c", String(accountId));
   res.set("Cache-Control", "no-store").json({
     ok: true,
     token,

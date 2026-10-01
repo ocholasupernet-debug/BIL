@@ -17,6 +17,7 @@ import {
   sbUpsertStrict,
 } from "../lib/supabase-client.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
+import { normalizeSmsPhone } from "../services/sms/sms-service.js";
 import { reconcileHotspotUserAccess, reconcilePppoeUserAccess, removeHotspotUser, removePPPSecretByName, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
 import { removeRadiusCustomer, syncRadiusCustomer } from "../lib/radius.js";
 import { deployRouterFile } from "../lib/mikrotik.js";
@@ -3145,6 +3146,7 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
       username: cleanUsername,
       email: cleanEmail || null,
       phone: typeof phone === "string" ? phone.trim() || null : null,
+      phone_e164: typeof phone === "string" && phone.trim() ? normalizeSmsPhone(phone.trim()) : null,
       password: await hashIspAdminPassword(cleanPassword),
       parent_id: account.id,
       role: "reseller",

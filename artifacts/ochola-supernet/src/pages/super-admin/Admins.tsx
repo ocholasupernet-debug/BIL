@@ -21,7 +21,7 @@ interface AdminForm {
   name: string; username: string; email: string; phone: string;
   role: string; subdomain: string; password: string;
 }
-const EMPTY: AdminForm = { name: "", username: "", email: "", phone: "", role: "admin", subdomain: "", password: "" };
+const EMPTY: AdminForm = { name: "", username: "", email: "", phone: "", role: "isp_admin", subdomain: "", password: "" };
 
 function makeUniqueSubdomain(name: string, requested: string, admins: Admin[], currentId?: number): string {
   const requestedSlug = requested.trim().toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
@@ -97,12 +97,18 @@ export default function SuperAdminAdmins() {
   const createAdmin = useMutation({
     mutationFn: async (f: AdminForm) => {
       const slug = makeUniqueSubdomain(f.name, f.subdomain, admins);
-      const { error } = await supabase.from("isp_admins").insert({
-        name: f.name, username: f.username, email: f.email || null,
-        phone: f.phone || null, role: f.role, subdomain: slug,
-        password: f.password, is_active: true,
+      const response = await fetch("/api/super-admin/admins", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-sa-token": localStorage.getItem("ochola_superadmin_token") || "",
+        },
+        body: JSON.stringify({ ...f, subdomain: slug }),
       });
-      if (error) throw error;
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok !== true) {
+        throw new Error(result.error || "The administrator account could not be created.");
+      }
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["sa_admins_list"] }); setShowAdd(false); setForm(EMPTY); showToast("Admin created"); },
     onError: (e: Error) => showToast(`Error: ${e.message}`, false),
@@ -111,10 +117,18 @@ export default function SuperAdminAdmins() {
   const updateAdmin = useMutation({
     mutationFn: async ({ id, f }: { id: number; f: AdminForm }) => {
       const slug = makeUniqueSubdomain(f.name, f.subdomain, admins, id);
-      const patch: Record<string, string | null> = { name: f.name, username: f.username, email: f.email || null, phone: f.phone || null, role: f.role, subdomain: slug };
-      if (f.password) patch.password = f.password;
-      const { error } = await supabase.from("isp_admins").update(patch).eq("id", id);
-      if (error) throw error;
+      const response = await fetch(`/api/super-admin/admins/${id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "x-sa-token": localStorage.getItem("ochola_superadmin_token") || "",
+        },
+        body: JSON.stringify({ ...f, subdomain: slug }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.ok !== true) {
+        throw new Error(result.error || "The administrator account could not be updated.");
+      }
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["sa_admins_list"] }); setEditing(null); showToast("Admin updated"); },
     onError: (e: Error) => showToast(`Error: ${e.message}`, false),
@@ -135,7 +149,7 @@ export default function SuperAdminAdmins() {
 
   const openEdit = (a: Admin) => {
     setEditing(a);
-    setForm({ name: a.name || "", username: a.username || "", email: a.email || "", phone: a.phone || "", role: a.role || "admin", subdomain: a.subdomain || "", password: "" });
+    setForm({ name: a.name || "", username: a.username || "", email: a.email || "", phone: a.phone || "", role: a.role === "admin" ? "isp_admin" : a.role || "isp_admin", subdomain: a.subdomain || "", password: "" });
   };
 
   const set = (k: keyof AdminForm, v: string) => setForm(f => ({ ...f, [k]: v }));
@@ -242,7 +256,7 @@ export default function SuperAdminAdmins() {
             <Field label="Phone"><input style={inp} value={form.phone} onChange={e => set("phone", e.target.value)} placeholder="+254700000000" /></Field>
             <Field label="Role">
               <select style={inp} value={form.role} onChange={e => set("role", e.target.value)}>
-                <option value="admin">Admin</option>
+                <option value="isp_admin">Admin</option>
                 <option value="sub_admin">Sub Admin</option>
                 <option value="reseller">Reseller</option>
               </select>
@@ -271,7 +285,7 @@ export default function SuperAdminAdmins() {
             <Field label="Phone"><input style={inp} value={form.phone} onChange={e => set("phone", e.target.value)} /></Field>
             <Field label="Role">
               <select style={inp} value={form.role} onChange={e => set("role", e.target.value)}>
-                <option value="admin">Admin</option>
+                <option value="isp_admin">Admin</option>
                 <option value="sub_admin">Sub Admin</option>
                 <option value="reseller">Reseller</option>
               </select>

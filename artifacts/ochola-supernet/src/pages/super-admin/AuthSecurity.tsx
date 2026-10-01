@@ -5,16 +5,17 @@ import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 
 type Role = "isp_admin" | "reseller";
 type OtpChannel = "whatsapp" | "sms" | "email";
+type PageAuthMethod = "none" | "password" | OtpChannel;
 type Policy = {
   otp: { allEnabled: boolean; channels: Record<OtpChannel, boolean> };
-  passwordReauth: Record<Role, Record<string, boolean>>;
+  pageMethods: Record<Role, Record<string, PageAuthMethod>>;
 };
 type CatalogPage = { key: string; label: string; description?: string };
 type CatalogSection = { label: string; pages: CatalogPage[] };
 
 const EMPTY_POLICY: Policy = {
   otp: { allEnabled: false, channels: { whatsapp: false, sms: false, email: false } },
-  passwordReauth: { isp_admin: {}, reseller: {} },
+  pageMethods: { isp_admin: {}, reseller: {} },
 };
 
 function tokenHeaders(json = false): HeadersInit {
@@ -51,11 +52,11 @@ export default function SuperAdminAuthSecurity() {
     ...current,
     otp: { ...current.otp, ...change, channels: { ...current.otp.channels, ...(change.channels ?? {}) } },
   }));
-  const setPagePolicy = (role: Role, key: string, enabled: boolean) => setPolicy(current => ({
+  const setPageMethod = (role: Role, key: string, method: PageAuthMethod) => setPolicy(current => ({
     ...current,
-    passwordReauth: {
-      ...current.passwordReauth,
-      [role]: { ...current.passwordReauth[role], [key]: enabled },
+    pageMethods: {
+      ...current.pageMethods,
+      [role]: { ...current.pageMethods[role], [key]: method },
     },
   }));
 
@@ -92,7 +93,7 @@ export default function SuperAdminAuthSecurity() {
           <ShieldCheck size={26} color="var(--isp-accent)" />
           <div>
             <h1 style={{ color: "var(--isp-text)", fontSize: 24, margin: 0 }}>OTP and password security</h1>
-            <p style={{ color: "var(--isp-text-muted)", margin: "5px 0 0", fontSize: 14 }}>Control verification channels and require a current-password check for selected pages.</p>
+            <p style={{ color: "var(--isp-text-muted)", margin: "5px 0 0", fontSize: 14 }}>Choose the extra verification method for each protected page and administrator role.</p>
           </div>
         </header>
 
@@ -106,30 +107,26 @@ export default function SuperAdminAuthSecurity() {
             Enable OTP globally
           </label>
           <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-            {(["whatsapp", "sms"] as OtpChannel[]).map(channel => (
+            {(["whatsapp", "sms", "email"] as OtpChannel[]).map(channel => (
               <label key={channel} style={{ display: "flex", alignItems: "center", gap: 9, color: "var(--isp-text)", textTransform: "capitalize" }}>
                 <input type="checkbox" checked={policy.otp.channels[channel]} onChange={event => setOtp({ channels: { [channel]: event.target.checked } })} />
-                {channel}
+                {channel === "email" ? "Email (including Gmail)" : channel}
               </label>
             ))}
-            <label style={{ display: "flex", alignItems: "center", gap: 9, color: "var(--isp-text-muted)" }}>
-              <input type="checkbox" checked={false} disabled />
-              Email (not available yet)
-            </label>
           </div>
-          <p style={{ color: "var(--isp-text-muted)", fontSize: 13, marginBottom: 0 }}>OTP is off by default. Both the global switch and a channel switch must be enabled. For protected payment settings, enabling WhatsApp uses a verified payment OTP number; disabling WhatsApp switches accounts to a separate payment-settings password. Only a Super Admin can reset those payment-settings credentials. This does not affect ordinary support messages.</p>
+          <p style={{ color: "var(--isp-text-muted)", fontSize: 13, marginBottom: 0 }}>OTP is off by default. Both the global switch and a channel switch must be enabled. Email page verification requires saved SMTP settings with TLS or STARTTLS; this does not enable email sign-in or password recovery. For protected payment settings, enabling WhatsApp uses a verified payment OTP number; disabling WhatsApp switches accounts to a separate payment-settings password that only a Super Admin can reset. This does not affect ordinary support messages.</p>
         </section>
 
         <section style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 14, padding: 20 }}>
-          <h2 style={{ color: "var(--isp-text)", fontSize: 17, marginTop: 0 }}>Require password again by role and page</h2>
-          <p style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>When enabled, ISP admins and resellers must re-enter their current password before the selected page can load.</p>
+          <h2 style={{ color: "var(--isp-text)", fontSize: 17, marginTop: 0 }}>Page verification by role</h2>
+          <p style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>Choose one extra check for each page and role. The check lasts five minutes. “None” skips only this extra check; normal sign-in and permissions still apply.</p>
           <div style={{ overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 620, color: "var(--isp-text)" }}>
               <thead>
                 <tr>
                   <th style={{ textAlign: "left", padding: "10px 8px", borderBottom: "1px solid var(--isp-border)" }}>Page</th>
-                  <th style={{ padding: 8, borderBottom: "1px solid var(--isp-border)" }}>ISP admin</th>
-                  <th style={{ padding: 8, borderBottom: "1px solid var(--isp-border)" }}>Reseller</th>
+                  <th style={{ padding: 8, borderBottom: "1px solid var(--isp-border)" }}>ISP admin method</th>
+                  <th style={{ padding: 8, borderBottom: "1px solid var(--isp-border)" }}>Reseller method</th>
                 </tr>
               </thead>
               <tbody>
@@ -145,7 +142,18 @@ export default function SuperAdminAuthSecurity() {
                       </td>
                       {(["isp_admin", "reseller"] as Role[]).map(role => (
                         <td key={role} style={{ textAlign: "center", borderBottom: "1px solid var(--isp-border)" }}>
-                          <input aria-label={`${role === "isp_admin" ? "ISP admin" : "Reseller"}: ${page.label}`} type="checkbox" checked={policy.passwordReauth[role]?.[page.key] === true} onChange={event => setPagePolicy(role, page.key, event.target.checked)} />
+                          <select
+                            aria-label={`${role === "isp_admin" ? "ISP admin" : "Reseller"} verification for ${page.label}`}
+                            value={policy.pageMethods[role]?.[page.key] ?? "none"}
+                            onChange={event => setPageMethod(role, page.key, event.target.value as PageAuthMethod)}
+                            style={{ maxWidth: 150, padding: "7px 8px", border: "1px solid var(--isp-border)", borderRadius: 7, background: "var(--isp-bg)", color: "var(--isp-text)" }}
+                          >
+                            <option value="none">None</option>
+                            <option value="password">Password</option>
+                            <option value="whatsapp">WhatsApp OTP</option>
+                            <option value="sms">SMS OTP</option>
+                            <option value="email">Email OTP</option>
+                          </select>
                         </td>
                       ))}
                     </tr>

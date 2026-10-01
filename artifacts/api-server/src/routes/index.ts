@@ -41,7 +41,9 @@ import platformEmailRouter from "./platform-email-route.js";
 import routerMigrationsRouter from "./router-migrations-route.js";
 import routerUserSnapshotsRouter from "./router-user-snapshots-route.js";
 import platformAuthSecurityRouter from "./platform-auth-security-route.js";
+import platformPageAuthRouter from "./platform-page-auth-route.js";
 import superAdminAccountAccessRouter from "./super-admin-account-access-route.js";
+import superAdminAdminsRouter from "./super-admin-admins-route.js";
 
 const router: IRouter = Router();
 
@@ -87,6 +89,8 @@ router.use(dashboardPreferencesRouter);
   router.use(routerMigrationsRouter);
   router.use(routerUserSnapshotsRouter);
   router.use(platformAuthSecurityRouter);
+  router.use(platformPageAuthRouter);
   router.use(superAdminAccountAccessRouter);
+  router.use(superAdminAdminsRouter);
 
 export default router;

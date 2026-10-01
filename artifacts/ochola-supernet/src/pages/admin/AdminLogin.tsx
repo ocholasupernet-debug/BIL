@@ -502,6 +502,23 @@ export default function AdminLogin() {
                     Forgot password?
                   </button>
                 )}
+                {(whatsappLoginEnabled || smsLoginEnabled) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const channel = smsLoginEnabled && !whatsappLoginEnabled ? "sms" : "whatsapp";
+                      setOtpChannel(channel);
+                      setLoginMethod(channel);
+                      setOtpChallengeId("");
+                      setOtpCode("");
+                      setOtpNotice("");
+                      setError("");
+                    }}
+                    style={{ display: "block", marginTop: 10, marginLeft: "auto", padding: 0, border: 0, background: "none", color: "var(--isp-accent)", cursor: "pointer", fontSize: "0.82rem", fontWeight: 700 }}
+                  >
+                    No password yet? Set one up with a verification code
+                  </button>
+                )}
               </div>
             </div></>}
 

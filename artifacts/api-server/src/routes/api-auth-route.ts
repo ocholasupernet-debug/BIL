@@ -19,7 +19,7 @@ import { getTenantSubdomainFromRequest, RESERVED_SUBDOMAINS } from "../lib/tenan
 import { registerAccount } from "../controllers/auth-controller.js";
 import { logger } from "../lib/logger.js";
 import { recordWhatsAppSignInFailure, type WhatsAppLoginAccountType } from "../services/whatsapp/whatsapp-service.js";
-import { isPasswordReauthRequired, isSupportedPasswordReauthFeature, recordPlatformAuthAudit } from "../lib/platform-auth-security.js";
+import { getPageAuthMethod, isSupportedPasswordReauthFeature, recordPlatformAuthAudit } from "../lib/platform-auth-security.js";
 import {
   EmailRegistrationOtpRateLimitError,
   isEmailRegistrationChallengeId,
@@ -177,8 +177,8 @@ router.post("/auth/admin/reauth", async (req: Request, res: Response): Promise<v
   }
 
   try {
-    if (!await isPasswordReauthRequired(admin.role, feature)) {
-      res.status(400).json({ ok: false, error: "This page is not currently set to require a password re-check." });
+    if (await getPageAuthMethod(admin.role, feature) !== "password") {
+      res.status(400).json({ ok: false, error: "This page is not currently set to require password verification." });
       return;
     }
     const grantToken = generatePasswordReauthProof(payload.uid, admin.role, feature);

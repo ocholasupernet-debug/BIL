@@ -28,7 +28,7 @@ import { AdminInstallButton } from "@/components/pwa/AdminInstallButton";
 type PasswordReauthPolicyCache = {
   role: string;
   fetchedAt: number;
-  policies: Record<string, boolean>;
+  methods: Record<string, PageAuthMethod>;
 };
 
 const PASSWORD_REAUTH_POLICY_CACHE_TTL_MS = 60_000;
@@ -50,9 +50,9 @@ function readPasswordReauthPolicyCache(): PasswordReauthPolicyCache | null {
       !Number.isFinite(cached.fetchedAt) ||
       age < 0 ||
       age > PASSWORD_REAUTH_POLICY_CACHE_TTL_MS ||
-      !cached.policies ||
-      typeof cached.policies !== "object" ||
-      Array.isArray(cached.policies)
+      !cached.methods ||
+      typeof cached.methods !== "object" ||
+      Array.isArray(cached.methods)
     ) {
       sessionStorage.removeItem(key);
       return null;
@@ -77,18 +77,21 @@ async function loadPasswordReauthPolicyCache(): Promise<PasswordReauthPolicyCach
       ok?: boolean;
       error?: string;
       role?: string;
-      policies?: Record<string, unknown>;
+      methods?: Record<string, unknown>;
     };
-    if (!response.ok || !data.ok || data.role !== getAdminRole() || !data.policies || typeof data.policies !== "object" || Array.isArray(data.policies)) {
+    if (!response.ok || !data.ok || data.role !== getAdminRole() || !data.methods || typeof data.methods !== "object" || Array.isArray(data.methods)) {
       throw new Error(data.error || "Password security policy could not be checked.");
     }
 
-    const policies: Record<string, boolean> = {};
-    for (const [feature, required] of Object.entries(data.policies)) {
-      if (typeof required !== "boolean") throw new Error("Password security policy response was invalid.");
-      policies[feature] = required;
+    const methods: Record<string, PageAuthMethod> = {};
+    const allowedMethods: PageAuthMethod[] = ["none", "password", "whatsapp", "sms", "email"];
+    for (const [feature, method] of Object.entries(data.methods)) {
+      if (typeof method !== "string" || !allowedMethods.includes(method as PageAuthMethod)) {
+        throw new Error("Page verification policy response was invalid.");
+      }
+      methods[feature] = method as PageAuthMethod;
     }
-    const cache = { role: data.role, fetchedAt: Date.now(), policies };
+    const cache = { role: data.role, fetchedAt: Date.now(), methods };
     try { sessionStorage.setItem(key, JSON.stringify(cache)); } catch {}
     return cache;
   })();
@@ -453,6 +456,8 @@ function PlatformBillingBanner() {
   );
 }
 
+type PageAuthMethod = "none" | "password" | "whatsapp" | "sms" | "email";
+
 export function AdminLayout({
   children,
   hiddenNavHrefs = [],
@@ -467,7 +472,12 @@ export function AdminLayout({
   const [reauthStatus, setReauthStatus] = useState<"checking" | "not-required" | "required" | "verified" | "failed">("checking");
   const [reauthCheckedFeature, setReauthCheckedFeature] = useState<string | null>(null);
   const [reauthUntil, setReauthUntil] = useState(0);
+  const [reauthMethod, setReauthMethod] = useState<PageAuthMethod>("none");
   const [reauthPassword, setReauthPassword] = useState("");
+  const [reauthChallengeId, setReauthChallengeId] = useState("");
+  const [reauthCode, setReauthCode] = useState("");
+  const [reauthDestination, setReauthDestination] = useState("");
+  const [reauthResendSeconds, setReauthResendSeconds] = useState(0);
   const [reauthBusy, setReauthBusy] = useState(false);
   const [reauthError, setReauthError] = useState("");
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
@@ -479,6 +489,15 @@ export function AdminLayout({
   const [passwordNotice, setPasswordNotice] = useState("");
   const [endingAccess, setEndingAccess] = useState(false);
   const [reauthRetryKey, setReauthRetryKey] = useState(0);
+
+  useEffect(() => {
+    if (reauthResendSeconds <= 0) return;
+    const timer = window.setTimeout(
+      () => setReauthResendSeconds(seconds => Math.max(0, seconds - 1)),
+      1000,
+    );
+    return () => window.clearTimeout(timer);
+  }, [reauthResendSeconds]);
   const { toggle, isDark }            = useTheme();
   const brand                         = useBrand();
   const adminName                     = getAdminName();
@@ -486,7 +505,7 @@ export function AdminLayout({
   const queryClient                   = useQueryClient();
   const { isVisible }                 = useAdminPageVisibility();
   const currentFeatureKey             = getAdminFeatureKeyForPath(location);
-  const isOverviewFeature             = !currentFeatureKey || currentFeatureKey === "overview" || currentFeatureKey === "overview.dashboard";
+  const isOverviewFeature             = !currentFeatureKey || currentFeatureKey === "overview";
   const requiresReauthGate            = !isOverviewFeature && !isImpersonating();
   const reauthCheckPending             = requiresReauthGate && (reauthCheckedFeature !== currentFeatureKey || reauthStatus === "checking");
   const pageIsVisible                 = !currentFeatureKey || isVisible(currentFeatureKey);
@@ -549,13 +568,76 @@ export function AdminLayout({
         throw new Error(data.error || "The password check could not be completed.");
       }
       localStorage.setItem("ochola_api_token", data.token);
-      sessionStorage.setItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentFeatureKey}`, String(data.expiresAt));
+      sessionStorage.setItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentFeatureKey}_password`, String(data.expiresAt));
       window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: ADMIN_ID } }));
       setReauthUntil(data.expiresAt);
       setReauthPassword("");
       setReauthStatus("verified");
     } catch (cause) {
       setReauthError(cause instanceof Error ? cause.message : "The password check could not be completed.");
+    } finally {
+      setReauthBusy(false);
+    }
+  };
+
+  const handlePageOtpRequest = async () => {
+    setReauthBusy(true);
+    setReauthError("");
+    setReauthChallengeId("");
+    setReauthCode("");
+    setReauthDestination("");
+    setReauthResendSeconds(0);
+    try {
+      const response = await fetch("/api/auth/admin/page-otp/request", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAdminApiToken()}` },
+        body: JSON.stringify({ feature: currentFeatureKey, method: reauthMethod }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok || typeof data.challengeId !== "string") {
+        throw new Error(data.error || "The verification code could not be sent.");
+      }
+      setReauthChallengeId(data.challengeId);
+      setReauthDestination(typeof data.destination === "string" ? data.destination : "");
+      const resendAfter = Number(data.resendAfterSeconds);
+      setReauthResendSeconds(Number.isFinite(resendAfter) && resendAfter > 0 ? Math.ceil(resendAfter) + 1 : 60);
+    } catch (cause) {
+      setReauthError(cause instanceof Error ? cause.message : "The verification code could not be sent.");
+    } finally {
+      setReauthBusy(false);
+    }
+  };
+
+  const handlePageOtpVerify = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setReauthBusy(true);
+    setReauthError("");
+    try {
+      const response = await fetch("/api/auth/admin/page-otp/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAdminApiToken()}` },
+        body: JSON.stringify({
+          feature: currentFeatureKey,
+          method: reauthMethod,
+          challengeId: reauthChallengeId,
+          code: reauthCode,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.token || !Number.isFinite(data.expiresAt)) {
+        throw new Error(data.error || "The verification code could not be confirmed.");
+      }
+      localStorage.setItem("ochola_api_token", data.token);
+      sessionStorage.setItem(
+        `ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentFeatureKey}_${reauthMethod}`,
+        String(data.expiresAt),
+      );
+      window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: ADMIN_ID } }));
+      setReauthUntil(data.expiresAt);
+      setReauthCode("");
+      setReauthStatus("verified");
+    } catch (cause) {
+      setReauthError(cause instanceof Error ? cause.message : "The verification code could not be confirmed.");
     } finally {
       setReauthBusy(false);
     }
@@ -655,23 +737,28 @@ export function AdminLayout({
     let cancelled = false;
     const feature = currentFeatureKey;
     setReauthError("");
-    const overviewFeature = !feature || feature === "overview" || feature === "overview.dashboard";
-    if (overviewFeature || isImpersonating()) {
+    if (!feature || feature === "overview" || isImpersonating()) {
       setReauthUntil(0);
+      setReauthMethod("none");
       setReauthStatus("not-required");
       setReauthCheckedFeature(feature ?? null);
-      if (feature === "overview.dashboard" && !isImpersonating()) {
-        void loadPasswordReauthPolicyCache().catch(() => {});
-      }
       return;
     }
+    setReauthCheckedFeature(null);
+    setReauthStatus("checking");
 
-    const applyPolicyDecision = (required: boolean) => {
-      if (!required) {
+    const applyMethodDecision = (method: PageAuthMethod) => {
+      setReauthMethod(method);
+      setReauthChallengeId("");
+      setReauthCode("");
+      setReauthDestination("");
+      setReauthResendSeconds(0);
+      if (method === "none") {
         setReauthUntil(0);
         setReauthStatus("not-required");
+        setReauthCheckedFeature(feature);
       } else {
-        const cacheKey = `ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${feature}`;
+        const cacheKey = `ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${feature}_${method}`;
         let storedExpiry = 0;
         try { storedExpiry = Number(sessionStorage.getItem(cacheKey) || 0); } catch {}
         if (Number.isFinite(storedExpiry) && storedExpiry > Date.now()) {
@@ -681,23 +768,23 @@ export function AdminLayout({
           setReauthUntil(0);
           setReauthStatus("required");
         }
+        setReauthCheckedFeature(feature);
       }
-      setReauthCheckedFeature(feature);
     };
 
     const cachedPolicy = readPasswordReauthPolicyCache();
-    if (cachedPolicy && Object.prototype.hasOwnProperty.call(cachedPolicy.policies, feature)) {
-      applyPolicyDecision(cachedPolicy.policies[feature] === true);
+    if (cachedPolicy && Object.prototype.hasOwnProperty.call(cachedPolicy.methods, feature)) {
+      applyMethodDecision(cachedPolicy.methods[feature]);
       return;
     }
 
-    setReauthCheckedFeature(null);
-    setReauthStatus("checking");
     const check = async () => {
       try {
         const policyCache = await loadPasswordReauthPolicyCache();
         if (cancelled) return;
-        applyPolicyDecision(policyCache.policies[feature] === true);
+        const method = policyCache.methods[feature];
+        if (!method) throw new Error("Page verification policy response was incomplete.");
+        applyMethodDecision(method);
       } catch (cause) {
         if (cancelled) return;
         setReauthError(cause instanceof Error ? cause.message : "Password security policy could not be checked.");
@@ -713,13 +800,13 @@ export function AdminLayout({
     if (reauthStatus !== "verified" || !reauthUntil) return;
     const timer = window.setInterval(() => {
       if (Date.now() >= reauthUntil) {
-        sessionStorage.removeItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentFeatureKey}`);
+        sessionStorage.removeItem(`ochola_reauth_${ADMIN_ID}_${getAdminRole()}_${currentFeatureKey}_${reauthMethod}`);
         setReauthStatus("required");
         setReauthUntil(0);
       }
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [currentFeatureKey, reauthStatus, reauthUntil]);
+  }, [currentFeatureKey, reauthMethod, reauthStatus, reauthUntil]);
 
   const toggleExpand = (name: string) =>
     setExpanded(p => p.includes(name) ? p.filter(n => n !== name) : [...p, name]);
@@ -938,32 +1025,76 @@ export function AdminLayout({
           <PlatformBillingBanner />
           {requiresReauthGate && !reauthCheckPending && reauthStatus !== "verified" && reauthStatus !== "not-required" ? (
             <div role="dialog" aria-modal="true" aria-labelledby="reauth-title" style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(5,10,20,0.78)", display: "grid", placeItems: "center", padding: 20 }}>
-              <form onSubmit={handlePasswordRecheck} style={{ width: "min(100%, 420px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 13, marginBottom: 18 }}>
-                  <div aria-hidden="true" style={{ width: 38, height: 38, flex: "0 0 38px", display: "grid", placeItems: "center", borderRadius: 11, background: "color-mix(in srgb, var(--isp-accent) 14%, transparent)", color: "var(--isp-accent)" }}>
-                    <KeyRound size={18} />
-                  </div>
-                  <div>
-                    <h2 id="reauth-title" style={{ margin: "1px 0 6px", fontSize: 19, lineHeight: 1.3 }}>{reauthStatus === "failed" ? "Security verification unavailable" : "Verify your identity"}</h2>
-                    <p style={{ color: "var(--isp-text-muted)", fontSize: 14, lineHeight: 1.5, margin: 0 }}>
-                      {reauthStatus === "failed"
-                        ? "This page is protected, but its security policy could not be confirmed."
-                        : "Enter your current password to continue. Verification remains active for five minutes."}
-                    </p>
-                  </div>
-                </div>
-                {reauthStatus === "failed" ? (
+              <form onSubmit={reauthMethod === "password" ? handlePasswordRecheck : handlePageOtpVerify} style={{ width: "min(100%, 420px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
+                <h2 id="reauth-title" style={{ margin: "0 0 8px", fontSize: 19 }}>
+                  {reauthStatus === "checking"
+                    ? "Checking page security…"
+                    : reauthStatus === "failed"
+                      ? "Unable to check security policy"
+                      : reauthMethod === "password"
+                        ? "Confirm your password"
+                        : `Verify with ${reauthMethod === "email" ? "email" : reauthMethod === "whatsapp" ? "WhatsApp" : "SMS"}`}
+                </h2>
+                {reauthStatus === "checking" ? (
+                  <p style={{ color: "var(--isp-text-muted)" }}>Checking the verification method assigned to this page…</p>
+                ) : reauthStatus === "failed" ? (
                   <>
                     <p role="alert" style={{ color: "#dc2626", fontSize: 13, margin: "0 0 16px" }}>{reauthError}</p>
                     <button type="button" onClick={() => { setReauthCheckedFeature(null); setReauthStatus("checking"); setReauthRetryKey(value => value + 1); }} style={{ border: 0, borderRadius: 9, padding: "10px 15px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer" }}>Try again</button>
                   </>
                 ) : (
                   <>
-                    <label htmlFor="page-reauth-password" style={{ display: "block", fontWeight: 600, fontSize: 13, margin: "0 0 7px" }}>Current password</label>
-                    <input id="page-reauth-password" type="password" autoComplete="current-password" value={reauthPassword} onChange={event => setReauthPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 9, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
-                    {reauthError && <p role="alert" style={{ color: "#dc2626", fontSize: 13, margin: "8px 0 0" }}>{reauthError}</p>}
-                    <button type="submit" disabled={reauthBusy || !reauthPassword} style={{ marginTop: 15, border: 0, borderRadius: 9, padding: "10px 15px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer", opacity: reauthBusy || !reauthPassword ? 0.6 : 1 }}>
-                      {reauthBusy ? "Checking…" : "Continue to page"}
+                    <p style={{ color: "var(--isp-text-muted)", fontSize: 14 }}>
+                      The Super Admin requires this check before the page can load. Verification lasts five minutes.
+                    </p>
+                    {reauthMethod === "password" ? (
+                      <>
+                        <label htmlFor="page-reauth-password" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>Current password</label>
+                        <input id="page-reauth-password" type="password" autoComplete="current-password" value={reauthPassword} onChange={event => setReauthPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+                      </>
+                    ) : reauthChallengeId ? (
+                      <>
+                        <p style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>
+                          Code sent to {reauthDestination || "the contact saved on your account"}. Enter it within five minutes.
+                        </p>
+                        <label htmlFor="page-reauth-code" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>Six-digit code</label>
+                        <input
+                          id="page-reauth-code"
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          pattern="[0-9]{6}"
+                          maxLength={6}
+                          value={reauthCode}
+                          onChange={event => setReauthCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                          style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)", letterSpacing: 4 }}
+                          required
+                        />
+                      </>
+                    ) : (
+                      <p style={{ color: "var(--isp-text-muted)", fontSize: 14 }}>
+                        We’ll send a one-time code to the {reauthMethod === "email" ? "email" : "phone number"} saved on your account.
+                      </p>
+                    )}
+                    {reauthError && <p role="alert" style={{ color: "#dc2626", fontSize: 13 }}>{reauthError}</p>}
+                    {reauthMethod !== "password" && reauthChallengeId && (
+                      <button type="button" onClick={() => void handlePageOtpRequest()} disabled={reauthBusy || reauthResendSeconds > 0} style={{ marginTop: 12, border: 0, background: "none", color: "var(--isp-accent)", cursor: reauthBusy || reauthResendSeconds > 0 ? "default" : "pointer", fontSize: 13, fontWeight: 600 }}>
+                        {reauthResendSeconds > 0 ? `Send a new code in ${reauthResendSeconds}s` : "Send a new code"}
+                      </button>
+                    )}
+                    <button
+                      type={reauthMethod !== "password" && !reauthChallengeId ? "button" : "submit"}
+                      onClick={reauthMethod !== "password" && !reauthChallengeId ? () => void handlePageOtpRequest() : undefined}
+                      disabled={reauthBusy || (reauthMethod === "password" && !reauthPassword) || (reauthMethod !== "password" && !!reauthChallengeId && reauthCode.length !== 6)}
+                      style={{ marginTop: 14, border: 0, borderRadius: 8, padding: "10px 15px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer", opacity: reauthBusy ? 0.6 : 1 }}
+                    >
+                      {reauthBusy
+                        ? reauthChallengeId ? "Verifying…" : "Sending…"
+                        : reauthMethod === "password"
+                          ? "Continue to page"
+                          : reauthChallengeId
+                            ? "Verify code"
+                            : "Send verification code"}
                     </button>
                   </>
                 )}

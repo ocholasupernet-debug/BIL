@@ -4,7 +4,8 @@ import { sbRpc, sbSelect, sbUpdateStrict } from "../lib/supabase-client.js";
 import { logger } from "../lib/logger.js";
 import { checkRegistrationContactCapacity } from "../lib/registration-contact-capacity.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
-import { generateAdminSessionToken, generatePasswordSetupToken, generateToken } from "../lib/api-auth.js";
+import { generateAdminSessionToken, generateToken } from "../lib/api-auth.js";
+import { getOtpPasswordSetupToken } from "../lib/admin-password-setup.js";
 import { activeSuperAdminName } from "./super-admin-auth-route.js";
 import {
   getTenantSubdomainFromRequest,
@@ -328,11 +329,14 @@ router.post("/auth/sms/verify-otp", async (req, res) => {
     phone_verified_at: new Date().toISOString(),
   });
   const verified = { ...found, phone_verified: true };
-  if (c.account_type === "admin" && found.must_change_password === true)
+  const setupToken = c.account_type === "admin"
+    ? await getOtpPasswordSetupToken(found)
+    : null;
+  if (setupToken)
     return void res.set("Cache-Control", "no-store").json({
       ok: true,
       requiresPasswordSetup: true,
-      setupToken: generatePasswordSetupToken(String(c.account_id), Number(found.auth_version ?? 1)),
+      setupToken,
       admin: pub(verified),
     });
   return void res.set("Cache-Control", "no-store").json({

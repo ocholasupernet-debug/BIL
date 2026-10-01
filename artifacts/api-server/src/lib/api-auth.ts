@@ -4,9 +4,10 @@ import { sbSelect, sbSelectStrict } from "./supabase-client.js";
 import { getTenantSubdomainFromRequest } from "./tenant-host.js";
 import {
   getAdminApiReauthFeature,
-  isPasswordReauthRequired,
+  getPageAuthMethod,
   recordPlatformAuthAudit,
   type AdminPolicyRole,
+  type PageAuthMethod,
 } from "./platform-auth-security.js";
 import { getActiveSuperAdminAccessActor } from "./platform-auth-store.js";
 
@@ -44,6 +45,7 @@ export interface PasswordReauthProof {
   uid: string;
   role: AdminPolicyRole;
   feature: string;
+  method: Exclude<PageAuthMethod, "none">;
   expiresAt: number;
   nonce: string;
 }
@@ -193,17 +195,58 @@ export function generatePasswordReauthProof(
   role: AdminPolicyRole,
   feature: string,
 ): { proof: string; expiresAt: number } {
+  return generatePageAuthProof(uid, role, feature, "password");
+}
+
+export function generatePageAuthProof(
+  uid: string,
+  role: AdminPolicyRole,
+  feature: string,
+  method: Exclude<PageAuthMethod, "none">,
+): { proof: string; expiresAt: number } {
   if (!TOKEN_SIGNING_SECRET) throw new Error("Server token signing is not configured.");
   const payload: PasswordReauthProof = {
     uid,
     role,
     feature,
+    method,
     expiresAt: Date.now() + 5 * 60 * 1000,
     nonce: randomBytes(18).toString("base64url"),
   };
   const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const signature = createHmac("sha256", TOKEN_SIGNING_SECRET).update(encoded).digest("base64url");
   return { proof: `${encoded}.${signature}`, expiresAt: payload.expiresAt };
+}
+
+export function hashPageOtpSession(token: string): string {
+  if (!TOKEN_SIGNING_SECRET) throw new Error("Server token signing is not configured.");
+  return createHmac("sha256", TOKEN_SIGNING_SECRET)
+    .update(`page-auth-session\u0000${token}`)
+    .digest("hex");
+}
+
+export function hashPageOtpCode(input: {
+  challengeId: string;
+  code: string;
+  token: string;
+  uid: string;
+  role: AdminPolicyRole;
+  feature: string;
+  method: Exclude<PageAuthMethod, "none" | "password">;
+}): string {
+  if (!TOKEN_SIGNING_SECRET) throw new Error("Server token signing is not configured.");
+  return createHmac("sha256", TOKEN_SIGNING_SECRET)
+    .update([
+      "page-auth-code",
+      input.challengeId,
+      input.uid,
+      input.role,
+      input.feature,
+      input.method,
+      hashPageOtpSession(input.token),
+      input.code,
+    ].join("\u0000"))
+    .digest("hex");
 }
 
 export function validatePasswordReauthProof(token: string): PasswordReauthProof | null {
@@ -224,6 +267,7 @@ export function validatePasswordReauthProof(token: string): PasswordReauthProof 
       typeof parsed.uid !== "string" ||
       (parsed.role !== "isp_admin" && parsed.role !== "reseller") ||
       typeof parsed.feature !== "string" ||
+      !["password", "whatsapp", "sms", "email"].includes(parsed.method) ||
       !Number.isFinite(parsed.expiresAt) ||
       parsed.expiresAt <= Date.now() ||
       parsed.expiresAt > Date.now() + 5 * 60 * 1000 + 30_000 ||
@@ -577,20 +621,25 @@ export function requireAdmin() {
           res.status(403).json({ ok: false, error: "This account cannot use administrator pages." });
           return;
         }
-        if (await isPasswordReauthRequired(role as AdminPolicyRole, feature)) {
+        const requiredMethod = await getPageAuthMethod(role as AdminPolicyRole, feature);
+        if (requiredMethod !== "none") {
           const validProof = (payload.reauthGrants ?? []).some(proof =>
             proof.uid === payload.uid &&
             proof.role === role &&
             proof.feature === feature &&
+            proof.method === requiredMethod &&
             Number.isFinite(proof.expiresAt) &&
             proof.expiresAt > Date.now(),
           );
           if (!validProof) {
             res.status(428).json({
               ok: false,
-              code: "PASSWORD_REAUTH_REQUIRED",
+              code: "PAGE_AUTH_REQUIRED",
               feature,
-              error: "Re-enter your current password to continue.",
+              method: requiredMethod,
+              error: requiredMethod === "password"
+                ? "Re-enter your current password to continue."
+                : "Complete the configured verification to continue.",
             });
             return;
           }

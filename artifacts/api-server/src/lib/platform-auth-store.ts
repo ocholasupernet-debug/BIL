@@ -73,6 +73,73 @@ export function selectPlatformAuthPolicy(): Promise<PlatformAuthPolicyRow[]> {
   );
 }
 
+export async function issuePlatformPageOtpChallenge(input: {
+  id: string;
+  adminId: number;
+  role: "isp_admin" | "reseller";
+  feature: string;
+  method: "whatsapp" | "sms" | "email";
+  sessionHash: string;
+  codeHash: string;
+  requestIp: string | null;
+}): Promise<string> {
+  const rows = await queryRows<{ outcome: string }>(
+    `SELECT public.issue_platform_page_auth_otp(
+       $1::uuid, $2::bigint, $3::text, $4::text, $5::text,
+       $6::text, $7::text, $8::inet
+     ) AS outcome`,
+    [
+      input.id,
+      input.adminId,
+      input.role,
+      input.feature,
+      input.method,
+      input.sessionHash,
+      input.codeHash,
+      input.requestIp,
+    ],
+  );
+  return rows[0]?.outcome ?? "unavailable";
+}
+
+export async function consumePlatformPageOtpChallenge(input: {
+  id: string;
+  adminId: number;
+  role: "isp_admin" | "reseller";
+  feature: string;
+  method: "whatsapp" | "sms" | "email";
+  sessionHash: string;
+  codeHash: string;
+}): Promise<string> {
+  const rows = await queryRows<{ outcome: string }>(
+    `SELECT public.consume_platform_page_auth_otp(
+       $1::uuid, $2::bigint, $3::text, $4::text, $5::text,
+       $6::text, $7::text
+     ) AS outcome`,
+    [
+      input.id,
+      input.adminId,
+      input.role,
+      input.feature,
+      input.method,
+      input.sessionHash,
+      input.codeHash,
+    ],
+  );
+  return rows[0]?.outcome ?? "invalid";
+}
+
+export async function invalidatePlatformPageOtpChallenge(input: {
+  id: string;
+  adminId: number;
+  sessionHash: string;
+}): Promise<void> {
+  await queryRows(
+    `SELECT public.invalidate_platform_page_auth_otp($1::uuid, $2::bigint, $3::text)`,
+    [input.id, input.adminId, input.sessionHash],
+  );
+}
+
 export async function upsertPlatformAuthPolicy(input: {
   otpAllEnabled: boolean;
   otpWhatsappEnabled: boolean;
