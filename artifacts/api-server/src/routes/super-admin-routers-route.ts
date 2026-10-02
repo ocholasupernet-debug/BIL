@@ -84,6 +84,7 @@ function secret(value: unknown, label: string, required = false): string | null 
   }
   if (typeof value !== "string") throw new Error(`${label} must be text.`);
   if (required && !value) throw new Error(`${label} is required.`);
+  if (value.length > 0 && value.length < 6) throw new Error(`${label} must contain at least 6 characters.`);
   if (value.length > MAX_SECRET_LENGTH) throw new Error(`${label} is too long.`);
   return value;
 }

@@ -1309,6 +1309,14 @@ router.put("/load-balancing/openvpn-profile", requireAdmin(), async (req, res): 
     const username = String(body.username ?? current?.username ?? "").trim().slice(0, 128);
     const suppliedPassword = String(body.password ?? "");
     const suppliedKeyPassphrase = String(body.keyPassphrase ?? "");
+    if (suppliedPassword.length > 0 && suppliedPassword.length < 6) {
+      res.status(400).json({ ok: false, error: "A new OpenVPN password must have at least 6 characters." });
+      return;
+    }
+    if (suppliedKeyPassphrase.length > 0 && suppliedKeyPassphrase.length < 6) {
+      res.status(400).json({ ok: false, error: "A new private-key passphrase must have at least 6 characters." });
+      return;
+    }
     const password = suppliedPassword.length ? suppliedPassword : current?.password || "";
     const keyPassphrase = suppliedKeyPassphrase.length ? suppliedKeyPassphrase : current?.keyPassphrase || "";
     if (!username || !password) {

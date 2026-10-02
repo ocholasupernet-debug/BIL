@@ -29,7 +29,7 @@ import {
 
 const router: IRouter = Router();
 const INITIAL_ADMIN_USERNAME = "admin";
-const INITIAL_ADMIN_PASSWORD = "admin";
+const INITIAL_ADMIN_PASSWORD = "admin123";
 type RegistrationRole = "isp_admin" | "reseller";
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 

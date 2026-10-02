@@ -828,6 +828,15 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
     type, ipAddress, ip_address, username, pppoe_username, mac_address, status, expiryDate, expires_at,
     password, fup_limit_mb,
   } = req.body;
+  if (
+    password !== undefined
+    && password !== null
+    && password !== ""
+    && (typeof password !== "string" || password.length < 6)
+  ) {
+    res.status(400).json({ error: "A customer password must have at least 6 characters." });
+    return;
+  }
   const effectiveAdminId = authenticatedAdminId(req, adminId || ispId);
   if (!Number.isSafeInteger(effectiveAdminId) || effectiveAdminId < 1) {
     res.status(400).json({ error: "A valid ISP account is required" });

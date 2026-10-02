@@ -3152,7 +3152,10 @@ router.post("/router/:id/ppp/secrets", async (req, res): Promise<void> => {
   const { name, password, profile, service, comment } = req.body as {
     name: string; password: string; profile?: string; service?: string; comment?: string;
   };
-  if (!name || !password) { res.status(400).json({ error: "name and password are required" }); return; }
+  if (typeof name !== "string" || !name.trim() || typeof password !== "string" || password.length < 6) {
+    res.status(400).json({ error: "Provide a username and a password with at least 6 characters." });
+    return;
+  }
   const found = await getRouterCreds(id);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {
@@ -3169,6 +3172,10 @@ router.patch("/router/:id/ppp/secrets/:secretId", async (req, res): Promise<void
   const { password, profile, disabled, comment } = req.body as {
     password?: string; profile?: string; disabled?: boolean; comment?: string;
   };
+  if (password !== undefined && (typeof password !== "string" || password.length < 6)) {
+    res.status(400).json({ error: "A new PPP password must have at least 6 characters." });
+    return;
+  }
   const found = await getRouterCreds(id);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {

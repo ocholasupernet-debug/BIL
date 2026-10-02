@@ -437,6 +437,16 @@ router.post("/routers", async (req, res): Promise<void> => {
 router.patch("/routers/:id", async (req, res): Promise<void> => {
   const id = req.params.id;
   const { name, host, ipAddress, model, rosVersion, status, router_username, apiUsername, router_secret, apiPassword, bridge_ip, proxy_ip } = req.body;
+  const requestedRouterSecret = router_secret !== undefined ? router_secret : apiPassword;
+  if (
+    requestedRouterSecret !== undefined
+    && requestedRouterSecret !== null
+    && requestedRouterSecret !== ""
+    && (typeof requestedRouterSecret !== "string" || requestedRouterSecret.length < 6)
+  ) {
+    res.status(400).json({ error: "A router password must have at least 6 characters." });
+    return;
+  }
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (name           !== undefined) updates.name            = name;
   if (host           !== undefined) updates.host            = host;

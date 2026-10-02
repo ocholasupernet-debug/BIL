@@ -130,6 +130,7 @@ function FormInput({
   type = "text",
   required = false,
   help,
+  minLength,
 }: {
   label: string;
   value: string;
@@ -138,6 +139,7 @@ function FormInput({
   type?: string;
   required?: boolean;
   help?: string;
+  minLength?: number;
 }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -150,6 +152,7 @@ function FormInput({
         onChange={event => onChange(event.target.value)}
         placeholder={placeholder}
         required={required}
+        minLength={minLength}
         autoComplete={type === "password" ? "new-password" : undefined}
         style={{
           width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 8,
@@ -338,7 +341,8 @@ export default function SuperAdminRouters() {
                 placeholder={editingId === null ? "Required" : "Leave blank to keep current"}
                 type="password"
                 required={editingId === null}
-                help="Never shown again after saving."
+                minLength={6}
+                help="At least 6 characters. Never shown again after saving."
               />
               <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <span style={{ color: C.sub, fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Status</span>

@@ -208,6 +208,7 @@ export default function CreateVpn() {
                     <Key size={14} className="text-gray-400" />
                     <input
                       type={showPass ? "text" : "password"}
+                      minLength={6}
                       value={password}
                       onChange={e => setPassword(e.target.value)}
                       className="flex-1 text-sm font-mono outline-none"
@@ -315,7 +316,7 @@ export default function CreateVpn() {
               Back
             </button>
             {step < 2
-              ? <button onClick={nextStep} disabled={!username || !password}
+              ? <button onClick={nextStep} disabled={!username || password.trim().length < 6}
                   className="flex items-center gap-2 px-5 py-2 text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-40 disabled:pointer-events-none transition-colors">
                   Review <ChevronRight size={14} />
                 </button>

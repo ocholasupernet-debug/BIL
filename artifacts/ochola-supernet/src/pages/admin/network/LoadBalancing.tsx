@@ -786,11 +786,11 @@ export default function LoadBalancing() {
                             </div>
                             <div className="lw-field">
                               <label style={fieldLabel}>OpenVPN password</label>
-                              <input className="lw-input" type="password" value={openVpnPassword} onChange={event => setOpenVpnPassword(event.target.value)} placeholder={openVpnProfileInfo?.configured ? "Leave blank to keep current password" : "Write-only secret"} autoComplete="new-password" />
+                              <input className="lw-input" type="password" minLength={6} value={openVpnPassword} onChange={event => setOpenVpnPassword(event.target.value)} placeholder={openVpnProfileInfo?.configured ? "Leave blank to keep current password" : "At least 6 characters"} autoComplete="new-password" />
                             </div>
                             <div className="lw-field">
                               <label style={fieldLabel}>Private-key passphrase</label>
-                              <input className="lw-input" type="password" value={openVpnKeyPassphrase} onChange={event => setOpenVpnKeyPassphrase(event.target.value)} placeholder={openVpnProfileInfo?.configured ? "Leave blank to keep current passphrase" : "Optional"} autoComplete="new-password" />
+                              <input className="lw-input" type="password" minLength={6} value={openVpnKeyPassphrase} onChange={event => setOpenVpnKeyPassphrase(event.target.value)} placeholder={openVpnProfileInfo?.configured ? "Leave blank to keep current passphrase" : "Optional; at least 6 characters"} autoComplete="new-password" />
                             </div>
                           </div>
                           <div className="lw-field">

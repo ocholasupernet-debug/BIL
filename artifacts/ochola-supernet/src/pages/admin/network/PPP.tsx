@@ -240,7 +240,7 @@ function AddSecretModal({
   const [err, setErr]         = useState("");
 
   async function handleSave() {
-    if (!name.trim() || !password.trim()) { setErr("Username and password are required."); return; }
+    if (!name.trim() || password.length < 6) { setErr("Enter a username and a password with at least 6 characters."); return; }
     setSaving(true); setErr("");
     try {
       await apiPost(`/api/router/${routerId}/ppp/secrets`, { name: name.trim(), password, profile, service, comment });
@@ -267,7 +267,7 @@ function AddSecretModal({
         </div>
 
         <div style={row}><label style={lbl}>Username *</label><input value={name} onChange={e => setName(e.target.value)} style={inp} placeholder="e.g. john_doe" /></div>
-        <div style={row}><label style={lbl}>Password *</label><PwInput value={password} onChange={setPassword} placeholder="Strong password" /></div>
+        <div style={row}><label style={lbl}>Password *</label><PwInput value={password} onChange={setPassword} placeholder="At least 6 characters" /></div>
         <div style={row}>
           <label style={lbl}>Service</label>
           <select value={service} onChange={e => setService(e.target.value)} style={sel}>
@@ -300,16 +300,22 @@ function AddSecretModal({
 function EditSecretModal({
   secret, routerId, profiles, onClose, onSaved,
 }: { secret: PPPSecret; routerId: number; profiles: PPPProfile[]; onClose: () => void; onSaved: () => void }) {
-  const [password, setPassword] = useState(secret.password);
+  const [password, setPassword] = useState("");
   const [profile,  setProfile]  = useState(secret.profile);
   const [comment,  setComment]  = useState(secret.comment);
   const [saving,   setSaving]   = useState(false);
   const [err,      setErr]      = useState("");
 
   async function handleSave() {
+    if (password.length > 0 && password.length < 6) {
+      setErr("A new password must have at least 6 characters.");
+      return;
+    }
     setSaving(true); setErr("");
     try {
-      await apiPatch(`/api/router/${routerId}/ppp/secrets/${secret.id}`, { password, profile, comment });
+      const updates: { password?: string; profile: string; comment: string } = { profile, comment };
+      if (password) updates.password = password;
+      await apiPatch(`/api/router/${routerId}/ppp/secrets/${secret.id}`, updates);
       onSaved(); onClose();
     } catch (e: unknown) { setErr(e instanceof Error ? e.message : "Failed to update"); }
     finally { setSaving(false); }
@@ -330,7 +336,7 @@ function EditSecretModal({
           <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--isp-text-muted)", cursor: "pointer", padding: 4 }}><X size={16} /></button>
         </div>
 
-        <div style={{ marginBottom: 14 }}><label style={lbl}>New Password</label><PwInput value={password} onChange={setPassword} /></div>
+        <div style={{ marginBottom: 14 }}><label style={lbl}>New Password</label><PwInput value={password} onChange={setPassword} placeholder="Leave blank to keep current; at least 6 characters to replace" /></div>
         <div style={{ marginBottom: 14 }}>
           <label style={lbl}>Profile</label>
           <select value={profile} onChange={e => setProfile(e.target.value)} style={sel}>

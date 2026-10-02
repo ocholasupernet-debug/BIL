@@ -263,12 +263,12 @@ export default function SuperAdminAdmins() {
             </Field>
             <Field label="Subdomain (slug)"><input style={inp} value={form.subdomain} onChange={e => set("subdomain", e.target.value)} placeholder="fastnet" /></Field>
             <div style={{ gridColumn: "1 / -1" }}>
-              <Field label="Password"><input style={inp} type="password" value={form.password} onChange={e => set("password", e.target.value)} placeholder="Temporary password" /></Field>
+              <Field label="Password"><input style={inp} type="password" minLength={6} maxLength={200} value={form.password} onChange={e => set("password", e.target.value)} placeholder="At least 6 characters" /></Field>
             </div>
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 }}>
             <button onClick={() => setShowAdd(false)} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "9px 18px", color: C.sub, cursor: "pointer", fontWeight: 600, fontSize: "0.82rem" }}>Cancel</button>
-            <button onClick={() => createAdmin.mutate(form)} disabled={createAdmin.isPending || !form.name || !form.username} style={{ background: C.accent, border: "none", borderRadius: 8, padding: "9px 20px", color: "white", cursor: "pointer", fontWeight: 700, fontSize: "0.82rem", display: "flex", alignItems: "center", gap: 6, opacity: (!form.name || !form.username) ? 0.5 : 1 }}>
+            <button onClick={() => createAdmin.mutate(form)} disabled={createAdmin.isPending || !form.name || !form.username || (form.password.length > 0 && form.password.length < 6)} style={{ background: C.accent, border: "none", borderRadius: 8, padding: "9px 20px", color: "white", cursor: "pointer", fontWeight: 700, fontSize: "0.82rem", display: "flex", alignItems: "center", gap: 6, opacity: (!form.name || !form.username || (form.password.length > 0 && form.password.length < 6)) ? 0.5 : 1 }}>
               {createAdmin.isPending ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Save size={14} />} Create Admin
             </button>
           </div>
@@ -292,12 +292,12 @@ export default function SuperAdminAdmins() {
             </Field>
             <Field label="Subdomain"><input style={inp} value={form.subdomain} onChange={e => set("subdomain", e.target.value)} /></Field>
             <div style={{ gridColumn: "1 / -1" }}>
-              <Field label="New Password (leave blank to keep)"><input style={inp} type="password" value={form.password} onChange={e => set("password", e.target.value)} placeholder="Leave blank to keep current" /></Field>
+              <Field label="New Password (leave blank to keep)"><input style={inp} type="password" minLength={6} maxLength={200} value={form.password} onChange={e => set("password", e.target.value)} placeholder="At least 6 characters" /></Field>
             </div>
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 }}>
             <button onClick={() => setEditing(null)} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: "9px 18px", color: C.sub, cursor: "pointer", fontWeight: 600, fontSize: "0.82rem" }}>Cancel</button>
-            <button onClick={() => updateAdmin.mutate({ id: editing.id, f: form })} disabled={updateAdmin.isPending} style={{ background: C.accent, border: "none", borderRadius: 8, padding: "9px 20px", color: "white", cursor: "pointer", fontWeight: 700, fontSize: "0.82rem", display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={() => updateAdmin.mutate({ id: editing.id, f: form })} disabled={updateAdmin.isPending || (form.password.length > 0 && form.password.length < 6)} style={{ background: C.accent, border: "none", borderRadius: 8, padding: "9px 20px", color: "white", cursor: "pointer", fontWeight: 700, fontSize: "0.82rem", display: "flex", alignItems: "center", gap: 6 }}>
               {updateAdmin.isPending ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Save size={14} />} Save Changes
             </button>
           </div>

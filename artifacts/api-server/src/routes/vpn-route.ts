@@ -626,7 +626,15 @@ router.get("/vpn/users", async (req: Request, res: Response): Promise<void> => {
 router.post("/vpn/users", async (req: Request, res: Response): Promise<void> => {
   const adminId = req.authUser?.uid ?? "";
   const { username, password, notes, expiresAt, vpnType = "main" } = req.body;
-  if (!username || !password) { res.status(400).json({ error: "username and password required" }); return; }
+  if (
+    typeof username !== "string"
+    || !username.trim()
+    || typeof password !== "string"
+    || password.trim().length < 6
+  ) {
+    res.status(400).json({ error: "Provide a username and a password with at least 6 characters." });
+    return;
+  }
   if (!/^\d+$/.test(String(adminId))) { res.status(403).json({ error: "Tenant administrator required" }); return; }
 
   const type: "main" | "proxy" = vpnType === "proxy" ? "proxy" : "main";
@@ -725,7 +733,18 @@ router.patch("/vpn/users/:id/toggle", async (req: Request, res: Response): Promi
 router.post("/vpn/users/:id/regenerate", async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   const adminId = req.authUser?.uid ?? "";
-  const newPassword: string = req.body?.password ?? Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-4);
+  const requestedPassword = req.body?.password;
+  if (
+    requestedPassword !== undefined
+    && requestedPassword !== null
+    && (typeof requestedPassword !== "string" || requestedPassword.trim().length < 6)
+  ) {
+    res.status(400).json({ error: "The new password must have at least 6 characters." });
+    return;
+  }
+  const newPassword: string = typeof requestedPassword === "string" && requestedPassword
+    ? requestedPassword
+    : Math.random().toString(36).slice(-10) + Math.random().toString(36).slice(-4);
   const url = sbUrl(); const key = sbKey();
   if (!url || !key) { res.status(503).json({ error: "Supabase not configured" }); return; }
 

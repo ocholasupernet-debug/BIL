@@ -394,6 +394,9 @@ router.post("/vpn-management/peers", async (req, res): Promise<void> => {
     assertCapability(capabilities, server.technology);
     const pair = server.technology === "wireguard" ? generateWireGuardKeyPair() : null;
     const suppliedSecret = body.secret ? String(body.secret) : "";
+    if (server.technology !== "wireguard" && suppliedSecret.trim().length < 6) {
+      throw new Error("VPN passwords and pre-shared keys must contain at least 6 characters.");
+    }
     const secret = pair?.publicKey ?? suppliedSecret;
     if (!secret) throw new Error(`${server.technology === "ipsec" ? "secret (PSK)" : "secret (password)"} is required`);
     const input = inputFromBody({ ...body, technology: server.technology, secret }, "create");

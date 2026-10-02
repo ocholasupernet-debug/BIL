@@ -255,7 +255,7 @@ function VpnUsersSection({ routers }: { routers: DbRouter[] }) {
               <label className="text-xs font-medium text-gray-500 block mb-1">Password</label>
               <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2">
                 <Lock size={13} className="text-gray-400" />
-                <input type={showPass ? "text" : "password"} value={form.password}
+                <input type={showPass ? "text" : "password"} minLength={6} value={form.password}
                   onChange={e => setForm(p => ({ ...p, password: e.target.value }))}
                   className="flex-1 text-sm font-mono outline-none bg-transparent" />
                 <button onClick={() => setShowPass(v => !v)} className="text-gray-400 hover:text-gray-600">
@@ -280,7 +280,7 @@ function VpnUsersSection({ routers }: { routers: DbRouter[] }) {
               Cancel
             </button>
             <button onClick={() => createMutation.mutate(form)}
-              disabled={!form.username || !form.password || createMutation.isPending}
+              disabled={!form.username || form.password.length < 6 || createMutation.isPending}
               className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg disabled:opacity-50 transition-colors">
               {createMutation.isPending ? "Creating…" : <><Plus size={13} /> Create</>}
             </button>

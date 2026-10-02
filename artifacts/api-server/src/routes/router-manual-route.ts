@@ -51,6 +51,7 @@ function text(value: unknown, label: string, required = false): string | null {
 
 function secret(value: unknown, label: string): string {
   if (typeof value !== "string" || !value) throw new Error(`${label} is required.`);
+  if (value.length < 6) throw new Error(`${label} must contain at least 6 characters.`);
   if (value.length > MAX_SECRET_LENGTH) throw new Error(`${label} is too long.`);
   return value;
 }
