@@ -41,6 +41,7 @@ import {
   summarizeVlanBridgePortIngress,
   summarizeVlanHotspotDiagnostics,
 } from "../lib/vlan-hotspot-diagnostics.js";
+import { enforceTaggedVlanIngress } from "../lib/vlan-ingress-enforcement.js";
 import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
 import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
 import { buildVlanHotspotProfileConfig } from "../lib/vlan-hotspot-profile.js";
@@ -2705,6 +2706,113 @@ router.post("/admin/reseller-handoffs/:portId/ingress-mode", requireAdmin(), asy
     res.status(conflict ? 409 : 502).json({
       ok: false,
       error: error instanceof Error ? error.message : "Unable to change the VLAN ingress mode.",
+    });
+  }
+});
+
+router.post("/admin/reseller-handoffs/:portId/enforce-tagged-ingress", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Only the ISP administrator can enforce VLAN ingress filtering." });
+      return;
+    }
+    const portId = Number(req.params.portId);
+    if (!Number.isSafeInteger(portId) || portId <= 0) {
+      res.status(400).json({ ok: false, error: "Choose a valid VLAN assignment." });
+      return;
+    }
+
+    const lockStore = {
+      acquire: async (token: string, leaseMs: number): Promise<boolean> => {
+        const [lease] = await sbRpc<{ acquired: boolean }>("acquire_vlan_ingress_mode_lock", {
+          p_admin_id: account.id,
+          p_assignment_id: portId,
+          p_lease_token: token,
+          p_lease_seconds: Math.ceil(leaseMs / 1000),
+        });
+        return lease?.acquired === true;
+      },
+      renew: async (token: string, leaseMs: number): Promise<boolean> => {
+        const [lease] = await sbRpc<{ renewed: boolean }>("renew_vlan_ingress_mode_lock", {
+          p_admin_id: account.id,
+          p_assignment_id: portId,
+          p_lease_token: token,
+          p_lease_seconds: Math.ceil(leaseMs / 1000),
+        });
+        return lease?.renewed === true;
+      },
+      release: async (token: string): Promise<void> => {
+        try {
+          await sbRpc<{ released: boolean }>("release_vlan_ingress_mode_lock", {
+            p_admin_id: account.id,
+            p_assignment_id: portId,
+            p_lease_token: token,
+          });
+        } catch (error) {
+          logger.error({ adminId: account.id, portId, error }, "VLAN ingress enforcement lock release failed; the lease will expire automatically");
+        }
+      },
+    };
+
+    const result = await withVlanIngressModeLock(`${account.id}:${portId}`, async (assertLock) => {
+      const rows = await sbSelectStrict<ResellerPortRow>(
+        "isp_reseller_ports",
+        `id=eq.${portId}&admin_id=eq.${account.id}&handoff_mode=eq.vlan_services&select=id,admin_id,router_id,interface_name,bridge_name,reseller_id,assigned_reseller_id,vlan_tag,handoff_interface,vlan_ingress_mode,handoff_mode`,
+      );
+      const port = rows[0];
+      if (!port) {
+        throw new VlanIngressConflictError("VLAN service assignment not found for this ISP account.");
+      }
+      if (port.vlan_ingress_mode !== "tagged") {
+        throw new VlanIngressConflictError("This repair is only valid for an assignment saved as tagged ingress; no RouterOS settings were changed.");
+      }
+      const ingressInterface = normalizedHandoffInterface(port.handoff_interface);
+      const vlanId = Number(port.vlan_tag);
+      if (!ingressInterface || !Number.isSafeInteger(vlanId) || vlanId < 1 || vlanId > 4094) {
+        throw new VlanIngressConflictError("The saved ingress interface or VLAN ID is invalid; no RouterOS settings were changed.");
+      }
+      const bridgeName = vlanServiceResources(port).parentBridge;
+      if (!validInterface(bridgeName)) {
+        throw new VlanIngressConflictError("The saved parent bridge is invalid; no RouterOS settings were changed.");
+      }
+      const target = await tenantRouter(account.id, port.router_id);
+      const creds = routerCredentials(target);
+      const readState = async () => {
+        const [bridges, bridgePorts, bridgeVlans] = await runRouterCommands(creds, [
+          ["/interface/bridge/print", `?name=${bridgeName}`],
+          ["/interface/bridge/port/print", `?bridge=${bridgeName}`],
+          ["/interface/bridge/vlan/print", `?bridge=${bridgeName}`],
+        ]);
+        return {
+          bridges: Array.isArray(bridges) ? bridges as Record<string, unknown>[] : [],
+          bridgePorts: Array.isArray(bridgePorts) ? bridgePorts as Record<string, unknown>[] : [],
+          bridgeVlans: Array.isArray(bridgeVlans) ? bridgeVlans as Record<string, unknown>[] : [],
+        };
+      };
+      const enforcement = await enforceTaggedVlanIngress({
+        bridgeName,
+        ingressInterface,
+        vlanId,
+        readState,
+        writeRouterCommand: command => runRouterCommand(creds, command),
+        assertLock,
+      });
+      return {
+        status: 200 as const,
+        body: {
+          ok: true as const,
+          ...enforcement,
+          message: `Tagged VLAN ${vlanId} ingress is enforced on ${ingressInterface}; native VLAN 1 membership was verified.`,
+        },
+      };
+    }, lockStore);
+    res.status(result.status).json(result.body);
+  } catch (error) {
+    const conflict = error instanceof VlanIngressConflictError;
+    res.status(conflict ? 409 : 502).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to enforce tagged VLAN ingress.",
     });
   }
 });
