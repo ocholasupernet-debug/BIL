@@ -38,6 +38,12 @@ type RouterProfile = {
   ros_version?: string | null;
 };
 
+type RouterScriptFile = {
+  name: string;
+  type: string;
+  size: number;
+};
+
 type VpnInfo = {
   routerId: number;
   routerName: string;
@@ -129,7 +135,7 @@ const MODE_OPTIONS: Array<{
     value: "zero-touch",
     backend: "takeover",
     title: "Zero-touch",
-    description: "Use only when an approved takeover/reset process is in place.",
+    description: "Use only with an approved takeover/reset process; build fresh scripts from a read-only source template.",
     tone: "#fb923c",
   },
 ];
@@ -330,6 +336,13 @@ export default function SelfInstall() {
   const [scriptWarning, setScriptWarning] = useState("");
   const [copiedStep, setCopiedStep] = useState<SelfInstallStep["id"] | null>(null);
   const [filePushProgress, setFilePushProgress] = useState<SelfInstallFilePushResult | null>(null);
+  const [takeoverSourceRouters, setTakeoverSourceRouters] = useState<RouterProfile[]>([]);
+  const [takeoverSourceRouterId, setTakeoverSourceRouterId] = useState("");
+  const [takeoverSourceFileName, setTakeoverSourceFileName] = useState("");
+  const [takeoverFilesRouterId, setTakeoverFilesRouterId] = useState("");
+  const [takeoverSourceLoading, setTakeoverSourceLoading] = useState(false);
+  const [takeoverFilesLoading, setTakeoverFilesLoading] = useState(false);
+  const [takeoverSourceError, setTakeoverSourceError] = useState("");
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -374,6 +387,84 @@ export default function SelfInstall() {
     setCopiedStep(null);
     setFilePushProgress(null);
   }, [mode, router?.id]);
+
+  useEffect(() => {
+    if (mode !== "zero-touch" || !router) return;
+    let active = true;
+    setTakeoverSourceLoading(true);
+    setTakeoverSourceError("");
+    void readJson<RouterProfile[]>(`/api/routers?adminId=${ADMIN_ID}`)
+      .then(rows => {
+        if (!active) return;
+        const available = rows.filter(item => item.id !== router.id);
+        setTakeoverSourceRouters(available);
+        setTakeoverSourceRouterId(current =>
+          available.some(item => String(item.id) === current)
+            ? current
+            : String(available.find(item => item.name.trim().toLowerCase() === "ocholasupernet1")?.id ?? ""),
+        );
+      })
+      .catch(cause => {
+        if (!active) return;
+        setTakeoverSourceRouters([]);
+        setTakeoverSourceRouterId("");
+        setTakeoverSourceError(cause instanceof Error
+          ? cause.message
+          : "Could not load source routers for Takeover.");
+      })
+      .finally(() => {
+        if (active) setTakeoverSourceLoading(false);
+      });
+    return () => { active = false; };
+  }, [mode, router?.id]);
+
+  useEffect(() => {
+    if (mode !== "zero-touch" || !takeoverSourceRouterId) {
+      setTakeoverSourceFileName("");
+      setTakeoverFilesRouterId("");
+      setTakeoverFilesLoading(false);
+      return;
+    }
+    let active = true;
+    setTakeoverFilesLoading(true);
+    setTakeoverFilesRouterId("");
+    setTakeoverSourceError("");
+    void readJson<{ files?: RouterScriptFile[] }>(
+      `/api/router/${encodeURIComponent(takeoverSourceRouterId)}/files?adminId=${ADMIN_ID}`,
+    )
+      .then(payload => {
+        if (!active) return;
+        const files = (Array.isArray(payload.files) ? payload.files : [])
+          .filter(file => file.type.toLowerCase() !== "directory");
+        const sourceFile = files.find(file =>
+          file.name.replace(/\\/g, "/").split("/").pop()?.toLowerCase() === "mainhotspot.rsc",
+        );
+        setTakeoverSourceFileName(sourceFile?.name ?? "");
+        setTakeoverFilesRouterId(takeoverSourceRouterId);
+        if (!sourceFile) {
+          setTakeoverSourceError('The selected router does not contain the required "mainhotspot.rsc" file.');
+        }
+      })
+      .catch(cause => {
+        if (!active) return;
+        setTakeoverSourceFileName("");
+        setTakeoverFilesRouterId("");
+        setTakeoverSourceError(cause instanceof Error
+          ? cause.message
+          : "Could not list files on the selected source router.");
+      })
+      .finally(() => {
+        if (active) setTakeoverFilesLoading(false);
+      });
+    return () => { active = false; };
+  }, [mode, takeoverSourceRouterId]);
+
+  useEffect(() => {
+    if (mode !== "zero-touch") return;
+    setScriptSteps([]);
+    setScriptWarning("");
+    setCopiedStep(null);
+  }, [mode, takeoverSourceRouterId, takeoverSourceFileName]);
 
   const refreshStatus = useCallback(async () => {
     if (!router) return;
@@ -486,6 +577,13 @@ export default function SelfInstall() {
       adminId: String(ADMIN_ID),
       mode: backendMode(mode),
     });
+    if (mode === "zero-touch") {
+      if (!takeoverSourceRouterId || !takeoverSourceFileName) {
+        throw new Error('Select a source router with a "mainhotspot.rsc" file before generating Takeover steps.');
+      }
+      params.set("sourceRouterId", takeoverSourceRouterId);
+      params.set("sourceTemplateFile", takeoverSourceFileName);
+    }
     if (bridgeName.trim()) params.set("bridgeName", bridgeName.trim());
     if (ports.trim()) params.set("bridgePorts", ports.trim());
     const token = getAdminApiToken();
@@ -620,6 +718,16 @@ export default function SelfInstall() {
   const selectedMode = MODE_OPTIONS.find(option => option.value === mode)!;
   const pageStep = finished ? 4 : router ? (connected ? 3 : 2) : 1;
   const endpointReady = Boolean(tunnel?.connectTo && !tunnel.connectTo.startsWith("SET_"));
+  const takeoverSourceReady = Boolean(
+    takeoverSourceRouters.some(item => String(item.id) === takeoverSourceRouterId)
+    && takeoverFilesRouterId === takeoverSourceRouterId
+    && takeoverSourceFileName.replace(/\\/g, "/").split("/").pop()?.toLowerCase() === "mainhotspot.rsc"
+    && !takeoverSourceLoading
+    && !takeoverFilesLoading
+    && !takeoverSourceError,
+  );
+  const canGenerateSteps = endpointReady && busy === ""
+    && (mode !== "zero-touch" || takeoverSourceReady);
   const incompleteInstall = Boolean(
     router
     && !finished
@@ -638,7 +746,7 @@ export default function SelfInstall() {
 
   return (
     <AdminLayout>
-      <style>{`@keyframes self-install-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+      <style>{`@keyframes self-install-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}.takeover-source-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.6rem}@media(max-width:760px){.takeover-source-grid{grid-template-columns:1fr}}`}</style>
       <div style={{ maxWidth: 1060, display: "flex", flexDirection: "column", gap: "1rem" }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
@@ -744,6 +852,58 @@ export default function SelfInstall() {
             })}
           </div>
 
+          {mode === "zero-touch" && (
+            <div style={{ marginTop: "1rem", padding: "0.9rem", borderRadius: 9, background: "var(--isp-section)", border: "1px solid var(--isp-border)" }}>
+              <div style={{ color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 800 }}>
+                Takeover source file
+              </div>
+              <p style={{ margin: "0.3rem 0 0.75rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.55 }}>
+                Takeover reads mainhotspot.rsc only to validate the source setup. Hotspot and PPPoE are rebuilt with the current safe generators, the portal uses this company’s isplatty.org hostname, and the management VPN uses OcholaSuperNet. Old tenant-specific VPN, user, sync, heartbeat, proxy, log-push, and security-log imports are skipped; the source router is never changed.
+              </p>
+              <div className="takeover-source-grid">
+                <label style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                  <span style={{ color: "var(--isp-text-muted)", fontSize: "0.66rem", fontWeight: 750, textTransform: "uppercase" }}>Source router ID</span>
+                  <select
+                    value={takeoverSourceRouterId}
+                    onChange={event => {
+                      setTakeoverSourceRouterId(event.target.value);
+                      setTakeoverSourceFileName("");
+                      setTakeoverFilesRouterId("");
+                      setTakeoverFilesLoading(Boolean(event.target.value));
+                    }}
+                    disabled={!router || takeoverSourceLoading || busy !== ""}
+                    style={inputStyle}
+                  >
+                    <option value="">
+                      {!router ? "Create the target profile first" : takeoverSourceLoading ? "Loading routers…" : "Select a source router"}
+                    </option>
+                    {takeoverSourceRouters.map(source => (
+                      <option key={source.id} value={String(source.id)}>
+                        {source.name} (ID {source.id})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                  <span style={{ color: "var(--isp-text-muted)", fontSize: "0.66rem", fontWeight: 750, textTransform: "uppercase" }}>Source .rsc file</span>
+                  <div aria-live="polite" style={{ ...inputStyle, display: "flex", alignItems: "center", minHeight: 38 }}>
+                    {takeoverFilesLoading ? "Checking source router…" : takeoverSourceFileName || "mainhotspot.rsc not found"}
+                  </div>
+                </div>
+              </div>
+              {takeoverSourceError && (
+                <div role="status" style={{ marginTop: "0.6rem", color: "#fbbf24", fontSize: "0.7rem", lineHeight: 1.45 }}>
+                  {takeoverSourceError}
+                </div>
+              )}
+              {takeoverSourceRouterId && !takeoverSourceLoading && !takeoverFilesLoading && !takeoverSourceError && (
+                <div style={{ marginTop: "0.6rem", color: "var(--isp-text-muted)", fontSize: "0.68rem" }}>
+                  "mainhotspot.rsc" is read and validated before any target provisioning.
+                </div>
+              )}
+            </div>
+          )}
+
           {!router && (
             <button
               type="button"
@@ -795,8 +955,8 @@ export default function SelfInstall() {
                    <button
                      type="button"
                       onClick={() => void refreshSelfInstallSteps()}
-                     disabled={busy !== "" || !endpointReady}
-                     style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: 0, borderRadius: 8, background: endpointReady && busy === "" ? "var(--isp-accent)" : "var(--isp-section)", color: endpointReady && busy === "" ? "#fff" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: endpointReady && busy === "" ? "pointer" : "not-allowed" }}
+                    disabled={!canGenerateSteps}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: 0, borderRadius: 8, background: canGenerateSteps ? "var(--isp-accent)" : "var(--isp-section)", color: canGenerateSteps ? "#fff" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: canGenerateSteps ? "pointer" : "not-allowed" }}
                    >
                       {busy === "script" ? <Loader2 size={15} style={{ animation: "self-install-spin 1.1s linear infinite" }} /> : <TerminalSquare size={15} />}
                       Generate ordered steps
@@ -804,8 +964,8 @@ export default function SelfInstall() {
                     <button
                       type="button"
                       onClick={() => void refreshSelfInstallSteps()}
-                      disabled={busy !== "" || !endpointReady}
-                      style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: "1px solid var(--isp-border)", borderRadius: 8, background: endpointReady && busy === "" ? "var(--isp-section)" : "var(--isp-section)", color: endpointReady && busy === "" ? "var(--isp-text)" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: endpointReady && busy === "" ? "pointer" : "not-allowed" }}
+                      disabled={!canGenerateSteps}
+                      style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-section)", color: canGenerateSteps ? "var(--isp-text)" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: canGenerateSteps ? "pointer" : "not-allowed" }}
                     >
                       <RefreshCw size={15} />
                       Refresh steps

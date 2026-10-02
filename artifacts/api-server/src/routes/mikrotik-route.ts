@@ -24,6 +24,7 @@ import {
   generateRouterManagementVpnScript,
   generateNetworkSetupScript,
   generateServiceSetupScript,
+  fetchRouterScriptTemplateFile,
   disableGeneratedHotspot,
   reconcileGeneratedServiceConfiguration,
   repairGeneratedServiceNetworking,
@@ -70,6 +71,7 @@ import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
+import { validateRouterTakeoverMainhotspot } from "../lib/router-takeover-template.js";
 
 const router: IRouter = Router();
 
@@ -2119,6 +2121,50 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
   const installationMode = requestedMode === "direct" || requestedMode === "takeover"
     ? requestedMode
     : "coexist";
+  if (installationMode === "takeover") {
+    const rawSourceRouterId = String(req.query.sourceRouterId ?? "").trim();
+    const sourceRouterId = Number(rawSourceRouterId);
+    const sourceFileName = String(req.query.sourceTemplateFile ?? "").trim();
+    if (!/^[1-9]\d*$/.test(rawSourceRouterId) || !Number.isSafeInteger(sourceRouterId)) {
+      res.status(400).json({ error: "Select a valid numeric-ID source router for Takeover." });
+      return;
+    }
+    const sourceFilePathParts = sourceFileName.replace(/\\/g, "/").split("/");
+    if (
+      sourceFilePathParts.at(-1)?.toLowerCase() !== "mainhotspot.rsc"
+      || sourceFilePathParts.some(part => part === "." || part === "..")
+    ) {
+      res.status(400).json({ error: 'Takeover reads only the source router file named "mainhotspot.rsc".' });
+      return;
+    }
+    if (sourceRouterId === id) {
+      res.status(400).json({ error: "The Takeover source must be a different router from the new target." });
+      return;
+    }
+    try {
+      const source = await getRouterCreds(sourceRouterId, adminId);
+      if (!source) {
+        res.status(404).json({ error: "The selected source router is not available to this ISP account." });
+        return;
+      }
+      const sourceFile = await fetchRouterScriptTemplateFile(
+        source.creds,
+        sourceFileName,
+      );
+      validateRouterTakeoverMainhotspot({
+        sourceRouterId,
+        fileName: sourceFileName,
+        content: sourceFile.content,
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      res.status(422).json({
+        error: 'The selected source "mainhotspot.rsc" could not be validated for Takeover.',
+        detail,
+      });
+      return;
+    }
+  }
   try {
     let provisioningWarning = "";
     let openVpnCredentials: { username: string; password: string };
@@ -2207,10 +2253,13 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       ?? "",
     ).trim();
     const hasCompletePlatformRadius = Boolean(platformRadiusIp && platformRadiusSecret);
-    if (installationMode === "coexist" && !hasCompletePlatformRadius) {
-      provisioningWarning = provisioningWarning
-        ? `${provisioningWarning} Platform RADIUS settings are incomplete, so Step 3 will preserve existing RADIUS entries.`
+    if ((installationMode === "coexist" || installationMode === "takeover") && !hasCompletePlatformRadius) {
+      const radiusWarning = installationMode === "takeover"
+        ? "OcholaSuperNet RADIUS settings are incomplete, so Takeover will not enable central Hotspot/PPPoE authentication."
         : "Platform RADIUS settings are incomplete, so Step 3 will preserve existing RADIUS entries.";
+      provisioningWarning = provisioningWarning
+        ? `${provisioningWarning} ${radiusWarning}`
+        : radiusWarning;
     }
     const portalHostname = new URL(sourceOrigin).hostname;
     const defaultPortalFiles = [
@@ -2247,15 +2296,22 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       backendRegistrationUrl,
       managementApiPassword: found.creds.password,
     });
-    const networkScript = generateNetworkSetupScript({ routerId: id });
+    const networkScript = generateNetworkSetupScript({
+      routerId: id,
+      requireInternet: installationMode === "takeover",
+    });
     const serviceScript = generateServiceSetupScript({
       routerId: id,
       installationMode,
       bridgeName: serviceBridgeName,
       bridgePorts: serviceBridgePorts,
       portName: serviceBridgePorts[0],
-      radiusIp: installationMode === "coexist" && hasCompletePlatformRadius ? platformRadiusIp : undefined,
-      radiusSecret: installationMode === "coexist" && hasCompletePlatformRadius ? platformRadiusSecret : undefined,
+      radiusIp: (installationMode === "coexist" || installationMode === "takeover") && hasCompletePlatformRadius
+        ? platformRadiusIp
+        : undefined,
+      radiusSecret: (installationMode === "coexist" || installationMode === "takeover") && hasCompletePlatformRadius
+        ? platformRadiusSecret
+        : undefined,
       /* The shared bridge is the single physical service wire. Bandwidth
          queues remain opt-in until a tenant supplies an aggregate speed. */
       maxPortSpeedMbps: Number.isFinite(Number(req.query.maxPortSpeedMbps))

@@ -1710,6 +1710,14 @@ export interface RouterFilesResult {
   connectedHost: string;
 }
 
+export interface RouterScriptTemplateFile {
+  name: string;
+  size: number;
+  content: string;
+}
+
+export const ROUTER_SCRIPT_TEMPLATE_MAX_BYTES = 56 * 1024;
+
 export interface DeployRouterFileOptions {
   /** RouterOS destination, e.g. hotspot/login.html or router-setup.rsc. */
   destinationPath: string;
@@ -2073,6 +2081,69 @@ export async function fetchRouterFiles(creds: RouterCredentials): Promise<Router
       .filter((file) => file.name.length > 0);
 
     return { files, connectedHost };
+  });
+}
+
+/**
+ * Reads the single mainhotspot.rsc Takeover reference file.
+ * The source router is only queried; no files or configuration are changed.
+ * RouterOS /file/get has a practical string-size ceiling, so larger files are
+ * rejected rather than accepted as partial templates.
+ */
+export async function fetchRouterScriptTemplateFile(
+  creds: RouterCredentials,
+  requestedName: string,
+): Promise<RouterScriptTemplateFile> {
+  const name = String(requestedName ?? "").trim();
+  const pathParts = name.replace(/\\/g, "/").split("/");
+  if (
+    pathParts.at(-1)?.toLowerCase() !== "mainhotspot.rsc"
+    || pathParts.some(part => part === "." || part === "..")
+  ) {
+    throw new Error('Takeover reads only the source router file named "mainhotspot.rsc".');
+  }
+
+  return withReadConn(creds, async (conn) => {
+    const timeoutMs = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const listedRows = await withTimeout(
+      conn.write(["/file/print", "=.proplist=.id,name,type,size"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const listedFiles = (Array.isArray(listedRows) ? listedRows : [])
+      .map(routerFileFromRow)
+      .filter(file => file.name.length > 0);
+    const file = listedFiles.find(candidate => candidate.name === name);
+    if (!file || file.type.toLowerCase() === "directory") {
+      throw new Error(`The source file "${name}" is not present on the router.`);
+    }
+    if (file.size <= 0) throw new Error(`The source file "${name}" is empty.`);
+    if (file.size > ROUTER_SCRIPT_TEMPLATE_MAX_BYTES) {
+      throw new Error(
+        `"${name}" is larger than the ${Math.floor(ROUTER_SCRIPT_TEMPLATE_MAX_BYTES / 1024)} KiB Takeover file limit.`,
+      );
+    }
+    if (!/^\*[0-9a-f]+$/i.test(file.id)) {
+      throw new Error(`RouterOS did not return a valid file identifier for "${name}".`);
+    }
+
+    const rows = await withTimeout(
+      conn.write(["/file/get", `=.id=${file.id}`, "=value-name=contents"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const content = rows.find(row => typeof row.ret === "string")?.ret
+      ?? rows.find(row => typeof row.contents === "string")?.contents;
+    if (typeof content !== "string" || content.length === 0) {
+      throw new Error(`RouterOS could not return the contents of "${name}".`);
+    }
+    const contentBytes = Buffer.byteLength(content, "utf8");
+    if (
+      content.includes("\0")
+      || contentBytes > ROUTER_SCRIPT_TEMPLATE_MAX_BYTES
+      || contentBytes < Math.floor(file.size * 0.9)
+    ) {
+      throw new Error(`RouterOS returned incomplete or non-text contents for "${name}".`);
+    }
+    return { name, size: contentBytes, content };
   });
 }
 
@@ -6158,9 +6229,11 @@ export interface RouterNetworkSetupOptions {
   routerId?: number;
   /** Networks allowed to reach the RouterOS API. */
   apiNetworks?: string[];
+  /** Require the shared Internet connectivity check before Takeover network changes. */
+  requireInternet?: boolean;
 }
 
-const DEFAULT_ROUTER_API_NETWORKS = [
+export const DEFAULT_ROUTER_API_NETWORKS = [
   "10.8.0.0/24",
   "10.8.5.0/24",
   "10.8.6.0/24",
@@ -6204,7 +6277,11 @@ function routerOsCompatibilityPreflight(tag: string): string {
 export function generateNetworkSetupScript(
   options: RouterNetworkSetupOptions = {},
 ): string {
-  const { routerId, apiNetworks = DEFAULT_ROUTER_API_NETWORKS } = options;
+  const {
+    routerId,
+    apiNetworks = DEFAULT_ROUTER_API_NETWORKS,
+    requireInternet = false,
+  } = options;
   const tag = `ochola-network-${routerId ?? "router"}`;
   const safeNetworks = Array.from(new Set(apiNetworks)).filter(network =>
     /^(?:\d{1,3}\.){3}\d{1,3}\/(?:[0-9]|[12]\d|3[0-2])$/.test(network),
@@ -6225,6 +6302,12 @@ export function generateNetworkSetupScript(
 :if ([:len $ocholaApiRuleError${index}] > 0) do={
     :put ("${tag}: could not add API allow rule for ${network}: " . $ocholaApiRuleError${index})
 }`).join("\n");
+  const internetPreflight = requireInternet
+    ? `:if ([/ping 8.8.8.8 count=3] = 0) do={
+    :put "${tag}: no Internet connection; no network changes were made."
+    :error "${tag}: no Internet connection; check the router's Internet access and retry."
+}`
+    : "";
 
   return `# ===============================================================
 # OcholaSupernet - networksetup.rsc
@@ -6237,6 +6320,8 @@ export function generateNetworkSetupScript(
 # ===============================================================
 
 ${routerOsCompatibilityPreflight(tag)}
+
+${internetPreflight}
 
 :put "${tag}: starting core firewall and NAT setup."
 /ip firewall filter
@@ -6299,7 +6384,7 @@ export interface RouterServiceSetupOptions {
   bridgePorts?: string[];
   /** Port label used to namespace the isolated Coexistence Hotspot and PPPoE resources. */
   portName?: string;
-  /** Platform RADIUS endpoint used by the isolated Coexistence profiles. */
+  /** Platform RADIUS endpoint used by Takeover and isolated Coexistence profiles. */
   radiusIp?: string;
   /** Shared secret for the platform RADIUS endpoint. */
   radiusSecret?: string;
@@ -6321,22 +6406,22 @@ export interface RouterServiceSetupOptions {
   };
 }
 
-function validateCoexistenceRadiusIp(value: string): string {
+function validatePlatformRadiusIp(value: string): string {
   const endpoint = String(value ?? "").trim();
   if (
     !endpoint
     || endpoint.length > 255
     || !/^[A-Za-z0-9:._-]+$/.test(endpoint)
   ) {
-    throw new Error("Coexistence RADIUS address must be a hostname or IP address.");
+    throw new Error("Platform RADIUS address must be a hostname or IP address.");
   }
   return endpoint;
 }
 
-function validateCoexistenceRadiusSecret(value: string): string {
+function validatePlatformRadiusSecret(value: string): string {
   const secret = String(value ?? "");
   if (!secret || /[\u0000-\u001F\u007F"]/u.test(secret)) {
-    throw new Error("Coexistence RADIUS secret is empty or contains unsafe characters.");
+    throw new Error("Platform RADIUS secret is empty or contains unsafe characters.");
   }
   return secret;
 }
@@ -6366,10 +6451,10 @@ function generateCoexistenceServiceSetupScript(
     "Coexistence port name",
   );
   const radiusIp = options.radiusIp
-    ? validateCoexistenceRadiusIp(options.radiusIp)
+    ? validatePlatformRadiusIp(options.radiusIp)
     : "";
   const radiusSecret = options.radiusSecret
-    ? validateCoexistenceRadiusSecret(options.radiusSecret)
+    ? validatePlatformRadiusSecret(options.radiusSecret)
     : "";
   if ((radiusIp && !radiusSecret) || (!radiusIp && radiusSecret)) {
     throw new Error("Coexistence RADIUS configuration must include both address and secret.");
@@ -6707,6 +6792,38 @@ export function generateServiceSetupScript(
   const portalHostnames = Array.from(new Set((options.portalHostnames ?? [])
     .map(host => String(host).trim().toLowerCase())
     .filter(host => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))));
+  const takeoverRadiusIp = options.installationMode === "takeover" && options.radiusIp
+    ? validatePlatformRadiusIp(options.radiusIp)
+    : "";
+  const takeoverRadiusSecret = options.installationMode === "takeover" && options.radiusSecret
+    ? validatePlatformRadiusSecret(options.radiusSecret)
+    : "";
+  if ((takeoverRadiusIp && !takeoverRadiusSecret) || (!takeoverRadiusIp && takeoverRadiusSecret)) {
+    throw new Error("Takeover RADIUS configuration must include both address and secret.");
+  }
+  const takeoverRadiusEnabled = Boolean(takeoverRadiusIp && takeoverRadiusSecret);
+  const takeoverHotspotDnsName = options.installationMode === "takeover"
+    ? portalHostnames[0]
+    : undefined;
+  const hotspotDnsSetting = takeoverHotspotDnsName
+    ? ` dns-name=${routerOsString(takeoverHotspotDnsName)}`
+    : "";
+  const radiusProfileSetting = takeoverRadiusEnabled ? " use-radius=yes" : "";
+  const takeoverRadiusSetup = takeoverRadiusEnabled
+    ? `:if ([:len [/radius find where service=${routerOsString("hotspot,ppp")} && address=${routerOsString(takeoverRadiusIp)} && disabled=no]] = 0) do={
+    :do {
+        /radius add service=${routerOsString("hotspot,ppp")} address=${routerOsString(takeoverRadiusIp)} secret=${routerOsString(takeoverRadiusSecret)} authentication-port=1812 accounting-port=1813 comment=${routerOsString(`OcholaSuperNet Takeover RADIUS ${routerTag}`)}
+    } on-error={
+        :set serviceError ("${tag}: OcholaSuperNet RADIUS profile could not be added: " . $error)
+        :error $serviceError
+    }
+}
+:if ([:len [/radius find where service=${routerOsString("hotspot,ppp")} && address=${routerOsString(takeoverRadiusIp)} && disabled=no]] = 0) do={
+    :set serviceError "${tag}: OcholaSuperNet RADIUS profile was not verified."
+    :error $serviceError
+}
+:put "${tag}: OcholaSuperNet RADIUS is configured for Hotspot and PPPoE."`
+    : `:put "${tag}: OcholaSuperNet RADIUS was not configured; platform address and secret were not both supplied."`;
   const paymentHostnames = Array.from(new Set((options.paymentHostnames ?? PAYMENT_WALLED_GARDEN_HOSTNAMES)
     .map(host => String(host).trim().toLowerCase())
     .filter(host => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))
@@ -6719,9 +6836,13 @@ export function generateServiceSetupScript(
   const legacyHotspot = legacySharedHotspotResourceNames(routerTag);
   const dhcpServer = `${tag}-dhcp`;
   const hotspotGateway = "192.168.180.1";
+  const hotspotAddress = `${hotspotGateway}/22`;
   const hotspotNetwork = "192.168.180.0/22";
+  const hotspotPoolRange = "192.168.180.10-192.168.183.254";
   const pppoeGateway = "192.168.99.1";
+  const pppoeAddress = `${pppoeGateway}/24`;
   const pppoeNetwork = "192.168.99.0/24";
+  const pppoePoolRange = "192.168.99.10-192.168.99.254";
   const portalFileUrls = options.portalFileUrls
     ? {
         login: validateRouterOpenVpnCaUrl(options.portalFileUrls.login),
@@ -6882,14 +7003,14 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
 :set serviceStepFailed false
 :put "${tag}: SERVICE STEP 3/7 - service gateways starting."
 :do {
-    :if ([:len [/ip address find where address=${routerOsString(`${hotspotGateway}/22`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
-        :do { /ip address add address=${routerOsString(`${hotspotGateway}/22`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} hotspot gateway`)} } on-error={
+    :if ([:len [/ip address find where address=${routerOsString(hotspotAddress)} && interface=${routerOsString(bridgeName)}]] = 0) do={
+        :do { /ip address add address=${routerOsString(hotspotAddress)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} hotspot gateway`)} } on-error={
             :set serviceError ("${tag}: Hotspot gateway creation failed: " . $error)
             :error $serviceError
         }
     }
-    :if ([:len [/ip address find where address=${routerOsString(`${pppoeGateway}/24`)} && interface=${routerOsString(bridgeName)}]] = 0) do={
-        :do { /ip address add address=${routerOsString(`${pppoeGateway}/24`)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} PPPoE gateway`)} } on-error={
+    :if ([:len [/ip address find where address=${routerOsString(pppoeAddress)} && interface=${routerOsString(bridgeName)}]] = 0) do={
+        :do { /ip address add address=${routerOsString(pppoeAddress)} interface=${routerOsString(bridgeName)} comment=${routerOsString(`${tag} PPPoE gateway`)} } on-error={
             :set serviceError ("${tag}: PPPoE gateway creation failed: " . $error)
             :error $serviceError
         }
@@ -6926,10 +7047,10 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
         }
     }
     :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] = 0) do={
-        /ip pool add name=${routerOsString(hotspotPool)} ranges=192.168.180.10-192.168.183.254 comment=${routerOsString(`${tag} Hotspot pool`)}
+        /ip pool add name=${routerOsString(hotspotPool)} ranges=${routerOsString(hotspotPoolRange)} comment=${routerOsString(`${tag} Hotspot pool`)}
     }
     :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] > 0) do={
-        /ip pool set [find where name=${routerOsString(hotspotPool)}] ranges=192.168.180.10-192.168.183.254 comment=${routerOsString(`${tag} Hotspot pool`)}
+        /ip pool set [find where name=${routerOsString(hotspotPool)}] ranges=${routerOsString(hotspotPoolRange)} comment=${routerOsString(`${tag} Hotspot pool`)}
     }
     :if ([:len [/ip dhcp-server network find where address=${routerOsString(hotspotNetwork)}]] = 0) do={
         /ip dhcp-server network add address=${routerOsString(hotspotNetwork)} gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
@@ -6942,9 +7063,9 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
         /ip dhcp-server set [find where name=${routerOsString(dhcpServer)}] interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
     }
     :if ([:len [/ip hotspot profile find where name=${routerOsString(hotspotProfile)}]] = 0) do={
-        /ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie
+        /ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString(hotspotGateway)}${hotspotDnsSetting} html-directory=hotspot login-by=http-chap,http-pap,cookie${radiusProfileSetting}
     } else={
-        /ip hotspot profile set [find where name=${routerOsString(hotspotProfile)}] hotspot-address=${routerOsString(hotspotGateway)} html-directory=hotspot login-by=http-chap,http-pap,cookie
+        /ip hotspot profile set [find where name=${routerOsString(hotspotProfile)}] hotspot-address=${routerOsString(hotspotGateway)}${hotspotDnsSetting} html-directory=hotspot login-by=http-chap,http-pap,cookie${radiusProfileSetting}
     }
     :if ([:len [/ip hotspot find where name=${routerOsString(hotspotServer)}]] = 0) do={
         /ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no
@@ -6982,21 +7103,22 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
 :put "${tag}: SERVICE STEP 6/7 - PPPoE starting."
 :do {
     :if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] = 0) do={
-        /ip pool add name=${routerOsString(pppoePool)} ranges=192.168.99.10-192.168.99.254 comment=${routerOsString(`${tag} PPPoE pool`)}
+        /ip pool add name=${routerOsString(pppoePool)} ranges=${routerOsString(pppoePoolRange)} comment=${routerOsString(`${tag} PPPoE pool`)}
     }
     :if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] > 0) do={
-        /ip pool set [find where name=${routerOsString(pppoePool)}] ranges=192.168.99.10-192.168.99.254 comment=${routerOsString(`${tag} PPPoE pool`)}
+        /ip pool set [find where name=${routerOsString(pppoePool)}] ranges=${routerOsString(pppoePoolRange)} comment=${routerOsString(`${tag} PPPoE pool`)}
     }
     :if ([:len [/ppp profile find where name=${routerOsString(pppoeProfile)}]] = 0) do={
-        /ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
+        /ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes${radiusProfileSetting} comment=${routerOsString(`${tag} PPPoE profile`)}
     } else={
-        /ppp profile set [find where name=${routerOsString(pppoeProfile)}] local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
+        /ppp profile set [find where name=${routerOsString(pppoeProfile)}] local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes${radiusProfileSetting} comment=${routerOsString(`${tag} PPPoE profile`)}
     }
     :if ([:len [/interface pppoe-server server find where service-name=${routerOsString(`${tag}-pppoe`)}]] = 0) do={
         /interface pppoe-server server add service-name=${routerOsString(`${tag}-pppoe`)} interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no
     } else={
         /interface pppoe-server server set [find where service-name=${routerOsString(`${tag}-pppoe`)}] interface=${routerOsString(bridgeName)} default-profile=${routerOsString(pppoeProfile)} one-session-per-host=yes disabled=no
     }
+    ${takeoverRadiusSetup}
 } on-error={
     :set serviceStepFailed true
     :local serviceStepError $error

@@ -62,6 +62,7 @@
 - [Captive portal DHCP discovery](captive-portal-dhcp-discovery.md) — Advertise the portal URI through DHCP option 114 while keeping the MikroTik gateway as client DNS.
 - [Legacy proxy VPN provisioning](legacy-proxy-vpn-provisioning.md) — The legacy proxy VPN is separate from the 1196/1197 management instances and must be provisioned explicitly.
 - [Router script URL normalization](router-script-url-normalization.md) — Normalize complete URLs before replacement; host/path suffix replacement can otherwise emit `https://https://`.
+- [Takeover template parsing](takeover-template-parsing.md) — Read only mainhotspot.rsc as a structure reference; never copy or execute its legacy commands or external configuration.
 - [Production readiness audit](production-readiness-audit.md) — Healthy API/deploy status does not prove tenant TLS, OpenVPN, or RouterOS connectivity.
 - [Router online signal](router-online-signal.md) — Only a recent authenticated RouterOS API heartbeat may make the website show a router online.
 - [Installer result contract](installer-result-contract.md) — Derive aggregate status from verification gates and persist the final callback fields as one validated result.

@@ -13,6 +13,19 @@ test("network setup preflights RouterOS before changing firewall rules", () => {
   assert.match(script, /RouterOS 6\.x and 7\.x/);
 });
 
+test("Takeover keeps the shared Internet check and does not include legacy endpoints", () => {
+  const takeoverScript = generateNetworkSetupScript({ routerId: 104, requireInternet: true });
+  const ordinaryScript = generateNetworkSetupScript({ routerId: 104 });
+  const internetCheck = takeoverScript.indexOf("/ping 8.8.8.8 count=3");
+  const firstFirewallMutation = takeoverScript.indexOf("/ip firewall filter");
+
+  assert.ok(internetCheck >= 0);
+  assert.ok(firstFirewallMutation > internetCheck);
+  assert.match(takeoverScript, /no Internet connection; no network changes were made/);
+  assert.doesNotMatch(ordinaryScript, /ping 8\.8\.8\.8/);
+  assert.doesNotMatch(takeoverScript, /legacy\.invalid|proxy\.invalid/);
+});
+
 test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   const script = generateServiceSetupScript({
     routerId: 104,
@@ -115,6 +128,24 @@ test("service setup keeps PPPoE on hotspot-bridge with the /22 Hotspot gateway",
   assert.match(script, /interface bridge set \[find where name="hotspot-bridge"\] comment=""/);
 });
 
+test("Takeover service setup keeps shared Hotspot/PPPoE defaults with fresh target-ID tags", () => {
+  const script = generateServiceSetupScript({
+    installationMode: "takeover",
+    routerId: 104,
+    bridgeName: "hotspot-bridge",
+  });
+
+  assert.match(script, /comment="ochola-services-104 hotspot gateway"/);
+  assert.match(script, /address="192\.168\.180\.1\/22"/);
+  assert.match(script, /address="192\.168\.180\.0\/22" gateway="192\.168\.180\.1"/);
+  assert.match(script, /ranges="192\.168\.180\.10-192\.168\.183\.254"/);
+  assert.match(script, /address="192\.168\.99\.1\/24"/);
+  assert.match(script, /src-address="192\.168\.99\.0\/24"/);
+  assert.match(script, /ranges="192\.168\.99\.10-192\.168\.99\.254"/);
+  assert.doesNotMatch(script, /ochola-services-7/);
+  assert.doesNotMatch(script, /legacy\.invalid|proxy\.invalid/);
+});
+
 test("service setup adds the optional shared-wire queue tree without changing the walled garden", () => {
   const script = generateServiceSetupScript({
     routerId: 104,
@@ -126,6 +157,45 @@ test("service setup adds the optional shared-wire queue tree without changing th
   assert.match(script, /name="ochola-services-104-pppoe" target="192\.168\.99\.0\/24" parent="ochola-services-104-root"[^\\n]*priority=1\/1/);
   assert.match(script, /name="ochola-services-104-hotspot" target="192\.168\.180\.0\/22" parent="ochola-services-104-root"[^\\n]*priority=8\/8/);
   assert.match(script, /walled-garden ip add dst-host="come\.isplatty\.org"/);
+});
+
+test("Takeover routes Hotspot and PPPoE through Ochola RADIUS and the current portal hostname", () => {
+  const script = generateServiceSetupScript({
+    installationMode: "takeover",
+    routerId: 104,
+    radiusIp: "10.8.5.1",
+    radiusSecret: "radius-test-secret",
+    portalHostnames: ["come.isplatty.org"],
+  });
+
+  assert.match(script, /\/radius add service="hotspot,ppp" address="10\.8\.5\.1"/);
+  assert.match(script, /ip hotspot profile add name="hsprof"[^\n]*dns-name="come\.isplatty\.org"[^\n]*use-radius=yes/);
+  assert.match(script, /ppp profile add name="ochola-services-104-pppoe-profile"[^\n]*use-radius=yes/);
+  assert.match(script, /OcholaSuperNet RADIUS is configured for Hotspot and PPPoE/);
+  assert.match(script, /walled-garden ip add dst-host="come\.isplatty\.org"/);
+  assert.doesNotMatch(script, /ispledger|netkali|freeispradius|proxyserver/i);
+});
+
+test("Takeover leaves RADIUS disabled when platform settings are incomplete", () => {
+  const script = generateServiceSetupScript({
+    installationMode: "takeover",
+    routerId: 104,
+    portalHostnames: ["come.isplatty.org"],
+  });
+
+  assert.doesNotMatch(script, /\/radius add/);
+  assert.doesNotMatch(script, /use-radius=yes/);
+  assert.match(script, /OcholaSuperNet RADIUS was not configured/);
+});
+
+test("Takeover rejects partial RADIUS settings", () => {
+  assert.throws(
+    () => generateServiceSetupScript({
+      installationMode: "takeover",
+      radiusIp: "10.8.5.1",
+    }),
+    /must include both address and secret/,
+  );
 });
 
 test("coexistence service setup compiles one isolated, delayed payload", () => {
