@@ -283,10 +283,10 @@ cat > "$AUTHSCRIPT" << AUTHEOF
 #!/usr/bin/env bash
 # Simple username:password verifier for OpenVPN
 PASSFILE="$AUTHFILE"
-username="\${username:-}"
-password="\${password:-}"
-[ -f "\$PASSFILE" ] || exit 1
-grep -Fqx "\${username}:\${password}" "\$PASSFILE" && exit 0 || exit 1
+username="\\\${username:-}"
+password="\\\${password:-}"
+[ -f "\\$PASSFILE" ] || exit 1
+grep -Fqx "\\\${username}:\\\${password}" "\\$PASSFILE" && exit 0 || exit 1
 AUTHEOF
 chmod 700 "$AUTHSCRIPT"
 
