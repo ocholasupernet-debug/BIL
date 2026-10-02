@@ -42,6 +42,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_router_management_vpn_credentials.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_migration_jobs.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_user_snapshots.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_router_user_import_data.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_migration_copy_flow.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_migration_tunnel_allocator_collision_fix.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_migration_tunnel_ccd_reservations.sql", import.meta.url)),

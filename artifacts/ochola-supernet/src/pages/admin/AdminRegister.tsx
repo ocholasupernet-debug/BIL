@@ -54,13 +54,6 @@ export default function AdminRegister() {
   const [company, setCompany] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
-  const [emailVerificationChallenge, setEmailVerificationChallenge] = useState("");
-  const [emailVerificationCode, setEmailVerificationCode] = useState("");
-  const [emailVerificationToken, setEmailVerificationToken] = useState("");
-  const [requestingEmailCode, setRequestingEmailCode] = useState(false);
-  const [verifyingEmailCode, setVerifyingEmailCode] = useState(false);
-  const [emailVerificationError, setEmailVerificationError] = useState("");
-  const emailVerificationRequestRef = useRef(0);
   const [phone, setPhone] = useState("");
   const [whatsappRegistrationCheck, setWhatsappRegistrationCheck] = useState(false);
   const [smsRegistrationCheck, setSmsRegistrationCheck] = useState(false);
@@ -95,68 +88,6 @@ export default function AdminRegister() {
   const [manualReference, setManualReference] = useState("");
   const [manualStatus, setManualStatus] = useState<"pending" | "failed">("pending");
   const [manualCheckNow, setManualCheckNow] = useState(0);
-
-  const requestEmailVerification = async () => {
-    setEmailVerificationError("");
-    const normalizedEmail = email.trim().toLowerCase();
-    if (!EMAIL_PATTERN.test(normalizedEmail)) {
-      setEmailVerificationError("Enter a valid email address before requesting a code.");
-      return;
-    }
-    const requestId = ++emailVerificationRequestRef.current;
-    setRequestingEmailCode(true);
-    try {
-      const response = await fetch("/api/auth/email-registration/request-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: normalizedEmail }),
-      });
-      const data = await response.json() as { ok?: boolean; challengeId?: string; error?: string };
-      if (!response.ok || !data.ok || !data.challengeId) {
-        throw new Error(data.error || "Could not send an email verification code.");
-      }
-      if (requestId === emailVerificationRequestRef.current) {
-        setEmailVerificationChallenge(data.challengeId);
-        setEmailVerificationCode("");
-        setEmailVerificationToken("");
-      }
-    } catch (cause) {
-      if (requestId === emailVerificationRequestRef.current) {
-        setEmailVerificationError(cause instanceof Error ? cause.message : "Could not send an email verification code.");
-      }
-    } finally {
-      if (requestId === emailVerificationRequestRef.current) setRequestingEmailCode(false);
-    }
-  };
-
-  const verifyRegistrationEmail = async () => {
-    setEmailVerificationError("");
-    const normalizedEmail = email.trim().toLowerCase();
-    const requestId = ++emailVerificationRequestRef.current;
-    setVerifyingEmailCode(true);
-    try {
-      const response = await fetch("/api/auth/email-registration/verify-otp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: normalizedEmail,
-          challengeId: emailVerificationChallenge,
-          code: emailVerificationCode,
-        }),
-      });
-      const data = await response.json() as { ok?: boolean; emailVerificationToken?: string; error?: string };
-      if (!response.ok || !data.ok || !data.emailVerificationToken) {
-        throw new Error(data.error || "That email verification code is invalid or expired.");
-      }
-      if (requestId === emailVerificationRequestRef.current) setEmailVerificationToken(data.emailVerificationToken);
-    } catch (cause) {
-      if (requestId === emailVerificationRequestRef.current) {
-        setEmailVerificationError(cause instanceof Error ? cause.message : "Could not verify this email address.");
-      }
-    } finally {
-      if (requestId === emailVerificationRequestRef.current) setVerifyingEmailCode(false);
-    }
-  };
 
   useEffect(() => {
     void Promise.all([
@@ -359,7 +290,6 @@ export default function AdminRegister() {
     }
     if (!email.trim()) e.email = "Email address is required";
     else if (!EMAIL_PATTERN.test(email.trim())) e.email = "Enter a valid email address";
-    if (!emailVerificationToken) e.emailVerification = "Verify your email address before continuing.";
     if (!paymentPhone.trim()) e.paymentPhone = "M-Pesa payment number is required";
     else if (!/^(\+?254|0)7\d{8}$/.test(paymentPhone.replace(/[\s-]/g, ""))) {
       e.paymentPhone = "Enter a valid Kenyan M-Pesa number";
@@ -386,7 +316,6 @@ export default function AdminRegister() {
           company: company.trim().toLowerCase(),
           displayName: displayName.trim(),
           email: email.trim().toLowerCase(),
-          emailVerificationToken,
           phone: phone.trim(),
           paymentPhone: paymentPhone.trim(),
           role: accountRole,
@@ -428,7 +357,6 @@ export default function AdminRegister() {
   };
 
   const canSubmit = !loading
-    && !!emailVerificationToken
     && companyAvailable !== false
     && !checkingCompany
     && paymentReady
@@ -797,16 +725,7 @@ export default function AdminRegister() {
                   <input
                     type="email"
                     value={email}
-                    onChange={e => {
-                      emailVerificationRequestRef.current += 1;
-                      setEmail(e.target.value);
-                      setEmailVerificationChallenge("");
-                      setEmailVerificationCode("");
-                      setEmailVerificationToken("");
-                      setEmailVerificationError("");
-                      setRequestingEmailCode(false);
-                      setVerifyingEmailCode(false);
-                    }}
+                    onChange={e => setEmail(e.target.value)}
                     placeholder="you@example.com"
                     autoComplete="email"
                     className="register-input"
@@ -819,29 +738,6 @@ export default function AdminRegister() {
                   We’ll use this email for account communication and sign-in recovery.
                 </p>
                 {errors.email && <p style={{ fontSize: "0.75rem", color: "#DC2626", marginTop: 4 }}>{errors.email}</p>}
-                <div style={{ marginTop: 10, padding: 12, border: "1px solid var(--isp-border)", borderRadius: 10, background: "var(--isp-inner-card)" }}>
-                  {emailVerificationToken ? (
-                    <p style={{ margin: 0, color: "var(--isp-green)", fontSize: "0.82rem", fontWeight: 600 }}>Email address verified.</p>
-                  ) : (
-                    <>
-                      <button type="button" onClick={() => void requestEmailVerification()} disabled={requestingEmailCode || verifyingEmailCode || !email.trim()} className="btn btn-secondary" style={{ padding: "8px 12px", fontSize: "0.82rem", opacity: requestingEmailCode ? 0.6 : 1 }}>
-                        {requestingEmailCode ? "Sending code…" : emailVerificationChallenge ? "Resend email code" : "Send email verification code"}
-                      </button>
-                      {emailVerificationChallenge && (
-                        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                          <input type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={6} pattern="[0-9]{6}" value={emailVerificationCode} onChange={event => setEmailVerificationCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6-digit code" className="register-input" aria-label="Email verification code" />
-                          <button type="button" onClick={() => void verifyRegistrationEmail()} disabled={requestingEmailCode || verifyingEmailCode || emailVerificationCode.length !== 6} className="btn btn-primary" style={{ padding: "8px 12px", fontSize: "0.82rem" }}>
-                            {verifyingEmailCode ? "Checking…" : "Verify"}
-                          </button>
-                        </div>
-                      )}
-                      {emailVerificationError && <p role="alert" style={{ fontSize: "0.75rem", color: "#DC2626", margin: "7px 0 0" }}>{emailVerificationError}</p>}
-                      {errors.emailVerification && <p style={{ fontSize: "0.75rem", color: "#DC2626", margin: "7px 0 0" }}>{errors.emailVerification}</p>}
-                      {emailVerificationChallenge && <p style={{ fontSize: "0.74rem", color: "var(--isp-text-muted)", margin: "7px 0 0" }}>Enter the 6-digit code sent to your email address. It expires in 10 minutes.</p>}
-                      {!emailVerificationError && <p style={{ fontSize: "0.74rem", color: "var(--isp-text-muted)", margin: "7px 0 0" }}>Verify this email address before continuing.</p>}
-                    </>
-                  )}
-                </div>
               </div>
 
                 <div className="register-payment-details">

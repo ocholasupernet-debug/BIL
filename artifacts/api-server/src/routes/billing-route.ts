@@ -137,10 +137,28 @@ async function currentInvoice(
   return { invoice, config };
 }
 
-function activeBillingStatus(invoice: Record<string, unknown>) {
-  if (invoice.status === "paid") return invoice.status;
-  const due = Date.parse(`${String(invoice.due_date)}T23:59:59.999Z`);
-  return Number.isFinite(due) && Date.now() > due ? "expired" : invoice.status;
+export function activeBillingStatus(invoice: Record<string, unknown>, now = new Date()): string {
+  const status = String(invoice.status ?? "");
+  if (status === "paid") return status;
+
+  const dueDate = typeof invoice.due_date === "string" ? invoice.due_date : "";
+  const parsedDueDate = new Date(`${dueDate}T00:00:00.000Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(dueDate) ||
+    !Number.isFinite(parsedDueDate.getTime()) ||
+    parsedDueDate.toISOString().slice(0, 10) !== dueDate
+  ) {
+    return status;
+  }
+
+  const dateParts = new Map(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Nairobi",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now).map(({ type, value }) => [type, value]));
+  const todayInNairobi = `${dateParts.get("year")}-${dateParts.get("month")}-${dateParts.get("day")}`;
+  return todayInNairobi >= dueDate ? "expired" : status;
 }
 
 router.get("/billing/current", requireAdmin(), async (req: Request, res: Response): Promise<void> => {

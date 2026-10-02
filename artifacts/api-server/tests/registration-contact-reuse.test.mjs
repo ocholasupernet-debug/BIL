@@ -38,6 +38,13 @@ test("registration accepts reused contacts without advertising the allowance", (
   assert.match(authController, /checkRegistrationContactCapacity\(email, null\)/);
 });
 
+test("registration does not require email verification", () => {
+  assert.match(adminRegister, /Email address/);
+  assert.doesNotMatch(adminRegister, /emailVerificationToken|requestEmailVerification|verifyRegistrationEmail|Send email verification code/);
+  assert.doesNotMatch(registrationRoute, /consumeEmailRegistrationToken|emailVerificationToken|Verify your email address before continuing registration/);
+  assert.doesNotMatch(authController, /consumeEmailRegistrationToken|emailVerificationToken|Verify your email address before creating an account/);
+});
+
 test("registration OTP is delivered for contact numbers still within the account cap", () => {
   assert.match(smsRoute, /checkRegistrationContactCapacity\(null, phone\)/);
   assert.match(whatsappRoute, /checkRegistrationContactCapacity\(null, phone\)/);

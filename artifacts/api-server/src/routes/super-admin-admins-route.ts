@@ -64,8 +64,8 @@ router.post("/super-admin/admins", async (req: Request, res: Response): Promise<
     res.status(400).json({ ok: false, error: "Enter a valid email address." });
     return;
   }
-  if (password && (password.length < 8 || password.toLowerCase() === "admin")) {
-    res.status(400).json({ ok: false, error: "Passwords must contain at least 8 characters and cannot be the default password." });
+  if (password && (password.length < 6 || password.toLowerCase() === "admin")) {
+    res.status(400).json({ ok: false, error: "Passwords must contain at least 6 characters and cannot be the default password." });
     return;
   }
 
@@ -177,8 +177,8 @@ router.put("/super-admin/admins/:id", async (req: Request, res: Response): Promi
     res.status(400).json({ ok: false, error: "Enter a valid email address." });
     return;
   }
-  if (password && (password.length < 8 || password.toLowerCase() === "admin")) {
-    res.status(400).json({ ok: false, error: "Passwords must contain at least 8 characters and cannot be the default password." });
+  if (password && (password.length < 6 || password.toLowerCase() === "admin")) {
+    res.status(400).json({ ok: false, error: "Passwords must contain at least 6 characters and cannot be the default password." });
     return;
   }
   const phoneE164 = phone ? normalizeSmsPhone(phone) : null;

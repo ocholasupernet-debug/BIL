@@ -2336,6 +2336,8 @@ export interface HotspotUser {
   password: string;
   profile: string;
   comment: string;
+  macAddress?: string;
+  server?: string;
   disabled: boolean;
   limitUptime: string;
   limitBytesTotal: number;
@@ -2353,11 +2355,48 @@ export async function fetchHotspotUserList(creds: RouterCredentials): Promise<Ho
       password:        r.password          ?? "",
       profile:         r.profile           ?? "default",
       comment:         r.comment           ?? "",
+      macAddress:      r["mac-address"]    ?? "",
+      server:          r.server            ?? "",
       disabled:        parseBool(r.disabled),
       limitUptime:     r["limit-uptime"]   ?? "",
       limitBytesTotal: parseBytes(r["limit-bytes-total"]),
       bytesIn:         parseBytes(r["bytes-in"]),
       bytesOut:        parseBytes(r["bytes-out"]),
+    }));
+  });
+}
+
+export interface HotspotUserProfile {
+  id: string;
+  name: string;
+  rateLimit: string;
+  sharedUsers: number;
+  sessionTimeout: string;
+  idleTimeout: string;
+  keepaliveTimeout: string;
+  statusAutorefresh: string;
+  macCookieTimeout: string;
+  comment: string;
+}
+
+export async function fetchHotspotUserProfiles(creds: RouterCredentials): Promise<HotspotUserProfile[]> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write(["/ip/hotspot/user/profile/print"]),
+      ms,
+    )) as Record<string, string>[];
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      id: r[".id"] ?? "",
+      name: r.name ?? "",
+      rateLimit: r["rate-limit"] ?? "",
+      sharedUsers: Math.max(0, Number.parseInt(r["shared-users"] ?? "0", 10) || 0),
+      sessionTimeout: r["session-timeout"] ?? "",
+      idleTimeout: r["idle-timeout"] ?? "",
+      keepaliveTimeout: r["keepalive-timeout"] ?? "",
+      statusAutorefresh: r["status-autorefresh"] ?? "",
+      macCookieTimeout: r["mac-cookie-timeout"] ?? "",
+      comment: r.comment ?? "",
     }));
   });
 }
@@ -3886,6 +3925,7 @@ export interface PPPSecret {
   profile: string;
   localAddress: string;
   remoteAddress: string;
+  callerId?: string;
   disabled: boolean;
   comment: string;
 }
@@ -3902,6 +3942,7 @@ export async function fetchPPPSecrets(creds: RouterCredentials): Promise<PPPSecr
       profile:       r.profile            ?? "default",
       localAddress:  r["local-address"]   ?? "",
       remoteAddress: r["remote-address"]  ?? "",
+      callerId:      r["caller-id"]       ?? "",
       disabled:      parseBool(r.disabled),
       comment:       r.comment            ?? "",
     }));
@@ -4025,6 +4066,7 @@ export interface PPPProfile {
   rateLimit: string;
   sessionTimeout: string;
   idleTimeout: string;
+  onlyOne?: boolean;
   comment: string;
 }
 
@@ -4040,6 +4082,7 @@ export async function fetchPPPProfiles(creds: RouterCredentials): Promise<PPPPro
       rateLimit:      r["rate-limit"]      ?? "",
       sessionTimeout: r["session-timeout"] ?? "",
       idleTimeout:    r["idle-timeout"]    ?? "",
+      onlyOne:        parseBool(r["only-one"]),
       comment:        r.comment            ?? "",
     }));
   });

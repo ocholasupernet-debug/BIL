@@ -16,6 +16,8 @@ const [
   recoveryUi,
   resellerUi,
   accountAccessRoute,
+  adminLayout,
+  superAdminAdminsRoute,
 ] = await Promise.all([
   read("../src/controllers/auth-controller.ts"),
   read("../src/routes/api-auth-route.ts"),
@@ -29,21 +31,26 @@ const [
   read("../../ochola-supernet/src/pages/admin/AdminLogin.tsx"),
   read("../../ochola-supernet/src/pages/admin/ResellerWorkspace.tsx"),
   read("../src/routes/super-admin-account-access-route.ts"),
+  read("../../ochola-supernet/src/components/layout/AdminLayout.tsx"),
+  read("../src/routes/super-admin-admins-route.ts"),
 ]);
 
-test("registration and first-password setup require eight characters", () => {
-  assert.match(authController, /password\.length < 8/);
-  assert.match(setupRoute, /password\.length < 8/);
-  assert.match(unifiedRegister, /minLength=\{8\}/);
-  assert.match(setPassword, /password\.length < 8/);
-  assert.match(setPassword, /minLength=\{8\}/);
+test("account password setup and registration allow a six-character minimum", () => {
+  assert.match(authController, /password\.length < 6/);
+  assert.match(setupRoute, /password\.length < 6/);
+  assert.match(unifiedRegister, /minLength=\{6\}/);
+  assert.match(setPassword, /password\.length < 6/);
+  assert.match(setPassword, /minLength=\{6\}/);
+  assert.match(adminLayout, /newPassword\.length < 6/);
+  assert.match(adminLayout, /noValidate/);
+  assert.match(superAdminAdminsRoute, /password\.length < 6/);
 });
 
 test("payment settings password is separate and only Super Admin can reset its credentials", () => {
   assert.match(whatsappRoute, /password\.length < 10/);
   assert.match(whatsappRoute, /password !== confirmPassword/);
-  assert.match(whatsappRoute, /A payment settings password is already set\. Only a Super Admin can reset it\./);
-  assert.match(whatsappRoute, /if \(purpose === "recovery"\)[\s\S]*Only a Super Admin can reset an account password/);
+  assert.match(whatsappRoute, /A payment settings password is already set\./);
+  assert.match(whatsappRoute, /if \(purpose === "recovery"\)[\s\S]*Password recovery is not available here\./);
   assert.match(accountAccessRoute, /reset-payment-settings-credentials/);
   assert.match(accountAccessRoute, /activeSuperAdminName/);
   assert.match(accountAccessRoute, /gateway_settings_password_hash:\s*null/);

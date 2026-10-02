@@ -313,6 +313,8 @@ type PlatformBillingState = {
     due_date: string;
     status: string;
     payment_phone?: string | null;
+    sales_total?: number | string;
+    sales_threshold?: number | string;
   } | null;
 };
 
@@ -352,8 +354,8 @@ function PlatformBillingBanner() {
 
   if (role === "superadmin" || !state?.eligible || !state.invoice || state.invoice.status === "paid") return null;
 
-  const dueAt = Date.parse(`${state.invoice.due_date}T23:59:59.999Z`);
-  const remaining = Math.max(0, dueAt - now);
+  const dueAt = Date.parse(`${state.invoice.due_date}T00:00:00+03:00`);
+  const remaining = Number.isFinite(dueAt) ? Math.max(0, dueAt - now) : 0;
   const days = Math.floor(remaining / 86400000);
   const hours = Math.floor((remaining % 86400000) / 3600000);
   const minutes = Math.floor((remaining % 3600000) / 60000);
@@ -365,6 +367,10 @@ function PlatformBillingBanner() {
     timeZone: "Africa/Nairobi",
   });
   const isPastDue = remaining === 0;
+  const previousSalesTotal = state.invoice.sales_total == null ? null : Number(state.invoice.sales_total);
+  const salesThreshold = state.invoice.sales_threshold == null ? null : Number(state.invoice.sales_threshold);
+  const hasPreviousSalesTotal = previousSalesTotal !== null && Number.isFinite(previousSalesTotal);
+  const hasSalesThreshold = salesThreshold !== null && Number.isFinite(salesThreshold);
 
   const renew = async () => {
     setBusy(true);
@@ -435,8 +441,20 @@ function PlatformBillingBanner() {
           </span>
         </div>
         <p className="platform-billing-banner__summary">
-          KSh {Number(state.invoice.amount_due).toLocaleString("en-KE")} due by <strong>{dueDateLabel}</strong>.
+          {isPastDue ? "Renewal was due at midnight at the start of " : "Pay before midnight at the start of "}
+          <strong>{dueDateLabel}</strong> (Nairobi time): KSh {Number(state.invoice.amount_due).toLocaleString("en-KE")}.
         </p>
+        {hasPreviousSalesTotal && (
+          <p className="platform-billing-banner__summary">
+            Previous month’s eligible sales: <strong>KSh {previousSalesTotal.toLocaleString("en-KE")}</strong>
+            {hasSalesThreshold && (
+              <>
+                {" "}({previousSalesTotal > salesThreshold ? "above" : "at or below"} the KSh {salesThreshold.toLocaleString("en-KE")} threshold; renewal fee KSh {Number(state.invoice.amount_due).toLocaleString("en-KE")}).
+              </>
+            )}
+            {!hasSalesThreshold && "."}
+          </p>
+        )}
         <span className="platform-billing-banner__note">Monthly reminder · available from the 1st of each month</span>
         {!state.paymentsAvailable && <small className="platform-billing-banner__message">Renewal payments are unavailable in this preview.</small>}
         {message && <small className={`platform-billing-banner__message${message.includes("confirmed") ? " platform-billing-banner__message--success" : ""}`}>{message}</small>}
@@ -744,12 +762,16 @@ export function AdminLayout({
     event.preventDefault();
     setPasswordError("");
     setPasswordNotice("");
+    if (!currentPassword.trim()) {
+      setPasswordError("Enter your current password.");
+      return;
+    }
     if (newPassword !== confirmNewPassword) {
       setPasswordError("The new password and confirmation do not match.");
       return;
     }
-    if (newPassword.length < 10 || newPassword.length > 200) {
-      setPasswordError("Choose a password with at least 10 characters.");
+    if (newPassword.length < 6 || newPassword.length > 200) {
+      setPasswordError("Choose a password with at least 6 characters.");
       return;
     }
     setPasswordBusy(true);
@@ -1258,16 +1280,16 @@ export function AdminLayout({
 
         {changePasswordOpen && (
           <div role="dialog" aria-modal="true" aria-labelledby="change-password-title" style={{ position: "fixed", inset: 0, zIndex: 110, background: "rgba(5,10,20,0.78)", display: "grid", placeItems: "center", padding: 20 }}>
-            <form onSubmit={handleChangePassword} style={{ width: "min(100%, 440px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
+            <form onSubmit={handleChangePassword} noValidate style={{ width: "min(100%, 440px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
                 <h2 id="change-password-title" style={{ margin: 0, fontSize: 19 }}>Change password</h2>
                 <button type="button" aria-label="Close password change" onClick={() => setChangePasswordOpen(false)} style={{ border: 0, background: "transparent", color: "var(--isp-text-muted)", cursor: "pointer" }}><X size={18} /></button>
               </div>
-              <p style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>Enter your current password, then choose and confirm a new password of at least 10 characters.</p>
+              <p style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>Enter your current password, then choose and confirm a new password of at least 6 characters.</p>
               <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>Current password</label>
               <input type="password" autoComplete="current-password" value={currentPassword} onChange={event => setCurrentPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", marginBottom: 12, border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
               <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>New password</label>
-              <input type="password" autoComplete="new-password" minLength={10} value={newPassword} onChange={event => setNewPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", marginBottom: 12, border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+              <input type="password" autoComplete="new-password" minLength={6} value={newPassword} onChange={event => setNewPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", marginBottom: 12, border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
               <label style={{ display: "block", fontSize: 13, marginBottom: 5 }}>Confirm new password</label>
               <input type="password" autoComplete="new-password" minLength={10} value={confirmNewPassword} onChange={event => setConfirmNewPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
               {passwordError && <p role="alert" style={{ color: "#dc2626", fontSize: 13 }}>{passwordError}</p>}

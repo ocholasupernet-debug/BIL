@@ -1,9 +1,13 @@
 import { encryptVpnSecret, decryptVpnSecret, type EncryptedSecret } from "../lib/vpn-crypto.js";
 import {
   fetchHotspotUserList,
+  fetchHotspotUserProfiles,
   fetchPPPSecrets,
+  fetchPPPProfiles,
   type HotspotUser,
+  type HotspotUserProfile,
   type PPPSecret,
+  type PPPProfile,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
 import { sbRpc } from "../lib/supabase-client.js";
@@ -11,12 +15,14 @@ import { sbRpc } from "../lib/supabase-client.js";
 const MAX_SNAPSHOT_BYTES = 6 * 1024 * 1024;
 
 export interface RouterUserSnapshotPayload {
-  version: 1;
+  version: 1 | 2;
   routerId: number;
   routerName: string;
   capturedAt: string;
   pppSecrets: PPPSecret[];
   hotspotUsers: HotspotUser[];
+  pppProfiles?: PPPProfile[];
+  hotspotProfiles?: HotspotUserProfile[];
 }
 
 export interface ClaimedRouterUserSnapshot {
@@ -82,14 +88,18 @@ export async function syncClaimedRouterUserSnapshot(
     // Fetch sequentially to avoid opening concurrent API sessions on smaller routers.
     const pppSecrets = await fetchPPPSecrets(creds);
     const hotspotUsers = await fetchHotspotUserList(creds);
+    const pppProfiles = await fetchPPPProfiles(creds);
+    const hotspotProfiles = await fetchHotspotUserProfiles(creds);
     const capturedAt = new Date().toISOString();
     const encrypted = encodeRouterUserSnapshot({
-      version: 1,
+      version: 2,
       routerId,
       routerName: routerName.slice(0, 100),
       capturedAt,
       pppSecrets,
       hotspotUsers,
+      pppProfiles,
+      hotspotProfiles,
     });
     const result = await sbRpc<{ completed: boolean }>("complete_router_user_snapshot", {
       p_admin_id: adminId,

@@ -443,8 +443,8 @@ router.post("/auth/admin/change-password", requireAdmin(), async (req: Request, 
     res.status(400).json({ ok: false, error: "The new password and confirmation do not match." });
     return;
   }
-  if (password.length < 10 || password.length > 200 || password.toLowerCase() === "admin") {
-    res.status(400).json({ ok: false, error: "Choose a new password with at least 10 characters." });
+  if (password.length < 6 || password.length > 200 || password.toLowerCase() === "admin") {
+    res.status(400).json({ ok: false, error: "Choose a new password with at least 6 characters." });
     return;
   }
 
@@ -581,8 +581,8 @@ router.post("/auth/admin/set-password", async (req: Request, res: Response): Pro
     res.status(400).json({ ok: false, error: "Enter matching passwords." });
     return;
   }
-  if (password.length < 8 || password.toLowerCase() === "admin") {
-    res.status(400).json({ ok: false, error: "Choose a new password with at least 8 characters." });
+  if (password.length < 6 || password.toLowerCase() === "admin") {
+    res.status(400).json({ ok: false, error: "Choose a new password with at least 6 characters." });
     return;
   }
 

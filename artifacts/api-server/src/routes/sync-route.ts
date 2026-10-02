@@ -779,6 +779,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
       ip_address?: string;
       comment?: string;
       router_id?: number | null;
+      customer_id?: number;
     }>;
   };
 
@@ -860,6 +861,21 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
       )
     : [];
   const plansById = new Map(planRows.map(plan => [Number(plan.id), plan]));
+  const customerIds = [...new Set(users
+    .map(user => Number(user.customer_id))
+    .filter(id => Number.isSafeInteger(id) && id > 0))];
+  const customerRows = customerIds.length
+    ? await sbSelect<{
+        id: number;
+        username: string | null;
+        pppoe_username: string | null;
+        fup_limit_mb: number | null;
+      }>(
+        "isp_customers",
+        `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${customerIds.join(",")})&select=id,username,pppoe_username,fup_limit_mb&limit=5000`,
+      )
+    : [];
+  const customersById = new Map(customerRows.map(customer => [Number(customer.id), customer]));
 
   const logs: string[] = [];
   const log = (msg: string) => logs.push(msg);
@@ -881,6 +897,12 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
 
     for (const u of users) {
       const plan = u.plan_id ? plansById.get(Number(u.plan_id)) : undefined;
+      const storedCustomer = customersById.get(Number(u.customer_id));
+      const suppliedRadiusUsername = String(u.pppoe_username || u.username || "").trim();
+      const storedRadiusUsername = String(storedCustomer?.pppoe_username || storedCustomer?.username || "").trim();
+      const customerFupLimitMb = storedCustomer && storedRadiusUsername === suppliedRadiusUsername
+        ? Number(storedCustomer.fup_limit_mb)
+        : 0;
       const isHotspotUser = u.type === "hotspot" || u.type === "voucher";
       if (u.router_id !== undefined && routerId !== undefined && Number(u.router_id) !== Number(routerId)) {
         log(`  — Skipping '${u.username}': assigned to a different router`);
@@ -944,7 +966,11 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         const parsedCapMb = plan.data_limit_mb === null || plan.data_limit_mb === undefined
           ? null
           : Number(plan.data_limit_mb);
-        const capMb = parsedCapMb === 0 ? null : parsedCapMb;
+        const capMb = isHotspotUser && Number.isFinite(customerFupLimitMb) && customerFupLimitMb > 0
+          ? customerFupLimitMb
+          : parsedCapMb === 0
+            ? null
+            : parsedCapMb;
         let policy: ReturnType<typeof validateFupPolicy>;
         try {
           policy = validateFupPolicy(

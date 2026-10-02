@@ -9,7 +9,6 @@ import { hashIspAdminPassword } from "../lib/passwords.js";
 import { apiTokenSigningConfigured, generateAdminSessionToken } from "../lib/api-auth.js";
 import { RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
 import { sendRegistrationConfirmationEmail } from "../lib/platform-email.js";
-import { consumeEmailRegistrationToken } from "../services/email-registration-otp.js";
 
 export type UnifiedRegistrationRole = "isp_admin" | "reseller";
 
@@ -67,8 +66,8 @@ export async function registerAccount(req: Request, res: Response): Promise<void
     res.status(400).json({ success: false, ok: false, error: "Enter a valid email address." });
     return;
   }
-  if (password.length < 8 || password.length > 200) {
-    res.status(400).json({ success: false, ok: false, error: "Choose a password with at least 8 characters." });
+  if (password.length < 6 || password.length > 200) {
+    res.status(400).json({ success: false, ok: false, error: "Choose a password with at least 6 characters." });
     return;
   }
   if (password !== confirmPassword) {
@@ -131,18 +130,6 @@ export async function registerAccount(req: Request, res: Response): Promise<void
   }
 
   const passwordHash = await hashIspAdminPassword(password);
-  const emailVerificationToken = typeof req.body?.emailVerificationToken === "string"
-    ? req.body.emailVerificationToken
-    : "";
-  if (!emailVerificationToken || !await consumeEmailRegistrationToken(emailVerificationToken, email)) {
-    res.status(403).json({
-      success: false,
-      ok: false,
-      error: "Verify your email address before creating an account.",
-    });
-    return;
-  }
-
   const accountPayload = {
     name,
     company_name: businessName,

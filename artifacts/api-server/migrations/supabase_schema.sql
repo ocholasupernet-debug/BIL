@@ -186,6 +186,7 @@ create table if not exists isp_customers (
   status          text not null default 'active',   -- active | suspended | expired
   expires_at      timestamptz,
   depletion_reason text,
+  router_import_data jsonb,
   wallet_balance  numeric(12,2) not null default 0,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()

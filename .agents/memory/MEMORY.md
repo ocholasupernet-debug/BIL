@@ -99,5 +99,6 @@
 - [Reseller VLAN access handoff](reseller-vlan-access-handoff.md) — Identify the live physical ingress before assigning an untagged reseller VLAN access port; preserve the legacy native VLAN explicitly.
 - [Settings page verification](settings-page-verification.md) — Keep the Settings visibility group separate from the independent verification identity of each tab.
 - [Page-verification credential changes](page-verification-credential-changes.md) — Version browser caches and server proofs when a page's password credential changes.
+- [Inline JSX patching](inline-jsx-patching.md) — Split dense form controls before changing attributes; exact-line patches can fail on long JSX.
 - [Canvas action validation](canvas-action-validation.md) — Keep iframe update actions literal, cap suggestion labels at 60 characters, and attach three suggestions when marking design frames live.
 - [Tenant-facing role copy](tenant-facing-role-copy.md) — Keep platform-role disclosures out of ISP/reseller-facing copy while preserving internal authorization and privileged-only surfaces.

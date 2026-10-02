@@ -116,9 +116,9 @@ export default function SuperAdminBillingEngine() {
 
         <Section title="ISP & reseller platform renewal" icon={DollarSign}>
           <p style={{ color: C.sub, fontSize: "0.76rem", lineHeight: 1.6, margin: "0 0 20px" }}>
-            The monthly renewal banner appears from the 1st. Accounts created on or after the 25th of the previous month skip that cycle's banner. Fees use the immutable previous-month sales ledger and are due on the configured day.
+            The monthly renewal banner appears from the 1st. Accounts created on or after the 25th of the previous month skip that cycle's banner. Fees use the immutable previous-month sales ledger and are due by midnight at the start of the configured day (Nairobi time).
           </p>
-          <Row label="Payment deadline" hint="Banner countdown ends at the end of this day">
+          <Row label="Payment deadline" hint="Unpaid renewals expire at midnight at the start of this day (Nairobi time)">
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <input style={{ ...inp, width: 90 }} type="number" min="1" max="28" value={platform.due_day} onChange={e => platformSet("due_day", e.target.value)} />
               <span style={{ color: C.sub, fontSize: "0.82rem" }}>of each month</span>

@@ -47,8 +47,8 @@ export default function AdminSetPassword() {
     e.preventDefault();
     setError("");
 
-    if (password.length < 8 || password.toLowerCase() === "admin") {
-      setError("Choose a new password with at least 8 characters.");
+    if (password.length < 6 || password.toLowerCase() === "admin") {
+      setError("Choose a new password with at least 6 characters.");
       return;
     }
     if (password !== confirm) {
@@ -143,8 +143,8 @@ export default function AdminSetPassword() {
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  minLength={8}
-                  placeholder="At least 8 characters"
+                  minLength={6}
+                  placeholder="At least 6 characters"
                   style={inputStyle}
                   onFocus={e => { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; }}
                   onBlur={e => { e.target.style.borderColor = "var(--isp-input-border)"; e.target.style.boxShadow = "none"; }}

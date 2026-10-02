@@ -303,7 +303,7 @@ export default function UnifiedRegister() {
             <label htmlFor="register-password">Password</label>
             <div className="unified-register-input-wrap">
               <LockKeyhole size={17} aria-hidden="true" />
-              <input id="register-password" required minLength={8} type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" placeholder="At least 8 characters" />
+              <input id="register-password" required minLength={6} type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" placeholder="At least 6 characters" />
               <button type="button" className="unified-register-password-toggle" onClick={() => setShowPassword((visible) => !visible)} aria-label={showPassword ? "Hide password" : "Show password"}>
                 {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
               </button>
@@ -314,7 +314,7 @@ export default function UnifiedRegister() {
             <label htmlFor="register-confirm-password">Confirm password</label>
             <div className="unified-register-input-wrap">
               <LockKeyhole size={17} aria-hidden="true" />
-              <input id="register-confirm-password" required minLength={10} type={showPassword ? "text" : "password"} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder="Enter the same password again" />
+              <input id="register-confirm-password" required minLength={6} type={showPassword ? "text" : "password"} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder="Enter the same password again" />
             </div>
           </div>
 

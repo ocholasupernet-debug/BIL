@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, CheckCircle, Clock3, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 import { getAdminApiToken } from "@/lib/supabase";
+import { RouterUserImportModal } from "./RouterUserImportModal";
 
 interface SnapshotStatus {
   routerId: number;
@@ -65,6 +66,7 @@ export function RouterUserSnapshotModal({
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [showImport, setShowImport] = useState(false);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -126,7 +128,7 @@ export function RouterUserSnapshotModal({
   return (
     <div
       role="presentation"
-      onClick={onClose}
+      onClick={() => { if (!showImport) onClose(); }}
       style={{
         position: "fixed", inset: 0, zIndex: 1100, padding: "1rem",
         display: "flex", alignItems: "center", justifyContent: "center",
@@ -167,7 +169,7 @@ export function RouterUserSnapshotModal({
           border: "1px solid rgba(16,185,129,0.2)", fontSize: "0.73rem", lineHeight: 1.5,
         }}>
           <ShieldCheck size={16} style={{ flexShrink: 0, marginTop: 1 }} />
-          <span>PPP and Hotspot user details, including passwords, are encrypted in storage and never shown here. This does not include live sessions or historical session records.</span>
+          <span>PPP and Hotspot users and service profiles, including passwords, are encrypted in storage and never shown here. Live sessions and historical billing are not included.</span>
         </div>
 
         {loading ? (
@@ -235,6 +237,21 @@ export function RouterUserSnapshotModal({
               : <Clock3 size={13} />}
             {status?.scheduleEnabled ? "Disable daily refresh" : "Enable daily refresh"}
           </button>
+          <button
+            type="button"
+            onClick={() => setShowImport(true)}
+            disabled={!status?.snapshotAvailable || loading}
+            title={status?.snapshotAvailable ? "Review router users and import them into this ISP account" : "Sync a user backup before importing"}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6, padding: "0.55rem 0.75rem",
+              borderRadius: 7, border: "1px solid var(--isp-border)", background: "rgba(255,255,255,0.04)",
+              color: "var(--isp-text)", fontSize: "0.75rem", fontWeight: 650,
+              cursor: !status?.snapshotAvailable || loading ? "not-allowed" : "pointer",
+              opacity: !status?.snapshotAvailable || loading ? 0.6 : 1,
+            }}
+          >
+            <ShieldCheck size={13} /> Import into account
+          </button>
           <div style={{ display: "flex", gap: 8 }}>
             <button
               type="button"
@@ -268,6 +285,13 @@ export function RouterUserSnapshotModal({
           </div>
         </footer>
       </section>
+      {showImport && (
+        <RouterUserImportModal
+          routerId={routerId}
+          routerName={routerName}
+          onClose={() => setShowImport(false)}
+        />
+      )}
     </div>
   );
 }

@@ -13,11 +13,26 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   delete process.env.SUPABASE_SERVICE_KEY;
 
-  const [{ default: billingRouter }, { default: mpesaRouter }, { generateAdminSessionToken }] = await Promise.all([
+  const [{ default: billingRouter, activeBillingStatus }, { default: mpesaRouter }, { generateAdminSessionToken }] = await Promise.all([
     import("./billing-route.js"),
     import("./mpesa-route.js"),
     import("../lib/api-auth.js"),
   ]);
+  assert.equal(
+    activeBillingStatus({ status: "due", due_date: "2026-09-05" }, new Date("2026-09-04T20:59:59.999Z")),
+    "due",
+    "the invoice remains due until midnight at the start of the fifth in Nairobi",
+  );
+  assert.equal(
+    activeBillingStatus({ status: "due", due_date: "2026-09-05" }, new Date("2026-09-04T21:00:00.000Z")),
+    "expired",
+    "the invoice expires at midnight at the start of the fifth in Nairobi",
+  );
+  assert.equal(
+    activeBillingStatus({ status: "paid", due_date: "2026-09-05" }, new Date("2026-09-04T21:00:00.000Z")),
+    "paid",
+    "paid invoices stay paid after the deadline",
+  );
   const app = express();
   app.use(express.json());
   app.use("/api", billingRouter);
