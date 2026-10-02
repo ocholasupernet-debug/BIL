@@ -837,6 +837,19 @@ export async function runRouterCommand(
   return withConn(creds, (conn) => runRouterCommandOnConnection(conn, creds, command));
 }
 
+export async function runRouterCommands(
+  creds: RouterCredentials,
+  commands: string[][]
+): Promise<Record<string, string>[][]> {
+  return withConn(creds, async conn => {
+    const results: Record<string, string>[][] = [];
+    for (const command of commands) {
+      results.push(await runRouterCommandOnConnection(conn, creds, command));
+    }
+    return results;
+  });
+}
+
 export async function readRouterSystemIdentity(creds: RouterCredentials): Promise<string> {
   return withReadConn(creds, async (conn) => {
     const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 15_000);
