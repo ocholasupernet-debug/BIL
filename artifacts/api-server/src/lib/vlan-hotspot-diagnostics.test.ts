@@ -1,7 +1,42 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { summarizeVlanHotspotDiagnostics } from "./vlan-hotspot-diagnostics.js";
+import {
+  summarizeVlanBridgePortIngress,
+  summarizeVlanHotspotDiagnostics,
+} from "./vlan-hotspot-diagnostics.js";
+
+test("summarizes only the selected bridge-port ingress fields", () => {
+  const result = summarizeVlanBridgePortIngress([
+    {
+      ".id": "*2",
+      interface: "ether4",
+      bridge: "hotspot-bridge",
+      disabled: "false",
+      running: "true",
+      pvid: "20",
+      "frame-types": "admit-only-vlan-tagged",
+      "ingress-filtering": "true",
+      "mac-address": "00:11:22:33:44:55",
+      comment: "unrelated router metadata",
+    },
+  ], "ether4", "hotspot-bridge");
+
+  assert.deepEqual(result, {
+    interface: "ether4",
+    bridge: "hotspot-bridge",
+    disabled: "false",
+    running: "true",
+    pvid: "20",
+    frameTypes: "admit-only-vlan-tagged",
+    ingressFiltering: "true",
+  });
+  assert.equal(JSON.stringify(result).includes("mac-address"), false);
+  assert.equal(
+    summarizeVlanBridgePortIngress([], "ether4", "hotspot-bridge"),
+    null,
+  );
+});
 
 test("summarizes the VLAN server, assigned profile, portal files, and aggregate host counts", () => {
   const result = summarizeVlanHotspotDiagnostics({

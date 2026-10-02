@@ -37,7 +37,10 @@ import {
   withVlanIngressModeLock,
   type VlanIngressMode,
 } from "../lib/port-service-resources.js";
-import { summarizeVlanHotspotDiagnostics } from "../lib/vlan-hotspot-diagnostics.js";
+import {
+  summarizeVlanBridgePortIngress,
+  summarizeVlanHotspotDiagnostics,
+} from "../lib/vlan-hotspot-diagnostics.js";
 import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
 import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
 import { buildVlanHotspotProfileConfig } from "../lib/vlan-hotspot-profile.js";
@@ -2986,23 +2989,8 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
     const { parentBridge, vlanInterface } = vlanServiceResources(port);
     const network = portServiceNetwork(port.id, port.subnet_range || "");
     const creds = routerCredentials(target);
-    const [
-      bridgeRows,
-      bridgePortRows,
-      bridgeVlanRows,
-      vlanRows,
-      addressRows,
-      dhcpRows,
-      dhcpNetworkRows,
-      leaseRows,
-      hotspotHostRows,
-      arpRows,
-      hotspotServerRows,
-      hotspotProfileRows,
-      hotspotFileRows,
-      hotspotHostSummaryRows,
-      captivePortalOptionRows,
-    ] = await runRouterCommands(creds, [
+    const handoffInterface = normalizedHandoffInterface(port.handoff_interface);
+    const diagnosticCommands: string[][] = [
       ["/interface/bridge/print", "=.proplist=.id,name,disabled,running,vlan-filtering,frame-types,ingress-filtering", `?name=${parentBridge}`],
       ["/interface/bridge/port/print", "=.proplist=.id,interface,bridge,disabled,running,hw,edge,point-to-point,pvid,frame-types,ingress-filtering", `?bridge=${parentBridge}`],
       ["/interface/bridge/vlan/print", "=.proplist=.id,bridge,vlan-ids,tagged,untagged", `?bridge=${parentBridge}`],
@@ -3018,7 +3006,40 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
       ["/file/print", "=.proplist=name"],
       ["/ip/hotspot/host/print", "=.proplist=server"],
       ["/ip/dhcp-server/option/print", "=.proplist=name,code,value", "?code=114"],
-    ]);
+    ];
+    if (handoffInterface) {
+      diagnosticCommands.splice(2, 0, [
+        "/interface/bridge/port/print",
+        `?interface=${handoffInterface}`,
+      ]);
+    }
+    const diagnosticResults = await runRouterCommands(creds, diagnosticCommands);
+    let diagnosticIndex = 0;
+    const bridgeRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const bridgePortRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const handoffBridgePortDetailRows = handoffInterface
+      ? diagnosticResults[diagnosticIndex++] ?? []
+      : [];
+    const bridgeVlanRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const vlanRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const addressRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const dhcpRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const dhcpNetworkRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const leaseRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const hotspotHostRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const arpRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const hotspotServerRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const hotspotProfileRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const hotspotFileRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const hotspotHostSummaryRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const captivePortalOptionRows = diagnosticResults[diagnosticIndex++] ?? [];
+    const handoffBridgePort = handoffInterface
+      ? summarizeVlanBridgePortIngress(
+        handoffBridgePortDetailRows,
+        handoffInterface,
+        parentBridge,
+      )
+      : null;
     const relevantHotspotInterfaces = new Set([
       vlanInterface,
       parentBridge,
@@ -3081,8 +3102,7 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
     const queueDiagnosticsError = queueReadResult.status === "rejected"
       ? "MikroTik aggregate or customer queue counters could not be read."
       : null;
-    const handoffInterface = String(port.handoff_interface ?? "").trim();
-    const handoffLink = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(handoffInterface)
+    const handoffLink = handoffInterface
       ? await detectRouterInterfaceLink(target, handoffInterface)
       : null;
     res.json({
@@ -3111,6 +3131,7 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
         type: handoffLink.type,
         error: handoffLink.error,
       } : null,
+      handoffBridgePort,
       bridge: bridgeRows,
       bridgePorts: bridgePortRows,
       bridgeVlans: bridgeVlanRows,
