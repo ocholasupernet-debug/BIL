@@ -46,6 +46,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_router_migration_tunnel_allocator_collision_fix.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_migration_tunnel_ccd_reservations.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_migration_source_registration.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_router_migration_verified_registration_and_delete.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_vpn_management.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_tenant_subdomain_rules.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_vpn_fallbacks.sql", import.meta.url)),
@@ -113,6 +114,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_account_scoped_hotspot_vouchers.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_account_scoped_hotspot_bindings.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_page_password.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_admin_page_passwords.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_reseller_port_nas_mapping.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });

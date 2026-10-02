@@ -267,15 +267,23 @@ test("collector handoff requires the authenticated RouterOS preflight", async ()
   assert.match(page, /Download both/);
   assert.match(page, /setCurrentStep\(2\)/);
 });
-test("unlisted source registration is tenant-bound, retry-safe, and never a replacement target", async () => {
+test("source registration persists no router before identity verification and remains tenant-bound", async () => {
   const route = await readFile("src/routes/router-migrations-route.ts", "utf8");
   const migration = await readFile("migrations/2026_router_migration_source_registration.sql", "utf8");
+  const verifiedRegistration = await readFile(
+    "migrations/2026_router_migration_verified_registration_and_delete.sql",
+    "utf8",
+  );
   const schemaSnapshot = await readFile("migrations/supabase_schema.sql", "utf8");
   const runner = await readFile("scripts/apply-deployment-migrations.mjs", "utf8");
   const ensure = await readFile("src/routes/router-ensure-route.ts", "utf8");
+  const migrationPage = await readFile("../ochola-supernet/src/pages/admin/network/NetworkMigration.tsx", "utf8");
+  const migrationApi = await readFile("../ochola-supernet/src/pages/admin/network/migration/api.ts", "utf8");
   assert.match(route, /req\.body\?\.registerSource === true/);
   assert.match(route, /registration_key_hash=eq\.\$\{keyHash\}/);
-  assert.match(route, /create_router_migration_source_stub/);
+  assert.doesNotMatch(route, /createPendingMigrationSource|create_router_migration_source_stub/);
+  assert.match(route, /source_router_id:\s*source\?\.id \?\? null/);
+  assert.match(route, /finalize_router_migration_source_registration/);
   assert.match(route, /sourceRegistrationComplete:\s*Boolean\(job\.registration_key_hash\)/);
   assert.match(route, /if \(target\.migration_source_only\)/);
   assert.match(route, /serial=eq\.\$\{encodeURIComponent\(serial\)\}/);
@@ -286,8 +294,19 @@ test("unlisted source registration is tenant-bound, retry-safe, and never a repl
   assert.match(migration, /registration_key_hash/);
   assert.match(migration, /pg_advisory_xact_lock/);
   assert.match(migration, /isp_routers_serial_unique_uidx/);
-  assert.match(schemaSnapshot, /public\.create_router_migration_source_stub/);
+  assert.match(verifiedRegistration, /alter column source_router_id drop not null/);
+  assert.match(verifiedRegistration, /drop function if exists public\.create_router_migration_source_stub/);
+  const identityCheck = route.indexOf("const identity = await routerIdentity(creds)");
+  const finalizeCall = route.indexOf('"finalize_router_migration_source_registration"');
+  assert.ok(identityCheck >= 0 && finalizeCall > identityCheck);
+  assert.match(verifiedRegistration, /nullif\(btrim\(coalesce\(p_identity, ''\)\), ''\) is null/);
+  assert.match(verifiedRegistration, /update router_migration_jobs\s+set source_router_id = v_router_id/s);
+  assert.match(schemaSnapshot, /finalize_router_migration_source_registration/);
+  assert.match(migrationApi, /sourceRouterId:\s*number \| null/);
+  assert.match(migrationPage, /No router record is added until RouterOS identity verification succeeds/);
+  assert.doesNotMatch(migrationPage, /id:\s*result\.sourceRouterId,\s*name:\s*result\.sourceRouterName/);
   assert.match(runner, /2026_router_migration_source_registration\.sql/);
+  assert.match(runner, /2026_router_migration_verified_registration_and_delete\.sql/);
   assert.match(ensure, /migration_source_only=eq\.false/);
 });
 
@@ -297,8 +316,10 @@ test("migration allocator collision fix is registered after copy flow", async ()
   const collisionFix = runner.indexOf("2026_router_migration_tunnel_allocator_collision_fix.sql");
   const ccdReservations = runner.indexOf("2026_router_migration_tunnel_ccd_reservations.sql");
   const sourceRegistration = runner.indexOf("2026_router_migration_source_registration.sql");
+  const verifiedRegistration = runner.indexOf("2026_router_migration_verified_registration_and_delete.sql");
   assert.ok(copyFlow >= 0);
   assert.ok(collisionFix > copyFlow && ccdReservations > collisionFix && ccdReservations < sourceRegistration);
+  assert.ok(verifiedRegistration > sourceRegistration);
 });
 
 test("migration allocator globally locks and reserves failed address pairs", async () => {
@@ -335,15 +356,34 @@ test("migration allocator requires and excludes live backup CCD pair reservation
   assert.match(migration, /notify pgrst, 'reload schema'/i);
 });
 
-test("migration job scans the live backup CCD before creating a source, job, or lease", async () => {
+test("migration job scans live backup CCD before creating a job or lease and does not create a router stub", async () => {
   const route = await readFile("src/routes/router-migrations-route.ts", "utf8");
   const registrationLookup = route.indexOf("await findRegistrationJob(adminId, registrationKeyHash)");
   const ccdScan = route.indexOf("await readRouterMigrationVpnCcdPairs()");
-  const pendingSource = route.indexOf("source = await createPendingMigrationSource(adminId)");
   const jobInsert = route.indexOf('sbInsertStrict<MigrationJob>("router_migration_jobs"');
   const leaseRpc = route.indexOf('"issue_router_migration_tunnel_lease"');
   assert.ok(registrationLookup >= 0 && registrationLookup < ccdScan);
-  assert.ok(ccdScan >= 0 && ccdScan < pendingSource);
-  assert.ok(ccdScan < jobInsert && ccdScan < leaseRpc);
+  assert.ok(ccdScan >= 0 && ccdScan < jobInsert && ccdScan < leaseRpc);
+  assert.doesNotMatch(route, /createPendingMigrationSource|create_router_migration_source_stub/);
   assert.match(route, /p_backup_ccd_pairs:\s*backupCcdPairs/);
+});
+
+test("super-admin router deletion removes migration and customer rows transactionally after temporary peer cleanup", async () => {
+  const deletionRoute = await readFile("src/routes/super-admin-routers-route.ts", "utf8");
+  const migration = await readFile(
+    "migrations/2026_router_migration_verified_registration_and_delete.sql",
+    "utf8",
+  );
+  const runner = await readFile("scripts/apply-deployment-migrations.mjs", "utf8");
+  assert.match(deletionRoute, /prepare_super_admin_router_deletion/);
+  assert.match(deletionRoute, /revokeRouterMigrationVpnClient\(username\)/);
+  assert.match(deletionRoute, /delete_super_admin_router_with_history/);
+  assert.match(migration, /router_migration_collector_tokens/);
+  assert.match(migration, /router_migration_tunnel_leases/);
+  assert.match(migration, /router_migration_target_leases/);
+  assert.match(migration, /delete from isp_customers c where c\.router_id = p_router_id/);
+  assert.match(migration, /delete from router_migration_jobs j\s+where j\.id = any\(v_job_ids\)/s);
+  assert.match(migration, /Active temporary migration VPN clients must be revoked before router deletion/);
+  assert.match(migration, /revoke all on function public\.delete_super_admin_router_with_history/);
+  assert.match(runner, /2026_router_migration_verified_registration_and_delete\.sql/);
 });

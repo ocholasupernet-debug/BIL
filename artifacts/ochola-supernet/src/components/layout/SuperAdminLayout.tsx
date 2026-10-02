@@ -151,6 +151,18 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
   }, [forceLogout]);
 
   useEffect(() => {
+    localStorage.removeItem("ochola_admin_name");
+    localStorage.removeItem("ochola_admin_display_name");
+    localStorage.removeItem("ochola_admin_username");
+    localStorage.removeItem("ochola_api_token");
+    localStorage.removeItem("ochola_impersonating");
+    localStorage.removeItem("ochola_impersonate_name");
+    localStorage.removeItem("ochola_impersonate_username");
+    localStorage.removeItem("ochola_impersonation_session_id");
+    localStorage.removeItem("ochola_impersonation_expires_at");
+  }, []);
+
+  useEffect(() => {
     verifySession();
     const tick = setInterval(verifySession, VERIFY_INTERVAL);
     const handleStorage = (event: StorageEvent) => {

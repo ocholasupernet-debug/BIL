@@ -74,7 +74,7 @@ export const migrationApi = {
   registerSource: (registrationKey: string) =>
     migrationRequest<{
       jobId: number;
-      sourceRouterId: number;
+      sourceRouterId: number | null;
       sourceRouterName: string;
       tunnelScript?: string;
       tunnelAddress?: string;

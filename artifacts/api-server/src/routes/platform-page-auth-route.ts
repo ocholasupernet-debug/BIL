@@ -289,7 +289,8 @@ router.post("/auth/admin/page-otp/verify", async (req: Request, res: Response): 
       ...(context.payload.reauthGrants ?? []).filter(existing =>
         existing.uid === context.payload.uid &&
         existing.expiresAt > Date.now() &&
-        existing.feature !== context.feature,
+        existing.feature !== context.feature &&
+        (existing.method !== "password" || existing.credentialVersion === 1),
       ),
       grant,
     ];

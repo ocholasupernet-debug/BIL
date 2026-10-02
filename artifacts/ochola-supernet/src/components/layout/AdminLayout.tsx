@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import {
   LayoutDashboard, Users, Ticket, Package, CreditCard,
   Network, Settings, Bell, Wifi, Shield, FolderOpen,
@@ -460,14 +460,21 @@ function PlatformBillingBanner() {
 }
 
 type PageAuthMethod = "none" | "password" | "whatsapp" | "sms" | "email";
-type RouterPagePasswordStatus = "unknown" | "checking" | "missing" | "configured";
+type PagePasswordStatus = "unknown" | "checking" | "missing" | "configured";
 const ROUTER_PAGE_AUTH_FEATURE = "network.routers";
 
 function pageReauthSessionKey(adminId: string | number, role: string, feature: string, method: PageAuthMethod): string {
-  const routerPasswordVersion = feature === ROUTER_PAGE_AUTH_FEATURE && method === "password"
-    ? "_independent-v1"
+  const pagePasswordVersion = method === "password"
+    ? "_page-password-v1"
     : "";
-  return `ochola_reauth_${adminId}_${role}_${feature}_${method}${routerPasswordVersion}`;
+  return `ochola_reauth_${adminId}_${role}_${feature}_${method}${pagePasswordVersion}`;
+}
+
+function pagePasswordLabel(feature: string | null): string {
+  if (feature === ROUTER_PAGE_AUTH_FEATURE) return "Routers";
+  const label = feature?.split(".").at(-1)?.replace(/[-_]/g, " ").trim();
+  if (!label) return "this page";
+  return label.replace(/\b\w/g, character => character.toUpperCase());
 }
 
 export function AdminLayout({
@@ -478,6 +485,8 @@ export function AdminLayout({
   hiddenNavHrefs?: string[];
 }) {
   const [location, setLocation] = useLocation();
+  const search = useSearch();
+  const currentRoute = search ? `${location}?${search}` : location;
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 768);
   const [expanded, setExpanded]       = useState<string[]>([]);
   const [notice, setNotice] = useState("");
@@ -492,9 +501,9 @@ export function AdminLayout({
   const [reauthResendSeconds, setReauthResendSeconds] = useState(0);
   const [reauthBusy, setReauthBusy] = useState(false);
   const [reauthError, setReauthError] = useState("");
-  const [routerPagePasswordStatus, setRouterPagePasswordStatus] = useState<RouterPagePasswordStatus>("unknown");
-  const [newRouterPagePassword, setNewRouterPagePassword] = useState("");
-  const [confirmRouterPagePassword, setConfirmRouterPagePassword] = useState("");
+  const [pagePasswordStatus, setPagePasswordStatus] = useState<PagePasswordStatus>("unknown");
+  const [newPagePassword, setNewPagePassword] = useState("");
+  const [confirmPagePassword, setConfirmPagePassword] = useState("");
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -519,19 +528,29 @@ export function AdminLayout({
   const isResellerAccount             = getAdminRole() === "reseller";
   const queryClient                   = useQueryClient();
   const { isVisible }                 = useAdminPageVisibility();
-  const currentFeatureKey             = getAdminFeatureKeyForPath(location);
-  const currentPageAuthFeatureKey     = getAdminPageAuthFeatureKeyForPath(location) ?? currentFeatureKey;
+  const currentFeatureKey             = getAdminFeatureKeyForPath(currentRoute);
+  const currentPageAuthFeatureKey     = getAdminPageAuthFeatureKeyForPath(currentRoute) ?? currentFeatureKey;
   const isOverviewFeature             = !currentPageAuthFeatureKey || currentPageAuthFeatureKey === "overview" || currentPageAuthFeatureKey === "overview.dashboard";
   const requiresReauthGate            = !isOverviewFeature && !isImpersonating();
-  const usesRouterPagePassword        = currentPageAuthFeatureKey === ROUTER_PAGE_AUTH_FEATURE && reauthMethod === "password";
-  const routerPagePasswordSetupNeeded = usesRouterPagePassword && routerPagePasswordStatus === "missing";
-  const routerPagePasswordStatusPending = usesRouterPagePassword &&
+  const usesPagePassword              = reauthMethod === "password";
+  const pagePasswordSetupNeeded        = usesPagePassword && pagePasswordStatus === "missing";
+  const pagePasswordStatusPending      = usesPagePassword &&
     reauthStatus === "required" &&
-    (routerPagePasswordStatus === "unknown" || routerPagePasswordStatus === "checking");
+    (pagePasswordStatus === "unknown" || pagePasswordStatus === "checking");
+  const currentPagePasswordLabel       = pagePasswordLabel(currentPageAuthFeatureKey);
+  const headerUserName                 = getAdminRole() === "superadmin" ||
+    (
+      currentPageAuthFeatureKey === ROUTER_PAGE_AUTH_FEATURE &&
+      requiresReauthGate &&
+      reauthStatus !== "verified" &&
+      reauthStatus !== "not-required"
+    )
+      ? "Admin"
+      : adminName || brand.adminName || "Admin";
   const reauthCheckPending            = requiresReauthGate && (
     reauthCheckedFeature !== currentPageAuthFeatureKey ||
     reauthStatus === "checking" ||
-    routerPagePasswordStatusPending
+    pagePasswordStatusPending
   );
   const pageIsVisible                 = !currentFeatureKey || isVisible(currentFeatureKey);
   const isVpnSurface                  = location.startsWith("/admin/vpn");
@@ -608,46 +627,51 @@ export function AdminLayout({
     }
   };
 
-  const handleRouterPagePasswordSetup = async (event: React.FormEvent) => {
+  const handlePagePasswordSetup = async (event: React.FormEvent) => {
     event.preventDefault();
     setReauthError("");
-    if (newRouterPagePassword.length < 10 || newRouterPagePassword.length > 200) {
-      setReauthError("Choose a password with at least 10 characters.");
+    if (!currentPageAuthFeatureKey) {
+      setReauthError("The current page could not be identified for password setup.");
       return;
     }
-    if (newRouterPagePassword !== confirmRouterPagePassword) {
-      setReauthError("The Routers page passwords do not match.");
+    if (newPagePassword.length < 10 || newPagePassword.length > 200) {
+      setReauthError("Choose a page password with at least 10 characters.");
+      return;
+    }
+    if (newPagePassword !== confirmPagePassword) {
+      setReauthError("The page passwords do not match.");
       return;
     }
 
     setReauthBusy(true);
     try {
-      const response = await fetch("/api/auth/admin/router-page-password/setup", {
+      const response = await fetch("/api/auth/admin/page-password/setup", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAdminApiToken()}` },
         body: JSON.stringify({
-          password: newRouterPagePassword,
-          confirmPassword: confirmRouterPagePassword,
+          feature: currentPageAuthFeatureKey,
+          password: newPagePassword,
+          confirmPassword: confirmPagePassword,
         }),
       });
       const data = await response.json() as { ok?: boolean; token?: string; expiresAt?: number; error?: string };
       const expiresAt = Number(data.expiresAt);
       if (!response.ok || !data.ok || !data.token || !Number.isFinite(expiresAt)) {
-        throw new Error(data.error || "The Routers page password could not be created.");
+        throw new Error(data.error || "The page password could not be created.");
       }
       localStorage.setItem("ochola_api_token", data.token);
       sessionStorage.setItem(
-        pageReauthSessionKey(ADMIN_ID, getAdminRole(), ROUTER_PAGE_AUTH_FEATURE, "password"),
+        pageReauthSessionKey(ADMIN_ID, getAdminRole(), currentPageAuthFeatureKey, "password"),
         String(data.expiresAt),
       );
       window.dispatchEvent(new CustomEvent("ochola-auth-change", { detail: { id: ADMIN_ID } }));
-      setRouterPagePasswordStatus("configured");
-      setNewRouterPagePassword("");
-      setConfirmRouterPagePassword("");
+      setPagePasswordStatus("configured");
+      setNewPagePassword("");
+      setConfirmPagePassword("");
       setReauthUntil(expiresAt);
       setReauthStatus("verified");
     } catch (cause) {
-      setReauthError(cause instanceof Error ? cause.message : "The Routers page password could not be created.");
+      setReauthError(cause instanceof Error ? cause.message : "The page password could not be created.");
     } finally {
       setReauthBusy(false);
     }
@@ -796,9 +820,9 @@ export function AdminLayout({
   }, []);
 
   useEffect(() => {
-    const disabled = new URLSearchParams(location.split("?")[1] ?? "").get("disabled");
+    const disabled = new URLSearchParams(search).get("disabled");
     setNotice(disabled ? "That page is currently unavailable." : "");
-  }, [location]);
+  }, [search]);
 
   useEffect(() => {
     if (!pageIsVisible) {
@@ -810,6 +834,9 @@ export function AdminLayout({
     let cancelled = false;
     const feature = currentPageAuthFeatureKey;
     setReauthError("");
+    setPagePasswordStatus("unknown");
+    setNewPagePassword("");
+    setConfirmPagePassword("");
     if (!feature || feature === "overview" || feature === "overview.dashboard" || isImpersonating()) {
       setReauthUntil(0);
       setReauthMethod("none");
@@ -869,39 +896,36 @@ export function AdminLayout({
   }, [currentPageAuthFeatureKey, reauthRetryKey]);
   useEffect(() => {
     let cancelled = false;
-    const appliesToRouterPassword =
-      currentPageAuthFeatureKey === ROUTER_PAGE_AUTH_FEATURE &&
-      reauthMethod === "password";
-    if (!appliesToRouterPassword) {
-      setRouterPagePasswordStatus("unknown");
-      setNewRouterPagePassword("");
-      setConfirmRouterPagePassword("");
+    if (!usesPagePassword || !currentPageAuthFeatureKey) {
+      setPagePasswordStatus("unknown");
+      setNewPagePassword("");
+      setConfirmPagePassword("");
       return;
     }
     if (reauthStatus !== "required") return;
 
-    setRouterPagePasswordStatus("checking");
+    setPagePasswordStatus("checking");
     setReauthError("");
     void (async () => {
       try {
-        const response = await fetch("/api/auth/admin/router-page-password/status", {
+        const response = await fetch(`/api/auth/admin/page-password/status?feature=${encodeURIComponent(currentPageAuthFeatureKey)}`, {
           cache: "no-store",
           headers: { Authorization: `Bearer ${getAdminApiToken()}` },
         });
         const data = await response.json() as { ok?: boolean; configured?: boolean; error?: string };
         if (!response.ok || !data.ok || typeof data.configured !== "boolean") {
-          throw new Error(data.error || "The Routers page password status could not be checked.");
+          throw new Error(data.error || "The page password status could not be checked.");
         }
         if (cancelled) return;
-        setRouterPagePasswordStatus(data.configured ? "configured" : "missing");
+        setPagePasswordStatus(data.configured ? "configured" : "missing");
       } catch (cause) {
         if (cancelled) return;
-        setReauthError(cause instanceof Error ? cause.message : "The Routers page password status could not be checked.");
+        setReauthError(cause instanceof Error ? cause.message : "The page password status could not be checked.");
         setReauthStatus("failed");
       }
     })();
     return () => { cancelled = true; };
-  }, [currentPageAuthFeatureKey, reauthMethod, reauthStatus, reauthRetryKey]);
+  }, [currentPageAuthFeatureKey, usesPagePassword, reauthMethod, reauthStatus, reauthRetryKey]);
 
   useEffect(() => {
     if (reauthStatus !== "verified" || !reauthUntil) return;
@@ -926,7 +950,10 @@ export function AdminLayout({
     return !!item.children?.some(c => location.startsWith(c.href.split("?")[0]));
   };
 
-  const isChildActive = (href: string) => location.startsWith(href.split("?")[0]);
+  const isChildActive = (href: string) => {
+    const [path, query = ""] = href.split("?", 2);
+    return location === path && search === query;
+  };
 
   if (!pageIsVisible) {
     return (
@@ -1100,10 +1127,10 @@ export function AdminLayout({
 
             <div className="header-user-pill">
               <div className="header-avatar">
-                {(adminName || "A").charAt(0).toUpperCase()}
+                {(headerUserName || "A").charAt(0).toUpperCase()}
               </div>
               <span className="header-user-name">
-                {adminName || brand.adminName || "Admin"}
+                {headerUserName}
               </span>
             </div>
 
@@ -1132,18 +1159,16 @@ export function AdminLayout({
           <PlatformBillingBanner />
           {requiresReauthGate && !reauthCheckPending && reauthStatus !== "verified" && reauthStatus !== "not-required" ? (
             <div role="dialog" aria-modal="true" aria-labelledby="reauth-title" style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(5,10,20,0.78)", display: "grid", placeItems: "center", padding: 20 }}>
-              <form onSubmit={routerPagePasswordSetupNeeded ? handleRouterPagePasswordSetup : reauthMethod === "password" ? handlePasswordRecheck : handlePageOtpVerify} style={{ width: "min(100%, 420px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
+              <form onSubmit={pagePasswordSetupNeeded ? handlePagePasswordSetup : reauthMethod === "password" ? handlePasswordRecheck : handlePageOtpVerify} style={{ width: "min(100%, 420px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
                 <h2 id="reauth-title" style={{ margin: "0 0 8px", fontSize: 19 }}>
                   {reauthStatus === "checking"
                     ? "Checking page security…"
                     : reauthStatus === "failed"
                       ? "Unable to check security policy"
                       : reauthMethod === "password"
-                        ? routerPagePasswordSetupNeeded
-                          ? "Create a Routers page password"
-                          : usesRouterPagePassword
-                            ? "Enter your Routers page password"
-                            : "Confirm your password"
+                        ? pagePasswordSetupNeeded
+                          ? `Create a ${currentPagePasswordLabel} page password`
+                          : `Enter your ${currentPagePasswordLabel} page password`
                         : `Verify with ${reauthMethod === "email" ? "email" : reauthMethod === "whatsapp" ? "WhatsApp" : "SMS"}`}
                 </h2>
                 {reauthStatus === "checking" ? (
@@ -1156,24 +1181,22 @@ export function AdminLayout({
                 ) : (
                   <>
                     <p style={{ color: "var(--isp-text-muted)", fontSize: 14 }}>
-                      {routerPagePasswordSetupNeeded
-                        ? "Set a password for the Routers page."
-                        : usesRouterPagePassword
-                          ? "Enter your Routers page password to continue."
-                          : "Enter your password to continue."}
+                      {pagePasswordSetupNeeded
+                        ? "Choose a unique password for this page, different from your sign-in password and other protected pages."
+                        : `Enter the unique password for this page to continue.`}
                     </p>
                     {reauthMethod === "password" ? (
-                      routerPagePasswordSetupNeeded ? (
+                      pagePasswordSetupNeeded ? (
                         <>
-                          <label htmlFor="router-page-new-password" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>New Routers page password</label>
-                          <input id="router-page-new-password" type="password" autoComplete="new-password" minLength={10} maxLength={200} value={newRouterPagePassword} onChange={event => setNewRouterPagePassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
-                          <label htmlFor="router-page-confirm-password" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>Confirm Routers page password</label>
-                          <input id="router-page-confirm-password" type="password" autoComplete="new-password" minLength={10} maxLength={200} value={confirmRouterPagePassword} onChange={event => setConfirmRouterPagePassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+                          <label htmlFor="page-password-new" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>New {currentPagePasswordLabel} page password</label>
+                          <input id="page-password-new" name={`page-password-${currentPageAuthFeatureKey}`} type="password" autoComplete="new-password" minLength={10} maxLength={200} value={newPagePassword} onChange={event => setNewPagePassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+                          <label htmlFor="page-password-confirm" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>Confirm {currentPagePasswordLabel} page password</label>
+                          <input id="page-password-confirm" name={`page-password-confirm-${currentPageAuthFeatureKey}`} type="password" autoComplete="new-password" minLength={10} maxLength={200} value={confirmPagePassword} onChange={event => setConfirmPagePassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
                         </>
                       ) : (
                         <>
-                          <label htmlFor="page-reauth-password" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>{usesRouterPagePassword ? "Routers page password" : "Current password"}</label>
-                          <input id="page-reauth-password" type="password" autoComplete={usesRouterPagePassword ? "off" : "current-password"} value={reauthPassword} onChange={event => setReauthPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
+                          <label htmlFor="page-reauth-password" style={{ display: "block", fontWeight: 600, margin: "14px 0 7px" }}>{currentPagePasswordLabel} page password</label>
+                          <input id="page-reauth-password" name={`page-password-${currentPageAuthFeatureKey}`} type="password" autoComplete="new-password" value={reauthPassword} onChange={event => setReauthPassword(event.target.value)} style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-bg)", color: "var(--isp-text)" }} required />
                         </>
                       )
                     ) : reauthChallengeId ? (
@@ -1209,17 +1232,17 @@ export function AdminLayout({
                     <button
                       type={reauthMethod !== "password" && !reauthChallengeId ? "button" : "submit"}
                       onClick={reauthMethod !== "password" && !reauthChallengeId ? () => void handlePageOtpRequest() : undefined}
-                      disabled={reauthBusy || (reauthMethod === "password" && (routerPagePasswordSetupNeeded
-                        ? !newRouterPagePassword || !confirmRouterPagePassword
+                      disabled={reauthBusy || (reauthMethod === "password" && (pagePasswordSetupNeeded
+                        ? !newPagePassword || !confirmPagePassword
                         : !reauthPassword)) || (reauthMethod !== "password" && !!reauthChallengeId && reauthCode.length !== 6)}
                       style={{ marginTop: 14, border: 0, borderRadius: 8, padding: "10px 15px", background: "var(--isp-accent)", color: "white", fontWeight: 700, cursor: "pointer", opacity: reauthBusy ? 0.6 : 1 }}
                     >
                       {reauthBusy
                         ? reauthMethod === "password"
-                          ? routerPagePasswordSetupNeeded ? "Creating…" : "Checking…"
+                          ? pagePasswordSetupNeeded ? "Creating…" : "Checking…"
                           : reauthChallengeId ? "Verifying…" : "Sending…"
                         : reauthMethod === "password"
-                          ? routerPagePasswordSetupNeeded ? "Create password and continue" : "Continue to page"
+                          ? pagePasswordSetupNeeded ? "Create password and continue" : "Continue to page"
                           : reauthChallengeId
                             ? "Verify code"
                             : "Send verification code"}

@@ -50,9 +50,12 @@ export interface PasswordReauthProof {
   role: AdminPolicyRole;
   feature: string;
   method: Exclude<PageAuthMethod, "none">;
+  credentialVersion?: 1;
   expiresAt: number;
   nonce: string;
 }
+
+const PAGE_PASSWORD_CREDENTIAL_VERSION = 1 as const;
 
 interface AuthenticatedAdmin {
   id: number;
@@ -214,6 +217,7 @@ export function generatePageAuthProof(
     role,
     feature,
     method,
+    ...(method === "password" ? { credentialVersion: PAGE_PASSWORD_CREDENTIAL_VERSION } : {}),
     expiresAt: Date.now() + 5 * 60 * 1000,
     nonce: randomBytes(18).toString("base64url"),
   };
@@ -272,6 +276,7 @@ export function validatePasswordReauthProof(token: string): PasswordReauthProof 
       (parsed.role !== "isp_admin" && parsed.role !== "reseller") ||
       typeof parsed.feature !== "string" ||
       !["password", "whatsapp", "sms", "email"].includes(parsed.method) ||
+      (parsed.method === "password" && parsed.credentialVersion !== PAGE_PASSWORD_CREDENTIAL_VERSION) ||
       !Number.isFinite(parsed.expiresAt) ||
       parsed.expiresAt <= Date.now() ||
       parsed.expiresAt > Date.now() + 5 * 60 * 1000 + 30_000 ||
@@ -767,6 +772,7 @@ export function requireAdmin() {
             proof.role === role &&
             proof.feature === feature &&
             proof.method === requiredMethod &&
+            (requiredMethod !== "password" || proof.credentialVersion === PAGE_PASSWORD_CREDENTIAL_VERSION) &&
             Number.isFinite(proof.expiresAt) &&
             proof.expiresAt > Date.now(),
           );
@@ -777,7 +783,7 @@ export function requireAdmin() {
               feature,
               method: requiredMethod,
               error: requiredMethod === "password"
-                ? "Re-enter your current password to continue."
+                ? "Enter this page's separate password to continue."
                 : "Complete the configured verification to continue.",
             });
             return;

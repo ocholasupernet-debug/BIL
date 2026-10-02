@@ -112,7 +112,7 @@ export default function PlatformNotifications() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14, marginBottom: 22 }}>
           <div>
             <h1 style={{ color: "#f1f5f9", fontSize: 22, fontWeight: 800, margin: 0, display: "flex", alignItems: "center", gap: 9 }}><Bell size={21} color={COLORS.accent} /> Platform notifications</h1>
-            <p style={{ color: COLORS.muted, fontSize: 13, margin: "5px 0 0" }}>Important notices from your platform administrator.</p>
+            <p style={{ color: COLORS.muted, fontSize: 13, margin: "5px 0 0" }}>Important notices and service updates.</p>
           </div>
           <button onClick={() => void load(true)} disabled={refreshing} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-border)", borderRadius: 8, color: COLORS.accent, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}><RefreshCw size={13} style={{ animation: refreshing ? "spin 1s linear infinite" : "none" }} /> Refresh</button>
         </div>

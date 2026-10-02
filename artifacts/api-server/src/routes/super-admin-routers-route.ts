@@ -1,11 +1,12 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import {
-  sbDeleteStrict,
   sbInsertStrict,
+  sbRpc,
   sbSelectStrict,
   sbUpdateStrict,
 } from "../lib/supabase-client.js";
 import { logActivity } from "../lib/activity-log.js";
+import { revokeRouterMigrationVpnClient } from "../lib/router-migration-vpn.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 
 const router: IRouter = Router();
@@ -333,68 +334,65 @@ router.delete("/super-admin/routers/:id", async (req, res): Promise<void> => {
   }
 
   try {
-    const rows = await sbSelectStrict<{ id: number; admin_id: number; name: string }>(
-      "isp_routers",
-      `id=eq.${routerId}&select=id,admin_id,name&limit=1`,
+    const plans = await sbRpc<{
+      router_id: number;
+      admin_id: number;
+      router_name: string;
+      active_vpn_usernames: string[] | null;
+    }>(
+      "prepare_super_admin_router_deletion",
+      { p_router_id: routerId },
     );
-    const current = rows[0];
-    if (!current) {
+    const plan = plans[0];
+    if (!plan) {
       res.status(404).json({ ok: false, error: "Router not found." });
       return;
     }
 
-    const migrationJobs = await sbSelectStrict<{ id: number }>(
-      "router_migration_jobs",
-      `or=(source_router_id.eq.${routerId},target_router_id.eq.${routerId})&select=id&limit=1`,
-    );
-    if (migrationJobs.length > 0) {
-      res.status(409).json({
+    const activeVpnUsernames = Array.isArray(plan.active_vpn_usernames)
+      ? [...new Set(plan.active_vpn_usernames.filter(name => typeof name === "string" && name.length > 0))]
+      : [];
+    try {
+      for (const username of activeVpnUsernames) {
+        await revokeRouterMigrationVpnClient(username);
+      }
+    } catch {
+      res.status(503).json({
         ok: false,
-        error: "This router is referenced by migration job history and cannot be deleted. The router record must remain to preserve that history.",
-        code: "router_migration_job_reference",
+        error: "Temporary migration VPN access could not be revoked. The router and its migration history were not deleted; retry after VPN cleanup is available.",
       });
       return;
     }
 
-    const childTables = [
-      "isp_ip_pools",
-      "isp_ppp_secrets",
-      "isp_pppoe_users",
-      "isp_hotspot_users",
-      "isp_bridge_ports",
-      "isp_router_history",
-      "isp_router_sessions",
-      "isp_active_sessions",
-      "isp_router_pings",
-      "isp_router_metrics",
-    ];
-    for (const table of childTables) {
-      try {
-        await sbDeleteStrict(table, `router_id=eq.${routerId}`);
-      } catch {
-        /* Optional child tables may not exist in every deployment. */
-      }
-    }
-
-    await sbDeleteStrict("isp_routers", `id=eq.${routerId}`);
-    const remaining = await sbSelectStrict<{ id: number }>(
-      "isp_routers",
-      `id=eq.${routerId}&select=id&limit=1`,
+    const deletedRows = await sbRpc<{
+      router_id: number;
+      admin_id: number;
+      router_name: string;
+      migration_jobs_deleted: number;
+    }>(
+      "delete_super_admin_router_with_history",
+      {
+        p_router_id: routerId,
+        p_revoked_vpn_usernames: activeVpnUsernames,
+      },
     );
-    if (remaining.length > 0) {
-      res.status(409).json({
-        ok: false,
-        error: "Router could not be deleted because related records still reference it.",
-      });
+    const deleted = deletedRows[0];
+    if (!deleted) {
+      res.status(404).json({ ok: false, error: "Router not found." });
       return;
     }
 
     void logActivity({
-      adminId: current.admin_id,
+      adminId: deleted.admin_id,
       type: "router",
       action: "deleted",
-      subject: current.name,
-      details: { source: "super_admin", admin_id: current.admin_id },
+      subject: deleted.router_name,
+      details: {
+        source: "super_admin",
+        admin_id: deleted.admin_id,
+        migration_jobs_deleted: Number(deleted.migration_jobs_deleted) || 0,
+        temporary_migration_vpn_clients_revoked: activeVpnUsernames.length,
+      },
     });
     res.status(204).end();
   } catch (error) {

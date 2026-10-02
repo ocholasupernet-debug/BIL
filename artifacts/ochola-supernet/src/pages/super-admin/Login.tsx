@@ -10,9 +10,11 @@ function setSuperAdminSession(name: string, token: string, issuedAt: number) {
     localStorage.setItem("ochola_superadmin_name",      name);
     localStorage.setItem("ochola_superadmin_issued_at", String(issuedAt));
     localStorage.setItem("ochola_admin_role",           "superadmin");
-    localStorage.setItem("ochola_admin_name",           name);
-    localStorage.setItem("ochola_admin_username",       name);
     localStorage.setItem("ochola_admin_id",             "0");
+    localStorage.removeItem("ochola_admin_name");
+    localStorage.removeItem("ochola_admin_display_name");
+    localStorage.removeItem("ochola_admin_username");
+    localStorage.removeItem("ochola_api_token");
   } catch {}
 }
 

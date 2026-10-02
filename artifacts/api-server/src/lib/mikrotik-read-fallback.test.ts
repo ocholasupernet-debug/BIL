@@ -17,6 +17,7 @@ import {
   createWirelessVirtualAp,
   patchWirelessInterface,
   deleteWirelessVirtualAp,
+  runRouterCommands,
 } from "./mikrotik.js";
 
 type MockRows = Record<string, string>[];
@@ -90,6 +91,37 @@ function routerCredentials(port: number, alternateUsernames?: string[]) {
     requestTimeoutMs: 1_000,
   };
 }
+
+test("RouterOS read batches reuse one connection and run commands sequentially", async () => {
+  let activeWrites = 0;
+  let maxActiveWrites = 0;
+  await withMockRouterApi(async (_username, command) => {
+    activeWrites++;
+    maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    activeWrites--;
+    return [{ command: command[0] }];
+  }, async ({ port, connectedUsers, commands }) => {
+    const result = await runRouterCommands(routerCredentials(port), [
+      ["/interface/bridge/print"],
+      ["/ip/hotspot/print"],
+      ["/ip/hotspot/profile/print"],
+    ]);
+
+    assert.deepEqual(connectedUsers, [savedAccount]);
+    assert.deepEqual(commands.map(({ command }) => command[0]), [
+      "/interface/bridge/print",
+      "/ip/hotspot/print",
+      "/ip/hotspot/profile/print",
+    ]);
+    assert.deepEqual(result, [
+      [{ command: "/interface/bridge/print" }],
+      [{ command: "/ip/hotspot/print" }],
+      [{ command: "/ip/hotspot/profile/print" }],
+    ]);
+    assert.equal(maxActiveWrites, 1);
+  });
+});
 
 test("System Identity lookup falls back to the management account", async () => {
   await withMockRouterApi((username, command) => {

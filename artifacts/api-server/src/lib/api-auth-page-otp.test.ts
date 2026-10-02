@@ -4,6 +4,7 @@ import test from "node:test";
 process.env.TOKEN_SIGNING_SECRET = "page-auth-unit-test-signing-secret";
 const {
   generatePageAuthProof,
+  generatePasswordReauthProof,
   hashPageOtpCode,
   validatePasswordReauthProof,
 } = await import("./api-auth.js");
@@ -15,6 +16,14 @@ test("signed page verification proofs preserve the selected method", () => {
   assert.equal(proof.method, "sms");
   assert.equal(proof.feature, "network.routers");
   assert.equal(proof.role, "reseller");
+});
+
+test("page-password proofs carry the dedicated-credential version", () => {
+  const created = generatePasswordReauthProof("42", "isp_admin", "billing.plans");
+  const proof = validatePasswordReauthProof(created.proof);
+  assert.ok(proof);
+  assert.equal(proof.method, "password");
+  assert.equal(proof.credentialVersion, 1);
 });
 
 test("page OTP hashes are bound to session, page, role, and method", () => {

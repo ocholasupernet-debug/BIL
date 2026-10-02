@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import express from "express";
 import { test } from "node:test";
 
-test("router deletion with migration history is rejected before related records are removed", async () => {
+test("super-admin router deletion revokes planned temporary VPN clients and removes linked history atomically", async () => {
   const envKeys = [
     "SUPERADMIN_USERNAME",
     "SUPERADMIN_API_KEY",
@@ -33,31 +33,53 @@ test("router deletion with migration history is rejected before related records 
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   const originalFetch = globalThis.fetch;
-  let routerReads = 0;
-  let migrationReads = 0;
-  let deletes = 0;
+  let prepareCalls = 0;
+  let deleteCalls = 0;
+  let activityWrites = 0;
 
   globalThis.fetch = async (input, init) => {
     const url = new URL(String(input));
     if (url.hostname === "127.0.0.1") return originalFetch(input, init);
     assert.equal(url.hostname, "router-delete-test.supabase.co");
 
-    if (url.pathname.endsWith("/rest/v1/isp_routers") && (!init?.method || init.method === "GET")) {
-      routerReads += 1;
-      return new Response(JSON.stringify([{ id: 138, admin_id: 1, name: "Source router" }]), {
+    if (url.pathname.endsWith("/rest/v1/rpc/prepare_super_admin_router_deletion")) {
+      prepareCalls += 1;
+      assert.equal(init?.method, "POST");
+      assert.deepEqual(JSON.parse(String(init?.body)), { p_router_id: 138 });
+      return new Response(JSON.stringify([{
+        router_id: 138,
+        admin_id: 1,
+        router_name: "Source router",
+        active_vpn_usernames: [],
+      }]), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     }
-    if (url.pathname.endsWith("/rest/v1/router_migration_jobs") && (!init?.method || init.method === "GET")) {
-      migrationReads += 1;
-      assert.equal(url.searchParams.get("or"), "(source_router_id.eq.138,target_router_id.eq.138)");
-      return new Response(JSON.stringify([{ id: 7 }]), {
+    if (url.pathname.endsWith("/rest/v1/rpc/delete_super_admin_router_with_history")) {
+      deleteCalls += 1;
+      assert.equal(init?.method, "POST");
+      assert.deepEqual(JSON.parse(String(init?.body)), {
+        p_router_id: 138,
+        p_revoked_vpn_usernames: [],
+      });
+      return new Response(JSON.stringify([{
+        router_id: 138,
+        admin_id: 1,
+        router_name: "Source router",
+        migration_jobs_deleted: 1,
+      }]), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
     }
-    if (init?.method === "DELETE") deletes += 1;
+    if (init?.method === "POST" && url.pathname.startsWith("/rest/v1/")) {
+      activityWrites += 1;
+      return new Response("[]", {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     throw new Error(`Unexpected Supabase request: ${init?.method ?? "GET"} ${url.pathname}`);
   };
 
@@ -79,15 +101,11 @@ test("router deletion with migration history is rejected before related records 
       headers: { "x-sa-token": login.token },
     });
 
-    assert.equal(response.status, 409);
-    assert.deepEqual(await response.json(), {
-      ok: false,
-      error: "This router is referenced by migration job history and cannot be deleted. The router record must remain to preserve that history.",
-      code: "router_migration_job_reference",
-    });
-    assert.equal(routerReads, 1);
-    assert.equal(migrationReads, 1);
-    assert.equal(deletes, 0);
+    assert.equal(response.status, 204);
+    assert.equal(prepareCalls, 1);
+    assert.equal(deleteCalls, 1);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(activityWrites, 1);
   } finally {
     globalThis.fetch = originalFetch;
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

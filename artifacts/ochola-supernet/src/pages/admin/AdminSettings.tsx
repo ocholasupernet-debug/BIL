@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useState, useRef, useEffect, type ReactNode } from "react";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Logo } from "@/components/Logo";
@@ -3428,7 +3428,8 @@ const TABS = [
 
 export default function AdminSettings() {
   const [location, setLocation] = useLocation();
-  const requestedTab = new URLSearchParams(location.split("?")[1] ?? "").get("tab");
+  const search = useSearch();
+  const requestedTab = new URLSearchParams(search).get("tab");
   const isReseller = getAdminRole() === "reseller";
   const [canManageGateways, setCanManageGateways] = useState(false);
   const [gatewayPermissionLoading, setGatewayPermissionLoading] = useState(true);

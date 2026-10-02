@@ -558,7 +558,7 @@ grant execute on function consume_router_migration_collector_token(text) to serv
 create table if not exists router_migration_tunnel_leases (
   id bigserial primary key,
   admin_id bigint not null references isp_admins(id) on delete cascade,
-  source_router_id bigint not null references isp_routers(id) on delete cascade,
+  source_router_id bigint references isp_routers(id) on delete cascade,
   migration_job_id bigint references router_migration_jobs(id) on delete set null,
   technology text not null check (technology = 'openvpn'),
   username text not null unique,
@@ -1102,3 +1102,26 @@ revoke all on table public.isp_admin_router_page_passwords from anon;
 revoke all on table public.isp_admin_router_page_passwords from authenticated;
 grant select, insert, update, delete
   on table public.isp_admin_router_page_passwords to service_role;
+
+create table if not exists public.isp_admin_page_passwords (
+  admin_id bigint not null references public.isp_admins(id) on delete cascade,
+  feature text not null check (feature ~ '^[a-z0-9.-]+$'),
+  password_hash text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (admin_id, feature)
+);
+
+alter table public.isp_admin_page_passwords enable row level security;
+revoke all on table public.isp_admin_page_passwords from anon;
+revoke all on table public.isp_admin_page_passwords from authenticated;
+grant select, insert, update, delete
+  on table public.isp_admin_page_passwords to service_role;
+
+-- Additive final state is installed by the registered migration. Keep the
+-- snapshot's tunnel FK nullable and remove the pre-verification stub RPC.
+alter table public.router_migration_tunnel_leases
+  alter column source_router_id drop not null;
+drop function if exists public.create_router_migration_source_stub(bigint);
+-- The additive migration also installs finalize_router_migration_source_registration
+-- and the prepare/delete super-admin router-history RPCs.

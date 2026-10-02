@@ -21,6 +21,35 @@ function value(row: RouterDiagnosticRow | undefined, key: string): string | null
   return result || null;
 }
 
+export function summarizeVlanBridgePortIngress(
+  rows: RouterDiagnosticRow[],
+  interfaceName: string,
+  bridgeName: string,
+): {
+  interface: string;
+  bridge: string;
+  disabled: string | null;
+  running: string | null;
+  pvid: string | null;
+  frameTypes: string | null;
+  ingressFiltering: string | null;
+} | null {
+  const row = rows.find(item =>
+    value(item, "interface") === interfaceName
+    && value(item, "bridge") === bridgeName,
+  );
+  if (!row) return null;
+  return {
+    interface: value(row, "interface") ?? interfaceName,
+    bridge: value(row, "bridge") ?? bridgeName,
+    disabled: value(row, "disabled"),
+    running: value(row, "running"),
+    pvid: value(row, "pvid"),
+    frameTypes: value(row, "frame-types"),
+    ingressFiltering: value(row, "ingress-filtering"),
+  };
+}
+
 function normalizePath(path: string): string {
   return path.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
 }

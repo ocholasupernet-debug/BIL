@@ -286,19 +286,9 @@ export default function NetworkMigration() {
       const tunnelScript = result.tunnelScript || (await migrationApi.tunnelScript(result.jobId)).tunnelScript;
       setJobId(result.jobId);
       sessionStorage.setItem("ochola_router_migration_job_id", String(result.jobId));
-      setSourceId(result.sourceRouterId);
+      setSourceId(result.sourceRouterId ?? "");
       setTargetId("");
       setOutcome("replace_router");
-      setRouters(current => {
-        const pending = {
-          id: result.sourceRouterId,
-          name: result.sourceRouterName,
-          status: "setup",
-          host: "",
-          migration_source_only: true,
-        };
-        return [pending, ...current.filter(item => item.id !== pending.id)];
-      });
       setTunnelScript(tunnelScript);
       setCollectorScript("");
       setPlan(null);
@@ -306,7 +296,7 @@ export default function NetworkMigration() {
       await refreshJob(result.jobId);
       setCurrentStep(1);
       const expiry = result.expiresAt ? ` It expires at ${new Date(result.expiresAt).toLocaleString()}.` : "";
-      setNotice(`Pending source ${result.sourceRouterName} is bound to this migration. Run the temporary tunnel script; identity verification will finalize an offline, migration-only dashboard record.${expiry}`);
+      setNotice(`A temporary tunnel is ready for ${result.sourceRouterName}. No router record is added until RouterOS identity verification succeeds.${expiry}`);
     } catch (cause) {
       if (cause instanceof Error && /registration attempt has ended|tunnel expired/i.test(cause.message)) {
         sessionStorage.removeItem(keyStorage);

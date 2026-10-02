@@ -37,9 +37,9 @@ import {
 
 const router: IRouter = Router();
 const ROUTER_PAGE_AUTH_FEATURE = "network.routers";
-const ROUTER_PAGE_PASSWORD_TABLE = "isp_admin_router_page_passwords";
+const ADMIN_PAGE_PASSWORD_TABLE = "isp_admin_page_passwords";
 
-type RouterPagePasswordAdmin = {
+type PagePasswordAdmin = {
   id: number;
   name: string | null;
   username: string | null;
@@ -49,10 +49,10 @@ type RouterPagePasswordAdmin = {
   must_change_password: boolean | null;
 };
 
-async function resolveRouterPagePasswordAdmin(
+async function resolvePagePasswordAdmin(
   req: Request,
   res: Response,
-): Promise<{ payload: ApiTokenPayload; admin: RouterPagePasswordAdmin } | null> {
+): Promise<{ payload: ApiTokenPayload; admin: PagePasswordAdmin } | null> {
   const payload = validateToken(extractToken(req));
   if (
     !payload ||
@@ -61,12 +61,12 @@ async function resolveRouterPagePasswordAdmin(
     payload.impersonationSessionId ||
     !Number.isSafeInteger(Number(payload.uid))
   ) {
-    res.status(401).json({ ok: false, error: "Sign in to an ISP account before managing its Routers page password." });
+    res.status(401).json({ ok: false, error: "Sign in to an ISP account before managing page passwords." });
     return null;
   }
 
   try {
-    const admins = await sbSelectStrict<RouterPagePasswordAdmin>(
+    const admins = await sbSelectStrict<PagePasswordAdmin>(
       "isp_admins",
       `id=eq.${encodeURIComponent(payload.uid)}&is_active=is.true&select=id,name,username,role,password,auth_version,must_change_password&limit=1`,
     );
@@ -77,12 +77,12 @@ async function resolveRouterPagePasswordAdmin(
       Number(payload.authVersion ?? 1) !== Number(admin.auth_version ?? 1) ||
       admin.must_change_password === true
     ) {
-      res.status(401).json({ ok: false, error: "This administrator session is no longer active." });
+      res.status(401).json({ ok: false, error: "This account session is no longer active." });
       return null;
     }
     return { payload, admin };
   } catch {
-    res.status(503).json({ ok: false, error: "The Routers page password could not be checked." });
+    res.status(503).json({ ok: false, error: "The page password could not be checked." });
     return null;
   }
 }
@@ -204,7 +204,7 @@ router.post("/auth/admin/reauth", async (req: Request, res: Response): Promise<v
     return;
   }
   if (!password) {
-    res.status(400).json({ ok: false, error: "Enter your current password." });
+    res.status(400).json({ ok: false, error: "Enter this page's password." });
     return;
   }
 
@@ -232,32 +232,24 @@ router.post("/auth/admin/reauth", async (req: Request, res: Response): Promise<v
       res.status(400).json({ ok: false, error: "This page is not currently set to require password verification." });
       return;
     }
-    let passwordMatches = false;
-    if (feature === ROUTER_PAGE_AUTH_FEATURE) {
-      const passwordRows = await sbSelectStrict<{ password_hash: string }>(
-        ROUTER_PAGE_PASSWORD_TABLE,
-        `admin_id=eq.${encodeURIComponent(payload.uid)}&select=password_hash&limit=1`,
-      );
-      if (!passwordRows[0]?.password_hash) {
-        res.status(409).json({
-          ok: false,
-          error: "Create a separate Routers page password before continuing.",
-        });
-        return;
-      }
-      passwordMatches = await verifyIspAdminPassword(passwordRows[0].password_hash, password);
-    } else {
-      passwordMatches = await verifyIspAdminPassword(admin.password, password);
+    const pagePasswords = await sbSelectStrict<{ password_hash: string }>(
+      ADMIN_PAGE_PASSWORD_TABLE,
+      `admin_id=eq.${encodeURIComponent(payload.uid)}&feature=eq.${encodeURIComponent(feature)}&select=password_hash&limit=1`,
+    );
+    if (!pagePasswords[0]?.password_hash) {
+      res.status(409).json({
+        ok: false,
+        code: "PAGE_PASSWORD_SETUP_REQUIRED",
+        error: "Create a separate password for this page before continuing.",
+      });
+      return;
     }
+    const passwordMatches = await verifyIspAdminPassword(pagePasswords[0].password_hash, password);
     if (!passwordMatches) {
-      if (feature === ROUTER_PAGE_AUTH_FEATURE) {
-        await recordFailedAccountSignIn(req, "admin", admin.id);
-      }
+      await recordFailedAccountSignIn(req, "admin", admin.id);
       res.status(401).json({
         ok: false,
-        error: feature === ROUTER_PAGE_AUTH_FEATURE
-          ? "The Routers page password is incorrect."
-          : "The current password is incorrect.",
+        error: "The password for this page is incorrect.",
       });
       return;
     }
@@ -267,12 +259,13 @@ router.post("/auth/admin/reauth", async (req: Request, res: Response): Promise<v
     if (!grant) throw new Error("A password re-check grant could not be created.");
     const grants = [
       ...(payload.reauthGrants ?? []).filter(existing =>
-        existing.uid === payload.uid && existing.expiresAt > Date.now(),
+        existing.uid === payload.uid &&
+        existing.expiresAt > Date.now() &&
+        existing.feature !== feature &&
+        (existing.method !== "password" || existing.credentialVersion === 1),
       ),
       grant,
-    ].filter((item, index, all) =>
-      all.findIndex(candidate => candidate.feature === item.feature) === index,
-    );
+    ];
     const token = generateAdminSessionToken(
       payload.uid,
       Number(admin.auth_version ?? 1),
@@ -292,63 +285,92 @@ router.post("/auth/admin/reauth", async (req: Request, res: Response): Promise<v
   }
 });
 
-router.get("/auth/admin/router-page-password/status", async (req: Request, res: Response): Promise<void> => {
+async function getPagePasswordStatus(req: Request, res: Response, forcedFeature?: string): Promise<void> {
   res.setHeader("Cache-Control", "no-store");
-  const context = await resolveRouterPagePasswordAdmin(req, res);
+  const context = await resolvePagePasswordAdmin(req, res);
   if (!context) return;
+  const feature = forcedFeature ?? (typeof req.query.feature === "string" ? req.query.feature : "");
+  if (!isSupportedPasswordReauthFeature(feature)) {
+    res.status(400).json({ ok: false, error: "That page does not support a separate password." });
+    return;
+  }
 
   try {
-    const rows = await sbSelectStrict<{ admin_id: number }>(
-      ROUTER_PAGE_PASSWORD_TABLE,
-      `admin_id=eq.${encodeURIComponent(context.payload.uid)}&select=admin_id&limit=1`,
+    const rows = await sbSelectStrict<{ feature: string }>(
+      ADMIN_PAGE_PASSWORD_TABLE,
+      `admin_id=eq.${encodeURIComponent(context.payload.uid)}&feature=eq.${encodeURIComponent(feature)}&select=feature&limit=1`,
     );
     res.json({ ok: true, configured: Boolean(rows[0]) });
   } catch {
-    res.status(503).json({ ok: false, error: "The Routers page password status could not be loaded." });
+    res.status(503).json({ ok: false, error: "The page password status could not be loaded." });
   }
+}
+
+router.get("/auth/admin/page-password/status", async (req: Request, res: Response): Promise<void> => {
+  await getPagePasswordStatus(req, res);
+});
+router.get("/auth/admin/router-page-password/status", async (req: Request, res: Response): Promise<void> => {
+  await getPagePasswordStatus(req, res, ROUTER_PAGE_AUTH_FEATURE);
 });
 
-router.post("/auth/admin/router-page-password/setup", async (req: Request, res: Response): Promise<void> => {
+async function setupPagePassword(req: Request, res: Response, forcedFeature?: string): Promise<void> {
   res.setHeader("Cache-Control", "no-store");
-  const context = await resolveRouterPagePasswordAdmin(req, res);
+  const context = await resolvePagePasswordAdmin(req, res);
   if (!context) return;
 
+  const feature = forcedFeature ?? (typeof req.body?.feature === "string" ? req.body.feature : "");
+  if (!isSupportedPasswordReauthFeature(feature)) {
+    res.status(400).json({ ok: false, error: "That page does not support a separate password." });
+    return;
+  }
   const password = typeof req.body?.password === "string" ? req.body.password : "";
   const confirmPassword = typeof req.body?.confirmPassword === "string" ? req.body.confirmPassword : "";
   if (password.length < 10 || password.length > 200 || password !== confirmPassword) {
     res.status(400).json({
       ok: false,
-      error: "Choose and confirm a Routers page password with at least 10 characters.",
+      error: "Choose and confirm a page password with at least 10 characters.",
     });
     return;
   }
   if (await verifyIspAdminPassword(context.admin.password, password)) {
     res.status(400).json({
       ok: false,
-      error: "Choose a Routers page password that is different from your ISP sign-in password.",
+      error: "Choose a page password that is different from your ISP sign-in password.",
     });
     return;
   }
 
   try {
     const role = context.admin.role as "isp_admin" | "reseller";
-    if (await getPageAuthMethod(role, ROUTER_PAGE_AUTH_FEATURE) !== "password") {
+    if (await getPageAuthMethod(role, feature) !== "password") {
       res.status(409).json({ ok: false, error: "The current page policy does not require password verification." });
       return;
     }
-    const existing = await sbSelectStrict<{ admin_id: number }>(
-      ROUTER_PAGE_PASSWORD_TABLE,
-      `admin_id=eq.${encodeURIComponent(context.payload.uid)}&select=admin_id&limit=1`,
+    const existing = await sbSelectStrict<{ feature: string }>(
+      ADMIN_PAGE_PASSWORD_TABLE,
+      `admin_id=eq.${encodeURIComponent(context.payload.uid)}&feature=eq.${encodeURIComponent(feature)}&select=feature&limit=1`,
     );
     if (existing[0]) {
-      res.status(409).json({ ok: false, error: "A Routers page password has already been created." });
+      res.status(409).json({ ok: false, error: "A password has already been created for this page." });
       return;
     }
 
+    const existingPasswords = await sbSelectStrict<{ feature: string; password_hash: string }>(
+      ADMIN_PAGE_PASSWORD_TABLE,
+      `admin_id=eq.${encodeURIComponent(context.payload.uid)}&select=feature,password_hash`,
+    );
+    for (const existingPassword of existingPasswords) {
+      if (await verifyIspAdminPassword(existingPassword.password_hash, password)) {
+        res.status(400).json({ ok: false, error: "Each protected page must have a different password." });
+        return;
+      }
+    }
+
     await sbInsertStrict(
-      ROUTER_PAGE_PASSWORD_TABLE,
+      ADMIN_PAGE_PASSWORD_TABLE,
       {
         admin_id: Number(context.payload.uid),
+        feature,
         password_hash: await hashIspAdminPassword(password),
       },
     );
@@ -356,15 +378,16 @@ router.post("/auth/admin/router-page-password/setup", async (req: Request, res: 
     const proof = generatePasswordReauthProof(
       context.payload.uid,
       role,
-      ROUTER_PAGE_AUTH_FEATURE,
+      feature,
     );
     const grant = validatePasswordReauthProof(proof.proof);
-    if (!grant) throw new Error("The Routers page password grant could not be validated.");
+    if (!grant) throw new Error("The page password grant could not be validated.");
     const grants = [
       ...(context.payload.reauthGrants ?? []).filter(existingGrant =>
         existingGrant.uid === context.payload.uid &&
         existingGrant.expiresAt > Date.now() &&
-        existingGrant.feature !== ROUTER_PAGE_AUTH_FEATURE,
+        existingGrant.feature !== feature &&
+        (existingGrant.method !== "password" || existingGrant.credentialVersion === 1),
       ),
       grant,
     ];
@@ -377,23 +400,30 @@ router.post("/auth/admin/router-page-password/setup", async (req: Request, res: 
     try {
       await recordPlatformAuthAudit({
         actorName: String(context.admin.username ?? context.admin.name ?? context.payload.uid),
-        action: "router_page_password_created",
+        action: "page_password_created",
         targetAdminId: Number(context.payload.uid),
-        details: { feature: ROUTER_PAGE_AUTH_FEATURE },
+        details: { feature },
         sourceIp: req.ip ?? req.socket.remoteAddress,
         userAgent: req.get("user-agent"),
       });
     } catch (error) {
       logger.warn(
         { errorType: error instanceof Error ? error.name : "unknown" },
-        "[auth] Routers page password audit could not be recorded",
+        "[auth] Page password audit could not be recorded",
       );
     }
 
     res.json({ ok: true, token, expiresAt: grant.expiresAt });
   } catch {
-    res.status(503).json({ ok: false, error: "The Routers page password could not be saved. Try again." });
+    res.status(503).json({ ok: false, error: "The page password could not be saved. Try again." });
   }
+}
+
+router.post("/auth/admin/page-password/setup", async (req: Request, res: Response): Promise<void> => {
+  await setupPagePassword(req, res);
+});
+router.post("/auth/admin/router-page-password/setup", async (req: Request, res: Response): Promise<void> => {
+  await setupPagePassword(req, res, ROUTER_PAGE_AUTH_FEATURE);
 });
 
 router.post("/auth/admin/change-password", requireAdmin(), async (req: Request, res: Response): Promise<void> => {

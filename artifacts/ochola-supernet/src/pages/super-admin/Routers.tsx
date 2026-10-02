@@ -247,7 +247,7 @@ export default function SuperAdminRouters() {
   const deleteRouter = async (router: DbRouter) => {
     const admin = adminMap[router.admin_id];
     const confirmed = window.confirm(
-      `Delete ${router.name}? This permanently removes the router and related router records${admin ? ` from ${admin.name || admin.username || `ISP #${admin.id}`}` : ""}.`,
+      `Delete ${router.name}? This permanently removes the dashboard router, its linked customer/router records, and migration job history${admin ? ` from ${admin.name || admin.username || `ISP #${admin.id}`}` : ""}. Active temporary migration VPN accounts will be revoked. Linked router and port settings may also be removed or detached; the physical MikroTik and its persistent VPN configuration will not be changed.`,
     );
     if (!confirmed) return;
 

@@ -18,7 +18,7 @@ import {
 } from "../lib/supabase-client.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { normalizeSmsPhone } from "../services/sms/sms-service.js";
-import { reconcileHotspotUserAccess, reconcilePppoeUserAccess, removeHotspotUser, removePPPSecretByName, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
+import { reconcileHotspotUserAccess, reconcilePppoeUserAccess, removeHotspotUser, removePPPSecretByName, runRouterCommand, runRouterCommands, type RouterCredentials } from "../lib/mikrotik.js";
 import { removeRadiusCustomer, syncRadiusCustomer } from "../lib/radius.js";
 import { deployRouterFile } from "../lib/mikrotik.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
@@ -37,7 +37,10 @@ import {
   withVlanIngressModeLock,
   type VlanIngressMode,
 } from "../lib/port-service-resources.js";
-import { summarizeVlanHotspotDiagnostics } from "../lib/vlan-hotspot-diagnostics.js";
+import {
+  summarizeVlanBridgePortIngress,
+  summarizeVlanHotspotDiagnostics,
+} from "../lib/vlan-hotspot-diagnostics.js";
 import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
 import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
 import { buildVlanHotspotProfileConfig } from "../lib/vlan-hotspot-profile.js";
@@ -2986,6 +2989,7 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
     const { parentBridge, vlanInterface } = vlanServiceResources(port);
     const network = portServiceNetwork(port.id, port.subnet_range || "");
     const creds = routerCredentials(target);
+    const handoffInterface = normalizedHandoffInterface(port.handoff_interface);
     const read = async (command: string[]): Promise<Record<string, string>[]> => {
       const rows = await runRouterCommand(creds, command);
       return Array.isArray(rows) ? rows : [];
@@ -2993,6 +2997,7 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
     const [
       bridgeRows,
       bridgePortRows,
+      handoffBridgePortDetailRows,
       bridgeVlanRows,
       vlanRows,
       addressRows,
@@ -3008,7 +3013,14 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
       captivePortalOptionRows,
     ] = await Promise.all([
       read(["/interface/bridge/print", "=.proplist=.id,name,disabled,running,vlan-filtering,frame-types,ingress-filtering", `?name=${parentBridge}`]),
-      read(["/interface/bridge/port/print", "=.proplist=.id,interface,bridge,disabled,running,hw,edge,point-to-point", `?bridge=${parentBridge}`]),
+      read(["/interface/bridge/port/print", "=.proplist=.id,interface,bridge,disabled,running,hw,edge,point-to-point,pvid,frame-types,ingress-filtering", `?bridge=${parentBridge}`]),
+      handoffInterface
+        ? read([
+          "/interface/bridge/port/print",
+          "=.proplist=.id,interface,bridge,disabled,running,pvid,frame-types,ingress-filtering",
+          `?interface=${handoffInterface}`,
+        ])
+        : Promise.resolve([]),
       read(["/interface/bridge/vlan/print", "=.proplist=.id,bridge,vlan-ids,tagged,untagged", `?bridge=${parentBridge}`]),
       read(["/interface/vlan/print", "=.proplist=.id,name,vlan-id,interface,disabled,running", `?name=${vlanInterface}`]),
       read(["/ip/address/print", "=.proplist=.id,address,interface,disabled,comment", `?interface=${vlanInterface}`]),
@@ -3023,6 +3035,13 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
       read(["/ip/hotspot/host/print", "=.proplist=server"]),
       read(["/ip/dhcp-server/option/print", "=.proplist=name,code,value", "?code=114"]),
     ]);
+    const handoffBridgePort = handoffInterface
+      ? summarizeVlanBridgePortIngress(
+        handoffBridgePortDetailRows,
+        handoffInterface,
+        parentBridge,
+      )
+      : null;
     const relevantHotspotInterfaces = new Set([
       vlanInterface,
       parentBridge,
@@ -3060,9 +3079,11 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
         .filter(profile => relevantHotspotProfileNames.has(String(profile.name ?? "").trim()))
         .map(profile => validPortalHostname(profile["dns-name"]) ?? null),
     ].filter((name): name is string => Boolean(name)))];
-    const hotspotDnsRows = (await Promise.all(hotspotDnsNames.map(name =>
-      read(["/ip/dns/static/print", "=.proplist=.id,name,address,disabled,comment", `?name=${name}`]),
-    ))).flat();
+    const hotspotDnsRows = hotspotDnsNames.length
+      ? (await runRouterCommands(creds, hotspotDnsNames.map(name =>
+        ["/ip/dns/static/print", "=.proplist=.id,name,address,disabled,comment", `?name=${name}`],
+      ))).flat()
+      : [];
     const referencedPortalOptionNames = new Set([
       `${resources.commentPrefix}_captive_portal`,
       ...dhcpNetworkRows.flatMap(row =>
@@ -3081,8 +3102,7 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
     const queueDiagnosticsError = aggregateQueueResult.status === "rejected" || customerQueueResult.status === "rejected"
       ? "MikroTik aggregate or customer queue counters could not be read."
       : null;
-    const handoffInterface = String(port.handoff_interface ?? "").trim();
-    const handoffLink = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(handoffInterface)
+    const handoffLink = handoffInterface
       ? await detectRouterInterfaceLink(target, handoffInterface)
       : null;
     res.json({
@@ -3111,6 +3131,7 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
         type: handoffLink.type,
         error: handoffLink.error,
       } : null,
+      handoffBridgePort,
       bridge: bridgeRows,
       bridgePorts: bridgePortRows,
       bridgeVlans: bridgeVlanRows,

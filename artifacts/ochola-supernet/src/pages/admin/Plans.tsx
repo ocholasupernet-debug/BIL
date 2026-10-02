@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useSearch } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Badge } from "@/components/ui/badge";
 import { getAdminApiToken, type DbPlan, type DbBandwidth, type DbRouter } from "@/lib/supabase";
@@ -921,8 +921,8 @@ const TAB_LABELS: Record<string, string> = {
 };
 
 export default function Plans() {
-  const [location] = useLocation();
-  const requestedType = new URLSearchParams(location.split("?")[1] ?? "").get("type");
+  const search = useSearch();
+  const requestedType = new URLSearchParams(search).get("type");
   const activeTab = requestedType && Object.prototype.hasOwnProperty.call(TAB_LABELS, requestedType)
     ? requestedType
     : "hotspot";
