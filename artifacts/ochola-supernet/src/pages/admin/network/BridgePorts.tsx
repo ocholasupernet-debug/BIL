@@ -393,18 +393,21 @@ export default function BridgePorts() {
     return r.host || r.vpn_ip || "";
   }
 
-  async function fetchPortsForRouter(r: UnifiedRouter) {
+  async function fetchPortsForRouter(r: UnifiedRouter, preserveApplyResult = false) {
     const host = effectiveHost(r);
     const cn   = slugify(r.name);
     if (!host && !cn) {
       setLoadError("No IP address available for this router. It will be set automatically once the VPN tunnel connects.");
+      if (preserveApplyResult) setPayload(null);
       return;
     }
     setLoading(true);
     setLoadError(null);
-    setPayload(null);
-    setApplyLogs(null);
-    setApplyOk(null);
+    if (!preserveApplyResult) {
+      setPayload(null);
+      setApplyLogs(null);
+      setApplyOk(null);
+    }
     try {
       const res = await fetch("/api/admin/router/ports", {
         method: "POST",
@@ -424,12 +427,14 @@ export default function BridgePorts() {
         if (data.connectedVia) setConnectedVia(data.connectedVia);
         void ensureVpnUser(r.name);
       } else {
+        if (preserveApplyResult) setPayload(null);
         setLoadError(
           (data.error && data.error.trim()) ||
           "Could not connect to router — API service may not be enabled on port 8728."
         );
       }
     } catch (e) {
+      if (preserveApplyResult) setPayload(null);
       setLoadError(String(e));
     } finally {
       setLoading(false);
@@ -475,13 +480,11 @@ export default function BridgePorts() {
       const data = await res.json() as { ok: boolean; logs: string[]; error?: string };
       setApplyLogs(data.logs ?? []);
       setApplyOk(data.ok);
-      if (data.ok) {
-        fetchPorts(selectedKey!);
-      }
     } catch (e) {
       setApplyLogs([`❌ ${e}`]);
       setApplyOk(false);
     } finally {
+      await fetchPortsForRouter(activeRouter, true);
       setApplying(false);
     }
   }
@@ -615,6 +618,22 @@ export default function BridgePorts() {
 
           {/* Load error */}
           {loadError && !loading && <RouterErrorPanel error={loadError} />}
+
+          {applyLogs && (
+            <div style={{
+              background: applyOk ? "rgba(34,197,94,0.06)" : "rgba(248,113,113,0.06)",
+              border: `1px solid ${applyOk ? "rgba(34,197,94,0.25)" : "rgba(248,113,113,0.25)"}`,
+              borderRadius: 10, padding: "0.875rem 1.25rem",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem", color: applyOk ? "#22c55e" : "#f87171", fontWeight: 700, fontSize: "0.85rem" }}>
+                {applyOk ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+                {applyOk ? "Bridge ports updated successfully!" : "Failed to update bridge ports"}
+              </div>
+              <div style={{ fontFamily: "monospace", fontSize: "0.75rem", color: "var(--isp-text-muted)", display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+                {applyLogs.map((l, i) => <span key={i}>{l}</span>)}
+              </div>
+            </div>
+          )}
 
           {/* No router selected yet */}
           {!activeRouter && !loading && routers.length === 0 && (
@@ -782,23 +801,6 @@ export default function BridgePorts() {
                   })}
                 </div>
               </details>
-
-              {/* Apply result */}
-              {applyLogs && (
-                <div style={{
-                  background: applyOk ? "rgba(34,197,94,0.06)" : "rgba(248,113,113,0.06)",
-                  border: `1px solid ${applyOk ? "rgba(34,197,94,0.25)" : "rgba(248,113,113,0.25)"}`,
-                  borderRadius: 10, padding: "0.875rem 1.25rem",
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem", color: applyOk ? "#22c55e" : "#f87171", fontWeight: 700, fontSize: "0.85rem" }}>
-                    {applyOk ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
-                    {applyOk ? "Bridge ports updated successfully!" : "Failed to update bridge ports"}
-                  </div>
-                  <div style={{ fontFamily: "monospace", fontSize: "0.75rem", color: "var(--isp-text-muted)", display: "flex", flexDirection: "column", gap: "0.2rem" }}>
-                    {applyLogs.map((l, i) => <span key={i}>{l}</span>)}
-                  </div>
-                </div>
-              )}
 
               {/* Action buttons — Finish · Back · Refresh */}
               <div style={{ display: "flex", alignItems: "center", gap: "0.625rem", flexWrap: "wrap" }}>
@@ -1012,6 +1014,22 @@ export default function BridgePorts() {
 
         {loadError && !loading && <RouterErrorPanel error={loadError} />}
 
+        {applyLogs && (
+          <div style={{
+            background: applyOk ? "rgba(34,197,94,0.06)" : "rgba(248,113,113,0.06)",
+            border: `1px solid ${applyOk ? "rgba(34,197,94,0.25)" : "rgba(248,113,113,0.25)"}`,
+            borderRadius: 10, padding: "0.875rem 1.25rem",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "0.5rem", color: applyOk ? "#22c55e" : "#f87171", fontWeight: 700, fontSize: "0.85rem" }}>
+              {applyOk ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+              {applyOk ? "Bridge ports updated successfully!" : "Failed to update bridge ports"}
+            </div>
+            <div style={{ fontFamily: "monospace", fontSize: "0.75rem", color: "var(--isp-text-muted)", display: "flex", flexDirection: "column", gap: "0.2rem" }}>
+              {applyLogs.map((l, i) => <span key={i}>{l}</span>)}
+            </div>
+          </div>
+        )}
+
         {/* Create Hotspot Bridge banner (Standalone mode) */}
         {payload && !loading && !hasHotspotBridge && (
           <CreateHotspotBridgeBanner creating={creatingBridge} message={bridgeCreateMsg} onCreateClick={handleCreateHotspotBridge} />
@@ -1090,18 +1108,6 @@ export default function BridgePorts() {
                 })}
               </div>
             </details>
-
-            {applyLogs && (
-              <div style={{
-                background: applyOk ? "rgba(34,197,94,0.06)" : "rgba(248,113,113,0.06)",
-                border: `1px solid ${applyOk ? "rgba(34,197,94,0.25)" : "rgba(248,113,113,0.25)"}`,
-                borderRadius: 10, padding: "0.875rem 1.25rem",
-              }}>
-                <div style={{ fontFamily: "monospace", fontSize: "0.75rem", color: "var(--isp-text-muted)", display: "flex", flexDirection: "column", gap: "0.2rem" }}>
-                  {applyLogs.map((l, i) => <span key={i}>{l}</span>)}
-                </div>
-              </div>
-            )}
 
             <button
               onClick={applyChanges}

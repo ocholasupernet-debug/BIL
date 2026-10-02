@@ -21,6 +21,7 @@ import {
   guardRouterOSConnection,
   RouterOSConnectionLostError,
 } from "../lib/routeros-connection";
+import { compareBridgePortMembership } from "../lib/bridge-port-membership.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 
 const router: IRouter = Router();
@@ -139,13 +140,21 @@ async function cleanupLegacyPlanProfiles(
 }
 
 /* ─── Connect helper ─── */
-function makeConn(host: string, username: string, password: string): RouterOSAPI {
+const BRIDGE_PORT_TIMEOUT_SECONDS = 30;
+const BRIDGE_PORT_TIMEOUT_MS = BRIDGE_PORT_TIMEOUT_SECONDS * 1000;
+
+function makeConn(
+  host: string,
+  username: string,
+  password: string,
+  timeoutSeconds = 6,
+): RouterOSAPI {
   return guardRouterOSConnection(new RouterOSAPI({
     host,
     port: 8728,
     user: username || "admin",
     password: password || "",
-    timeout: 6,
+    timeout: timeoutSeconds,
     keepalive: false,
   }));
 }
@@ -1722,7 +1731,7 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
 
   for (const { ip, label } of toTry) {
     try {
-      conn = makeConn(ip, username, password);
+      conn = makeConn(ip, username, password, BRIDGE_PORT_TIMEOUT_SECONDS);
       await withTimeout(conn.connect(), 8000);
       connectedVia = label;
 
@@ -1773,12 +1782,9 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
       bridges = (Array.isArray(brArr) ? brArr : []) as Record<string, string>[];
     } catch { /* old ROS / no bridge package */ }
 
-    /* Current bridge-port memberships */
-    let bridgePorts: Record<string, string>[] = [];
-    try {
-      const bpArr = await conn.write(["/interface/bridge/port/print"]);
-      bridgePorts = (Array.isArray(bpArr) ? bpArr : []) as Record<string, string>[];
-    } catch { /* ignore */ }
+    /* Bridge membership is required for a safe port-selection snapshot. */
+    const bpArr = await conn.write(["/interface/bridge/port/print"]);
+    const bridgePorts = (Array.isArray(bpArr) ? bpArr : []) as Record<string, string>[];
 
     conn.close();
 
@@ -1843,22 +1849,22 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
     log(`   Bridge: ${bridge}`);
   }
 
-  let conn = makeConn(primaryHost, username, password);
+  let conn = makeConn(primaryHost, username, password, BRIDGE_PORT_TIMEOUT_SECONDS);
   let connectedVia = primaryHost;
   let connectedHost = primaryHost;
-  let portOperationFailed = false;
 
   try {
     try {
-      await withTimeout(conn.connect(), 12000);
+      await withTimeout(conn.connect(), BRIDGE_PORT_TIMEOUT_MS);
       log(`✓ Connected to ${primaryHost}`);
     } catch (directErr) {
       /* If primaryHost is already the management VPN IP, or the VPN IP is
          different, try it as the alternate path. */
       const altHost = validVpnIp && validVpnIp !== primaryHost ? validVpnIp : null;
       if (altHost) {
-        conn = makeConn(altHost, username, password);
-        await withTimeout(conn.connect(), 12000);
+        try { conn.close(); } catch { /* failed connection may not be open */ }
+        conn = makeConn(altHost, username, password, BRIDGE_PORT_TIMEOUT_SECONDS);
+        await withTimeout(conn.connect(), BRIDGE_PORT_TIMEOUT_MS);
         connectedVia = `${altHost} (VPN)`;
         connectedHost = altHost;
         log(`✓ Connected via VPN tunnel (${altHost})`);
@@ -1867,6 +1873,10 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
       }
     }
     void connectedVia;
+
+    /* Stop mutating after the first failed command. A timed-out write may
+       already have reached RouterOS, so only a fresh read is safe afterward. */
+    let mutationFailure: unknown = null;
 
     /* Remove ports */
     for (const iface of removePorts) {
@@ -1884,13 +1894,14 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
           }
         }
       } catch (e) {
-        portOperationFailed = true;
+        mutationFailure = e;
         log(`  ⚠ skip remove ${iface}: ${enrichPermErr(e, username)}`);
+        break;
       }
     }
 
     /* Add ports */
-    for (const iface of addPorts) {
+    for (const iface of mutationFailure ? [] : addPorts) {
       try {
         /* Check not already a member */
         const existing = await conn.write([
@@ -1909,35 +1920,90 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
         ]);
         log(`✓ Added ${iface} → ${bridge}`);
       } catch (e) {
-        portOperationFailed = true;
+        mutationFailure = e;
         log(`❌ Add ${iface}: ${enrichPermErr(e, username)}`);
+        break;
       }
     }
 
-    /* Do not treat a successful API connection as proof that bridge work
-       completed. Re-read the full bridge membership and compare it with the
-       selected snapshot, including a legitimate no-change submission. */
-    const currentMembers = await conn.write(["/interface/bridge/port/print", `?bridge=${bridge}`]);
-    const actualPorts = new Set(
-      Array.isArray(currentMembers)
-        ? currentMembers.map(row => String((row as Record<string, unknown>).interface ?? "")).filter(Boolean)
-        : [],
-    );
-    const expectedPorts = new Set(Array.isArray(desiredPorts) ? desiredPorts.filter(Boolean) : []);
-    let portMembershipVerified = !portOperationFailed && Array.isArray(desiredPorts);
+    let actualPorts: Set<string> | null = null;
+    let verificationFailure: unknown = mutationFailure;
+
+    if (!mutationFailure) {
+      try {
+        /* Do not treat a successful API connection as proof that bridge work
+           completed. Re-read the full membership, including no-change submits. */
+        const currentMembers = await conn.write(["/interface/bridge/port/print", `?bridge=${bridge}`]);
+        if (!Array.isArray(currentMembers)) {
+          throw new Error("RouterOS returned an invalid bridge membership response.");
+        }
+        actualPorts = new Set(
+          currentMembers
+            .map(row => String((row as Record<string, unknown>).interface ?? ""))
+            .filter(Boolean),
+        );
+      } catch (e) {
+        verificationFailure = e;
+        log(`⚠️ Membership read failed: ${enrichPermErr(e, username)}`);
+      }
+    }
+
+    if (verificationFailure) {
+      try { conn.close(); } catch { /* connection may already be closed */ }
+      log("ℹ️ Reconnecting for a read-only bridge membership check; no further changes will be sent.");
+
+      const alternateHost = connectedHost === primaryHost
+        ? (validVpnIp && validVpnIp !== primaryHost ? validVpnIp : null)
+        : primaryHost;
+      const recoveryHosts = [...new Set([connectedHost, alternateHost].filter((value): value is string => Boolean(value)))];
+
+      for (const recoveryHost of recoveryHosts) {
+        const recoveryConn = makeConn(recoveryHost, username, password, BRIDGE_PORT_TIMEOUT_SECONDS);
+        try {
+          await withTimeout(recoveryConn.connect(), BRIDGE_PORT_TIMEOUT_MS);
+          const recoveredMembers = await withTimeout(
+            recoveryConn.write(["/interface/bridge/port/print", `?bridge=${bridge}`]),
+            BRIDGE_PORT_TIMEOUT_MS,
+          );
+          if (!Array.isArray(recoveredMembers)) {
+            throw new Error("RouterOS returned an invalid bridge membership response.");
+          }
+          actualPorts = new Set(
+            recoveredMembers
+              .map(row => String((row as Record<string, unknown>).interface ?? ""))
+              .filter(Boolean),
+          );
+          log(`✓ Read-only membership check completed via ${recoveryHost}`);
+          break;
+        } catch (e) {
+          log(`⚠️ Read-only membership check via ${recoveryHost} failed: ${enrichPermErr(e, username)}`);
+        } finally {
+          try { recoveryConn.close(); } catch { /* connection may already be closed */ }
+        }
+      }
+    }
+
+    let portMembershipVerified = Array.isArray(desiredPorts) && actualPorts !== null;
     if (!Array.isArray(desiredPorts)) {
       log("❌ Verification failed: the selected port snapshot was not supplied.");
     }
-    for (const iface of expectedPorts) {
-      if (!actualPorts.has(iface)) {
-        portMembershipVerified = false;
+    if (actualPorts === null) {
+      portMembershipVerified = false;
+      log("❌ Verification failed: RouterOS membership could not be read after the operation.");
+    } else if (Array.isArray(desiredPorts)) {
+      const expectedPorts = new Set(
+        desiredPorts.filter((port): port is string => typeof port === "string" && Boolean(port)),
+      );
+      const comparison = compareBridgePortMembership(actualPorts, expectedPorts);
+      portMembershipVerified = comparison.matches;
+      for (const iface of comparison.missing) {
         log(`❌ Verification failed: ${iface} is not a member of ${bridge}`);
       }
-    }
-    for (const iface of actualPorts) {
-      if (!expectedPorts.has(iface)) {
-        portMembershipVerified = false;
+      for (const iface of comparison.unexpected) {
         log(`❌ Verification failed: ${iface} is unexpectedly a member of ${bridge}`);
+      }
+      if (comparison.matches && verificationFailure) {
+        log("✓ Read-only recovery confirmed the requested bridge membership.");
       }
     }
 
