@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "wouter";
 import { AlertTriangle, Banknote, CheckCircle2, Copy, Gauge, LockKeyhole, PauseCircle, PlayCircle, Plus, ReceiptText, RefreshCw, Router as RouterIcon, ShieldCheck, Trash2, Users, WalletCards } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
@@ -21,6 +21,12 @@ type Assignment = {
   link_detection_error?: string | null;
   provisioning_error?: string | null; link_provisioning_error?: string | null;
   router?: { id: number; name: string; status: string } | null;
+};
+type XponTrafficSample = {
+  interfaceName: string;
+  rxBitsPerSecond: number;
+  txBitsPerSecond: number;
+  sampledAt: string;
 };
 type Sale = { id: number; reseller_port_id: number; client_reference: string; client_ip: string; amount: number; gateway_type: string; payment_reference: string; status: string; created_at: string };
 type ResellerResponse = {
@@ -74,6 +80,14 @@ async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 function money(value: unknown): string {
   return `KES ${Number(value ?? 0).toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatBitRate(value: number): string {
+  const rate = Number.isFinite(value) ? Math.max(0, value) : 0;
+  if (rate >= 1_000_000_000) return `${(rate / 1_000_000_000).toFixed(2)} Gbps`;
+  if (rate >= 1_000_000) return `${(rate / 1_000_000).toFixed(2)} Mbps`;
+  if (rate >= 1_000) return `${(rate / 1_000).toFixed(1)} kbps`;
+  return `${Math.round(rate)} bps`;
 }
 
 const cardStyle: React.CSSProperties = {
@@ -134,6 +148,8 @@ function AdminResellerManagement() {
   const [linkCapDraft, setLinkCapDraft] = useState<Record<number, string>>({});
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [xponTrafficLivePortId, setXponTrafficLivePortId] = useState<number | null>(null);
+  const xponTrafficInFlight = useRef(new Set<number>());
   const [requestBusy, setRequestBusy] = useState<number | null>(null);
   const [handoffRequestId, setHandoffRequestId] = useState<number | null>(null);
   const [handoffRouterId, setHandoffRouterId] = useState("");
@@ -151,6 +167,9 @@ function AdminResellerManagement() {
   const [handoffSaving, setHandoffSaving] = useState(false);
   const [handoffScriptSaving, setHandoffScriptSaving] = useState(false);
   const [linkChecking, setLinkChecking] = useState<number | null>(null);
+  const [xponTraffic, setXponTraffic] = useState<Record<number, XponTrafficSample>>({});
+  const [xponTrafficLoading, setXponTrafficLoading] = useState<Record<number, boolean>>({});
+  const [xponTrafficErrors, setXponTrafficErrors] = useState<Record<number, string>>({});
   const [linkDeleting, setLinkDeleting] = useState<number | null>(null);
   const [ingressModeEditing, setIngressModeEditing] = useState<number | null>(null);
   const [ingressModeDraft, setIngressModeDraft] = useState<"tagged" | "untagged">("tagged");
@@ -176,7 +195,9 @@ function AdminResellerManagement() {
       setResellers(resellerResult.resellers ?? []);
       setConnectionRequests(connectionResult.requests ?? []);
       setRequestResellers(connectionResult.resellers ?? []);
-      setAssignments(resellerResult.ports ?? []);
+      const nextAssignments = resellerResult.ports ?? [];
+      setAssignments(nextAssignments);
+      setXponTrafficLivePortId((current) => current !== null && nextAssignments.some((port) => port.id === current) ? current : null);
        if (!routerId && routerResult?.[0]) setRouterId(String(routerResult[0].id));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load reseller management.");
@@ -356,6 +377,38 @@ function AdminResellerManagement() {
       setError(e instanceof Error ? e.message : "Unable to check the XPON link.");
     } finally { setLinkChecking(null); }
   };
+  const checkXponTraffic = useCallback(async (portId: number) => {
+    if (xponTrafficInFlight.current.has(portId)) return;
+    xponTrafficInFlight.current.add(portId);
+    setXponTrafficLoading((current) => ({ ...current, [portId]: true }));
+    setXponTrafficErrors((current) => ({ ...current, [portId]: "" }));
+    try {
+      const result = await apiJson<{ ok: boolean; traffic: XponTrafficSample }>(`/api/admin/reseller-handoffs/${portId}/traffic`);
+      setXponTraffic((current) => ({ ...current, [portId]: result.traffic }));
+    } catch (e) {
+      setXponTrafficErrors((current) => ({
+        ...current,
+        [portId]: e instanceof Error ? e.message : "Unable to load XPON traffic.",
+      }));
+    } finally {
+      xponTrafficInFlight.current.delete(portId);
+      setXponTrafficLoading((current) => ({ ...current, [portId]: false }));
+    }
+  }, []);
+  useEffect(() => {
+    if (xponTrafficLivePortId === null) return;
+    let cancelled = false;
+    let timeoutId: number;
+    const sampleAgain = async () => {
+      await checkXponTraffic(xponTrafficLivePortId);
+      if (!cancelled) timeoutId = window.setTimeout(() => void sampleAgain(), 5_000);
+    };
+    timeoutId = window.setTimeout(() => void sampleAgain(), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [xponTrafficLivePortId, checkXponTraffic]);
   const updateLink = async (port: Assignment, linkStatus: "active" | "suspended") => {
     const resellerId = port.assigned_reseller_id ?? port.reseller_id;
     if (!resellerId) {
@@ -698,10 +751,10 @@ function AdminResellerManagement() {
         </details>
         <div style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-             <div><div style={{ fontWeight: 800, color: "var(--isp-text)" }}>Resellers and assigned ports</div><div style={{ fontSize: 13, color: "var(--isp-text-muted)", marginTop: 4 }}>Provisioning state is separate from the wholesale payment link. Activate or suspend traffic independently.</div></div>
+             <div><div style={{ fontWeight: 800, color: "var(--isp-text)" }}>Resellers and assigned ports</div><div style={{ fontSize: 13, color: "var(--isp-text-muted)", marginTop: 4 }}>Provisioning state is separate from the wholesale payment link. Start live XPON sampling to refresh current rates every 5 seconds; rates are not historical totals.</div></div>
             <button onClick={() => void load()} style={{ border: "1px solid var(--isp-border)", background: "transparent", color: "var(--isp-text)", borderRadius: 9, padding: 9, cursor: "pointer" }}><RefreshCw size={16} /></button>
           </div>
-           <div style={{ overflowX: "auto" }}><table className="isp-table reseller-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr>{["Reseller", "Username", "Port", "Cap", "Provisioning", "Wholesale link", "Actions"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "9px 8px", color: "var(--isp-text-muted)", borderBottom: "1px solid var(--isp-border)" }}>{heading}</th>)}</tr></thead><tbody>
+            <div style={{ overflowX: "auto" }}><table className="isp-table reseller-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}><thead><tr>{["Reseller", "Username", "Port", "Live XPON traffic", "Cap", "Provisioning", "Wholesale link", "Actions"].map((heading) => <th key={heading} style={{ textAlign: "left", padding: "9px 8px", color: "var(--isp-text-muted)", borderBottom: "1px solid var(--isp-border)" }}>{heading}</th>)}</tr></thead><tbody>
              {resellers.flatMap((reseller) => {
                const resellerPorts = assignments.filter((item) => (item.assigned_reseller_id ?? item.reseller_id) === reseller.id);
                const visiblePorts: Array<Assignment | null> = resellerPorts.length ? resellerPorts : [null];
@@ -713,6 +766,42 @@ function AdminResellerManagement() {
                  <td style={{ padding: "10px 8px", color: "var(--isp-text)", fontWeight: 700 }}>{reseller.company_name || reseller.name}</td>
                  <td style={{ padding: "10px 8px", color: "var(--isp-text-muted)" }}>{reseller.username}</td>
                    <td style={{ padding: "10px 8px", color: "var(--isp-text)" }}>{port?.handoff_mode === "vlan_services" ? <><code className="reseller-mono">VLAN {port.vlan_tag}</code><div style={{ marginTop: 5, color: "#15803d", fontSize: 11, fontWeight: 750 }}>Bridge: {port.bridge_name || "—"} · {port.handoff_interface || "Ingress not set"} · {port.vlan_ingress_mode === "tagged" ? "Tagged trunk" : port.vlan_ingress_mode === "untagged" ? "Untagged access" : "Mode not set"}</div><div style={{ marginTop: 3, color: "var(--isp-text-muted)", fontSize: 11 }}>Hotspot + PPPoE service</div></> : <><code className="reseller-mono">{port?.interface_name || "—"}</code>{port?.handoff_mode === "isp_router" && <div style={{ marginTop: 5, color: port.link_detected ? "#15803d" : "#a16207", fontSize: 11, fontWeight: 750 }}>{port.handoff_type === "vlan" ? `VLAN ${port.vlan_tag}` : "ISP router"} · {port.link_detected ? "XPON link detected" : "waiting for XPON"} </div>}</>}</td>
+                  <td style={{ padding: "10px 8px", minWidth: 190 }}>
+                    {port ? (
+                      <div style={{ display: "grid", gap: 5 }}>
+                        <button
+                          type="button"
+                          disabled={Boolean(xponTrafficLoading[port.id] && xponTrafficLivePortId !== port.id)}
+                          onClick={() => {
+                            if (xponTrafficLivePortId === port.id) {
+                              setXponTrafficLivePortId(null);
+                            } else {
+                              setXponTrafficLivePortId(port.id);
+                              void checkXponTraffic(port.id);
+                            }
+                          }}
+                          aria-label={`${xponTrafficLivePortId === port.id ? "Stop" : "Start"} live XPON traffic for ${reseller.company_name || reseller.name}`}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6, justifySelf: "start", border: "1px solid var(--isp-border)", borderRadius: 7, padding: "5px 8px", background: "transparent", color: "var(--isp-text)", cursor: xponTrafficLoading[port.id] && xponTrafficLivePortId !== port.id ? "wait" : "pointer", fontSize: 11, fontWeight: 750 }}
+                        >
+                          <RefreshCw size={13} /> {xponTrafficLivePortId === port.id ? "Stop live" : xponTrafficLoading[port.id] ? "Sampling…" : "Start live"}
+                        </button>
+                        {xponTraffic[port.id] ? (
+                          <div role="status" style={{ display: "grid", gap: 3, color: "var(--isp-text)", fontSize: 11, fontVariantNumeric: "tabular-nums" }}>
+                            <span>RX from XPON: <b>{formatBitRate(xponTraffic[port.id].rxBitsPerSecond)}</b></span>
+                            <span>TX to XPON: <b>{formatBitRate(xponTraffic[port.id].txBitsPerSecond)}</b></span>
+                            <span style={{ color: "var(--isp-text-muted)", fontSize: 10 }}>
+                              {xponTrafficLivePortId === port.id ? "Live · " : ""}{xponTraffic[port.id].interfaceName} · {new Date(xponTraffic[port.id].sampledAt).toLocaleTimeString()}
+                            </span>
+                          </div>
+                        ) : !xponTrafficErrors[port.id] ? <span style={{ color: "var(--isp-text-muted)", fontSize: 11 }}>No live sample yet.</span> : null}
+                        {xponTrafficErrors[port.id] && (
+                          <span style={{ color: "#b91c1c", fontSize: 11 }}>
+                            {xponTraffic[port.id] ? `Last update failed: ${xponTrafficErrors[port.id]}` : xponTrafficErrors[port.id]}
+                          </span>
+                        )}
+                      </div>
+                    ) : "—"}
+                  </td>
                  <td style={{ padding: "10px 8px", color: "var(--isp-text)" }}>{port ? <div style={{ display: "flex", gap: 5, alignItems: "center" }}><input aria-label={`Maximum bandwidth for ${port.interface_name}`} type="number" min="1" max="100000" value={linkCapDraft[port.id] ?? String(port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps)} onChange={(event) => setLinkCapDraft((current) => ({ ...current, [port.id]: event.target.value }))} style={{ ...inputStyle, width: 86, minHeight: 32, padding: "5px 7px" }} /><span>Mbps</span></div> : "—"}</td>
                  <td style={{ padding: "10px 8px" }}><StatusBadge status={port?.status} />{port?.provisioning_error ? <div style={{ color: "#b91c1c", maxWidth: 260, marginTop: 5 }}>{port.provisioning_error}</div> : null}</td>
                  <td style={{ padding: "10px 8px" }}><StatusBadge status={linkStatus} />{port?.link_provisioning_error ? <div style={{ color: "#b91c1c", maxWidth: 260, marginTop: 5 }}>{port.link_provisioning_error}</div> : null}</td>
@@ -822,7 +911,7 @@ function AdminResellerManagement() {
                  </tr>;
                });
              })}
-             {!resellers.length && <tr><td colSpan={7} style={{ padding: 28, textAlign: "center", color: "var(--isp-text-muted)" }}>No reseller accounts yet.</td></tr>}
+              {!resellers.length && <tr><td colSpan={8} style={{ padding: 28, textAlign: "center", color: "var(--isp-text-muted)" }}>No reseller accounts yet.</td></tr>}
           </tbody></table></div>
         </div>
         </div>

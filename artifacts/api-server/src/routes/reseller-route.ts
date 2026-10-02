@@ -18,7 +18,7 @@ import {
 } from "../lib/supabase-client.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { normalizeSmsPhone } from "../services/sms/sms-service.js";
-import { reconcileHotspotUserAccess, reconcilePppoeUserAccess, removeHotspotUser, removePPPSecretByName, runRouterCommand, runRouterCommands, type RouterCredentials } from "../lib/mikrotik.js";
+import { fetchTraffic, reconcileHotspotUserAccess, reconcilePppoeUserAccess, removeHotspotUser, removePPPSecretByName, runRouterCommand, runRouterCommands, type RouterCredentials } from "../lib/mikrotik.js";
 import { removeRadiusCustomer, syncRadiusCustomer } from "../lib/radius.js";
 import { deployRouterFile } from "../lib/mikrotik.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
@@ -2608,6 +2608,58 @@ router.get("/admin/reseller-handoffs/:portId/link", requireAdmin(), async (req, 
     });
   } catch (error) {
     res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to detect the XPON link." });
+  }
+});
+
+router.get("/admin/reseller-handoffs/:portId/traffic", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (account.role === "reseller") {
+      res.status(403).json({ ok: false, error: "Only the ISP account can view XPON handoff traffic." });
+      return;
+    }
+    const portId = Number(req.params.portId);
+    if (!Number.isSafeInteger(portId) || portId <= 0) {
+      res.status(400).json({ ok: false, error: "A valid reseller handoff is required." });
+      return;
+    }
+    let port: ResellerPortRow;
+    try {
+      port = await ownedPort(req, portId);
+    } catch (error) {
+      res.status(403).json({ ok: false, error: error instanceof Error ? error.message : "This handoff is not assigned to your ISP account." });
+      return;
+    }
+
+    // VLAN service assignments share a physical XPON ingress; monitor that
+    // ingress rather than the logical VLAN interface. Other handoffs monitor
+    // the assigned XPON-facing interface.
+    const interfaceName = normalizedHandoffInterface(
+      port.handoff_mode === "vlan_services" ? port.handoff_interface : port.interface_name,
+    );
+    if (!interfaceName) {
+      res.status(409).json({ ok: false, error: "This reseller handoff has no valid XPON-facing interface configured." });
+      return;
+    }
+
+    const target = await tenantRouter(port.admin_id, port.router_id);
+    const samples = await fetchTraffic(routerCredentials(target), [interfaceName]);
+    const sample = samples.find((item) => item.iface === interfaceName);
+    if (!sample) {
+      res.status(502).json({ ok: false, error: "The ISP router did not return a traffic sample for this XPON interface." });
+      return;
+    }
+    res.json({
+      ok: true,
+      traffic: {
+        interfaceName,
+        rxBitsPerSecond: Math.max(0, Number(sample.rxBitsPerSecond) || 0),
+        txBitsPerSecond: Math.max(0, Number(sample.txBitsPerSecond) || 0),
+        sampledAt: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to sample XPON handoff traffic." });
   }
 });
 
