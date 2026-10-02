@@ -19,6 +19,8 @@ export interface HotspotFileDeploymentResult {
 interface DeploymentResponse extends HotspotFileDeploymentResult {
   jobId?: string;
   error?: string;
+  detail?: string;
+  hint?: string;
 }
 
 export async function installHotspotFiles(
@@ -43,7 +45,10 @@ export async function installHotspotFiles(
     });
     const queued = await response.json().catch(() => ({})) as DeploymentResponse;
     if (!response.ok || !queued.jobId) {
-      throw new Error(queued.error || `Hotspot file deployment could not start (HTTP ${response.status})`);
+      const message = [queued.error, queued.detail, queued.hint]
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .join(" — ");
+      throw new Error(message || `Hotspot file deployment could not start (HTTP ${response.status})`);
     }
     return queued;
   };
@@ -85,8 +90,8 @@ export async function installHotspotFiles(
     }
 
     if (statusResponse.status === 404 && !recoveredLostJob) {
-      /* API restarts clear the in-memory job. Requeue once even when the first
-         poll reaches the restarted process; existing assets are never replaced. */
+      /* API restarts can clear the in-memory job before any 5xx reaches the
+         browser. Requeue once; existing files are skipped and never replaced. */
       queued = await startDeployment();
       result = queued;
       onProgress?.(result);
@@ -97,7 +102,10 @@ export async function installHotspotFiles(
 
     result = await statusResponse.json().catch(() => ({})) as DeploymentResponse;
     if (!statusResponse.ok) {
-      throw new Error(result.error || `Could not read deployment progress (HTTP ${statusResponse.status})`);
+      const message = [result.error, result.detail, result.hint]
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .join(" — ");
+      throw new Error(message || `Could not read deployment progress (HTTP ${statusResponse.status})`);
     }
     successfulPolls += 1;
     consecutiveReadFailures = 0;

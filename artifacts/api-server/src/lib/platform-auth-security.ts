@@ -262,6 +262,15 @@ const API_REAUTH_PREFIXES: Array<[string, string]> = [
 
 export function getAdminApiReauthFeature(path: string): string | null {
   const pathname = path.split("?")[0].replace(/^\/api(?=\/)/, "");
+  if (/^\/router\/[^/]+\/files(?:\/|$)/.test(pathname)) {
+    return "network.files";
+  }
+  if (
+    /^\/router\/[^/]+\/managed-reset(?:\/|$)/.test(pathname) ||
+    /^\/admin\/router\/(?:install-progress|install-history)(?:\/|$)/.test(pathname)
+  ) {
+    return "network.routers";
+  }
   const match = API_REAUTH_PREFIXES.find(([prefix]) =>
     pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}-`),
   );

@@ -1207,6 +1207,13 @@ export function AdminLayout({
                         ? "Choose a unique password for this page, different from your sign-in password and other protected pages."
                         : `Enter the unique password for this page to continue.`}
                     </p>
+                    {(currentPageAuthFeatureKey === "network.routers" || currentPageAuthFeatureKey === "network.files") && (
+                      <p style={{ color: "var(--isp-text-muted)", fontSize: 13, marginTop: -4 }}>
+                        {currentPageAuthFeatureKey === "network.routers"
+                          ? "This verification applies only to the Routers page. Files access is controlled separately."
+                          : "This verification applies only to the Files page. Routers access is controlled separately."}
+                      </p>
+                    )}
                     {reauthMethod === "password" ? (
                       pagePasswordSetupNeeded ? (
                         <>

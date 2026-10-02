@@ -92,6 +92,16 @@ test("settings API reauthentication maps M-Pesa endpoints to Billing & M-Pesa", 
   assert.equal(getAdminApiReauthFeature("/api/settings/mpesa/status"), "settings.billing");
 });
 
+test("router and file APIs use separate page verification features", () => {
+  assert.equal(getAdminApiReauthFeature("/api/routers?adminId=7"), "network.routers");
+  assert.equal(getAdminApiReauthFeature("/api/router/7/managed-reset/plan"), "network.routers");
+  assert.equal(getAdminApiReauthFeature("/api/admin/router/install-progress?adminId=7"), "network.routers");
+  assert.equal(getAdminApiReauthFeature("/api/admin/router/install-history?adminId=7"), "network.routers");
+  assert.equal(getAdminApiReauthFeature("/api/files/routers?adminId=7"), "network.files");
+  assert.equal(getAdminApiReauthFeature("/api/router/7/files?adminId=7"), "network.files");
+  assert.equal(getAdminApiReauthFeature("/api/router/7/files/deploy-bulk/job-1"), "network.files");
+});
+
 test("page policy rejects unknown methods and page keys", () => {
   const base = {
     otp: { allEnabled: false, channels: { whatsapp: false, sms: false, email: false } },

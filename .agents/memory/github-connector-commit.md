@@ -3,7 +3,7 @@ name: GitHub connector commit flow
 description: Reconcile connector commits with the live remote branch without replacing production changes.
 ---
 
-Before writing a GitHub branch, read its live ref and compare both trees from their merge base; do not assume the workspace tracking ref is current. Fetch remote commits read-only, reconcile overlapping edits, then create a commit whose first parent is the current remote head and update the ref once with `force: false`.
+Before writing a GitHub branch, read its live ref and compare both trees from their merge base; do not assume the workspace tracking ref is current. Fetch remote commits read-only, reconcile overlapping edits, then create a commit whose first parent is the current remote head and update the ref once with `force: false`. GitHub's create-tree response with `base_tree` can show only root-level entries; verify the resulting tree recursively and compare leaf blobs before committing.
 
 **Why:** A stale workspace tracking ref can hide newer production commits, and a tree based on it can overwrite independent remote changes. The GitHub client wraps REST responses in `data`, so inspecting the wrapper directly can make an existing SHA appear missing; another release can also advance `main` during local checks. In the sandbox, `git merge-file` with process-substitution inputs once produced a clean output that omitted the workspace-side edits. Shell Git HTTPS may also lack write credentials while the connected GitHub proxy still has repository write access.
 

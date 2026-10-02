@@ -102,3 +102,4 @@
 - [Inline JSX patching](inline-jsx-patching.md) — Split dense form controls before changing attributes; exact-line patches can fail on long JSX.
 - [Canvas action validation](canvas-action-validation.md) — Keep iframe update actions literal, cap suggestion labels at 60 characters, and attach three suggestions when marking design frames live.
 - [Tenant-facing role copy](tenant-facing-role-copy.md) — Keep platform-role disclosures out of ISP/reseller-facing copy while preserving internal authorization and privileged-only surfaces.
+- [Password minimum policy](password-minimum-policy.md) — Require six characters when setting passwords; preserve stronger minima and legacy login/sync compatibility.

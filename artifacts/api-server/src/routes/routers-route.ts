@@ -64,15 +64,13 @@ function discoverVpnIp(
 }
 
 /*
- * /api/routers — thin proxy to Supabase isp_routers.
- * The frontend Routers.tsx page writes to Supabase directly; this route is
- * used by server-side flows (e.g. BridgePorts credential lookup) and any
- * integrations that prefer the REST API over the Supabase JS SDK.
+ * Tenant-scoped router summaries. Keep a Files-page alias so that loading
+ * its router selector uses the Files verification policy rather than inheriting
+ * the Routers page policy from the shared /api/routers endpoint.
  *
- * Query param:  adminId (preferred) or ispId (alias) — filters by admin_id
+ * Query param: adminId (preferred) or ispId (alias) — filters by admin_id.
  */
-
-router.get("/routers", requireAdmin(), async (req, res): Promise<void> => {
+async function listTenantRouters(req: Request, res: Response): Promise<void> {
   const account = await authenticatedAccount(req);
   const requestedAdmin = req.query.adminId ?? req.query.ispId;
   const adminId = account?.role === "reseller"
@@ -106,7 +104,10 @@ router.get("/routers", requireAdmin(), async (req, res): Promise<void> => {
     `admin_id=eq.${adminId}${routerFilter}${setupFilter}&select=id,name,host,bridge_ip,vpn_ip,proxy_ip,bridge_interface,router_username,status,last_seen,last_connected_host,model,ros_version,ip_address`,
   );
   res.json(rows);
-});
+}
+
+router.get("/routers", requireAdmin(), listTenantRouters);
+router.get("/files/routers", requireAdmin(), listTenantRouters);
 
 type InstallRouter = {
   id: number;

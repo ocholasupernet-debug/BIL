@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { installHotspotFiles } from "./router-hotspot-files";
 
-test("hotspot file progress retries a gateway failure and resumes a lost job", async () => {
+test("hotspot file progress resumes a lost job immediately and retries gateway failures", async () => {
   const originalFetch = globalThis.fetch;
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
   const requests: Array<{ method: string; cache?: RequestCache; url: string }> = [];
@@ -36,13 +36,13 @@ test("hotspot file progress retries a gateway failure and resumes a lost job", a
     }
 
     pollNumber += 1;
-    if (pollNumber === 1) return new Response("temporarily unavailable", { status: 502 });
-    if (pollNumber === 2) {
+    if (pollNumber === 1) {
       return new Response(JSON.stringify({ error: "Bulk deployment job not found" }), {
         status: 404,
         headers: { "Content-Type": "application/json" },
       });
     }
+    if (pollNumber === 2) return new Response("temporarily unavailable", { status: 502 });
     return new Response(JSON.stringify({
       jobId: "recovered-job",
       status: "complete",
@@ -58,7 +58,7 @@ test("hotspot file progress retries a gateway failure and resumes a lost job", a
     const result = await installHotspotFiles(105, 3, "test-token");
     assert.equal(result.status, "complete");
     assert.equal(result.deployed.length, 1);
-    assert.deepEqual(requests.map(request => request.method), ["POST", "GET", "GET", "POST", "GET"]);
+    assert.deepEqual(requests.map(request => request.method), ["POST", "GET", "POST", "GET", "GET"]);
     assert.ok(requests.every(request => request.cache === "no-store"));
     assert.ok(requests.some(request => request.url.includes("/recovered-job?")));
   } finally {
@@ -68,6 +68,27 @@ test("hotspot file progress retries a gateway failure and resumes a lost job", a
     } else {
       Reflect.deleteProperty(globalThis, "window");
     }
+  }
+});
+
+test("hotspot file deployment includes router API detail and hint in startup errors", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    error: "MikroTik API error",
+    detail: "Connection timed out",
+    hint: "Check the router-management VPN and API access.",
+  }), {
+    status: 500,
+    headers: { "Content-Type": "application/json" },
+  })) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      installHotspotFiles(105, 3, "test-token"),
+      /MikroTik API error — Connection timed out — Check the router-management VPN and API access\./,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 

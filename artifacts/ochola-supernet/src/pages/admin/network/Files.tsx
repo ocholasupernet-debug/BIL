@@ -137,7 +137,7 @@ export default function Files() {
     setError("");
     try {
       const result = await readJson<RouterSummary[]>(
-        `/api/routers?adminId=${ADMIN_ID}&includeSetup=false`,
+        `/api/files/routers?adminId=${ADMIN_ID}&includeSetup=false`,
       );
       const activeRouters = result.filter(router => !["setup", "awaiting_ports", "awaiting_sync", "awaiting_connection"].includes(router.status ?? ""));
       setRouters(activeRouters);
