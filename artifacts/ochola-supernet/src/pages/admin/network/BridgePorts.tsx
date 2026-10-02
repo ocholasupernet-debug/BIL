@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { supabase, ADMIN_ID } from "@/lib/supabase";
+import RouterPortMap from "./RouterPortMap";
 import {
   Loader2, RefreshCw, CheckCircle2, AlertTriangle,
   ChevronDown, Check, Network, Plug, Wifi, Shield, Copy, Plus,
@@ -716,64 +717,71 @@ export default function BridgePorts() {
                 </div>
               )}
 
-              {/* Port list */}
-              <div style={{
-                background: "var(--isp-card)", border: "1px solid var(--isp-border)",
-                borderRadius: 10, overflow: "hidden",
+              <RouterPortMap
+                interfaces={payload.interfaces}
+                bridgePorts={payload.bridgePorts}
+                selectedBridge={selectedBridge}
+                selectedPorts={selectedPorts}
+                onTogglePort={togglePort}
+              />
+
+              <details style={{
+                background: "var(--isp-card)",
+                border: "1px solid var(--isp-border)",
+                borderRadius: 9,
+                padding: "0.65rem 0.85rem",
               }}>
-                {physicalPorts.length === 0 ? (
-                  <div style={{ padding: "1.5rem", textAlign: "center", color: "var(--isp-text-muted)", fontSize: "0.85rem" }}>
-                    No assignable ports found (ether1 excluded).
-                  </div>
-                ) : physicalPorts.map((iface, idx) => {
-                  const inBridge = selectedPorts.has(iface.name);
-                  const isLast   = idx === physicalPorts.length - 1;
-                  return (
-                    <div
-                      key={iface.name}
-                      onClick={() => togglePort(iface.name)}
-                      style={{
-                        display: "flex", alignItems: "center", gap: "0.875rem",
-                        padding: "0.85rem 1.25rem",
-                        borderBottom: isLast ? "none" : "1px solid var(--isp-border-subtle)",
-                        cursor: "pointer",
-                        background: inBridge ? "rgba(37,99,235,0.04)" : "transparent",
-                        transition: "background 0.15s",
-                      }}
-                      onMouseOver={e => { if (!inBridge) (e.currentTarget as HTMLDivElement).style.background = "rgba(255,255,255,0.02)"; }}
-                      onMouseOut={e  => { if (!inBridge) (e.currentTarget as HTMLDivElement).style.background = "transparent"; }}
-                    >
-                      {/* Checkbox */}
-                      <div style={{
-                        width: 20, height: 20, borderRadius: 5, flexShrink: 0,
-                        background: inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.06)",
-                        border: `2px solid ${inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.18)"}`,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        transition: "all 0.15s",
-                      }}>
-                        {inBridge && <Check size={11} strokeWidth={3} color="white" />}
+                <summary style={{
+                  color: "var(--isp-text-muted)",
+                  cursor: "pointer",
+                  fontSize: "0.72rem",
+                  fontWeight: 700,
+                }}>
+                  Show detailed interface list
+                </summary>
+                <div style={{
+                  marginTop: "0.6rem",
+                  border: "1px solid var(--isp-border-subtle)",
+                  borderRadius: 8,
+                  overflow: "hidden",
+                }}>
+                  {physicalPorts.map((iface, idx) => {
+                    const inBridge = selectedPorts.has(iface.name);
+                    const isLast = idx === physicalPorts.length - 1;
+                    return (
+                      <div
+                        key={iface.name}
+                        onClick={() => togglePort(iface.name)}
+                        style={{
+                          display: "flex", alignItems: "center", gap: "0.875rem",
+                          padding: "0.75rem 1rem",
+                          borderBottom: isLast ? "none" : "1px solid var(--isp-border-subtle)",
+                          cursor: "pointer",
+                          background: inBridge ? "rgba(37,99,235,0.04)" : "transparent",
+                        }}
+                      >
+                        <div style={{
+                          width: 20, height: 20, borderRadius: 5, flexShrink: 0,
+                          background: inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.06)",
+                          border: `2px solid ${inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.18)"}`,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>
+                          {inBridge && <Check size={11} strokeWidth={3} color="white" />}
+                        </div>
+                        <IfaceIcon name={iface.name} type={iface.type} running={iface.running} />
+                        <span style={{
+                          fontFamily: "monospace", fontSize: "0.82rem", fontWeight: 700,
+                          color: "var(--isp-text)", flex: 1,
+                        }}>
+                          {iface.name}
+                        </span>
+                        <BridgeBadge bridge={portCurrentBridge(iface.name, payload.bridgePorts)} />
+                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: iface.running ? "#4ade80" : "#475569", flexShrink: 0 }} />
                       </div>
-
-                      {/* Interface icon */}
-                      <IfaceIcon name={iface.name} type={iface.type} running={iface.running} />
-
-                      {/* Name */}
-                      <span style={{
-                        fontFamily: "monospace", fontSize: "0.9rem", fontWeight: 700,
-                        color: "var(--isp-text)", flex: 1,
-                      }}>
-                        {iface.name}
-                      </span>
-
-                      {/* Bridge type badge */}
-                      <BridgeBadge bridge={portCurrentBridge(iface.name, payload!.bridgePorts)} />
-
-                      {/* Running dot */}
-                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: iface.running ? "#4ade80" : "#475569", flexShrink: 0 }} />
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              </details>
 
               {/* Apply result */}
               {applyLogs && (
@@ -1011,49 +1019,77 @@ export default function BridgePorts() {
 
         {payload && !loading && (
           <>
-            <div style={{
-              background: "var(--isp-card)", border: "1px solid var(--isp-border)",
-              borderRadius: 10, overflow: "hidden",
+            <RouterPortMap
+              interfaces={payload.interfaces}
+              bridgePorts={payload.bridgePorts}
+              selectedBridge={selectedBridge}
+              selectedPorts={selectedPorts}
+              onTogglePort={togglePort}
+            />
+
+            <details style={{
+              background: "var(--isp-card)",
+              border: "1px solid var(--isp-border)",
+              borderRadius: 9,
+              padding: "0.65rem 0.85rem",
             }}>
-              {physicalPortsAll.map((iface, idx) => {
-                const isBridgeType = iface.type === "bridge" || iface.type === "loopback";
-                const inBridge = selectedPorts.has(iface.name);
-                return (
-                  <div
-                    key={iface.name}
-                    style={{
-                      display: "flex", alignItems: "center", gap: "0.875rem",
-                      padding: "0.75rem 1rem",
-                      borderBottom: idx < physicalPortsAll.length - 1 ? "1px solid var(--isp-border-subtle)" : "none",
-                      opacity: isBridgeType ? 0.45 : 1,
-                    }}
-                  >
-                    <button
-                      onClick={() => !isBridgeType && togglePort(iface.name)}
-                      disabled={isBridgeType}
+              <summary style={{
+                color: "var(--isp-text-muted)",
+                cursor: "pointer",
+                fontSize: "0.72rem",
+                fontWeight: 700,
+              }}>
+                Show all live interfaces
+              </summary>
+              <div style={{
+                marginTop: "0.6rem",
+                border: "1px solid var(--isp-border-subtle)",
+                borderRadius: 8,
+                overflow: "hidden",
+              }}>
+                {physicalPortsAll.map((iface, idx) => {
+                  const isBridgeType = iface.type === "bridge" || iface.type === "loopback";
+                  const isWan = iface.name.toLowerCase() === "ether1";
+                  const isLocked = isBridgeType || isWan;
+                  const inBridge = selectedPorts.has(iface.name);
+                  return (
+                    <div
+                      key={iface.name}
                       style={{
-                        width: 20, height: 20, borderRadius: 5, flexShrink: 0,
-                        background: inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.06)",
-                        border: `2px solid ${inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.2)"}`,
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        cursor: isBridgeType ? "not-allowed" : "pointer", transition: "all 0.15s",
+                        display: "flex", alignItems: "center", gap: "0.875rem",
+                        padding: "0.75rem 1rem",
+                        borderBottom: idx < physicalPortsAll.length - 1 ? "1px solid var(--isp-border-subtle)" : "none",
+                        opacity: isLocked ? 0.45 : 1,
                       }}
                     >
-                      {inBridge && <Check size={11} strokeWidth={3} color="white" />}
-                    </button>
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flex: 1 }}>
-                      <IfaceIcon name={iface.name} type={iface.type} running={iface.running} />
-                      <span style={{ fontFamily: "monospace", fontSize: "0.85rem", fontWeight: 700, color: "var(--isp-text)" }}>{iface.name}</span>
-                      {iface.comment && <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)" }}>— {iface.comment}</span>}
-                      <IfaceKindBadge name={iface.name} type={iface.type} />
+                      <button
+                        onClick={() => !isLocked && togglePort(iface.name)}
+                        disabled={isLocked}
+                        title={isWan ? "ether1 is reserved for WAN and cannot be selected." : undefined}
+                        style={{
+                          width: 20, height: 20, borderRadius: 5, flexShrink: 0,
+                          background: inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.06)",
+                          border: `2px solid ${inBridge ? "var(--isp-accent)" : "rgba(255,255,255,0.2)"}`,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          cursor: isLocked ? "not-allowed" : "pointer", transition: "all 0.15s",
+                        }}
+                      >
+                        {inBridge && <Check size={11} strokeWidth={3} color="white" />}
+                      </button>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flex: 1 }}>
+                        <IfaceIcon name={iface.name} type={iface.type} running={iface.running} />
+                        <span style={{ fontFamily: "monospace", fontSize: "0.85rem", fontWeight: 700, color: "var(--isp-text)" }}>{iface.name}</span>
+                        {iface.comment && <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)" }}>— {iface.comment}</span>}
+                        <IfaceKindBadge name={iface.name} type={iface.type} />
+                      </div>
+                      <span style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", padding: "0.15rem 0.5rem", borderRadius: 4, background: "rgba(255,255,255,0.06)", color: "var(--isp-text-muted)" }}>{iface.type || "ether"}</span>
+                      <BridgeBadge bridge={portCurrentBridge(iface.name, payload.bridgePorts)} />
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: iface.running ? "#4ade80" : "#475569" }} />
                     </div>
-                    <span style={{ fontSize: "0.65rem", fontWeight: 700, textTransform: "uppercase", padding: "0.15rem 0.5rem", borderRadius: 4, background: "rgba(255,255,255,0.06)", color: "var(--isp-text-muted)" }}>{iface.type || "ether"}</span>
-                    <BridgeBadge bridge={portCurrentBridge(iface.name, payload!.bridgePorts)} />
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: iface.running ? "#4ade80" : "#475569" }} />
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            </details>
 
             {applyLogs && (
               <div style={{

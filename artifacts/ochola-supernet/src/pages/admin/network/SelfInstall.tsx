@@ -471,7 +471,8 @@ export default function SelfInstall() {
       if (!result.ok || !result.router) throw new Error(result.error || "The router could not be promoted.");
       setFinished(result.router);
       setInstallStatus(current => current ? { ...current, ready: true, connected: true } : current);
-      setNotice("The router is verified and now appears in the active Routers list.");
+      setNotice("The router is verified; loading its live ports for assignment.");
+      navigate(`/admin/network/bridge-ports?routerId=${encodeURIComponent(String(router.id))}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Final router verification failed.");
     } finally {
