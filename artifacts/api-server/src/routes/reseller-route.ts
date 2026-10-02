@@ -3004,7 +3004,7 @@ router.get("/admin/reseller-handoffs/:portId/diagnostics", requireAdmin(), async
       captivePortalOptionRows,
     ] = await runRouterCommands(creds, [
       ["/interface/bridge/print", "=.proplist=.id,name,disabled,running,vlan-filtering,frame-types,ingress-filtering", `?name=${parentBridge}`],
-      ["/interface/bridge/port/print", "=.proplist=.id,interface,bridge,disabled,running,hw,edge,point-to-point", `?bridge=${parentBridge}`],
+      ["/interface/bridge/port/print", "=.proplist=.id,interface,bridge,disabled,running,hw,edge,point-to-point,pvid,frame-types,ingress-filtering", `?bridge=${parentBridge}`],
       ["/interface/bridge/vlan/print", "=.proplist=.id,bridge,vlan-ids,tagged,untagged", `?bridge=${parentBridge}`],
       ["/interface/vlan/print", "=.proplist=.id,name,vlan-id,interface,disabled,running", `?name=${vlanInterface}`],
       ["/ip/address/print", "=.proplist=.id,address,interface,disabled,comment", `?interface=${vlanInterface}`],
