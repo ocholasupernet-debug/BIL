@@ -112,7 +112,9 @@ async function readJson<T>(url: string): Promise<T> {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || payload.detail || `Request failed (${response.status})`);
+    const details = [payload.error, payload.detail, payload.hint]
+      .filter((part): part is string => typeof part === "string" && part.trim().length > 0);
+    throw new Error([...new Set(details)].join(" — ") || `Request failed (${response.status})`);
   }
   return payload as T;
 }

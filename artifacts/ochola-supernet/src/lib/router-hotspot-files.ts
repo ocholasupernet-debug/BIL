@@ -53,7 +53,6 @@ export async function installHotspotFiles(
   onProgress?.(result);
   let successfulPolls = 0;
   let consecutiveReadFailures = 0;
-  let sawTemporaryUnavailable = false;
   let recoveredLostJob = false;
   while (successfulPolls < 360) {
     if (result.status === "complete" || result.status === "failed") break;
@@ -68,7 +67,6 @@ export async function installHotspotFiles(
         },
       );
     } catch {
-      sawTemporaryUnavailable = true;
       consecutiveReadFailures += 1;
       if (consecutiveReadFailures > 6) {
         throw new Error("Could not read deployment progress after repeated network errors. The deployment may still be running; refresh the router files to check.");
@@ -78,7 +76,6 @@ export async function installHotspotFiles(
     }
 
     if (statusResponse.status >= 500 || statusResponse.status === 304) {
-      sawTemporaryUnavailable = true;
       consecutiveReadFailures += 1;
       if (consecutiveReadFailures > 6) {
         throw new Error(`Could not read deployment progress after repeated HTTP ${statusResponse.status} responses. The deployment may still be running; refresh the router files to check.`);
@@ -87,15 +84,14 @@ export async function installHotspotFiles(
       continue;
     }
 
-    if (statusResponse.status === 404 && sawTemporaryUnavailable && !recoveredLostJob) {
-      /* API restarts clear the in-memory job. Requeue once; bulk deployment
-         never overwrites files, so already-transferred assets are skipped. */
+    if (statusResponse.status === 404 && !recoveredLostJob) {
+      /* API restarts clear the in-memory job. Requeue once even when the first
+         poll reaches the restarted process; existing assets are never replaced. */
       queued = await startDeployment();
       result = queued;
       onProgress?.(result);
       recoveredLostJob = true;
       consecutiveReadFailures = 0;
-      sawTemporaryUnavailable = false;
       continue;
     }
 
@@ -105,7 +101,6 @@ export async function installHotspotFiles(
     }
     successfulPolls += 1;
     consecutiveReadFailures = 0;
-    sawTemporaryUnavailable = false;
     onProgress?.(result);
   }
 

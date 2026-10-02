@@ -1280,8 +1280,15 @@ export default function HotspotSettings() {
     setNotice(null);
     try {
       const result = await installHotspotFiles(routerId, adminId, getAdminApiToken());
-      if (result.failed.length > 0) {
-        setNotice({ type: "error", text: `Hotspot files finished with ${result.failed.length} failure(s): ${result.deployed.length} added, ${result.skipped.length} already present.` });
+      if (result.status !== "complete" || result.failed.length > 0 || result.error) {
+        const firstFailure = result.failed[0];
+        const detail = result.error
+          || (firstFailure ? `${firstFailure.destinationPath}: ${firstFailure.error}` : "");
+        const summary = `${result.deployed.length} added, ${result.skipped.length} already present, ${result.failed.length} failed`;
+        setNotice({
+          type: "error",
+          text: `Hotspot file installation did not complete (${summary}).${detail ? ` ${detail}` : ""}`,
+        });
       } else {
         setNotice({ type: "success", text: `Hotspot files installed: ${result.deployed.length} added, ${result.skipped.length} already present in flash/hotspot.` });
       }
