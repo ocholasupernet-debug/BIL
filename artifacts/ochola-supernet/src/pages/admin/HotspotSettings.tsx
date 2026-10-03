@@ -35,6 +35,11 @@ import {
 import type { DbRouter } from "@/lib/supabase";
 import { installHotspotFiles } from "@/lib/router-hotspot-files";
 import {
+  hotspotPortalTargets,
+  nextHotspotPortalTarget,
+  usesGeneratedHotspotPortal,
+} from "@/lib/hotspot-portal-target";
+import {
   AlertCircle, ArrowDownToLine, Check, ChevronDown, CircleHelp, Eye, FolderOpen,
   Image, Info, LayoutTemplate, Link2, Loader2, Mail, Palette, Phone,
   Save, ShieldCheck, Smartphone, Sparkles, Trash2, Upload, Wifi, X,
@@ -493,8 +498,14 @@ export async function buildPortalHtml(
     const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(adminId))}&type=hotspot&activeOnly=true&purchasableOnly=true${routerQuery}${portQuery}`, {
       cache: "no-store",
     });
+    if (!plansResponse.ok && portQuery) {
+      throw new Error(`The selected service's plans could not be loaded (HTTP ${plansResponse.status}).`);
+    }
     if (plansResponse.ok) {
       const data = await plansResponse.json() as unknown;
+      if (!Array.isArray(data) && portQuery) {
+        throw new Error("The selected service's plans returned an invalid response.");
+      }
       if (Array.isArray(data)) {
         plans = data
           .filter((plan): plan is Record<string, unknown> => !!plan && typeof plan === "object")
@@ -517,7 +528,10 @@ export async function buildPortalHtml(
      * hotspot port). Use the authenticated admin plan context only for that
      * local preview fallback; never use it for an exported/deployed bundle.
      */
-    if (!plans.length && scope.previewOnly) {
+    // ISP-owned assigned services use the authoritative public port query.
+    // Resellers retain their authenticated context fallback (their browser
+    // account id differs from the parent ISP id), but only for this exact port.
+    if (!plans.length && scope.previewOnly && (!(Number(scope.portId) > 0) || getAdminRole() === "reseller")) {
       const contextResponse = await fetch("/api/plans/admin-context", {
         headers: adminApiHeaders(),
         cache: "no-store",
@@ -531,6 +545,8 @@ export async function buildPortalHtml(
         const candidates = (context.plans ?? [])
           .filter(plan => ["hotspot", "trials", "trial"].includes(String(plan.type ?? "").toLowerCase()))
           .filter(plan => plan.is_active !== false && plan.client_can_purchase !== false)
+          .filter(plan => !(selectedPortId > 0)
+            || (Number(plan.router_id) === selectedRouterId && Number(plan.port_id) === selectedPortId))
           .sort((a, b) => {
             const score = (plan: Record<string, unknown>) => {
               let value = 0;
@@ -551,7 +567,10 @@ export async function buildPortalHtml(
           .filter(plan => plan.id > 0 && plan.name);
       }
     }
-  } catch {
+  } catch (error) {
+    if (scope.previewOnly || Number(scope.portId) > 0) {
+      throw new Error(error instanceof Error ? error.message : "The selected service's plans could not be loaded.");
+    }
     /* The API fallback remains available when the admin panel is offline. */
   }
   const exportSettings = {
@@ -960,6 +979,7 @@ export default function HotspotSettings() {
     if (!isResellerAccount && (!Number.isSafeInteger(routerId) || routerId < 1)) {
       setAssignedPorts([]);
       setPortDrafts({});
+      setSelectedAssignedPortId("");
       return;
     }
     let cancelled = false;
@@ -980,11 +1000,8 @@ export default function HotspotSettings() {
         if (cancelled) return;
         setAssignedPorts(ports);
         setPortDrafts(Object.fromEntries(ports.map(port => [port.id, draftFromAssignedHotspotPort(port)])));
+        setSelectedAssignedPortId(current => nextHotspotPortalTarget(current, ports, isResellerAccount));
         if (isResellerAccount) {
-          setSelectedAssignedPortId(current => {
-            const stillAssigned = ports.some(port => String(port.id) === current);
-            return stillAssigned ? current : String(ports[0]?.id ?? "");
-          });
           setSettings(previous => {
             const selected = ports.find(port => String(port.id) === selectedAssignedPortId) ?? ports[0];
             return selected && String(selected.router_id) !== previous.routerId
@@ -1053,6 +1070,17 @@ export default function HotspotSettings() {
     setNotice(null);
   };
 
+  const portalTargets = hotspotPortalTargets(assignedPorts, isResellerAccount);
+  const selectedPortalPort = portalTargets.find(port => String(port.id) === selectedAssignedPortId);
+
+  const buildTargetPortal = (port: AssignedHotspotPort | undefined, previewOnly = false) =>
+    buildPortalHtml(
+      port ? { ...settings, routerId: String(port.router_id) } : settings,
+      brand.domain,
+      { portalBackground, portalPackageShape },
+      { portId: port?.id, previewOnly },
+    );
+
   const waitForPortDeployment = async (portId: number): Promise<AssignedHotspotPort | null> => {
     for (let attempt = 0; attempt < 90; attempt += 1) {
       await new Promise(resolve => window.setTimeout(resolve, 2000));
@@ -1076,7 +1104,7 @@ export default function HotspotSettings() {
 
   const saveAssignedPort = async (port: AssignedHotspotPort) => {
     const draft = portDrafts[port.id];
-    if (!draft) return;
+    if (!draft) return false;
     const allowHotspotReplace = draft.hotspotEnabled
       && window.confirm(
         "Confirm replacing existing Hotspot portal files for this assigned service? Cancel keeps existing files unchanged while still allowing missing files to be added.",
@@ -1084,8 +1112,9 @@ export default function HotspotSettings() {
     setSavingPortId(port.id);
     setNotice(null);
     try {
-      const resellerPortalHtml = isResellerAccount && draft.hotspotEnabled
-        ? await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, { portId: port.id })
+      const portalHtml = draft.hotspotEnabled
+        && (isResellerAccount || (!port.assigned_reseller_id && usesGeneratedHotspotPortal(draft.hotspotFolderPath)))
+        ? await buildTargetPortal(port)
         : "";
       const response = await fetch(`/api/admin/port-services/${port.id}`, {
         method: "PUT",
@@ -1110,7 +1139,7 @@ export default function HotspotSettings() {
           method: "POST",
           headers: adminApiHeaders(),
           body: JSON.stringify({
-            ...(resellerPortalHtml ? { portalHtml: resellerPortalHtml } : {}),
+            ...(portalHtml ? { portalHtml } : {}),
             portalFileReplacementConsent: allowHotspotReplace,
           }),
         });
@@ -1133,13 +1162,16 @@ export default function HotspotSettings() {
                 allowHotspotReplace ? "may be replaced as confirmed." : "will remain unchanged."
               }`,
             });
-            return;
+            return false;
           }
           data.port = completed;
         }
       }
       setAssignedPorts(previous => previous.map(item => item.id === port.id ? data.port! : item));
       setPortDrafts(previous => ({ ...previous, [port.id]: draftFromAssignedHotspotPort(data.port!) }));
+      if (!isResellerAccount && !data.port.hotspot_enabled) {
+        setSelectedAssignedPortId(current => current === String(port.id) ? "" : current);
+      }
       setNotice({
         type: "success",
         text: `${port.interface_name} hotspot settings were saved and deployed to the router. ${
@@ -1148,8 +1180,10 @@ export default function HotspotSettings() {
             : "Existing Hotspot files were left unchanged."
         }`,
       });
+      return true;
     } catch (error) {
       setNotice({ type: "error", text: error instanceof Error ? error.message : "The assigned hotspot port could not be saved." });
+      return false;
     } finally {
       setSavingPortId(null);
     }
@@ -1166,6 +1200,7 @@ export default function HotspotSettings() {
       const data = await parseApiResponse<{ ok?: boolean; interfaceName?: string }>(response, "The assigned hotspot port could not be deleted.");
       if (!response.ok) throw new Error(data.error || "The assigned hotspot port could not be deleted.");
       setAssignedPorts(previous => previous.filter(item => item.id !== port.id));
+      setSelectedAssignedPortId(current => current === String(port.id) ? "" : current);
       setPortDrafts(previous => {
         const next = { ...previous };
         delete next[port.id];
@@ -1220,12 +1255,12 @@ export default function HotspotSettings() {
         portalBackground,
         portalPackageShape,
       });
-      if (isResellerAccount) {
-        const selectedPort = assignedPorts.find(port => String(port.id) === selectedAssignedPortId);
+      if (isResellerAccount || selectedAssignedPortId) {
+        const selectedPort = selectedPortalPort;
         if (!selectedPort) {
-          throw new Error("Choose the assigned MikroTik VLAN interface before syncing.");
+          throw new Error("Choose an assigned Hotspot service before syncing.");
         }
-        await saveAssignedPort(selectedPort);
+        if (!await saveAssignedPort(selectedPort)) return;
         setSaved(true);
         window.setTimeout(() => setSaved(false), 2500);
         return;
@@ -1305,9 +1340,10 @@ export default function HotspotSettings() {
       setNotice({ type: "error", text: error });
       return null;
     }
-    return buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, {
-      portId: isResellerAccount ? Number(selectedAssignedPortId) : undefined,
-    });
+    if ((isResellerAccount || selectedAssignedPortId) && !selectedPortalPort) {
+      throw new Error("The selected Hotspot service is no longer available. Choose a service again.");
+    }
+    return buildTargetPortal(selectedPortalPort);
   };
 
   const handleDownload = async () => {
@@ -1321,12 +1357,15 @@ export default function HotspotSettings() {
       const anchor = document.createElement("a");
       const slug = safeText(settings.ispName, "hotspot-portal").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "hotspot-portal";
       anchor.href = url;
-      anchor.download = `${slug}-hotspot-login.html`;
+      const portSlug = selectedPortalPort?.interface_name.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+      anchor.download = `${slug}${portSlug ? `-${portSlug}` : ""}-hotspot-login.html`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setNotice({ type: "success", text: "Your tenant-branded login.html is ready to upload to the router hotspot folder." });
+      setNotice({ type: "success", text: selectedPortalPort
+        ? `${selectedPortalPort.interface_name}'s port-scoped login.html is ready for its isolated Hotspot folder.`
+        : "Your tenant-branded login.html is ready to upload to the router hotspot folder." });
     } catch (error) {
       setNotice({ type: "error", text: error instanceof Error ? error.message : "The portal HTML could not be generated." });
     } finally {
@@ -1335,6 +1374,22 @@ export default function HotspotSettings() {
   };
 
   const handleDeploy = async () => {
+    if (selectedAssignedPortId) {
+      if (!selectedPortalPort) {
+        setNotice({ type: "error", text: "The selected Hotspot service is no longer available. Choose a service again." });
+        return;
+      }
+      setDeploying(true);
+      try {
+        await savePreferences({ ...preferences, portalBackground, portalPackageShape });
+        await saveAssignedPort(selectedPortalPort);
+      } catch (error) {
+        setNotice({ type: "error", text: error instanceof Error ? error.message : "The service portal could not be deployed." });
+      } finally {
+        setDeploying(false);
+      }
+      return;
+    }
     const routerId = Number(settings.routerId);
      const selectedRouter = routers.find((router) => router.id === routerId);
      const adminId = selectedRouter?.admin_id ?? getSelectedTenantId();
@@ -1471,22 +1526,17 @@ export default function HotspotSettings() {
     }
   };
 
-  const handlePreview = async () => {
+  const handlePreview = async (port = selectedPortalPort) => {
     setShowPreview(true);
     setPreviewLoading(true);
     setNotice(null);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     try {
-       const html = await buildPortalHtml(
-         settings,
-         brand.domain,
-         { portalBackground, portalPackageShape },
-         {
-           portId: isResellerAccount ? Number(selectedAssignedPortId) : undefined,
-           previewOnly: true,
-         },
-       );
+       if ((isResellerAccount || selectedAssignedPortId) && !port) {
+         throw new Error("The selected Hotspot service is no longer available. Choose a service again.");
+       }
+       const html = await buildTargetPortal(port, true);
        if (!html) {
          setShowPreview(false);
          return;
@@ -1540,13 +1590,13 @@ export default function HotspotSettings() {
             </p>
           </div>
           <div className="hs-actions">
-            <button type="button" className="hs-btn hs-btn-quiet" onClick={handlePreview} disabled={previewLoading}>
+            <button type="button" className="hs-btn hs-btn-quiet" onClick={() => void handlePreview()} disabled={previewLoading || portsLoading}>
               {previewLoading ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
             </button>
-            <button type="button" className="hs-btn hs-btn-soft" onClick={handleDownload} disabled={exporting}>
+            <button type="button" className="hs-btn hs-btn-soft" onClick={handleDownload} disabled={exporting || portsLoading}>
               {exporting ? <Loader2 size={14} className="animate-spin" /> : <ArrowDownToLine size={14} />} Download HTML
             </button>
-            {!isResellerAccount && <button type="button" className="hs-btn hs-btn-primary" onClick={handleDeploy} disabled={deploying || exporting}>
+            {!isResellerAccount && <button type="button" className="hs-btn hs-btn-primary" onClick={handleDeploy} disabled={deploying || exporting || portsLoading || savingPortId !== null}>
               {deploying ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {deploying ? "Deploying…" : "Deploy to router"}
             </button>}
             {!isResellerAccount && <button type="button" className="hs-btn hs-btn-soft" onClick={handleInstallHotspotFiles} disabled={installingHotspotFiles || deploying || exporting}>
@@ -1555,7 +1605,7 @@ export default function HotspotSettings() {
             {!isResellerAccount && <Link href="/admin/network/files" className="hs-btn hs-btn-quiet">
               <FolderOpen size={14} /> View router files
             </Link>}
-            <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving}>
+            <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving || portsLoading || deploying || savingPortId !== null}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
               {saving ? "Syncing…" : saved ? "Synced" : isResellerAccount ? "Sync to MikroTik" : "Save settings"}
             </button>
@@ -1589,6 +1639,8 @@ export default function HotspotSettings() {
                        value={isResellerAccount ? selectedAssignedPortId : settings.routerId}
                        onChange={event => {
                          if (!isResellerAccount) {
+                            setSelectedAssignedPortId("");
+                            setAssignedPorts([]);
                            update("routerId", event.target.value);
                            return;
                          }
@@ -1615,6 +1667,19 @@ export default function HotspotSettings() {
                   </div>
                 )}
               </Field>
+               {!isResellerAccount && portalTargets.length > 0 && (
+                 <Field label="Portal service" help="Preview, download, save, and deploy use this exact service's plans and isolated Hotspot folder.">
+                   <div className="hs-select-wrap">
+                     <select className="hs-select" value={selectedAssignedPortId} onChange={event => setSelectedAssignedPortId(event.target.value)} disabled={portsLoading}>
+                       <option value="">Router-wide portal (no assigned-port plans)</option>
+                       {portalTargets.map(port => (
+                         <option key={port.id} value={port.id}>{port.interface_name} · service #{port.id}</option>
+                       ))}
+                     </select>
+                     <ChevronDown size={14} />
+                   </div>
+                 </Field>
+               )}
               <Field label="Portal status" help="Maintenance mode keeps the page available while replacing purchases with your message.">
                 <SelectField value={settings.maintenanceMode} onChange={value => update("maintenanceMode", value)} options={["Online", "Maintenance"]} />
               </Field>
@@ -1736,6 +1801,14 @@ export default function HotspotSettings() {
                           </div>
                         )}
                         <div style={{ display: "flex", justifyContent: "flex-end", gap: 9, flexWrap: "wrap", marginTop: 12 }}>
+                           {portalTargets.some(target => target.id === port.id) && (
+                             <button type="button" className="hs-btn hs-btn-quiet" onClick={() => {
+                               setSelectedAssignedPortId(String(port.id));
+                               void handlePreview(port);
+                             }} disabled={previewLoading || savingPortId === port.id}>
+                               <Eye size={14} /> Preview {port.interface_name}
+                             </button>
+                           )}
                           <button type="button" className="hs-btn hs-btn-primary" onClick={() => void saveAssignedPort(port)} disabled={savingPortId === port.id || deletingPortId === port.id}>
                             {savingPortId === port.id ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                              {savingPortId === port.id ? "Syncing…" : isResellerAccount ? "Sync to MikroTik" : "Save port changes"}
@@ -1930,7 +2003,7 @@ export default function HotspotSettings() {
             </Section>
 
             <div className="hs-foot-actions">
-              <button type="button" className="hs-btn hs-btn-quiet" onClick={handlePreview} disabled={previewLoading}><Eye size={14} /> Preview portal</button>
+              <button type="button" className="hs-btn hs-btn-quiet" onClick={() => void handlePreview()} disabled={previewLoading || portsLoading}><Eye size={14} /> Preview portal</button>
               <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving}>{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {saving ? "Saving…" : "Save settings"}</button>
             </div>
           </main>
