@@ -17,7 +17,7 @@
 - [Router management VPN failover](router-management-vpn-failover.md) — Self Install must prefer the 10.8.5.x client and activate the isolated 10.8.6.x client only after primary failure.
 - [Hotspot MAC payment access](hotspot-mac-payment-access.md) — Paid MAC bypasses must be paired with a persistent RouterOS expiry scheduler and must not expose router credentials to the portal.
 - [Hotspot forwarding auth gate](hotspot-forwarding-auth-gate.md) — Never put a blanket bridge-to-WAN accept before Hotspot processing; unauthenticated clients must stay behind the portal.
-- [Hotspot asset Super Admin consent](hotspot-asset-superadmin-consent.md) — Approved portal files may only be overwritten, removed, or blocked after explicit Super Admin approval enforced by the API.
+- [Hotspot file confirmation](hotspot-file-confirmation.md) — Any authorized tenant/router admin can confirm Hotspot file overwrites or removals; no separate Super Admin approval.
 - [Hotspot M-Pesa reconnect](hotspot-mpesa-reconnect.md) — Require a stored active payment and live router confirmation of its linked device; SMS is only a receipt lookup key.
 - [Hotspot payment router selection](hotspot-payment-router-selection.md) — Payment flows must use the management VPN address, never the customer-facing hotspot gateway.
 - [Hotspot credential login](hotspot-credential-login.md) — Credential login must use the submitted account and server-side RouterOS activation; MAC troubleshooting is a separate recovery path.

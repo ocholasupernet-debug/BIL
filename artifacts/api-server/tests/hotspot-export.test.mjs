@@ -51,7 +51,6 @@ async function loadExportBuilder(role = "isp_admin") {
               export function getAdminApiToken() { return ""; }
               export function getAdminRole() { return ${JSON.stringify(role)}; }
               export function getSelectedTenantId() { return 7; }
-              export function isSuperAdmin() { return ${JSON.stringify(role === "superadmin")}; }
               export function isLoggedIn() { return false; }
               export const supabase = { from() { throw new Error("supabase should not be called by HTML export"); } };
             `,
@@ -339,6 +338,7 @@ test("reseller preview fallback remains restricted to the selected assigned port
 
 test("assigned-service UI carries port scope into preview, export, and isolated deployment", async () => {
   const source = await readFile(entry, "utf8");
+  assert.doesNotMatch(source, /isSuperAdmin\(\)|Super Admin must approve|Super Admin approval/i);
   assert.match(source, /label="Portal service"/);
   assert.match(source, /port \? \{ \.\.\.settings, routerId: String\(port\.router_id\) \}/);
   assert.match(source, /\{ portId: port\?\.id, previewOnly \}/);
@@ -347,8 +347,10 @@ test("assigned-service UI carries port scope into preview, export, and isolated 
   const savePort = source.slice(source.indexOf("const saveAssignedPort"), source.indexOf("const deleteAssignedPort"));
   assert.match(savePort, /usesGeneratedHotspotPortal\(draft\.hotspotFolderPath\)/);
   assert.match(savePort, /await buildTargetPortal\(port\)/);
+  assert.match(savePort, /draft\.hotspotEnabled\s*&&\s*window\.confirm/);
   assert.match(savePort, /portalHtml \? \{ portalHtml \}/);
   assert.match(savePort, /portalFileReplacementConsent: allowHotspotReplace/);
+  assert.doesNotMatch(savePort, /isSuperAdmin|Super Admin approval/i);
   assert.match(source, /await saveAssignedPort\(selectedPortalPort\)/);
 });
 
@@ -404,6 +406,7 @@ test("deploy UI uses two confirmations and sends generated content through the d
   assert.match(deployActions, /deploy\(false\)/);
   assert.match(deployActions, /deploy\(true\)/);
   assert.match(deployActions, /status === 409/);
+  assert.doesNotMatch(deployActions, /Super Admin approval|Super Admin must approve/i);
   assert.match(deployActions, /JSON\.stringify\(\{\s*adminId,\s*html,\s*overwrite,\s*portalFileReplacementConsent: overwrite,\s*destinationDirectory: "flash\/hotspot",?\s*\}\)/);
   assert.doesNotMatch(deployActions, /routerSecret|routerPassword|paymentSecret|vpnPrivateKey/);
 });

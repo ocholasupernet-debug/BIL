@@ -4,20 +4,9 @@ export interface HotspotFileAuthorizationActor {
   impersonationSessionId?: unknown;
 }
 
-export function hasHotspotFileReplacementConsent(
+export function hasHotspotFileMutationConfirmation(
   actor: HotspotFileAuthorizationActor | undefined,
-  consent: unknown,
+  confirmed: unknown,
 ): boolean {
-  return hasSuperAdminHotspotFileConsent(actor, consent);
-}
-
-export function hasSuperAdminHotspotFileConsent(
-  actor: HotspotFileAuthorizationActor | undefined,
-  consent: unknown,
-): boolean {
-  const isSuperAdmin = actor?.type === "a" && (
-    actor.uid === "superadmin"
-    || (typeof actor.impersonationSessionId === "string" && actor.impersonationSessionId.length > 0)
-  );
-  return isSuperAdmin && consent === true;
+  return actor?.type === "a" && confirmed === true;
 }

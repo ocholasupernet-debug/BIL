@@ -15,15 +15,12 @@ import {
   runRouterCommand,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
-import {
-  hasHotspotFileReplacementConsent,
-  hasSuperAdminHotspotFileConsent,
-} from "../lib/hotspot-file-authorization.js";
-import { findEmbeddedHotspotConfig } from "../lib/hotspot-portal-deploy.js";
+import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authorization.js";
 import { logger } from "../lib/logger.js";
 import { sbDeleteStrict, sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
 import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
+import { findEmbeddedHotspotConfig } from "../lib/hotspot-portal-deploy.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import {
   portServiceResourceNames,
@@ -357,7 +354,7 @@ async function deployApprovedSource(
       });
     } catch (error) {
       if (protectHotspotFile && !allowHotspotReplace && error instanceof RouterFileExistsError) {
-        logger.info({ destinationPath }, "[port-services] kept existing Hotspot file without Super Admin approval");
+        logger.info({ destinationPath }, "[port-services] kept existing Hotspot file because replacement was not confirmed");
         return;
       }
       throw error;
@@ -392,7 +389,7 @@ async function deployPortalContent(
       });
     } catch (error) {
       if (!allowHotspotReplace && error instanceof RouterFileExistsError) {
-        logger.info({ destinationPath }, "[port-services] kept existing Hotspot file without Super Admin approval");
+        logger.info({ destinationPath }, "[port-services] kept existing Hotspot file because replacement was not confirmed");
         return;
       }
       throw error;
@@ -1259,7 +1256,7 @@ router.delete("/admin/port-services/:portId", requireAdmin(), validatePortAccess
     }
     const identity = await resourceIdentityForPort(port);
     const resources = portServiceResourceNames(port, identity);
-    const removeHotspotFiles = hasSuperAdminHotspotFileConsent(req.authUser, req.body?.superAdminConsent);
+    const removeHotspotFiles = hasHotspotFileMutationConfirmation(req.authUser, req.body?.portalFileRemovalConsent);
     const hotspotFilesRemoved = await removePortServiceResources(
       found.creds,
       port,
@@ -1671,7 +1668,7 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
 
     await updatePortProvisioningState(port, "provisioning");
     const sourceOrigin = requestOrigin(req);
-    const allowHotspotReplace = hasHotspotFileReplacementConsent(req.authUser, req.body?.portalFileReplacementConsent);
+    const allowHotspotReplace = hasHotspotFileMutationConfirmation(req.authUser, req.body?.portalFileReplacementConsent);
     const job = executePortServiceDeployment(port, portalHtml, sourceOrigin, allowHotspotReplace)
       .catch(async (error) => {
         const errorMessage = error instanceof Error ? error.message : "Dual-service deployment failed.";

@@ -30,7 +30,6 @@ import {
   getAdminApiToken,
   getAdminRole,
   getSelectedTenantId,
-  isSuperAdmin,
 } from "@/lib/supabase";
 import type { DbRouter } from "@/lib/supabase";
 import { installHotspotFiles } from "@/lib/router-hotspot-files";
@@ -1106,7 +1105,7 @@ export default function HotspotSettings() {
   const saveAssignedPort = async (port: AssignedHotspotPort) => {
     const draft = portDrafts[port.id];
     if (!draft) return false;
-    const allowHotspotReplace = isSuperAdmin() && draft.hotspotEnabled
+    const allowHotspotReplace = draft.hotspotEnabled
       && window.confirm(
         "Confirm replacing existing Hotspot portal files for this assigned service? Cancel keeps existing files unchanged while still allowing missing files to be added.",
       );
@@ -1272,9 +1271,7 @@ export default function HotspotSettings() {
       let noticeText = "Hotspot settings saved on this admin workspace.";
 
        const canRefreshPortal = Number.isSafeInteger(routerId) && routerId > 0 && Boolean(adminId);
-       if (canRefreshPortal && !isSuperAdmin()) {
-         noticeText = "Settings saved. Existing router portal files were left unchanged; a Super Admin must approve their replacement.";
-       } else if (canRefreshPortal && !window.confirm(
+       if (canRefreshPortal && !window.confirm(
          "Saving these settings will replace the existing login.html and rlogin.html files on the selected router. Continue?",
        )) {
          noticeText = "Settings saved. Router portal files were left unchanged.";
@@ -1405,7 +1402,7 @@ export default function HotspotSettings() {
       return;
     }
     if (!window.confirm(
-        "Deploy the current branded portal to this router? The server will transfer login.html and rlogin.html. Replacing existing files requires Super Admin approval.",
+        "Deploy the current branded portal to this router? The server will transfer login.html and rlogin.html. You will be asked before existing files are replaced.",
     )) return;
 
     setDeploying(true);
@@ -1463,13 +1460,6 @@ export default function HotspotSettings() {
       let result = await deploy(false);
       if (result.response.status === 409 && result.data.existingFile) {
         const existing = result.data.existingFile;
-        if (!isSuperAdmin()) {
-          setNotice({
-            type: "info",
-            text: `Existing ${existing.name} was left unchanged. A Super Admin must approve its replacement.`,
-          });
-          return;
-        }
         if (!window.confirm(
           `Replace the existing ${existing.name} (${existing.size} bytes) on the router?`,
         )) {

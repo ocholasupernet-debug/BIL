@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { ADMIN_ID, getAdminApiToken, isSuperAdmin } from "@/lib/supabase";
+import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
 
 type Mode = "shared" | "multiport";
 type RouterOption = { id: number; name: string; status?: string; model?: string | null };
@@ -330,7 +330,7 @@ export default function Multiport() {
       setError("Choose a router and physical port first.");
       return;
     }
-    const allowHotspotReplace = isSuperAdmin() && draft.hotspotEnabled
+    const allowHotspotReplace = draft.hotspotEnabled
       && window.confirm(
         "Confirm replacing existing Hotspot portal files during this deployment? Cancel keeps existing files unchanged while still allowing missing files to be added.",
       );
@@ -396,7 +396,7 @@ export default function Multiport() {
     }
     setError("");
     setSuccess("");
-    const allowHotspotReplace = isSuperAdmin() && selectedAssignment.hotspot_enabled
+    const allowHotspotReplace = selectedAssignment.hotspot_enabled
       && window.confirm(
         "Confirm replacing existing Hotspot portal files during this deployment? Cancel keeps existing files unchanged while still allowing missing files to be added.",
       );
@@ -429,24 +429,23 @@ export default function Multiport() {
       return;
     }
     if (!window.confirm(
-      `Unassign ${selectedAssignment.interface_name} and remove its RouterOS service resources? Hotspot portal files will be retained unless a Super Admin separately approves their removal.`,
+      `Unassign ${selectedAssignment.interface_name} and remove its RouterOS service resources? Hotspot portal files will be retained unless you separately confirm their removal.`,
     )) return;
-    const removeHotspotFiles = isSuperAdmin()
-      && window.confirm(
-        "As Super Admin, approve removing the Hotspot portal files associated with this port? Choose Cancel to keep those files.",
-      );
+    const removeHotspotFiles = window.confirm(
+      "Also remove the Hotspot portal files associated with this port? Choose Cancel to keep those files.",
+    );
     setError("");
     setSuccess("");
     setUnassigning(true);
     try {
       const result = await apiJson<{ hotspotFilesRemoved?: boolean }>(
         `/api/admin/port-services/${selectedAssignment.id}`,
-        { method: "DELETE", body: JSON.stringify({ superAdminConsent: removeHotspotFiles }) },
+        { method: "DELETE", body: JSON.stringify({ portalFileRemovalConsent: removeHotspotFiles }) },
       );
       setSelectedPortKey("");
       setSuccess(
         `${selectedAssignment.interface_name} was unassigned and its RouterOS resources were removed. ${
-          result.hotspotFilesRemoved ? "Approved Hotspot files were removed." : "Hotspot files were left unchanged."
+          result.hotspotFilesRemoved ? "Hotspot files were removed after confirmation." : "Hotspot files were left unchanged."
         }`,
       );
       await loadPorts(routerId);

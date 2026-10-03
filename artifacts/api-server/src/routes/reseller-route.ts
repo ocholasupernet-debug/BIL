@@ -32,7 +32,7 @@ import {
 import { removeRadiusCustomer, syncRadiusCustomer } from "../lib/radius.js";
 import { deployRouterFile } from "../lib/mikrotik.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
-import { hasHotspotFileReplacementConsent } from "../lib/hotspot-file-authorization.js";
+import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authorization.js";
 import { logger } from "../lib/logger.js";
 import { planOwnerFilter } from "../lib/plan-ownership.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
@@ -427,7 +427,7 @@ async function deployDefaultResellerPortalFile(
       });
     } catch (error) {
       if (!allowHotspotReplace && error instanceof RouterFileExistsError) {
-        logger.info({ destinationPath }, "[reseller] kept existing Hotspot file without Super Admin approval");
+        logger.info({ destinationPath }, "[reseller] kept existing Hotspot file because replacement was not confirmed");
         return;
       }
       throw error;
@@ -2892,8 +2892,8 @@ router.post("/admin/reseller-handoffs/:portId/portal", requireAdmin(), async (re
       res.status(400).json({ ok: false, error: "Confirm overwrite:true before replacing the VLAN portal files." });
       return;
     }
-    if (!hasHotspotFileReplacementConsent(req.authUser, req.body?.portalFileReplacementConsent)) {
-      res.status(403).json({ ok: false, error: "Explicit Super Admin approval is required to replace existing Hotspot portal files." });
+    if (!hasHotspotFileMutationConfirmation(req.authUser, req.body?.portalFileReplacementConsent)) {
+      res.status(403).json({ ok: false, error: "An authorized admin must explicitly confirm replacement of existing Hotspot portal files." });
       return;
     }
 
