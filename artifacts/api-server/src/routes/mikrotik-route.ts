@@ -1703,10 +1703,18 @@ router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), as
   const id = Number(req.params.id);
   const adminId = authenticatedAdminId(req, req.body?.adminId);
   const bridgeName = String(req.body?.bridgeName ?? "").trim();
+  const expectedRouterName = req.body?.expectedRouterName;
   if (!Number.isSafeInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid router id" }); return; }
   if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bridgeName)) {
     res.status(400).json({ error: "A valid existing Hotspot bridge name is required." });
+    return;
+  }
+  if (
+    expectedRouterName !== undefined
+    && (typeof expectedRouterName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(expectedRouterName))
+  ) {
+    res.status(400).json({ error: "The expected router name must be an exact valid stored name." });
     return;
   }
   if (req.body?.overwrite !== true) {
@@ -1723,6 +1731,10 @@ router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), as
   const found = await getRouterCreds(id, adminId);
   if (!found) {
     res.status(404).json({ error: "Router not found or not assigned to this administrator" });
+    return;
+  }
+  if (expectedRouterName !== undefined && found.row.name !== expectedRouterName) {
+    res.status(409).json({ error: "The resolved router no longer matches the requested exact name; no files were changed." });
     return;
   }
 

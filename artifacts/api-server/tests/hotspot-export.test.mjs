@@ -440,6 +440,11 @@ test("only the come3 bridge portal opts out of maintenance package hiding", asyn
   const route = source.slice(routeStart, routeEnd);
 
   assert.match(route, /getRouterCreds\(id, adminId\)/);
+  assert.match(route, /found\.row\.name !== expectedRouterName/);
+  assert.ok(
+    route.indexOf("found.row.name !== expectedRouterName") < route.indexOf("const read = async"),
+    "exact target-name verification runs before any RouterOS command",
+  );
   assert.match(route, /\.\.\.\(found\.row\.name === "come3" \? \{ allowPackagesDuringMaintenance: true \} : \{\}\)/);
   assert.doesNotMatch(route, /id === 85/);
   assert.match(route, /for \(const fileName of \["login\.html", "rlogin\.html"\] as const\)/);

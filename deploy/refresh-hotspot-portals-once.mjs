@@ -7,6 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { resolveRouterIdByExactName, validateExpectedRouterName } from "./portal-refresh-target.mjs";
 
 const markerPath = process.argv[2];
 if (!markerPath) throw new Error("A one-time portal refresh marker path is required.");
@@ -16,8 +17,15 @@ const markerId = String(marker.id ?? "");
 const parseOptionalId = value => value === undefined || value === null || value === "" ? null : Number(value);
 const resellerPortId = parseOptionalId(marker.resellerPortId);
 const ispBridgeRouterId = parseOptionalId(marker.ispBridgeRouterId);
+const ispBridgeRouterName = marker.ispBridgeRouterName === undefined || marker.ispBridgeRouterName === null || marker.ispBridgeRouterName === ""
+  ? null
+  : validateExpectedRouterName(marker.ispBridgeRouterName);
+const adminId = parseOptionalId(marker.adminId) ?? 3;
 if (!/^[a-z0-9-]{1,80}$/.test(markerId)) {
   throw new Error("The one-time portal refresh marker has an invalid ID.");
+}
+if (!Number.isSafeInteger(adminId) || adminId < 1) {
+  throw new Error("The one-time portal refresh marker must identify a valid tenant admin.");
 }
 if (resellerPortId !== null && (!Number.isSafeInteger(resellerPortId) || resellerPortId < 1)) {
   throw new Error("The reseller port ID must be a positive integer.");
@@ -25,7 +33,10 @@ if (resellerPortId !== null && (!Number.isSafeInteger(resellerPortId) || reselle
 if (ispBridgeRouterId !== null && (!Number.isSafeInteger(ispBridgeRouterId) || ispBridgeRouterId < 1)) {
   throw new Error("The ISP bridge router ID must be a positive integer.");
 }
-if (resellerPortId === null && ispBridgeRouterId === null) {
+if (ispBridgeRouterId !== null && ispBridgeRouterName !== null) {
+  throw new Error("Specify the ISP bridge target by ID or exact name, not both.");
+}
+if (resellerPortId === null && ispBridgeRouterId === null && ispBridgeRouterName === null) {
   throw new Error("The one-time portal refresh marker must identify at least one target.");
 }
 
@@ -44,7 +55,7 @@ try {
   }
 
   const issuedAt = Math.floor(Date.now() / 1000);
-  const payload = `a.3.${issuedAt}`;
+  const payload = `a.${adminId}.${issuedAt}`;
   const signature = createHmac("sha256", signingSecret).update(payload).digest("hex");
   const token = `${payload}.${signature}`;
   const apiOrigin = "https://come.isplatty.org";
@@ -81,6 +92,26 @@ try {
     }));
   }
 
+  let selectedRouterId = ispBridgeRouterId;
+  if (ispBridgeRouterName !== null) {
+    const response = await fetch(`${apiOrigin}/api/routers?adminId=${encodeURIComponent(adminId)}`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(60_000),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Could not resolve the exact ISP router name (${response.status}): ${text.slice(0, 500)}`);
+    }
+    const routers = JSON.parse(text);
+    selectedRouterId = resolveRouterIdByExactName(routers, ispBridgeRouterName);
+    console.log(JSON.stringify({
+      label: "ISP bridge target",
+      routerId: selectedRouterId,
+      routerName: ispBridgeRouterName,
+    }));
+  }
+
   if (resellerPortId !== null) {
     await refreshPortal(
       `/api/admin/reseller-handoffs/${resellerPortId}/portal`,
@@ -88,10 +119,15 @@ try {
       "reseller VLAN",
     );
   }
-  if (ispBridgeRouterId !== null) {
+  if (selectedRouterId !== null) {
     await refreshPortal(
-      `/api/admin/router/${ispBridgeRouterId}/hotspot-portal/bridge-deploy`,
-      { bridgeName: "co-hotspot-bridge", overwrite: true, portalFileReplacementConsent: true },
+      `/api/admin/router/${selectedRouterId}/hotspot-portal/bridge-deploy`,
+      {
+        bridgeName: "co-hotspot-bridge",
+        overwrite: true,
+        portalFileReplacementConsent: true,
+        ...(ispBridgeRouterName !== null ? { expectedRouterName: ispBridgeRouterName } : {}),
+      },
       "ISP bridge",
     );
   }
