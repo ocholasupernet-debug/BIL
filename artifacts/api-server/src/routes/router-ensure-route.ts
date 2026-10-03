@@ -13,6 +13,7 @@
  */
 
 import { Router, type IRouter } from "express";
+import { randomBytes } from "crypto";
 import { allocateRouterVpnIp, isRouterVpnIp } from "../lib/router-vpn-ip.js";
 import { readIppEntries } from "../lib/vpn-status.js";
 import { provisionRouterManagementOpenVpnPair } from "../lib/router-vpn-provisioning.js";
@@ -43,12 +44,8 @@ function sbHeaders(key: string) {
   };
 }
 
-function makeSecret(adminId: number): string {
-  return Buffer
-    .from(`${adminId}:${Date.now()}:ocholanet`)
-    .toString("base64")
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .slice(0, 48);
+function makeSecret(): string {
+  return randomBytes(32).toString("base64url");
 }
 
 async function nextCompanyRouterName(adminId: number, requestHost: string): Promise<string> {
@@ -253,7 +250,8 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
 
   /* ── 2. Try INSERT (service-role key first, then anon key) ── */
   const keysToTry = SERVICE_KEY ? [SERVICE_KEY, ANON_KEY].filter(Boolean) : [ANON_KEY];
-  const secret = makeSecret(adminId);
+  const installerToken = makeSecret();
+  const apiPassword = makeSecret();
   let vpnIp = "";
   try {
     vpnIp = await allocatePersistentVpnIp();
@@ -265,8 +263,8 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
     name,
     host:             "",
     router_username:  name,
-    router_secret:    name,
-    token:            secret,   /* NOT NULL installer token — kept separate from API password */
+    router_secret:    apiPassword, /* Dedicated RouterOS API password; never used as the installer token. */
+    token:            installerToken,
     bridge_interface: bridgeInterface || "bridge",
     bridge_ip:        bridgeIp        || "192.168.180.1",
     ...(vpnIp ? { vpn_ip: vpnIp } : {}),

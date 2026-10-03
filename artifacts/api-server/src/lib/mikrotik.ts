@@ -6255,6 +6255,10 @@ export interface RouterNetworkSetupOptions {
   apiNetworks?: string[];
   /** Require the shared Internet connectivity check before Takeover network changes. */
   requireInternet?: boolean;
+  /** Stable RouterOS management account to create before changing network rules. */
+  managementApiUsername?: string;
+  /** Password already stored for the router's management API account. */
+  managementApiPassword?: string;
 }
 
 export const DEFAULT_ROUTER_API_NETWORKS = [
@@ -6305,8 +6309,20 @@ export function generateNetworkSetupScript(
     routerId,
     apiNetworks = DEFAULT_ROUTER_API_NETWORKS,
     requireInternet = false,
+    managementApiUsername,
+    managementApiPassword,
   } = options;
   const tag = `ochola-network-${routerId ?? "router"}`;
+  const safeManagementApiUsername = managementApiUsername
+    ? validateRouterOsResourceName(managementApiUsername, "RouterOS management API username")
+    : "";
+  const safeManagementApiPassword = String(managementApiPassword ?? "");
+  if (Boolean(safeManagementApiUsername) !== Boolean(safeManagementApiPassword)) {
+    throw new Error("RouterOS management API username and password must be supplied together.");
+  }
+  if (/[\u0000-\u001F\u007F]/.test(safeManagementApiPassword)) {
+    throw new Error("RouterOS management API password contains control characters.");
+  }
   const safeNetworks = Array.from(new Set(apiNetworks)).filter(network =>
     /^(?:\d{1,3}\.){3}\d{1,3}\/(?:[0-9]|[12]\d|3[0-2])$/.test(network),
   );
@@ -6332,6 +6348,30 @@ export function generateNetworkSetupScript(
     :error "${tag}: no Internet connection; check the router's Internet access and retry."
 }`
     : "";
+  const managementApiAccountSetup = safeManagementApiUsername
+    ? `# Create or reconcile the dedicated API user before changing firewall rules.
+:put "${tag}: management API user setup starting."
+/user
+:local ocholaApiAccountError ""
+:local ocholaApiUserIds [/user find where name="${safeManagementApiUsername}"]
+:if ([:len $ocholaApiUserIds] = 0) do={
+    :do { add name="${safeManagementApiUsername}" group=full password=${routerOsString(safeManagementApiPassword)} disabled=no comment="DO NOT DELETE - OcholaSupernet management API" } on-error={
+        :set ocholaApiAccountError $error
+    }
+} else={
+    :do { set [:pick $ocholaApiUserIds 0] group=full password=${routerOsString(safeManagementApiPassword)} disabled=no comment="DO NOT DELETE - OcholaSupernet management API" } on-error={
+        :set ocholaApiAccountError $error
+    }
+}
+:if ([:len $ocholaApiAccountError] > 0) do={
+    :put ("${tag}: management API user could not be created or updated: " . $ocholaApiAccountError)
+    :error "${tag}: run Step 1 as a RouterOS user allowed to manage system users."
+}
+:if ([:len [/user find where name="${safeManagementApiUsername}" && disabled=no && group=full]] = 0) do={
+    :error "${tag}: management API user was not verified; network rules were not changed."
+}
+:put "${tag}: management API user setup complete."`
+    : "";
 
   return `# ===============================================================
 # OcholaSupernet - networksetup.rsc
@@ -6346,6 +6386,8 @@ export function generateNetworkSetupScript(
 ${routerOsCompatibilityPreflight(tag)}
 
 ${internetPreflight}
+
+${managementApiAccountSetup}
 
 :put "${tag}: starting core firewall and NAT setup."
 /ip firewall filter

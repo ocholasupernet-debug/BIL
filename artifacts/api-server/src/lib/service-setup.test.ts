@@ -26,6 +26,23 @@ test("Takeover keeps the shared Internet check and does not include legacy endpo
   assert.doesNotMatch(takeoverScript, /legacy\.invalid|proxy\.invalid/);
 });
 
+test("Self Install Step 1 creates and verifies the management API user before firewall changes", () => {
+  const script = generateNetworkSetupScript({
+    routerId: 104,
+    managementApiUsername: "ocholasupernet",
+    managementApiPassword: "generated-api-password",
+  });
+  const accountSetup = script.indexOf("management API user setup starting");
+  const firstFirewallChange = script.indexOf("/ip firewall filter");
+
+  assert.ok(accountSetup >= 0);
+  assert.ok(firstFirewallChange > accountSetup);
+  assert.match(script, /add name="ocholasupernet" group=full password="generated-api-password" disabled=no/);
+  assert.match(script, /set \[:pick \$ocholaApiUserIds 0\] group=full password="generated-api-password" disabled=no/);
+  assert.match(script, /management API user was not verified; network rules were not changed/);
+  assert.match(script, /run Step 1 as a RouterOS user allowed to manage system users/);
+});
+
 test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   const script = generateServiceSetupScript({
     routerId: 104,

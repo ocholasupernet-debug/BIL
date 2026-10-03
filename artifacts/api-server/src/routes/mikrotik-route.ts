@@ -310,6 +310,39 @@ function managedVpnPassword(row: SbRouter): string {
   return /^[A-Za-z0-9_-]{20,128}$/.test(value) ? value : "";
 }
 
+async function ensureSeparateRouterRegistrationToken(
+  id: number,
+  adminId: number,
+  row: SbRouter,
+  apiPassword: string,
+): Promise<string> {
+  const currentToken = row.token === undefined || row.token === null
+    ? null
+    : String(row.token).trim();
+  if (currentToken && currentToken !== apiPassword) return currentToken;
+
+  const replacement = randomBytes(32).toString("base64url");
+  const tokenFilter = currentToken === null
+    ? "token=is.null"
+    : `token=eq.${encodeURIComponent(currentToken)}`;
+  const updated = await sbUpdate<SbRouter>(
+    "isp_routers",
+    `id=eq.${id}&admin_id=eq.${adminId}&${tokenFilter}`,
+    { token: replacement },
+  );
+  const savedToken = String(updated[0]?.token ?? "").trim();
+  if (savedToken === replacement) return replacement;
+
+  /* A concurrent step-generation request may have saved its token first. */
+  const latest = await sbSelect<{ token?: string | null }>(
+    "isp_routers",
+    `id=eq.${id}&admin_id=eq.${adminId}&select=token&limit=1`,
+  );
+  const latestToken = String(latest[0]?.token ?? "").trim();
+  if (latestToken && latestToken !== apiPassword) return latestToken;
+  throw new Error("A separate router installer token could not be saved.");
+}
+
 function contentTypeForFile(fileName: string): string {
   const extension = fileName.split(".").pop()?.toLowerCase();
   const contentTypes: Record<string, string> = {
@@ -2169,14 +2202,6 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
   const tunnelRouterIp = String(
     req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id),
   ).trim();
-  const registrationToken = String(found.row.router_secret ?? "").trim()
-    || String(found.row.token ?? "").trim();
-  if (!registrationToken) {
-    res.status(409).json({
-      error: "This router profile has no registration token and cannot generate a Self Install script.",
-    });
-    return;
-  }
   if (!found.creds.password) {
     res.status(409).json({
       error: "This router profile has no stored API password for the ocholasupernet account.",
@@ -2232,6 +2257,12 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     }
   }
   try {
+    const registrationToken = await ensureSeparateRouterRegistrationToken(
+      id,
+      adminId,
+      found.row,
+      found.creds.password,
+    );
     let provisioningWarning = "";
     let openVpnCredentials: { username: string; password: string };
     try {
@@ -2365,6 +2396,8 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const networkScript = generateNetworkSetupScript({
       routerId: id,
       requireInternet: installationMode === "takeover",
+      managementApiUsername: ROUTER_MANAGEMENT_API_USERNAME,
+      managementApiPassword: found.creds.password,
     });
     const serviceScript = generateServiceSetupScript({
       routerId: id,
@@ -2447,9 +2480,9 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         {
           id: "network",
           order: 1,
-          title: "Configure the router network engine",
+          title: "Create the management API user and configure the network",
           fileName: networkFileName,
-          description: "Apply the tagged, retry-safe firewall and NAT rules before creating the management tunnel.",
+          description: "Create or repair the enabled ocholasupernet system user first, then apply firewall and NAT rules. Run Step 1 from a RouterOS account allowed to manage system users.",
           command: stepCommand(networkSourceUrl, networkFileName),
         },
         {
