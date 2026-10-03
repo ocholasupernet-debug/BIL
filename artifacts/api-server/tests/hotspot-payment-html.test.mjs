@@ -12,12 +12,39 @@ const checkoutScript = template.slice(
   template.indexOf("function closeTvModal("),
 );
 assert.ok(checkoutScript.includes("function sendStk()"));
+const packageVisibilityScript = template.slice(
+  template.indexOf("function shouldHidePackageSection("),
+  template.indexOf("function applyPortalConfig("),
+);
+const checkoutReadinessScript = template.slice(
+  template.indexOf("function canStartPaymentCheckout("),
+  template.indexOf("function paymentGatewayLabel("),
+);
+
+test("payment prompt availability disables checkout without hiding packages", () => {
+  assert.ok(packageVisibilityScript.includes("function shouldHidePackageSection"));
+  const context = {
+    portalCardEnabled: () => true,
+    MPESA_PROMPT_ENABLED: false,
+    PAYMENT_STATUS_LOADED: true,
+    PAYMENT_METHOD_READY: true,
+    PORTAL_PREVIEW_ONLY: false,
+  };
+  vm.createContext(context);
+  vm.runInContext(packageVisibilityScript, context);
+  vm.runInContext(checkoutReadinessScript, context);
+
+  assert.equal(vm.runInContext("shouldHidePackageSection(false)", context), false);
+  assert.equal(vm.runInContext("shouldHidePackageSection(true)", context), true);
+  assert.equal(vm.runInContext("canStartPaymentCheckout()", context), false);
+});
 
 async function checkout(respond, apiBase = "https://tenant.example.test") {
   const calls = [];
   const context = {
     Promise, JSON, Error, Array,
     MPESA_PROMPT_ENABLED: true,
+    canStartPaymentCheckout: () => true,
     document: { getElementById: () => ({ value: "0700000000" }) },
     DEVICE_MAC: "02:00:00:00:00:01", DEVICE_IP: "192.168.180.254",
     PORTAL_API_BASE: apiBase, PORTAL_ADMIN_ID: 7, PORTAL_ROUTER_ID: 3, PORTAL_PORT_ID: 4,

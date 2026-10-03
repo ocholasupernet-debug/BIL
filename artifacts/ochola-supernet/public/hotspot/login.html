@@ -727,6 +727,10 @@ function normalisePlanList(value){
     };
   }).filter(function(p){return p.id>0&&p.name;});
 }
+/* Payment availability gates checkout, not whether customers can view packages. */
+function shouldHidePackageSection(maintenanceMode){
+  return Boolean(maintenanceMode)||!portalCardEnabled("packages");
+}
 function applyPortalConfig(data){
   if(!data||typeof data!=="object")return;
   PORTAL_CARD_VISIBILITY=normalisePortalCardVisibility(data.portalCards,data);
@@ -806,7 +810,7 @@ function applyPortalConfig(data){
     if(maintenance)announceText.style.background="rgba(245,158,11,.12)";
   }
   var plansSection=document.getElementById("plansSection");
-  if(plansSection&&(maintenance||!MPESA_PROMPT_ENABLED||!portalCardEnabled("packages")))plansSection.style.display="none";
+  if(plansSection&&shouldHidePackageSection(maintenance))plansSection.style.display="none";
   var voucherSection=document.getElementById("voucherSection");
   if(voucherSection&&(data.vouchersEnabled===false||!portalCardEnabled("voucher")))voucherSection.style.display="none";
   var paymentInstructions=typeof data.paymentInstructions==="string"?data.paymentInstructions.trim():"";
