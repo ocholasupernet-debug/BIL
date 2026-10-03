@@ -84,14 +84,14 @@ try {
   if (resellerPortId !== null) {
     await refreshPortal(
       `/api/admin/reseller-handoffs/${resellerPortId}/portal`,
-      { overwrite: true },
+      { overwrite: true, portalFileReplacementConsent: true },
       "reseller VLAN",
     );
   }
   if (ispBridgeRouterId !== null) {
     await refreshPortal(
       `/api/admin/router/${ispBridgeRouterId}/hotspot-portal/bridge-deploy`,
-      { bridgeName: "co-hotspot-bridge", overwrite: true },
+      { bridgeName: "co-hotspot-bridge", overwrite: true, portalFileReplacementConsent: true },
       "ISP bridge",
     );
   }

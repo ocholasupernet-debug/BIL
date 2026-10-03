@@ -16,6 +16,8 @@ NODE
 chmod +x "$BIN_DIR/node"
 export PATH="$BIN_DIR:$PATH"
 
+test "$(grep -Fc 'portalFileReplacementConsent: true' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs")" -eq 2
+
 make_project() {
   local project_dir="$1"
   mkdir -p "$project_dir/deploy"
