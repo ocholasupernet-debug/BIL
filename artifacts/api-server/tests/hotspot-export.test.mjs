@@ -432,6 +432,25 @@ test("generated portal route keeps tenant scope and one-time source cleanup", as
   assert.match(sourceHandler, /pendingRouterFileSources\.delete\(token\)/);
 });
 
+test("only the come3 bridge portal opts out of maintenance package hiding", async () => {
+  const source = await readFile(mikrotikRoutePath, "utf8");
+  const routeStart = source.indexOf('router.post("/admin/router/:id/hotspot-portal/bridge-deploy"');
+  const routeEnd = source.indexOf('router.post("/router/:id/hotspot-portal/sync-tenant-host"', routeStart);
+  assert.ok(routeStart >= 0 && routeEnd > routeStart, "bridge portal deploy route is present");
+  const route = source.slice(routeStart, routeEnd);
+
+  assert.match(route, /getRouterCreds\(id, adminId\)/);
+  assert.match(route, /\.\.\.\(found\.row\.name === "come3" \? \{ allowPackagesDuringMaintenance: true \} : \{\}\)/);
+  assert.doesNotMatch(route, /id === 85/);
+  assert.match(route, /for \(const fileName of \["login\.html", "rlogin\.html"\] as const\)/);
+  const portal = await readFile(templatePath, "utf8");
+  assert.match(portal, /shouldHidePackageSection\(maintenance,allowPackagesDuringMaintenance\)/);
+  assert.match(portal, /EMBEDDED_CONFIG&&EMBEDDED_CONFIG\.allowPackagesDuringMaintenance===true/);
+
+  const reseller = await readFile(resellerRoutePath, "utf8");
+  assert.doesNotMatch(reseller, /allowPackagesDuringMaintenance/);
+});
+
 test("default reseller portal deployment embeds the assigned router and port scope", async () => {
   const source = await readFile(resellerRoutePath, "utf8");
   const deployStart = source.indexOf("async function deployDefaultResellerPortalFile");

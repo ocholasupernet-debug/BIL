@@ -21,10 +21,11 @@ const checkoutReadinessScript = template.slice(
   template.indexOf("function paymentGatewayLabel("),
 );
 
-test("payment prompt availability disables checkout without hiding packages", () => {
+test("maintenance hides packages by default but Router 85 can keep them visible", () => {
   assert.ok(packageVisibilityScript.includes("function shouldHidePackageSection"));
+  let packageCardVisible = true;
   const context = {
-    portalCardEnabled: () => true,
+    portalCardEnabled: () => packageCardVisible,
     MPESA_PROMPT_ENABLED: false,
     PAYMENT_STATUS_LOADED: true,
     PAYMENT_METHOD_READY: true,
@@ -36,6 +37,9 @@ test("payment prompt availability disables checkout without hiding packages", ()
 
   assert.equal(vm.runInContext("shouldHidePackageSection(false)", context), false);
   assert.equal(vm.runInContext("shouldHidePackageSection(true)", context), true);
+  assert.equal(vm.runInContext("shouldHidePackageSection(true, true)", context), false);
+  packageCardVisible = false;
+  assert.equal(vm.runInContext("shouldHidePackageSection(true, true)", context), true);
   assert.equal(vm.runInContext("canStartPaymentCheckout()", context), false);
 });
 

@@ -1793,6 +1793,9 @@ router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), as
       apiBase: origin,
       adminId,
       routerId: id,
+      // The router named come3 keeps its package list available during
+      // maintenance; the shared template's payment readiness gates still apply.
+      ...(found.row.name === "come3" ? { allowPackagesDuringMaintenance: true } : {}),
       plans: plans.map(plan => ({ ...plan, price: Number(plan.price) })),
     }).replace(/</g, "\\u003c");
     const bootstrap = `<script>window.__HOTSPOT_CONFIG__=${config};</script>`;
