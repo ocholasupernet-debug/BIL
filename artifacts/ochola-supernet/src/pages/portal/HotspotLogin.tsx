@@ -19,6 +19,11 @@ import {
   normalizeHotspotPortalCards,
   type HotspotPortalCardVisibility,
 } from "@/lib/hotspot-portal-cards";
+import {
+  HOSTED_PORTAL_LAYOUT_CSS,
+  normalizeHotspotPortalLayout,
+  type HotspotPortalLayout,
+} from "@/lib/hotspot-layouts";
 
 interface Plan {
   id: number; name: string; price: number;
@@ -42,6 +47,7 @@ interface HotspotRuntimeConfig {
   portId: number | null;
   portalContextToken: string;
   previewOnly: boolean;
+  portalLayout: HotspotPortalLayout;
   plans: Plan[];
 }
 interface HotspotCredentials {
@@ -136,6 +142,7 @@ function readHotspotRuntimeConfig(): HotspotRuntimeConfig {
     portId: positivePortalId(raw?.portId),
     portalContextToken: typeof raw?.portalContextToken === "string" ? raw.portalContextToken.trim() : "",
     previewOnly: raw?.previewOnly === true,
+    portalLayout: normalizeHotspotPortalLayout(raw?.portalLayout),
     plans: Array.isArray(raw?.plans)
       ? raw.plans.map(normalizeRuntimePlan).filter((plan): plan is Plan => Boolean(plan))
       : [],
@@ -184,6 +191,7 @@ type PortalBranding = {
   supportEmail?: string;
   portalHostname?: string;
   portalCards?: HotspotPortalCardVisibility;
+  portalLayout?: HotspotPortalLayout;
 };
 
 function formatValidity(plan: Plan): string {
@@ -320,7 +328,9 @@ function HotspotLoginView({
   initialTroubleshootOpen?: boolean;
 } = {}) {
   const brand = useBrand();
-  const [portalBranding, setPortalBranding] = useState<PortalBranding>({});
+  const [portalBranding, setPortalBranding] = useState<PortalBranding>({
+    portalLayout: HOTSPOT_RUNTIME_CONFIG.portalLayout,
+  });
   useEffect(() => {
     if (!HOTSPOT_RUNTIME_CONFIG.adminId) return;
     let cancelled = false;
@@ -340,6 +350,9 @@ function HotspotLoginView({
           supportEmail: typeof row.supportEmail === "string" ? row.supportEmail : undefined,
           portalHostname: typeof payload?.branding?.portalHostname === "string" ? payload.branding.portalHostname : undefined,
           portalCards: normalizeHotspotPortalCards(row.portalCards, row),
+          portalLayout: typeof row.portalLayout === "string"
+            ? normalizeHotspotPortalLayout(row.portalLayout)
+            : HOTSPOT_RUNTIME_CONFIG.portalLayout,
         });
       })
       .catch(() => undefined);
@@ -2017,9 +2030,10 @@ function HotspotLoginView({
             .hp-troubleshoot-card-action:hover:not(:disabled),
             .hp-troubleshoot-modal-action:hover:not(:disabled) { transform: none; }
           }
+      ${HOSTED_PORTAL_LAYOUT_CSS}
       `}</style>
 
-      <div className="hp-root">
+      <div className="hp-root" data-portal-layout={portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout}>
         {showTvSuccess && paymentMode === "tv" && accessReady && (
           <div className="hp-tv-success-screen" role="status" aria-live="polite">
             <div className="hp-tv-success-card">

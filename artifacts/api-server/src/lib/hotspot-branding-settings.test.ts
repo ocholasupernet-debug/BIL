@@ -31,3 +31,17 @@ test("drops malformed portal card maps without discarding other branding setting
 
   assert.deepEqual(sanitized, { tagline: "Fast internet" });
 });
+
+test("keeps only supported portal layout values", () => {
+  assert.deepEqual(
+    sanitizeHotspotBrandingSettings({
+      portalLayout: "coastal-light",
+      ignored: "discard",
+    }),
+    { portalLayout: "coastal-light" },
+  );
+  assert.deepEqual(
+    sanitizeHotspotBrandingSettings({ portalLayout: "unknown-layout" }),
+    {},
+  );
+});

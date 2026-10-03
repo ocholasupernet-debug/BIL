@@ -3,13 +3,17 @@ const SAFE_SETTINGS = new Set([
   "mpesaPrompt", "testimonials", "faqSection", "logoUrl", "advertUrl", "announcement",
   "paymentInstructions", "supportPhone", "supportEmail", "whatsappNumber", "termsUrl",
   "privacyUrl", "maintenanceMode", "maintenanceMessage", "testimonialText", "faqText", "colors",
-  "portalCards",
+  "portalCards", "portalLayout",
 ]);
 
 const SAFE_PORTAL_CARD_KEYS = new Set([
   "header", "hero", "announcement", "expiryNotice", "packages", "paymentStatus",
   "connectionSupport", "accountLogin", "voucher", "paymentRecovery", "testimonials",
   "faq", "advert", "deviceIdentity", "footer", "whatsapp",
+]);
+
+const SAFE_PORTAL_LAYOUTS = new Set([
+  "classic", "split-horizon", "coastal-light", "signal-grid", "warm-studio", "forest-pulse",
 ]);
 
 export function sanitizeHotspotBrandingSettings(value: unknown): Record<string, unknown> {
@@ -34,6 +38,8 @@ export function sanitizeHotspotBrandingSettings(value: unknown): Record<string, 
         if (SAFE_PORTAL_CARD_KEYS.has(cardKey) && typeof visible === "boolean") cards[cardKey] = visible;
       }
       output.portalCards = cards;
+    } else if (key === "portalLayout") {
+      if (typeof item === "string" && SAFE_PORTAL_LAYOUTS.has(item)) output.portalLayout = item;
     } else if (typeof item === "string" && item.length <= 2_000_000) {
       output[key] = item;
     }

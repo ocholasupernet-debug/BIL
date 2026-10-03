@@ -19,6 +19,12 @@ import {
   type HotspotPortalCardVisibility,
 } from "@/lib/hotspot-portal-cards";
 import {
+  HOTSPOT_PORTAL_LAYOUTS,
+  normalizeHotspotPortalLayout,
+  renderStaticPortalLayoutCss,
+  type HotspotPortalLayout,
+} from "@/lib/hotspot-layouts";
+import {
   supabase,
   ADMIN_ID as AUTH_ADMIN_ID,
   getAdminApiToken,
@@ -75,6 +81,7 @@ interface HSettings {
   testimonialText: string;
   faqText: string;
   portalCards: HotspotPortalCardVisibility;
+  portalLayout: HotspotPortalLayout;
   colors: ColorSettings;
 }
 
@@ -182,6 +189,7 @@ const DEFAULT_SETTINGS: HSettings = {
   testimonialText: "Fast, reliable Wi-Fi whenever I need it.",
   faqText: "How do I connect?\nChoose a package, complete payment, then sign in with the credentials you receive.",
   portalCards: DEFAULT_HOTSPOT_PORTAL_CARDS,
+  portalLayout: "classic",
   colors: DEFAULT_COLORS,
 };
 
@@ -200,6 +208,7 @@ function loadSettings(storageKey: string): HSettings {
       ...DEFAULT_SETTINGS,
       ...parsed,
       portalCards: normalizeHotspotPortalCards(parsed.portalCards, { ...DEFAULT_SETTINGS, ...parsed }),
+      portalLayout: normalizeHotspotPortalLayout(parsed.portalLayout),
       colors: { ...DEFAULT_COLORS, ...(parsed.colors ?? {}) },
     };
     settings.logoUrl = typeof parsed.logoUrl === "string" && parsed.logoUrl.trim()
@@ -335,6 +344,7 @@ type ExportConfig = {
   faqEnabled: boolean;
   faqText: string;
   portalCards: HotspotPortalCardVisibility;
+  portalLayout: HotspotPortalLayout;
   colors: ColorSettings;
   portalBackground: string;
   portalPackageShape: string;
@@ -382,7 +392,7 @@ function makeExportConfig(
   adminId: number,
   apiBase: string,
   plans: PortalPlan[],
-  appearance: { portalBackground?: unknown; portalPackageShape?: unknown } = {},
+  appearance: { portalBackground?: unknown; portalPackageShape?: unknown; portalLayout?: unknown } = {},
   portId = 0,
   previewOnly = false,
 ): ExportConfig {
@@ -422,6 +432,7 @@ function makeExportConfig(
     colors: { ...DEFAULT_COLORS, ...settings.colors },
     portalBackground: safePortalBackground(appearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearance.portalPackageShape),
+    portalLayout: normalizeHotspotPortalLayout(appearance.portalLayout ?? settings.portalLayout),
   };
 }
 
@@ -453,7 +464,7 @@ async function resolvePortalAppearance(domain: string, adminId: number): Promise
 export async function buildPortalHtml(
   settings: HSettings,
   domain: string,
-  appearanceOverride: { portalBackground?: unknown; portalPackageShape?: unknown } = {},
+  appearanceOverride: { portalBackground?: unknown; portalPackageShape?: unknown; portalLayout?: unknown } = {},
   scope: { portId?: number; previewOnly?: boolean } = {},
 ): Promise<string> {
   const adminId = getSelectedTenantId() ?? AUTH_ADMIN_ID;
@@ -465,6 +476,9 @@ export async function buildPortalHtml(
     ...resolvedAppearance,
     portalBackground: safePortalBackground(appearanceOverride.portalBackground ?? resolvedAppearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearanceOverride.portalPackageShape ?? resolvedAppearance.portalPackageShape),
+    portalLayout: normalizeHotspotPortalLayout(
+      appearanceOverride.portalLayout ?? settings.portalLayout,
+    ),
   };
   const routerId = Number(settings.routerId);
   let plans: PortalPlan[] = [];
@@ -546,7 +560,8 @@ export async function buildPortalHtml(
     portalCards: normalizeHotspotPortalCards(settings.portalCards, settings),
   };
   const config = makeExportConfig(exportSettings, adminId, appearance.apiBase, plans, appearance, scope.portId, scope.previewOnly === true);
-  const bootstrap = `<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};</script>`;
+  const layoutCss = renderStaticPortalLayoutCss(config.portalLayout);
+  const bootstrap = `${layoutCss ? `<style id="hotspot-portal-layout">${layoutCss}</style>` : ""}<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};document.documentElement.setAttribute("data-portal-layout",window.__HOTSPOT_CONFIG__.portalLayout);</script>`;
   const configuredTitle = escapeHtml(config.ispName);
   const staticPlanCards = renderStaticPlanCards(plans, appearance.portalPackageShape);
   const templateWithStaticPlans = staticPlanCards
@@ -635,6 +650,34 @@ const STYLES = `
   .hs-visibility-card[aria-checked="true"] .hs-visibility-switch > span { transform:translateX(14px); }
   .hs-choice-preview { display:block; flex:0 0 46px; width:46px; height:34px; border-radius:7px; border:1px solid rgba(255,255,255,.18); }
   .hs-shape-preview { display:block; flex:0 0 auto; }
+  .hs-layout-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+  .hs-layout-choice { display:flex; align-items:center; gap:10px; min-width:0; min-height:76px; padding:9px; border:1px solid var(--isp-border); border-radius:10px; background:var(--isp-input-bg); color:var(--isp-text-muted); text-align:left; cursor:pointer; transition:border-color .15s,background .15s,transform .15s; }
+  .hs-layout-choice:hover { border-color:var(--isp-accent-border); transform:translateY(-1px); }
+  .hs-layout-choice.active { border-color:var(--isp-accent); background:var(--isp-accent-glow); box-shadow:0 0 0 2px var(--isp-accent-glow); }
+  .hs-layout-copy { min-width:0; display:grid; gap:4px; }
+  .hs-layout-copy strong { color:var(--isp-text); font-size:.72rem; font-weight:800; }
+  .hs-layout-copy small { color:var(--isp-text-sub); font-size:.61rem; line-height:1.3; }
+  .hs-layout-thumb { display:grid; flex:0 0 62px; width:62px; height:48px; overflow:hidden; gap:3px; padding:4px; border:1px solid rgba(255,255,255,.14); border-radius:7px; background:var(--layout-preview-bg); }
+  .hs-layout-thumb i { display:block; min-width:0; min-height:0; border-radius:2px; }
+  .hs-layout-thumb-header { grid-column:1/-1; background:var(--layout-preview-accent); opacity:.9; }
+  .hs-layout-thumb-hero { background:var(--layout-preview-panel); }
+  .hs-layout-thumb-plans { background:linear-gradient(90deg,var(--layout-preview-accent) 0 22%,var(--layout-preview-panel) 22% 100%); }
+  .hs-layout-thumb-classic { grid-template-columns:1fr; grid-template-rows:5px 1fr 1fr; }
+  .hs-layout-thumb-classic .hs-layout-thumb-hero { width:45%; justify-self:center; }
+  .hs-layout-thumb-split-horizon { grid-template-columns:.8fr 1.2fr; grid-template-rows:5px 1fr; }
+  .hs-layout-thumb-split-horizon .hs-layout-thumb-header { grid-column:1/-1; }
+  .hs-layout-thumb-split-horizon .hs-layout-thumb-hero { grid-column:1; grid-row:2; }
+  .hs-layout-thumb-split-horizon .hs-layout-thumb-plans { grid-column:2; grid-row:2; }
+  .hs-layout-thumb-coastal-light { grid-template-columns:1fr; grid-template-rows:5px 1fr 1.2fr; border-radius:11px; }
+  .hs-layout-thumb-coastal-light .hs-layout-thumb-hero { width:68%; justify-self:center; background:var(--layout-preview-panel); }
+  .hs-layout-thumb-signal-grid { grid-template-columns:1fr 1fr; grid-template-rows:5px 1fr; border-radius:3px; }
+  .hs-layout-thumb-signal-grid .hs-layout-thumb-hero { grid-column:1; grid-row:2; }
+  .hs-layout-thumb-signal-grid .hs-layout-thumb-plans { grid-column:2; grid-row:2; }
+  .hs-layout-thumb-warm-studio { grid-template-columns:1fr; grid-template-rows:5px 1fr 1.1fr; border-radius:11px; }
+  .hs-layout-thumb-warm-studio .hs-layout-thumb-hero { width:56%; justify-self:center; }
+  .hs-layout-thumb-forest-pulse { grid-template-columns:1fr; grid-template-rows:5px 1.2fr 1fr; }
+  .hs-layout-thumb-forest-pulse .hs-layout-thumb-hero { width:74%; justify-self:center; }
+  @media (max-width: 760px) { .hs-layout-grid { grid-template-columns:1fr; } }
   .hs-side-card { background:linear-gradient(155deg,var(--isp-card),var(--isp-inner-card)); }
   .hs-side-body { padding:17px 18px 19px; }
   .hs-preview-screen { min-height:270px; overflow:hidden; border-radius:11px; border:1px solid var(--isp-border); background:linear-gradient(145deg,#081018,#122137); position:relative; }
@@ -877,6 +920,7 @@ export default function HotspotSettings() {
             portalHostname: typeof branding.portalHostname === "string" ? branding.portalHostname : previous.portalHostname,
             colors: { ...DEFAULT_COLORS, ...(persisted.colors ?? {}) },
             portalCards: normalizeHotspotPortalCards(persisted.portalCards, { ...previous, ...persisted }),
+            portalLayout: normalizeHotspotPortalLayout(persisted.portalLayout ?? previous.portalLayout),
           };
           merged.logoUrl = typeof persisted.logoUrl === "string" && persisted.logoUrl.trim()
             ? persisted.logoUrl
@@ -1731,11 +1775,43 @@ export default function HotspotSettings() {
               </div>
             </Section>
 
-            <Section icon={<Sparkles size={16} />} title="Captive portal appearance" description="Choose the background and package-card shape customers see on the hotspot login page.">
+            <Section icon={<Sparkles size={16} />} title="Captive portal appearance" description="Choose a full-page layout, then set the background and package-card shape independently.">
               {appearanceLoading ? (
                 <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading portal appearance…</div>
               ) : (
                 <>
+                  <Field label="Full-page layout" help="This changes the customer page's overall composition and treatment. Your selected background and package-card shape remain independent.">
+                    <div className="hs-layout-grid" role="group" aria-label="Hotspot sign-in page layout">
+                      {HOTSPOT_PORTAL_LAYOUTS.map(option => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`hs-layout-choice ${normalizeHotspotPortalLayout(settings.portalLayout) === option.value ? "active" : ""}`}
+                          aria-pressed={normalizeHotspotPortalLayout(settings.portalLayout) === option.value}
+                          aria-label={`${option.label}. ${option.description}`}
+                          onClick={() => { update("portalLayout", option.value); setNotice(null); }}
+                        >
+                          <span
+                            className={`hs-layout-thumb hs-layout-thumb-${option.value}`}
+                            style={{
+                              "--layout-preview-bg": option.background,
+                              "--layout-preview-panel": option.panel,
+                              "--layout-preview-accent": option.accent,
+                            } as React.CSSProperties}
+                            aria-hidden="true"
+                          >
+                            <i className="hs-layout-thumb-header" />
+                            <i className="hs-layout-thumb-hero" />
+                            <i className="hs-layout-thumb-plans" />
+                          </span>
+                          <span className="hs-layout-copy">
+                            <strong>{option.label}</strong>
+                            <small>{option.description}</small>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </Field>
                   <Field label="Portal background" help="This controls the main background of the generated hotspot page.">
                     <div className="hs-choice-grid">
                       {PORTAL_BACKGROUND_OPTIONS.map(option => (
