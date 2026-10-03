@@ -22,6 +22,7 @@ import { getDeployableSource } from "../lib/portal-assets.js";
 import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
 import { findEmbeddedHotspotConfig } from "../lib/hotspot-portal-deploy.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
+import { normalizePortalHostname } from "../lib/portal-hostname.js";
 import {
   portServiceResourceNames,
   vlanServicePoolRanges,
@@ -205,15 +206,7 @@ function portServiceNetwork(port: PortServiceRow, resources: PortServiceResource
 }
 
 function validPortalHostname(value: string | undefined): string | null {
-  const hostname = String(value ?? "").trim().toLowerCase();
-  if (
-    !/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(hostname)
-    || hostname.includes("..")
-    || hostname.split(".").some((label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
-  ) {
-    return null;
-  }
-  return hostname;
+  return normalizePortalHostname(value);
 }
 
 function optionalPortalHostname(value: unknown): string | null {
@@ -439,6 +432,7 @@ export function buildDualServiceCommands(
   routerAddress: string,
   options: {
     portalHostname?: string;
+    portalHostnames?: string[];
     hotspotDnsName?: string | null;
     pppoeDnsName?: string | null;
     companyName?: string | null;
@@ -496,6 +490,7 @@ export function buildDualServiceCommands(
     );
     const gardenHostnames = [...new Set([
       validPortalHostname(options.portalHostname),
+      ...(options.portalHostnames ?? []).map(validPortalHostname).filter((hostname): hostname is string => Boolean(hostname)),
       hotspotDnsName,
       ...(options.paymentHostnames ?? PAYMENT_WALLED_GARDEN_HOSTNAMES)
         .map(hostname => validPortalHostname(hostname))
@@ -589,6 +584,7 @@ function buildVlanServiceCommands(
   routerAddress: string,
   options: {
     portalHostname?: string;
+    portalHostnames?: string[];
     hotspotDnsName?: string | null;
     pppoeDnsName?: string | null;
     paymentHostnames?: string[];
@@ -637,6 +633,7 @@ function buildVlanServiceCommands(
     );
     for (const hostname of [...new Set([
       validPortalHostname(options.portalHostname),
+      ...(options.portalHostnames ?? []).map(validPortalHostname).filter((value): value is string => Boolean(value)),
       hotspotDnsName,
       ...(options.paymentHostnames ?? PAYMENT_WALLED_GARDEN_HOSTNAMES).map(validPortalHostname).filter((value): value is string => Boolean(value)),
     ].filter((value): value is string => Boolean(value)))]) {
@@ -1475,6 +1472,16 @@ async function executePortServiceDeployment(
   const scopedResellerVlan = port.hotspot_enabled
     && port.handoff_mode === "vlan_services"
     && !!port.assigned_reseller_id;
+  const portalBrandingOwnerId = scopedResellerVlan
+    ? port.assigned_reseller_id ?? port.admin_id
+    : port.admin_id;
+  const portalBrandingRows = port.hotspot_enabled
+    ? await sbSelectStrict<{ portal_hostname?: string | null }>(
+      "isp_hotspot_branding",
+      `admin_id=eq.${portalBrandingOwnerId}&select=portal_hostname&limit=1`,
+    )
+    : [];
+  const customPortalHostname = normalizePortalHostname(portalBrandingRows[0]?.portal_hostname);
   const portalPort = scopedResellerVlan
     ? await mapLiveRouterIdentityToVlan(port, found.creds)
     : port;
@@ -1613,6 +1620,7 @@ async function executePortServiceDeployment(
     found.row.bridge_ip || found.row.vpn_ip || "127.0.0.1",
     {
       portalHostname,
+      portalHostnames: customPortalHostname ? [customPortalHostname] : [],
       hotspotDnsName: deploymentPort.hotspot_dns_name,
       pppoeDnsName: deploymentPort.pppoe_dns_name,
       companyName: identity.companyName,

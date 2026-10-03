@@ -79,6 +79,7 @@ import {
 } from "../lib/bulk-hotspot-deployment.js";
 import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authorization.js";
 import { validateRouterTakeoverMainhotspot } from "../lib/router-takeover-template.js";
+import { normalizePortalHostname } from "../lib/portal-hostname.js";
 
 const router: IRouter = Router();
 
@@ -2359,6 +2360,11 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         : radiusWarning;
     }
     const portalHostname = new URL(sourceOrigin).hostname;
+    const portalBrandingRows = await sbSelectStrict<{ portal_hostname?: string | null }>(
+      "isp_hotspot_branding",
+      `admin_id=eq.${adminId}&select=portal_hostname&limit=1`,
+    );
+    const customPortalHostname = normalizePortalHostname(portalBrandingRows[0]?.portal_hostname);
     const defaultPortalFiles = [
       { routeName: "hotspot-login.html", fileName: "login.html", sourceName: "login.html" },
       { routeName: "hotspot-rlogin.html", fileName: "rlogin.html", sourceName: "rlogin.html" },
@@ -2417,7 +2423,9 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         && Number(req.query.maxPortSpeedMbps) > 0
         ? Number(req.query.maxPortSpeedMbps)
         : undefined,
-      portalHostnames: [portalHostname],
+      portalHostnames: [...new Set(
+        [portalHostname, customPortalHostname].filter((hostname): hostname is string => Boolean(hostname)),
+      )],
       paymentHostnames: [...PAYMENT_WALLED_GARDEN_HOSTNAMES],
       portalFileUrls,
     });
