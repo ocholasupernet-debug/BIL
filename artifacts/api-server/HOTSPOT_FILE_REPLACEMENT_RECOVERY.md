@@ -20,9 +20,10 @@ approval boundary.
 
 1. Keep the active Hotspot profile pointed at its last known-good
    `html-directory`.
-2. In RouterOS Files, remove only the exact destination file from the
-   interrupted fetch. Do not remove the whole Hotspot directory or unrelated
-   assets.
+2. Only a Super Admin, after explicitly approving this cleanup, may remove the
+   exact destination file from the interrupted fetch in RouterOS Files. Without
+   that approval, leave the partial file in place and ask a Super Admin to
+   review it. Do not remove the whole Hotspot directory or unrelated assets.
 3. Retry that asset from the File Manager and confirm the replacement
    completed. Compare the destination with the source file where possible.
 4. Load the portal from a client and check the login page and its required
@@ -37,7 +38,8 @@ Deploy and verify the portal in `flash/hotspot` while the old `hotspot/`
 directory remains available. Change the Hotspot profile to
 `html-directory=flash/hotspot` only after all required assets are present and
 a real client loads the portal. Remove the old directory only after that
-profile change and client test both succeed.
+profile change and client test both succeed, and only with explicit Super Admin
+approval.
 
 The procedure is documented, but the test MikroTik transfer and live-client
 verification are still pending.
