@@ -32,7 +32,7 @@ import {
 import { removeRadiusCustomer, syncRadiusCustomer } from "../lib/radius.js";
 import { deployRouterFile } from "../lib/mikrotik.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
-import { hasSuperAdminHotspotFileConsent } from "../lib/hotspot-file-authorization.js";
+import { hasHotspotFileReplacementConsent } from "../lib/hotspot-file-authorization.js";
 import { logger } from "../lib/logger.js";
 import { planOwnerFilter } from "../lib/plan-ownership.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
@@ -2892,8 +2892,8 @@ router.post("/admin/reseller-handoffs/:portId/portal", requireAdmin(), async (re
       res.status(400).json({ ok: false, error: "Confirm overwrite:true before replacing the VLAN portal files." });
       return;
     }
-    if (!hasSuperAdminHotspotFileConsent(req.authUser, req.body?.superAdminConsent)) {
-      res.status(403).json({ ok: false, error: "Super Admin consent is required to replace existing Hotspot portal files." });
+    if (!hasHotspotFileReplacementConsent(req.authUser, req.body?.portalFileReplacementConsent)) {
+      res.status(403).json({ ok: false, error: "Explicit administrator confirmation is required to replace existing Hotspot portal files." });
       return;
     }
 

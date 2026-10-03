@@ -331,9 +331,8 @@ export default function Multiport() {
       return;
     }
     const allowHotspotReplace = draft.hotspotEnabled
-      && isSuperAdmin()
       && window.confirm(
-        "As Super Admin, approve replacing existing Hotspot portal files during this deployment? Cancel keeps existing Hotspot files unchanged while still allowing missing approved files to be added.",
+        "Confirm replacing existing Hotspot portal files during this deployment? Cancel keeps existing files unchanged while still allowing missing files to be added.",
       );
     setSaving(true);
     try {
@@ -360,7 +359,7 @@ export default function Multiport() {
         try {
           await apiJson(`/api/admin/port-services/${savedPortId}/deploy`, {
             method: "POST",
-            body: JSON.stringify({ superAdminConsent: allowHotspotReplace }),
+            body: JSON.stringify({ portalFileReplacementConsent: allowHotspotReplace }),
           });
         } catch (cause) {
           deploymentError = cause instanceof Error ? cause.message : "Router deployment failed.";
@@ -375,7 +374,7 @@ export default function Multiport() {
           `Saved and deployed ${savedPortName} service configuration.${
             draft.hotspotEnabled
               ? allowHotspotReplace
-                ? " Super Admin approved Hotspot file replacement."
+                ? " Hotspot file replacement was confirmed."
                 : " Existing Hotspot files were left unchanged."
               : ""
           }`,
@@ -398,21 +397,20 @@ export default function Multiport() {
     setError("");
     setSuccess("");
     const allowHotspotReplace = selectedAssignment.hotspot_enabled
-      && isSuperAdmin()
       && window.confirm(
-        "As Super Admin, approve replacing existing Hotspot portal files during this deployment? Cancel keeps existing Hotspot files unchanged while still allowing missing approved files to be added.",
+        "Confirm replacing existing Hotspot portal files during this deployment? Cancel keeps existing files unchanged while still allowing missing files to be added.",
       );
     setDeploying(true);
     try {
       await apiJson(`/api/admin/port-services/${selectedAssignment.id}/deploy`, {
         method: "POST",
-        body: JSON.stringify({ superAdminConsent: allowHotspotReplace }),
+        body: JSON.stringify({ portalFileReplacementConsent: allowHotspotReplace }),
       });
       setSuccess(
         `${selectedAssignment.interface_name} was deployed to the router.${
           selectedAssignment.hotspot_enabled
             ? allowHotspotReplace
-              ? " Super Admin approved Hotspot file replacement."
+              ? " Hotspot file replacement was confirmed."
               : " Existing Hotspot files were left unchanged."
             : ""
         }`,

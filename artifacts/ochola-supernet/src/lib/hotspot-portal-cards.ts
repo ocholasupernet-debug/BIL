@@ -1,0 +1,70 @@
+export const DEFAULT_HOTSPOT_LOGO_URL = "/ocholasupernet-logo.png";
+
+export const HOTSPOT_PORTAL_CARD_OPTIONS = [
+  { key: "header", label: "Brand header", description: "ISP name, logo, and header contact." },
+  { key: "hero", label: "Welcome section", description: "Main introduction and service highlights." },
+  { key: "announcement", label: "Announcement banner", description: "Promotion, outage, or maintenance notice." },
+  { key: "expiryNotice", label: "Expiry notice", description: "Message shown when a package has expired or run out." },
+  { key: "packages", label: "Packages", description: "Package list and TV purchase entry point." },
+  { key: "paymentStatus", label: "Payment status", description: "M-Pesa availability or checkout guidance." },
+  { key: "connectionSupport", label: "Connection support", description: "Troubleshooting card and connection check." },
+  { key: "accountLogin", label: "Account login", description: "Username and password sign-in form." },
+  { key: "voucher", label: "Voucher redemption", description: "Voucher code entry and redemption." },
+  { key: "paymentRecovery", label: "Payment recovery", description: "Reconnect access using a completed M-Pesa payment." },
+  { key: "testimonials", label: "Testimonials", description: "Customer quote card." },
+  { key: "faq", label: "FAQ", description: "Common connection question and answer." },
+  { key: "advert", label: "Advert banner", description: "Optional image advertisement." },
+  { key: "deviceIdentity", label: "Device identity", description: "Customer device MAC address." },
+  { key: "footer", label: "Footer", description: "ISP contact, terms, privacy, and session links." },
+  { key: "whatsapp", label: "WhatsApp button", description: "Floating WhatsApp support link." },
+] as const;
+
+export type HotspotPortalCardKey = typeof HOTSPOT_PORTAL_CARD_OPTIONS[number]["key"];
+export type HotspotPortalCardVisibility = Record<HotspotPortalCardKey, boolean>;
+
+export const DEFAULT_HOTSPOT_PORTAL_CARDS: HotspotPortalCardVisibility = {
+  header: true,
+  hero: true,
+  announcement: true,
+  expiryNotice: true,
+  packages: true,
+  paymentStatus: true,
+  connectionSupport: true,
+  accountLogin: true,
+  voucher: true,
+  paymentRecovery: true,
+  testimonials: false,
+  faq: false,
+  advert: false,
+  deviceIdentity: true,
+  footer: true,
+  whatsapp: true,
+};
+
+export interface LegacyHotspotPortalCardSettings {
+  vouchers?: unknown;
+  enableAdvert?: unknown;
+  testimonials?: unknown;
+  faqSection?: unknown;
+}
+
+export function normalizeHotspotPortalCards(
+  value: unknown,
+  legacy: LegacyHotspotPortalCardSettings = {},
+): HotspotPortalCardVisibility {
+  const input = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  const cards = { ...DEFAULT_HOTSPOT_PORTAL_CARDS };
+
+  for (const { key } of HOTSPOT_PORTAL_CARD_OPTIONS) {
+    if (typeof input[key] === "boolean") cards[key] = input[key];
+  }
+
+  if (typeof input.voucher !== "boolean" && legacy.vouchers === "No") cards.voucher = false;
+  if (typeof input.advert !== "boolean" && legacy.enableAdvert === "Enable") cards.advert = true;
+  if (typeof input.testimonials !== "boolean" && legacy.testimonials === "Enable") cards.testimonials = true;
+  if (typeof input.faq !== "boolean" && legacy.faqSection === "Enable") cards.faq = true;
+
+  return cards;
+}

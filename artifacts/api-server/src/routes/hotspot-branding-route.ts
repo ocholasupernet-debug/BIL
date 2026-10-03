@@ -2,16 +2,11 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { requireAdmin } from "../lib/api-auth.js";
 import { sbSelect, sbUpsertStrict } from "../lib/supabase-client.js";
 import { logger } from "../lib/logger.js";
+import { sanitizeHotspotBrandingSettings } from "../lib/hotspot-branding-settings.js";
 
 const router: IRouter = Router();
 const HOSTNAME = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 const DEFAULTS = { portalHostname: "", settings: {} as Record<string, unknown> };
-const SAFE_SETTINGS = new Set([
-  "ispName", "freeTrial", "vouchers", "tagline", "routerId", "advertPos", "enableAdvert",
-  "mpesaPrompt", "testimonials", "faqSection", "logoUrl", "advertUrl", "announcement",
-  "paymentInstructions", "supportPhone", "supportEmail", "whatsappNumber", "termsUrl",
-  "privacyUrl", "maintenanceMode", "maintenanceMessage", "testimonialText", "faqText", "colors",
-]);
 
 function accountId(req: Request): number {
   const id = Number(req.authUser?.uid);
@@ -20,31 +15,11 @@ function accountId(req: Request): number {
 }
 
 function normalize(row?: { portal_hostname?: string | null; settings?: unknown } | null) {
-  const settings = safeSettings(row?.settings);
+  const settings = sanitizeHotspotBrandingSettings(row?.settings);
   return {
     portalHostname: typeof row?.portal_hostname === "string" ? row.portal_hostname : DEFAULTS.portalHostname,
     settings,
   };
-}
-
-function safeSettings(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return DEFAULTS.settings;
-  const input = value as Record<string, unknown>;
-  const output: Record<string, unknown> = {};
-  for (const key of SAFE_SETTINGS) {
-    const item = input[key];
-    if (key === "colors") {
-      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-      const colors: Record<string, string> = {};
-      for (const [name, color] of Object.entries(item)) {
-        if (/^[a-zA-Z][a-zA-Z0-9]*$/.test(name) && typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)) colors[name] = color.toLowerCase();
-      }
-      output.colors = colors;
-    } else if (typeof item === "string" && item.length <= 2_000_000) {
-      output[key] = item;
-    }
-  }
-  return output;
 }
 
 async function read(id: number) {
@@ -84,7 +59,7 @@ router.put("/admin/hotspot-branding", requireAdmin(), async (req: Request, res: 
     const rows = await sbUpsertStrict<{ portal_hostname: string | null; settings: unknown }>(
       "isp_hotspot_branding",
       "admin_id",
-      { admin_id: id, portal_hostname: portalHostname || null, settings: safeSettings(settings), updated_at: new Date().toISOString() },
+      { admin_id: id, portal_hostname: portalHostname || null, settings: sanitizeHotspotBrandingSettings(settings), updated_at: new Date().toISOString() },
     );
     res.set("Cache-Control", "no-store");
     res.json({ ok: true, branding: normalize(rows[0]) });

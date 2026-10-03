@@ -15,7 +15,10 @@ import {
   runRouterCommand,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
-import { hasSuperAdminHotspotFileConsent } from "../lib/hotspot-file-authorization.js";
+import {
+  hasHotspotFileReplacementConsent,
+  hasSuperAdminHotspotFileConsent,
+} from "../lib/hotspot-file-authorization.js";
 import { logger } from "../lib/logger.js";
 import { sbDeleteStrict, sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
@@ -1672,7 +1675,7 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
 
     await updatePortProvisioningState(port, "provisioning");
     const sourceOrigin = requestOrigin(req);
-    const allowHotspotReplace = hasSuperAdminHotspotFileConsent(req.authUser, req.body?.superAdminConsent);
+    const allowHotspotReplace = hasHotspotFileReplacementConsent(req.authUser, req.body?.portalFileReplacementConsent);
     const job = executePortServiceDeployment(port, portalHtml, sourceOrigin, allowHotspotReplace)
       .catch(async (error) => {
         const errorMessage = error instanceof Error ? error.message : "Dual-service deployment failed.";

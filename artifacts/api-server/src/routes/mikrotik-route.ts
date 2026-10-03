@@ -77,15 +77,15 @@ import {
   parseBulkDeployMode,
   type BulkDeployMode,
 } from "../lib/bulk-hotspot-deployment.js";
-import { hasSuperAdminHotspotFileConsent } from "../lib/hotspot-file-authorization.js";
+import { hasHotspotFileReplacementConsent } from "../lib/hotspot-file-authorization.js";
 import { validateRouterTakeoverMainhotspot } from "../lib/router-takeover-template.js";
 
 const router: IRouter = Router();
 
-function requireSuperAdminHotspotFileConsent(req: Request, res: Response): boolean {
-  if (hasSuperAdminHotspotFileConsent(req.authUser, req.body?.superAdminConsent)) return true;
+function requireHotspotFileReplacementConsent(req: Request, res: Response): boolean {
+  if (hasHotspotFileReplacementConsent(req.authUser, req.body?.portalFileReplacementConsent)) return true;
   res.status(403).json({
-    error: "Replacing approved Hotspot files requires explicit Super Admin consent.",
+    error: "Replacing approved Hotspot files requires explicit administrator confirmation.",
   });
   return false;
 }
@@ -1130,7 +1130,7 @@ router.post("/router/:id/files/deploy", requireAdmin(), async (req, res): Promis
     return;
   }
   const destinationPath = `${directory}/${source.source.name}`;
-  if (overwrite && !requireSuperAdminHotspotFileConsent(req, res)) return;
+  if (overwrite && !requireHotspotFileReplacementConsent(req, res)) return;
 
   cleanPendingRouterFileSources();
   const token = randomBytes(24).toString("hex");
@@ -1463,7 +1463,7 @@ router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): P
     res.status(400).json({ error: "Bulk deployment scope must be hotspot or all" });
     return;
   }
-  if (mode === "replace" && !requireSuperAdminHotspotFileConsent(req, res)) return;
+  if (mode === "replace" && !requireHotspotFileReplacementConsent(req, res)) return;
   if (scope === "hotspot" && destinationDirectory.toLowerCase() !== "flash/hotspot") {
     res.status(400).json({ error: "Bulk hotspot deployment is restricted to flash/hotspot" });
     return;
@@ -1599,7 +1599,7 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
     res.status(400).json({ error: "Hotspot portals must be deployed to hotspot, flash/hotspot, or disk1/hotspot" });
     return;
   }
-  if (overwrite && !requireSuperAdminHotspotFileConsent(req, res)) return;
+  if (overwrite && !requireHotspotFileReplacementConsent(req, res)) return;
 
   const origin = requestOrigin(req);
   if (!origin.startsWith("https://")) {
@@ -1712,7 +1712,7 @@ router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), as
     res.status(400).json({ error: "Confirm overwrite:true before replacing the bridge portal files." });
     return;
   }
-  if (!requireSuperAdminHotspotFileConsent(req, res)) return;
+  if (!requireHotspotFileReplacementConsent(req, res)) return;
 
   const origin = requestOrigin(req);
   if (!origin.startsWith("https://")) {

@@ -94,7 +94,7 @@
 </a>
 
 <!-- Header -->
-<header class="hdr">
+<header id="portalHeader" class="hdr">
   <div class="hdr-inner">
     <div style="display:flex;align-items:center;gap:.875rem">
       <div id="portalLogoIcon" style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px var(--portal-accent-border);overflow:hidden">
@@ -115,7 +115,7 @@
 </header>
 
 <!-- Hero -->
-<section style="padding-top:6.5rem;padding-bottom:3.5rem;padding-inline:1rem;position:relative;overflow:hidden;text-align:center">
+<section id="portalHero" style="padding-top:6.5rem;padding-bottom:3.5rem;padding-inline:1rem;position:relative;overflow:hidden;text-align:center">
   <div class="grid-bg"></div>
   <div class="anim-pulse" style="position:absolute;top:-4rem;left:50%;transform:translateX(-50%);width:32rem;height:20rem;border-radius:50%;background:radial-gradient(ellipse,rgba(147,51,234,.25),transparent);filter:blur(60px);pointer-events:none"></div>
   <div class="anim-pulse" style="position:absolute;bottom:0;right:10%;width:20rem;height:16rem;border-radius:50%;background:radial-gradient(ellipse,rgba(192,38,211,.15),transparent);filter:blur(48px);pointer-events:none;animation-delay:1.5s"></div>
@@ -202,7 +202,7 @@
 </section>
 
 <section id="portalRecoveryCards" style="max-width:880px;margin:-2rem auto 0;padding:0 1.25rem 3rem">
-  <div class="sec-card" style="max-width:840px;margin:0 auto;background:rgba(255,255,255,.035)">
+  <div id="portalConnectionSupportCard" class="sec-card" style="max-width:840px;margin:0 auto;background:rgba(255,255,255,.035)">
     <div class="sec-head" style="background:linear-gradient(135deg,rgba(126,34,206,.24),rgba(37,99,235,.18))">
       <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(216,180,254,.72);margin-bottom:.625rem">
         <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
@@ -403,7 +403,7 @@
 </div>
 
 <!-- Footer -->
-<footer style="border-top:1px solid rgba(255,255,255,.05);padding:2.5rem 1.5rem;text-align:center;background:rgba(0,0,0,.25)">
+<footer id="portalFooter" style="border-top:1px solid rgba(255,255,255,.05);padding:2.5rem 1.5rem;text-align:center;background:rgba(0,0,0,.25)">
   <div style="display:flex;align-items:center;justify-content:center;gap:.625rem;margin-bottom:.875rem">
     <div style="width:28px;height:28px;border-radius:.5rem;background:linear-gradient(135deg,#a855f7,#7c3aed);display:flex;align-items:center;justify-content:center">
       <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
@@ -489,8 +489,52 @@ var ROUTER_IP="$(ip)";
 var ROUTER_CHAP_ID="$(chap-id)";
 var ROUTER_CHAP_CHALLENGE="$(chap-challenge)";
   var PORTAL_ACCENT="#d96835", PORTAL_BACKGROUND="midnight", PORTAL_PACKAGE_SHAPE="rounded", PORTAL_PREVIEW_ONLY=false;
+var PORTAL_CARD_DEFAULTS={
+  header:true,hero:true,announcement:true,expiryNotice:true,packages:true,paymentStatus:true,
+  connectionSupport:true,accountLogin:true,voucher:true,paymentRecovery:true,testimonials:false,
+  faq:false,advert:false,deviceIdentity:true,footer:true,whatsapp:true
+};
+var PORTAL_CARD_VISIBILITY=Object.assign({},PORTAL_CARD_DEFAULTS);
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
 var PORTAL_QUERY=new URLSearchParams(window.location.search);
+function normalisePortalCardVisibility(value,legacy){
+  var input=value&&typeof value==="object"&&!Array.isArray(value)?value:{};
+  var cards=Object.assign({},PORTAL_CARD_DEFAULTS);
+  Object.keys(PORTAL_CARD_DEFAULTS).forEach(function(key){
+    if(typeof input[key]==="boolean")cards[key]=input[key];
+  });
+  legacy=legacy&&typeof legacy==="object"?legacy:{};
+  if(typeof input.voucher!=="boolean"&&legacy.vouchersEnabled===false)cards.voucher=false;
+  if(typeof input.advert!=="boolean"&&legacy.advertEnabled===true)cards.advert=true;
+  if(typeof input.testimonials!=="boolean"&&legacy.testimonialsEnabled===true)cards.testimonials=true;
+  if(typeof input.faq!=="boolean"&&legacy.faqEnabled===true)cards.faq=true;
+  return cards;
+}
+function portalCardEnabled(key){return PORTAL_CARD_VISIBILITY[key]!==false;}
+function applyPortalCardVisibility(){
+  var targets=[
+    ["header","portalHeader"],["hero","portalHero"],["announcement","portalAnnouncement"],
+    ["expiryNotice","portalExpiryNotice"],["packages","plansSection"],["paymentStatus","mpesaBanner"],
+    ["connectionSupport","portalConnectionSupportCard"],["connectionSupport","troubleshootModule"],
+    ["accountLogin","loginSection"],["voucher","voucherSection"],["paymentRecovery","mpesaReconnectSection"],
+    ["testimonials","testimonialCard"],["faq","faqCard"],["advert","portalAdvertSection"],
+    ["deviceIdentity","portalDeviceMac"],["footer","portalFooter"]
+  ];
+  targets.forEach(function(target){
+    var element=document.getElementById(target[1]);
+    if(element&&!portalCardEnabled(target[0])){
+      element.hidden=true;
+      element.style.display="none";
+    }
+  });
+  var recoveryContainer=document.getElementById("portalRecoveryCards");
+  if(recoveryContainer&&!portalCardEnabled("connectionSupport")&&!portalCardEnabled("paymentRecovery")){
+    recoveryContainer.hidden=true;
+    recoveryContainer.style.display="none";
+  }
+  var whatsapp=document.querySelector(".wa-btn");
+  if(whatsapp&&!portalCardEnabled("whatsapp"))whatsapp.style.display="none";
+}
 function portalQueryIdentifier(names,routerValue){
   var values=[];
   names.forEach(function(name){PORTAL_QUERY.getAll(name).forEach(function(value){values.push(value);});});
@@ -562,7 +606,7 @@ function setPortalText(id,value){
   if(element&&typeof value==="string")element.textContent=value;
 }
 function checkPortalExpiryOnLanding(){
-  if(PORTAL_PREVIEW_ONLY||PORTAL_ADMIN_ID<1||!DEVICE_MAC||PORTAL_QUERY.get("page")==="troubleshoot")return;
+  if(PORTAL_PREVIEW_ONLY||PORTAL_ADMIN_ID<1||!DEVICE_MAC||PORTAL_QUERY.get("page")==="troubleshoot"||!portalCardEnabled("expiryNotice"))return;
   fetch(apiUrl("/api/customers/hotspot-troubleshoot"),{
     method:"POST",
     headers:{"Content-Type":"application/json"},
@@ -629,9 +673,11 @@ function normalisePlanList(value){
 }
 function applyPortalConfig(data){
   if(!data||typeof data!=="object")return;
+  PORTAL_CARD_VISIBILITY=normalisePortalCardVisibility(data.portalCards,data);
+  applyPortalCardVisibility();
   MPESA_PROMPT_ENABLED=data.mpesaPromptEnabled!==false;
   var mpesaBanner=document.getElementById("mpesaBanner");
-  if(mpesaBanner)mpesaBanner.style.display=MPESA_PROMPT_ENABLED?"":"none";
+  if(mpesaBanner)mpesaBanner.style.display=MPESA_PROMPT_ENABLED&&portalCardEnabled("paymentStatus")?"":"none";
   var colors=data.colors&&typeof data.colors==="object"?data.colors:{};
   var hexKeys=["bgColor","bgColor2","primaryColor","accentColor","cardColor","buttonColor","textColor","inputBgColor"];
   var cssNames={bgColor:"--portal-bg",bgColor2:"--portal-bg2",primaryColor:"--portal-accent",accentColor:"--portal-accent2",cardColor:"--portal-card",buttonColor:"--portal-button",textColor:"--portal-text",inputBgColor:"--portal-input"};
@@ -687,7 +733,7 @@ function applyPortalConfig(data){
   if(!email){var emailDivider=document.getElementById("portalFooterEmailDivider");if(emailDivider)emailDivider.style.display="none";}
   var wa=document.querySelector(".wa-btn");
   var waNumber=typeof data.whatsappNumber==="string"?data.whatsappNumber.replace(/\D/g,""):"";
-  if(wa){wa.style.display=waNumber?"flex":"none";if(waNumber)wa.setAttribute("href","https://wa.me/"+waNumber);}
+  if(wa){wa.style.display=waNumber&&portalCardEnabled("whatsapp")?"flex":"none";if(waNumber)wa.setAttribute("href","https://wa.me/"+waNumber);}
   var logo=typeof data.logoUrl==="string"?data.logoUrl:"";
   var logoIcon=document.getElementById("portalLogoIcon");
   if(logoIcon&&logo){
@@ -698,15 +744,15 @@ function applyPortalConfig(data){
   var maintenance=Boolean(data.maintenanceMode);
   var announceSection=document.getElementById("portalAnnouncement");
   var announceText=document.getElementById("portalAnnouncementText");
-  if(announceSection&&announceText&&(announce||maintenance)){
+  if(announceSection&&announceText&&portalCardEnabled("announcement")&&(announce||maintenance)){
     announceText.textContent=maintenance?(data.maintenanceMessage||"Service updates are in progress."):announce;
     announceSection.style.display="";
     if(maintenance)announceText.style.background="rgba(245,158,11,.12)";
   }
   var plansSection=document.getElementById("plansSection");
-  if(plansSection&&(maintenance||!MPESA_PROMPT_ENABLED))plansSection.style.display="none";
+  if(plansSection&&(maintenance||!MPESA_PROMPT_ENABLED||!portalCardEnabled("packages")))plansSection.style.display="none";
   var voucherSection=document.getElementById("voucherSection");
-  if(voucherSection&&data.vouchersEnabled===false)voucherSection.style.display="none";
+  if(voucherSection&&(data.vouchersEnabled===false||!portalCardEnabled("voucher")))voucherSection.style.display="none";
   var paymentInstructions=typeof data.paymentInstructions==="string"?data.paymentInstructions.trim():"";
   PORTAL_PAYMENT_INSTRUCTIONS=paymentInstructions;
   if(paymentInstructions)setPortalText("mpesaMessage",paymentInstructions);
@@ -715,7 +761,7 @@ function applyPortalConfig(data){
   if(terms&&typeof data.termsUrl==="string"&&/^https:\/\//i.test(data.termsUrl)){terms.style.display="";terms.href=data.termsUrl;document.getElementById("portalTermsDivider").style.display="";}
   if(privacy&&typeof data.privacyUrl==="string"&&/^https:\/\//i.test(data.privacyUrl)){privacy.style.display="";privacy.href=data.privacyUrl;document.getElementById("portalPrivacyDivider").style.display="";}
   var advertUrl=typeof data.advertUrl==="string"?data.advertUrl:"";
-  if(data.advertEnabled===true&&advertUrl){
+  if(data.advertEnabled===true&&advertUrl&&portalCardEnabled("advert")){
     var advert=document.getElementById("portalAdvertSection");
     if(!advert){advert=document.createElement("section");advert.id="portalAdvertSection";advert.style.cssText="max-width:1200px;margin:0 auto;padding:.25rem 1.25rem 2rem";var imageWrap=document.createElement("div");imageWrap.style.cssText="border-radius:.875rem;overflow:hidden;border:1px solid var(--portal-accent-border);background:rgba(255,255,255,.04)";var advertImage=document.createElement("img");advertImage.id="portalAdvertImage";advertImage.style.cssText="display:block;width:100%;max-height:220px;object-fit:cover";imageWrap.appendChild(advertImage);advert.appendChild(imageWrap);}
     var advertImage=document.getElementById("portalAdvertImage");if(advertImage)advertImage.src=advertUrl;
@@ -724,8 +770,8 @@ function applyPortalConfig(data){
     else if(anchor&&anchor.parentNode)anchor.parentNode.insertBefore(advert,anchor);
   }
   var community=document.getElementById("communitySection"),testimonial=document.getElementById("testimonialCard"),faq=document.getElementById("faqCard");
-  if(community&&testimonial&&data.testimonialsEnabled===true){testimonial.style.display="";setPortalText("testimonialText",String(data.testimonialText||""));}
-  if(community&&faq&&data.faqEnabled===true){faq.style.display="";setPortalText("faqText",String(data.faqText||""));}
+  if(community&&testimonial&&data.testimonialsEnabled===true&&portalCardEnabled("testimonials")){testimonial.style.display="";setPortalText("testimonialText",String(data.testimonialText||""));}
+  if(community&&faq&&data.faqEnabled===true&&portalCardEnabled("faq")){faq.style.display="";setPortalText("faqText",String(data.faqText||""));}
   if(community&&((testimonial&&testimonial.style.display!=="none")||(faq&&faq.style.display!=="none"))){community.style.display="";}
 }
 function applyPortalTypography(data){

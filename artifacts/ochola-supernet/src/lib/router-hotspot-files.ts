@@ -61,7 +61,7 @@ async function deployHotspotFiles(
         adminId,
         scope: "hotspot",
         mode,
-        superAdminConsent: mode === "replace",
+        portalFileReplacementConsent: mode === "replace",
         destinationDirectory: "flash/hotspot",
       }),
     });

@@ -1,8 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hasSuperAdminHotspotFileConsent } from "./hotspot-file-authorization.js";
+import {
+  hasHotspotFileReplacementConsent,
+  hasSuperAdminHotspotFileConsent,
+} from "./hotspot-file-authorization.js";
 
-test("approved hotspot replacements require an explicit consent flag", () => {
+test("tenant administrators can explicitly approve approved Hotspot file replacement", () => {
+  assert.equal(hasHotspotFileReplacementConsent({ type: "a", uid: "42" }, true), true);
+  assert.equal(hasHotspotFileReplacementConsent({ type: "a", uid: "superadmin" }, true), true);
+  assert.equal(hasHotspotFileReplacementConsent({ type: "a", uid: "42" }, false), false);
+  assert.equal(hasHotspotFileReplacementConsent({ type: "c", uid: "42" }, true), false);
+  assert.equal(hasHotspotFileReplacementConsent(undefined, true), false);
+});
+
+test("removing Hotspot files still requires explicit Super Admin consent", () => {
   assert.equal(
     hasSuperAdminHotspotFileConsent({ type: "a", uid: "superadmin" }, true),
     true,
@@ -19,9 +30,6 @@ test("approved hotspot replacements require an explicit consent flag", () => {
     }, true),
     true,
   );
-});
-
-test("tenant administrators and customer tokens cannot approve hotspot replacement", () => {
   assert.equal(hasSuperAdminHotspotFileConsent({ type: "a", uid: "42" }, true), false);
   assert.equal(hasSuperAdminHotspotFileConsent({ type: "c", uid: "42" }, true), false);
   assert.equal(hasSuperAdminHotspotFileConsent(undefined, true), false);

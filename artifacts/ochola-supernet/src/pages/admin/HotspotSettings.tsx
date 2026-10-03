@@ -11,6 +11,14 @@ import {
   type PortalPackageShape,
 } from "@/lib/dashboard-preferences";
 import {
+  DEFAULT_HOTSPOT_LOGO_URL,
+  DEFAULT_HOTSPOT_PORTAL_CARDS,
+  HOTSPOT_PORTAL_CARD_OPTIONS,
+  normalizeHotspotPortalCards,
+  type HotspotPortalCardKey,
+  type HotspotPortalCardVisibility,
+} from "@/lib/hotspot-portal-cards";
+import {
   supabase,
   ADMIN_ID as AUTH_ADMIN_ID,
   getAdminApiToken,
@@ -66,6 +74,7 @@ interface HSettings {
   maintenanceMessage: string;
   testimonialText: string;
   faqText: string;
+  portalCards: HotspotPortalCardVisibility;
   colors: ColorSettings;
 }
 
@@ -159,7 +168,7 @@ const DEFAULT_SETTINGS: HSettings = {
   mpesaPrompt: "Enable",
   testimonials: "Disable",
   faqSection: "Disable",
-  logoUrl: "",
+  logoUrl: DEFAULT_HOTSPOT_LOGO_URL,
   advertUrl: "",
   announcement: "",
   paymentInstructions: "Enter your M-Pesa number and approve the prompt to connect instantly.",
@@ -172,26 +181,65 @@ const DEFAULT_SETTINGS: HSettings = {
   maintenanceMessage: "We are making a few improvements. Please check back shortly.",
   testimonialText: "Fast, reliable Wi-Fi whenever I need it.",
   faqText: "How do I connect?\nChoose a package, complete payment, then sign in with the credentials you receive.",
+  portalCards: DEFAULT_HOTSPOT_PORTAL_CARDS,
   colors: DEFAULT_COLORS,
 };
 
 function loadSettings(storageKey: string): HSettings {
   try {
     const raw = localStorage.getItem(storageKey);
-    if (!raw) return { ...DEFAULT_SETTINGS, colors: { ...DEFAULT_COLORS } };
+    if (!raw) {
+      return {
+        ...DEFAULT_SETTINGS,
+        portalCards: { ...DEFAULT_HOTSPOT_PORTAL_CARDS },
+        colors: { ...DEFAULT_COLORS },
+      };
+    }
     const parsed = JSON.parse(raw) as Partial<HSettings>;
-    return {
+    const settings: HSettings = {
       ...DEFAULT_SETTINGS,
       ...parsed,
+      portalCards: normalizeHotspotPortalCards(parsed.portalCards, { ...DEFAULT_SETTINGS, ...parsed }),
       colors: { ...DEFAULT_COLORS, ...(parsed.colors ?? {}) },
     };
+    settings.logoUrl = typeof parsed.logoUrl === "string" && parsed.logoUrl.trim()
+      ? parsed.logoUrl
+      : DEFAULT_HOTSPOT_LOGO_URL;
+    return settings;
   } catch {
-    return { ...DEFAULT_SETTINGS, colors: { ...DEFAULT_COLORS } };
+    return {
+      ...DEFAULT_SETTINGS,
+      portalCards: { ...DEFAULT_HOTSPOT_PORTAL_CARDS },
+      colors: { ...DEFAULT_COLORS },
+    };
   }
 }
 
 function safeText(value: string, fallback = ""): string {
   return value.trim() || fallback;
+}
+
+async function embedPortalLogo(value: string): Promise<string> {
+  const source = value.trim() || DEFAULT_HOTSPOT_LOGO_URL;
+  if (/^data:image\/(?:png|jpeg|webp);base64,/i.test(source)) return source;
+
+  const response = await fetch(source, { cache: "force-cache" });
+  if (!response.ok) throw new Error("The portal logo could not be loaded for the exported page.");
+  const blob = await response.blob();
+  if (!["image/png", "image/jpeg", "image/webp"].includes(blob.type.toLowerCase())) {
+    throw new Error("The portal logo must be a PNG, JPG, or WebP image.");
+  }
+  if (blob.size > 2 * 1024 * 1024) throw new Error("Portal logo images must be smaller than 2 MB.");
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("The portal logo could not be embedded in the exported page."));
+    };
+    reader.onerror = () => reject(new Error("The portal logo could not be embedded in the exported page."));
+    reader.readAsDataURL(blob);
+  });
 }
 
 function isValidPublicOrigin(value: string): boolean {
@@ -286,6 +334,7 @@ type ExportConfig = {
   testimonialText: string;
   faqEnabled: boolean;
   faqText: string;
+  portalCards: HotspotPortalCardVisibility;
   colors: ColorSettings;
   portalBackground: string;
   portalPackageShape: string;
@@ -337,6 +386,7 @@ function makeExportConfig(
   portId = 0,
   previewOnly = false,
 ): ExportConfig {
+  const portalCards = normalizeHotspotPortalCards(settings.portalCards, settings);
   return {
     adminId,
     routerId: Number.isSafeInteger(Number(settings.routerId)) && Number(settings.routerId) > 0
@@ -348,12 +398,12 @@ function makeExportConfig(
     plans,
     ispName: safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
     tagline: safeText(settings.tagline, DEFAULT_SETTINGS.tagline),
-    logoUrl: settings.logoUrl,
+    logoUrl: settings.logoUrl.trim() || DEFAULT_HOTSPOT_LOGO_URL,
     advertUrl: settings.advertUrl,
-    advertEnabled: settings.enableAdvert === "Enable" && !!settings.advertUrl,
+    advertEnabled: portalCards.advert && !!settings.advertUrl,
     advertPosition: settings.advertPos,
     mpesaPromptEnabled: settings.mpesaPrompt === "Enable",
-    vouchersEnabled: settings.vouchers === "Yes",
+    vouchersEnabled: settings.vouchers === "Yes" && portalCards.voucher,
     freeTrialEnabled: settings.freeTrial === "Enable",
     announcement: settings.announcement.trim(),
     paymentInstructions: safeText(settings.paymentInstructions, DEFAULT_SETTINGS.paymentInstructions),
@@ -364,10 +414,11 @@ function makeExportConfig(
     privacyUrl: settings.privacyUrl.trim(),
     maintenanceMode: settings.maintenanceMode === "Maintenance",
     maintenanceMessage: safeText(settings.maintenanceMessage, DEFAULT_SETTINGS.maintenanceMessage),
-    testimonialsEnabled: settings.testimonials === "Enable",
+    testimonialsEnabled: portalCards.testimonials,
     testimonialText: safeText(settings.testimonialText, DEFAULT_SETTINGS.testimonialText),
-    faqEnabled: settings.faqSection === "Enable",
+    faqEnabled: portalCards.faq,
     faqText: safeText(settings.faqText, DEFAULT_SETTINGS.faqText),
+    portalCards,
     colors: { ...DEFAULT_COLORS, ...settings.colors },
     portalBackground: safePortalBackground(appearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearance.portalPackageShape),
@@ -489,7 +540,12 @@ export async function buildPortalHtml(
   } catch {
     /* The API fallback remains available when the admin panel is offline. */
   }
-  const config = makeExportConfig(settings, adminId, appearance.apiBase, plans, appearance, scope.portId, scope.previewOnly === true);
+  const exportSettings = {
+    ...settings,
+    logoUrl: await embedPortalLogo(settings.logoUrl),
+    portalCards: normalizeHotspotPortalCards(settings.portalCards, settings),
+  };
+  const config = makeExportConfig(exportSettings, adminId, appearance.apiBase, plans, appearance, scope.portId, scope.previewOnly === true);
   const bootstrap = `<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};</script>`;
   const configuredTitle = escapeHtml(config.ispName);
   const staticPlanCards = renderStaticPlanCards(plans, appearance.portalPackageShape);
@@ -565,6 +621,18 @@ const STYLES = `
   .hs-choice > span:last-child { min-width:0; display:grid; gap:3px; }
   .hs-choice strong { color:var(--isp-text); font-size:.71rem; font-weight:800; }
   .hs-choice small { color:var(--isp-text-sub); font-size:.61rem; line-height:1.25; }
+  .hs-visibility-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; padding:14px 0 8px; }
+  .hs-visibility-card { display:flex; align-items:center; justify-content:space-between; gap:12px; min-width:0; padding:12px; border:1px solid var(--isp-border); border-radius:10px; background:var(--isp-input-bg); color:var(--isp-text); text-align:left; cursor:pointer; transition:border-color .15s,background .15s; }
+  .hs-visibility-card:hover { border-color:var(--isp-accent-border); }
+  .hs-visibility-card:focus-visible { outline:2px solid var(--isp-accent); outline-offset:2px; }
+  .hs-visibility-card[aria-checked="true"] { border-color:var(--isp-accent-border); background:var(--isp-accent-glow); }
+  .hs-visibility-copy { display:grid; gap:4px; min-width:0; }
+  .hs-visibility-copy strong { color:var(--isp-text); font-size:.72rem; font-weight:800; }
+  .hs-visibility-copy small { color:var(--isp-text-sub); font-size:.62rem; line-height:1.35; }
+  .hs-visibility-switch { position:relative; flex:0 0 34px; width:34px; height:20px; border-radius:999px; background:rgba(148,163,184,.26); transition:background .15s; }
+  .hs-visibility-switch > span { position:absolute; top:3px; left:3px; width:14px; height:14px; border-radius:50%; background:#fff; transition:transform .15s; }
+  .hs-visibility-card[aria-checked="true"] .hs-visibility-switch { background:var(--isp-accent); }
+  .hs-visibility-card[aria-checked="true"] .hs-visibility-switch > span { transform:translateX(14px); }
   .hs-choice-preview { display:block; flex:0 0 46px; width:46px; height:34px; border-radius:7px; border:1px solid rgba(255,255,255,.18); }
   .hs-shape-preview { display:block; flex:0 0 auto; }
   .hs-side-card { background:linear-gradient(155deg,var(--isp-card),var(--isp-inner-card)); }
@@ -594,7 +662,7 @@ const STYLES = `
   .hs-modal-close { display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:7px; border:1px solid rgba(248,113,113,.25); background:rgba(248,113,113,.08); color:#fca5a5; font:700 .68rem inherit; cursor:pointer; }
   .hs-modal-frame { flex:1; min-height:0; border:0; background:#02090f; }
   @media (max-width: 900px) { .hs-grid { grid-template-columns:1fr; } .hs-side { display:grid; grid-template-columns:1fr 1fr; gap:18px; } }
-  @media (max-width: 680px) { .hs-page { padding:22px 15px 42px; } .hs-hero { display:block; } .hs-actions { justify-content:flex-start; margin-top:18px; } .hs-field { grid-template-columns:1fr; gap:8px; } .hs-card-body { padding-inline:15px; } .hs-card-head { padding-inline:15px; } .hs-color-grid { grid-template-columns:repeat(4,1fr); gap:12px 7px; } .hs-choice-grid { grid-template-columns:1fr; } .hs-side { display:flex; flex-direction:column; } .hs-foot-actions { justify-content:stretch; } .hs-foot-actions .hs-btn { flex:1; } }
+  @media (max-width: 680px) { .hs-page { padding:22px 15px 42px; } .hs-hero { display:block; } .hs-actions { justify-content:flex-start; margin-top:18px; } .hs-field { grid-template-columns:1fr; gap:8px; } .hs-card-body { padding-inline:15px; } .hs-card-head { padding-inline:15px; } .hs-color-grid { grid-template-columns:repeat(4,1fr); gap:12px 7px; } .hs-choice-grid, .hs-visibility-grid { grid-template-columns:1fr; } .hs-side { display:flex; flex-direction:column; } .hs-foot-actions { justify-content:stretch; } .hs-foot-actions .hs-btn { flex:1; } }
 `;
 
 function Section({
@@ -802,12 +870,19 @@ export default function HotspotSettings() {
         if (cancelled || !branding) return;
         const persisted = branding.settings && typeof branding.settings === "object" && !Array.isArray(branding.settings)
           ? branding.settings as Partial<HSettings> : {};
-        setSettings(previous => ({
-          ...previous,
-          ...persisted,
-          portalHostname: typeof branding.portalHostname === "string" ? branding.portalHostname : previous.portalHostname,
-          colors: { ...DEFAULT_COLORS, ...(persisted.colors ?? {}) },
-        }));
+        setSettings(previous => {
+          const merged: HSettings = {
+            ...previous,
+            ...persisted,
+            portalHostname: typeof branding.portalHostname === "string" ? branding.portalHostname : previous.portalHostname,
+            colors: { ...DEFAULT_COLORS, ...(persisted.colors ?? {}) },
+            portalCards: normalizeHotspotPortalCards(persisted.portalCards, { ...previous, ...persisted }),
+          };
+          merged.logoUrl = typeof persisted.logoUrl === "string" && persisted.logoUrl.trim()
+            ? persisted.logoUrl
+            : DEFAULT_HOTSPOT_LOGO_URL;
+          return merged;
+        });
       })
       .catch(() => {
         /* Local storage remains an offline fallback for older deployments. */
@@ -899,6 +974,28 @@ export default function HotspotSettings() {
     setSettings(previous => ({ ...previous, [key]: value }));
     setNotice(null);
   };
+  const updatePortalCard = (key: HotspotPortalCardKey, enabled: boolean) => {
+    setSettings(previous => {
+      const legacyValues: Partial<HSettings> = key === "voucher"
+        ? { vouchers: enabled ? "Yes" : "No" }
+        : key === "advert"
+          ? { enableAdvert: enabled ? "Enable" : "Disable" }
+          : key === "testimonials"
+            ? { testimonials: enabled ? "Enable" : "Disable" }
+            : key === "faq"
+              ? { faqSection: enabled ? "Enable" : "Disable" }
+              : {};
+      return {
+        ...previous,
+        ...legacyValues,
+        portalCards: {
+          ...normalizeHotspotPortalCards(previous.portalCards, previous),
+          [key]: enabled,
+        },
+      };
+    });
+    setNotice(null);
+  };
   const updateColor = (key: keyof ColorSettings, value: string) => {
     setSettings(previous => ({ ...previous, colors: { ...previous.colors, [key]: value } }));
     setNotice(null);
@@ -937,9 +1034,8 @@ export default function HotspotSettings() {
     const draft = portDrafts[port.id];
     if (!draft) return;
     const allowHotspotReplace = draft.hotspotEnabled
-      && isSuperAdmin()
       && window.confirm(
-        "As Super Admin, approve replacing existing Hotspot portal files during this deployment? Cancel keeps existing Hotspot files unchanged while still allowing missing approved files to be added.",
+        "Confirm replacing existing Hotspot portal files for this assigned service? Cancel keeps existing files unchanged while still allowing missing files to be added.",
       );
     setSavingPortId(port.id);
     setNotice(null);
@@ -971,7 +1067,7 @@ export default function HotspotSettings() {
           headers: adminApiHeaders(),
           body: JSON.stringify({
             ...(resellerPortalHtml ? { portalHtml: resellerPortalHtml } : {}),
-            superAdminConsent: allowHotspotReplace,
+            portalFileReplacementConsent: allowHotspotReplace,
           }),
         });
         const deployData = await parseApiResponse<{ status?: string; accepted?: boolean }>(
@@ -990,7 +1086,7 @@ export default function HotspotSettings() {
             setNotice({
               type: "info",
               text: `The router deployment is still running. Existing Hotspot files ${
-                allowHotspotReplace ? "may be replaced with Super Admin approval." : "will remain unchanged without Super Admin approval."
+                allowHotspotReplace ? "may be replaced as confirmed." : "will remain unchanged."
               }`,
             });
             return;
@@ -1004,8 +1100,8 @@ export default function HotspotSettings() {
         type: "success",
         text: `${port.interface_name} hotspot settings were saved and deployed to the router. ${
           allowHotspotReplace
-            ? "Existing Hotspot files may have been replaced with Super Admin approval."
-            : "Existing Hotspot files were left unchanged without Super Admin approval."
+            ? "Existing Hotspot files may have been replaced as confirmed."
+            : "Existing Hotspot files were left unchanged."
         }`,
       });
     } catch (error) {
@@ -1096,10 +1192,10 @@ export default function HotspotSettings() {
       let noticeText = "Hotspot settings saved on this admin workspace.";
 
        const canRefreshPortal = Number.isSafeInteger(routerId) && routerId > 0 && Boolean(adminId);
-       if (canRefreshPortal && (!isSuperAdmin() || !window.confirm(
-         "Saving these settings will replace the existing login.html and rlogin.html files on the router. Approve this Hotspot file replacement as Super Admin?",
-       ))) {
-         noticeText = "Settings saved. Router portal files were left unchanged; only the Super Admin can approve replacing them.";
+       if (canRefreshPortal && !window.confirm(
+         "Saving these settings will replace the existing login.html and rlogin.html files on the selected router. Continue?",
+       )) {
+         noticeText = "Settings saved. Router portal files were left unchanged.";
        } else if (canRefreshPortal) {
          const html = await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, {
            portId: isResellerAccount ? Number(selectedAssignedPortId) : undefined,
@@ -1125,7 +1221,7 @@ export default function HotspotSettings() {
             adminId,
             html,
             overwrite: true,
-            superAdminConsent: true,
+            portalFileReplacementConsent: true,
             destinationDirectory: "flash/hotspot",
           }),
         });
@@ -1207,7 +1303,7 @@ export default function HotspotSettings() {
       return;
     }
     if (!window.confirm(
-        "Deploy the current branded portal to this router? The server will transfer login.html and rlogin.html. Replacing either existing file requires separate explicit Super Admin approval.",
+        "Deploy the current branded portal to this router? The server will transfer login.html and rlogin.html. If either file already exists, you will be asked before it is replaced.",
     )) return;
 
     setDeploying(true);
@@ -1242,7 +1338,7 @@ export default function HotspotSettings() {
              adminId,
              html,
              overwrite,
-             superAdminConsent: overwrite && isSuperAdmin(),
+             portalFileReplacementConsent: overwrite,
              destinationDirectory: "flash/hotspot",
            }),
         });
@@ -1265,15 +1361,8 @@ export default function HotspotSettings() {
       let result = await deploy(false);
       if (result.response.status === 409 && result.data.existingFile) {
         const existing = result.data.existingFile;
-        if (!isSuperAdmin()) {
-          setNotice({
-            type: "error",
-            text: `${existing.name} already exists. It was left unchanged; only the Super Admin can approve replacing existing portal files.`,
-          });
-          return;
-        }
         if (!window.confirm(
-          `Approve replacing ${existing.name} (${existing.size} bytes) on the router as Super Admin?`,
+          `Replace the existing ${existing.name} (${existing.size} bytes) on the router?`,
         )) {
           setNotice({ type: "info", text: "Deployment cancelled. The existing router portal was left unchanged." });
           return;
@@ -1687,15 +1776,40 @@ export default function HotspotSettings() {
               )}
             </Section>
 
+            <Section icon={<Eye size={16} />} title="Sign-in page cards" description="Show or hide each customer-facing card on the hotspot sign-in page.">
+              <p style={{ margin: "12px 0 0", color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5 }}>
+                Hiding a card removes it from the customer page without deleting its content or changing router configuration.
+              </p>
+              <div className="hs-visibility-grid">
+                {HOTSPOT_PORTAL_CARD_OPTIONS.map(card => {
+                  const enabled = settings.portalCards[card.key];
+                  return (
+                    <button
+                      key={card.key}
+                      type="button"
+                      className="hs-visibility-card"
+                      role="switch"
+                      aria-checked={enabled}
+                      aria-label={`${card.label} visibility`}
+                      onClick={() => updatePortalCard(card.key, !enabled)}
+                    >
+                      <span className="hs-visibility-copy">
+                        <strong>{card.label}</strong>
+                        <small>{card.description}</small>
+                      </span>
+                      <span className="hs-visibility-switch" aria-hidden="true"><span /></span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Section>
+
             <Section icon={<Smartphone size={16} />} title="Checkout & access" description="Choose which access paths appear and make the payment step easy to understand.">
               <Field label="M-Pesa STK prompt" help="Show the phone-number checkout that sends a PIN approval prompt to the customer's M-Pesa line.">
                 <SelectField value={settings.mpesaPrompt} onChange={value => update("mpesaPrompt", value)} options={["Enable", "Disable"]} />
               </Field>
               <Field label="Free trial" help="Keep the existing free-trial setting available to the portal installer.">
                 <SelectField value={settings.freeTrial} onChange={value => update("freeTrial", value)} options={["Disable", "Enable"]} />
-              </Field>
-              <Field label="Voucher redemption" help="Show or hide voucher access without changing RouterOS login forms.">
-                <SelectField value={settings.vouchers} onChange={value => update("vouchers", value)} options={["Yes", "No"]} />
               </Field>
               <Field label="Payment instructions" help="Shown in the M-Pesa checkout dialog before a customer approves the prompt.">
                 <textarea className="hs-textarea" value={settings.paymentInstructions} maxLength={240} onChange={event => update("paymentInstructions", event.target.value)} />
@@ -1706,11 +1820,8 @@ export default function HotspotSettings() {
               <Field label="Advert banner" help="Optional banner embedded in the page. Maximum 500 KB.">
                 <FilePicker label="Choose banner" value={settings.advertUrl} accept=".png,.jpg,.jpeg,.webp" onSelect={file => handleFile("advertUrl", file)} />
               </Field>
-              <Field label="Advert display" help="Control whether the banner is shown and where it appears.">
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <SelectField value={settings.enableAdvert} onChange={value => update("enableAdvert", value)} options={["Disable", "Enable"]} />
-                  <SelectField value={settings.advertPos} onChange={value => update("advertPos", value)} options={["Top", "Middle", "Bottom"]} />
-                </div>
+              <Field label="Advert position" help="Choose where the enabled banner appears.">
+                <SelectField value={settings.advertPos} onChange={value => update("advertPos", value)} options={["Top", "Middle", "Bottom"]} />
               </Field>
             </Section>
 
@@ -1730,18 +1841,12 @@ export default function HotspotSettings() {
               <Field label="Privacy link" help="Optional HTTPS link displayed in the footer.">
                 <div style={{ position: "relative" }}><ShieldCheck size={14} style={{ position: "absolute", left: 11, top: 11, color: "var(--isp-text-sub)" }} /><input className="hs-input" style={{ paddingLeft: 32 }} type="url" value={settings.privacyUrl} maxLength={300} onChange={event => update("privacyUrl", event.target.value)} placeholder="https://example.com/privacy" /></div>
               </Field>
-              <Field label="Testimonials" help="Add a short customer quote below the access options.">
-                <SelectField value={settings.testimonials} onChange={value => update("testimonials", value)} options={["Disable", "Enable"]} />
-              </Field>
-              {settings.testimonials === "Enable" && (
+              {settings.portalCards.testimonials && (
                 <Field label="Customer quote">
                   <textarea className="hs-textarea" value={settings.testimonialText} maxLength={300} onChange={event => update("testimonialText", event.target.value)} />
                 </Field>
               )}
-              <Field label="FAQ section" help="Answer a common connection question without sending visitors away.">
-                <SelectField value={settings.faqSection} onChange={value => update("faqSection", value)} options={["Disable", "Enable"]} />
-              </Field>
-              {settings.faqSection === "Enable" && (
+              {settings.portalCards.faq && (
                 <Field label="FAQ content" help="Use a new line between the question and answer.">
                   <textarea className="hs-textarea" value={settings.faqText} maxLength={700} onChange={event => update("faqText", event.target.value)} />
                 </Field>

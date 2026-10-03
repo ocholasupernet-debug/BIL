@@ -233,12 +233,8 @@ export default function Files() {
 
   const replaceHotspotAssets = async () => {
     if (!selectedRouterId || deployingHotspot) return;
-    if (!isSuperAdmin()) {
-      setError("Only the Super Admin can approve replacement of existing Hotspot files. Installing missing files is still available.");
-      return;
-    }
     if (!window.confirm(
-      `Approve replacing the approved website Hotspot files on ${selectedRouter?.name || "this router"}? Only matching files in flash/hotspot will be overwritten; missing approved files will be added, and unrelated router files will not be touched. RouterOS writes directly to each destination, so an interrupted transfer may leave that file incomplete. No automatic backup is made. Continue as Super Admin?`,
+      `Replace approved website Hotspot files on ${selectedRouter?.name || "this router"}? Only matching files in flash/hotspot will be overwritten; missing approved files will be added, and unrelated router files will not be touched. RouterOS writes directly to each destination, so an interrupted transfer may leave that file incomplete. No automatic backup is made. Continue?`,
     )) return;
 
     setDeployingHotspot(true);
@@ -309,30 +305,26 @@ export default function Files() {
             {deployingHotspot ? <Loader2 size={15} style={{ animation: "self-install-spin 1s linear infinite" }} /> : <HardDrive size={15} />}
             {deployingHotspot ? "Installing hotspot files…" : "Install hotspot files"}
           </button>
-          {isSuperAdmin() && (
-            <button
-              type="button"
-              onClick={() => void replaceHotspotAssets()}
-              disabled={!selectedRouterId || deployingHotspot}
-              style={{ ...buttonStyle, background: "rgba(248,113,113,0.12)", borderColor: "rgba(248,113,113,0.45)", color: "#fca5a5", cursor: selectedRouterId && !deployingHotspot ? "pointer" : "not-allowed", opacity: selectedRouterId && !deployingHotspot ? 1 : 0.6 }}
-            >
-              {deployingHotspot && deploymentMode === "replace" ? <Loader2 size={15} style={{ animation: "self-install-spin 1s linear infinite" }} /> : <HardDrive size={15} />}
-              {deployingHotspot && deploymentMode === "replace" ? "Replacing hotspot files…" : "Replace hotspot files"}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => void replaceHotspotAssets()}
+            disabled={!selectedRouterId || deployingHotspot}
+            style={{ ...buttonStyle, background: "rgba(248,113,113,0.12)", borderColor: "rgba(248,113,113,0.45)", color: "#fca5a5", cursor: selectedRouterId && !deployingHotspot ? "pointer" : "not-allowed", opacity: selectedRouterId && !deployingHotspot ? 1 : 0.6 }}
+          >
+            {deployingHotspot && deploymentMode === "replace" ? <Loader2 size={15} style={{ animation: "self-install-spin 1s linear infinite" }} /> : <HardDrive size={15} />}
+            {deployingHotspot && deploymentMode === "replace" ? "Replacing hotspot files…" : "Replace hotspot files"}
+          </button>
           <button type="button" onClick={() => void loadRouters()} disabled={loadingRouters} style={{ ...buttonStyle, cursor: loadingRouters ? "not-allowed" : "pointer" }}>
             {loadingRouters ? <Loader2 size={15} style={{ animation: "self-install-spin 1s linear infinite" }} /> : <Server size={15} />}
             Refresh routers
           </button>
         </section>
 
-        {!isSuperAdmin() && (
-          <section style={{ ...panel, padding: "0.85rem 1rem", borderColor: "rgba(96,165,250,0.3)", background: "rgba(96,165,250,0.05)" }}>
-            <p style={{ ...mutedText, margin: 0 }}>
-              Existing Hotspot files can only be replaced with explicit Super Admin approval. Installing missing approved files does not overwrite existing files.
-            </p>
-          </section>
-        )}
+        <section style={{ ...panel, padding: "0.85rem 1rem", borderColor: "rgba(96,165,250,0.3)", background: "rgba(96,165,250,0.05)" }}>
+          <p style={{ ...mutedText, margin: 0 }}>
+            Install adds missing approved files. Replace overwrites only approved files in flash/hotspot after confirmation; unrelated router files are not touched.
+          </p>
+        </section>
 
         <section style={{ ...panel, padding: "0.85rem 1rem", borderColor: "rgba(251,191,36,0.3)", background: "rgba(251,191,36,0.05)" }}>
           <div style={{ color: "#fbbf24", fontSize: "0.76rem", fontWeight: 800 }}>

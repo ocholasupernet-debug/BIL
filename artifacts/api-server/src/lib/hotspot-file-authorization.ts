@@ -4,6 +4,13 @@ export interface HotspotFileAuthorizationActor {
   impersonationSessionId?: unknown;
 }
 
+export function hasHotspotFileReplacementConsent(
+  actor: HotspotFileAuthorizationActor | undefined,
+  consent: unknown,
+): boolean {
+  return actor?.type === "a" && consent === true;
+}
+
 export function hasSuperAdminHotspotFileConsent(
   actor: HotspotFileAuthorizationActor | undefined,
   consent: unknown,

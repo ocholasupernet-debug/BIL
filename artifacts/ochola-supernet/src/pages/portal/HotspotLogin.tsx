@@ -13,6 +13,12 @@ import {
   saveHotspotDevice,
   type SavedHotspotDevice,
 } from "@/lib/saved-hotspot-devices";
+import {
+  DEFAULT_HOTSPOT_LOGO_URL,
+  DEFAULT_HOTSPOT_PORTAL_CARDS,
+  normalizeHotspotPortalCards,
+  type HotspotPortalCardVisibility,
+} from "@/lib/hotspot-portal-cards";
 
 interface Plan {
   id: number; name: string; price: number;
@@ -177,6 +183,7 @@ type PortalBranding = {
   supportPhone?: string;
   supportEmail?: string;
   portalHostname?: string;
+  portalCards?: HotspotPortalCardVisibility;
 };
 
 function formatValidity(plan: Plan): string {
@@ -332,6 +339,7 @@ function HotspotLoginView({
           supportPhone: typeof row.supportPhone === "string" ? row.supportPhone : undefined,
           supportEmail: typeof row.supportEmail === "string" ? row.supportEmail : undefined,
           portalHostname: typeof payload?.branding?.portalHostname === "string" ? payload.branding.portalHostname : undefined,
+          portalCards: normalizeHotspotPortalCards(row.portalCards, row),
         });
       })
       .catch(() => undefined);
@@ -344,7 +352,15 @@ function HotspotLoginView({
     supportEmail: portalBranding.supportEmail || brand.supportEmail,
     domain: portalBranding.portalHostname || brand.domain,
   };
+  const portalCards = portalBranding.portalCards ?? DEFAULT_HOTSPOT_PORTAL_CARDS;
   const [activeTab, setActiveTab] = useState<Tab>("plans");
+  useEffect(() => {
+    const availableTabs: Tab[] = [
+      ...(portalCards.packages ? ["plans", "tv"] as const : []),
+      ...(portalCards.voucher ? ["voucher"] as const : []),
+    ];
+    if (availableTabs.length && !availableTabs.includes(activeTab)) setActiveTab(availableTabs[0]);
+  }, [activeTab, portalCards.packages, portalCards.voucher]);
 
   const portalContext = (() => {
     try {
@@ -1246,6 +1262,7 @@ function HotspotLoginView({
     { id: "tv", label: "Buy for TV", icon: <Tv size={16} /> },
     { id: "voucher", label: "Voucher", icon: <Ticket size={16} /> },
   ];
+  const visibleTabs = TABS.filter(tab => tab.id === "voucher" ? portalCards.voucher : portalCards.packages);
   const isTvMode = paymentMode === "tv";
   const voucherPlanName = voucherInfo?.plan_name == null ? "" : String(voucherInfo.plan_name);
   const voucherDuration = voucherInfo?.duration == null ? "" : String(voucherInfo.duration);
@@ -2026,40 +2043,44 @@ function HotspotLoginView({
         <div className="hp-bg-orb" style={{ width: 250, height: 250, top: "40%", left: "60%", background: "rgba(236,72,153,0.06)", animationDelay: "2s" }} />
 
         {/* Header */}
-        <header className="hp-header">
-          <div className="hp-logo">
-            <img className="hp-logo-image" src={portalBranding.logoUrl || "/ocholasupernet-logo.png"} alt={portalBrand.ispName} />
-            <div>
-              <div className="hp-logo-sub">{portalBrand.domain}</div>
+        {portalCards.header && (
+          <header className="hp-header">
+            <div className="hp-logo">
+              <img className="hp-logo-image" src={portalBranding.logoUrl || DEFAULT_HOTSPOT_LOGO_URL} alt={portalBrand.ispName} />
+              <div>
+                <div className="hp-logo-sub">{portalBrand.domain}</div>
+              </div>
             </div>
-          </div>
-          <div className="hp-status">
-            <span className="hp-status-dot" />
-            Online
-          </div>
-        </header>
+            <div className="hp-status">
+              <span className="hp-status-dot" />
+              Online
+            </div>
+          </header>
+        )}
 
         {/* Main */}
         <main className="hp-main">
           {/* Hero */}
-          <div className="hp-hero">
-            <div className="hp-wifi-wrap">
-              <div className="hp-wifi-box">
-                <Wifi size={36} color="var(--isp-accent)" strokeWidth={2} />
+          {portalCards.hero && (
+            <div className="hp-hero">
+              <div className="hp-wifi-wrap">
+                <div className="hp-wifi-box">
+                  <Wifi size={36} color="var(--isp-accent)" strokeWidth={2} />
+                </div>
+              </div>
+              <h1 className="hp-title">{troubleshootingOnly ? "Connection help" : "Your world, connected."}</h1>
+              <p className="hp-subtitle">{troubleshootingOnly
+                ? "Check your package and router session, then retry the connection if needed."
+                : portalBranding.tagline || `Fast, reliable internet for your phone, home and TV — powered by ${portalBrand.ispName}.`}</p>
+              <div className="hp-badges">
+                <span className="hp-badge"><Shield size={12} /> Secure</span>
+                <span className="hp-badge"><Zap size={12} /> Instant</span>
+                <span className="hp-badge"><Clock size={12} /> 24/7</span>
               </div>
             </div>
-             <h1 className="hp-title">{troubleshootingOnly ? "Connection help" : "Your world, connected."}</h1>
-             <p className="hp-subtitle">{troubleshootingOnly
-               ? "Check your package and router session, then retry the connection if needed."
-               : portalBranding.tagline || `Fast, reliable internet for your phone, home and TV — powered by ${portalBrand.ispName}.`}</p>
-            <div className="hp-badges">
-              <span className="hp-badge"><Shield size={12} /> Secure</span>
-              <span className="hp-badge"><Zap size={12} /> Instant</span>
-              <span className="hp-badge"><Clock size={12} /> 24/7</span>
-            </div>
-          </div>
+          )}
 
-          {!troubleshootingOnly && (loginSession?.status === "expired" || loginSession?.status === "depleted") && (
+          {!troubleshootingOnly && portalCards.expiryNotice && (loginSession?.status === "expired" || loginSession?.status === "depleted") && (
             <div
               role="alert"
               aria-live="assertive"
@@ -2206,22 +2227,24 @@ function HotspotLoginView({
                 </div>
               </div>
 
-              {mpesaReconnectCard}
+              {portalCards.paymentRecovery && mpesaReconnectCard}
             </section>
           ) : (
             <>
           {/* Tabs */}
+          {visibleTabs.length > 0 && (
           <div className="hp-tabs" id="hp-plan-tabs">
-            {TABS.map(tab => (
+            {visibleTabs.map(tab => (
                <button key={tab.id} onClick={() => handleTabChange(tab.id)} disabled={stkSent}
                  className={`hp-tab${activeTab === tab.id ? " active" : ""}`} aria-pressed={activeTab === tab.id}>
                 {tab.icon} {tab.label}
               </button>
             ))}
           </div>
+          )}
 
           {/* ── BUY DATA ── */}
-           {(activeTab === "plans" || activeTab === "tv") && (
+           {portalCards.packages && (activeTab === "plans" || activeTab === "tv") && (
             <div className="hp-section">
               {stkSent ? (
                 <div className="hp-glass">
@@ -2523,7 +2546,7 @@ function HotspotLoginView({
           )}
 
           {/* ── VOUCHER ── */}
-          {activeTab === "voucher" && (
+          {portalCards.voucher && activeTab === "voucher" && (
             <div className="hp-section">
               <div className="hp-glass">
                 <div className="hp-glass-header">
@@ -2594,6 +2617,7 @@ function HotspotLoginView({
             </div>
           )}
 
+          {portalCards.connectionSupport && (
           <div className="hp-troubleshoot-card" style={{ maxWidth: 840, margin: "14px auto 12px" }}>
             <div className="hp-troubleshoot-card-copy">
               <div className="hp-troubleshoot-card-icon" aria-hidden="true"><Wifi size={20} /></div>
@@ -2614,12 +2638,15 @@ function HotspotLoginView({
               <Wifi size={15} /> Troubleshoot connection <ArrowRight size={15} />
             </button>
           </div>
+          )}
 
-          <div style={{ maxWidth: 840, margin: "0 auto 20px" }}>
-            {mpesaReconnectCard}
-          </div>
+          {portalCards.paymentRecovery && (
+            <div style={{ maxWidth: 840, margin: "0 auto 20px" }}>
+              {mpesaReconnectCard}
+            </div>
+          )}
 
-          {troubleshootDialogOpen && (
+          {portalCards.connectionSupport && troubleshootDialogOpen && (
             <div
               className="hp-troubleshoot-overlay"
               role="presentation"
@@ -2945,17 +2972,21 @@ function HotspotLoginView({
             </div>
           )}
 
-          <div style={{ padding: "0 0 16px", textAlign: "center" }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 13px", borderRadius: 8, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.45)", fontSize: 12 }}>
-              Your MAC address:
-              <strong style={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontWeight: 700 }}>
-                {deviceMacAddress || "Resolved by router"}
-              </strong>
-            </span>
-          </div>
-          <div className="hp-footer">
-            {new Date().getFullYear()} {portalBrand.ispName} &middot; {portalBrand.domain}
-          </div>
+          {portalCards.deviceIdentity && (
+            <div style={{ padding: "0 0 16px", textAlign: "center" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 13px", borderRadius: 8, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.45)", fontSize: 12 }}>
+                Your MAC address:
+                <strong style={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontWeight: 700 }}>
+                  {deviceMacAddress || "Resolved by router"}
+                </strong>
+              </span>
+            </div>
+          )}
+          {portalCards.footer && (
+            <div className="hp-footer">
+              {new Date().getFullYear()} {portalBrand.ispName} &middot; {portalBrand.domain}
+            </div>
+          )}
             </>
           )}
         </main>
