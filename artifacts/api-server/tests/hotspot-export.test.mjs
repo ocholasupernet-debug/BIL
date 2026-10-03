@@ -20,7 +20,7 @@ const mikrotikRoutePath = resolve(apiRoot, "src/routes/mikrotik-route.ts");
 const resellerRoutePath = resolve(apiRoot, "src/routes/reseller-route.ts");
 const mpesaRoutePath = resolve(apiRoot, "src/routes/mpesa-route.ts");
 
-async function loadExportBuilder() {
+async function loadExportBuilder(role = "isp_admin") {
   const outdir = await mkdtemp(resolve(webRoot, ".hotspot-export-"));
   const outfile = resolve(outdir, "HotspotSettings.cjs");
   await build({
@@ -49,8 +49,9 @@ async function loadExportBuilder() {
             "supabase": `
               export const ADMIN_ID = 7;
               export function getAdminApiToken() { return ""; }
-              export function getAdminRole() { return "isp_admin"; }
+              export function getAdminRole() { return ${JSON.stringify(role)}; }
               export function getSelectedTenantId() { return 7; }
+              export function isSuperAdmin() { return ${JSON.stringify(role === "superadmin")}; }
               export function isLoggedIn() { return false; }
               export const supabase = { from() { throw new Error("supabase should not be called by HTML export"); } };
             `,
@@ -105,6 +106,17 @@ function stagingSettings() {
   };
 }
 
+function embeddedPortalConfig(html) {
+  const prefix = "window.__HOTSPOT_CONFIG__=";
+  const suffix = ";document.documentElement.setAttribute(\"data-portal-layout\"";
+  const start = html.indexOf(prefix);
+  assert.notEqual(start, -1, "generated portal config bootstrap is present");
+  const jsonStart = start + prefix.length;
+  const end = html.indexOf(suffix, jsonStart);
+  assert.notEqual(end, -1, "generated portal config ends before its layout bootstrap");
+  return JSON.parse(html.slice(jsonStart, end));
+}
+
 test("HTML export preserves RouterOS macros and safely embeds tenant configuration", async () => {
   const template = await readFile(templatePath, "utf8");
   const builder = await loadExportBuilder();
@@ -152,9 +164,7 @@ test("HTML export preserves RouterOS macros and safely embeds tenant configurati
     assert.match(html, /Acme &lt;script&gt;alert\(&#39;x&#39;\)&lt;\/script&gt;/);
     assert.doesNotMatch(html, /<script>alert\('x'\)<\/script>/);
 
-    const configMatch = html.match(/window\.__HOTSPOT_CONFIG__=(.*);<\/script>/);
-    assert.ok(configMatch, "generated config bootstrap is present");
-    const config = JSON.parse(configMatch[1]);
+    const config = embeddedPortalConfig(html);
     assert.equal(config.apiBase, "https://tenant.example.test");
     assert.equal(config.routerId, 3);
     assert.equal(config.portId, 88);
@@ -210,9 +220,7 @@ test("local hotspot preview keeps embedded plans instead of refreshing them away
       portId: 88,
       previewOnly: true,
     });
-    const configMatch = html.match(/window\.__HOTSPOT_CONFIG__=(.*);<\/script>/);
-    assert.ok(configMatch, "preview config bootstrap is present");
-    const config = JSON.parse(configMatch[1]);
+    const config = embeddedPortalConfig(html);
     assert.equal(config.previewOnly, true);
     assert.deepEqual(config.plans, [{
       id: 41,
@@ -227,6 +235,121 @@ test("local hotspot preview keeps embedded plans instead of refreshing them away
     globalThis.fetch = realFetch;
     await builder.cleanup();
   }
+});
+
+test("ISP assigned-port preview and export use only that service's eligible plans", async () => {
+  const template = await readFile(templatePath, "utf8");
+  const builder = await loadExportBuilder();
+  const realFetch = globalThis.fetch;
+  const calls = [];
+  let planResponse = [{ id: 88, name: "WLAN 2 package", price: 50, validity: 1, validity_unit: "days" }];
+  globalThis.fetch = async input => {
+    const url = new URL(String(input), "https://tenant.example.test");
+    calls.push(url);
+    if (url.pathname === "/hotspot/login.html") return new Response(template);
+    if (url.pathname === "/api/public/typography") {
+      return new Response(JSON.stringify({ apiBase: "https://tenant.example.test" }));
+    }
+    if (url.pathname === "/api/plans") {
+      assert.equal(url.searchParams.get("adminId"), "7");
+      assert.equal(url.searchParams.get("routerId"), "3");
+      assert.equal(url.searchParams.get("portId"), "88");
+      assert.equal(url.searchParams.get("activeOnly"), "true");
+      assert.equal(url.searchParams.get("purchasableOnly"), "true");
+      return new Response(JSON.stringify(planResponse));
+    }
+    throw new Error(`unexpected assigned-port request: ${url}`);
+  };
+
+  try {
+    for (const previewOnly of [true, false]) {
+      const html = await builder.buildPortalHtml(stagingSettings(), "tenant", {}, { portId: 88, previewOnly });
+      const config = embeddedPortalConfig(html);
+      assert.equal(config.routerId, 3);
+      assert.equal(config.portId, 88);
+      assert.equal(config.previewOnly, previewOnly);
+      assert.deepEqual(config.plans, planResponse);
+      assert.match(html, /WLAN 2 package/);
+    }
+    // A truly empty assigned service must not show sibling or router-wide
+    // packages through the generic admin preview fallback.
+    planResponse = [];
+    const html = await builder.buildPortalHtml(stagingSettings(), "tenant", {}, { portId: 88, previewOnly: true });
+    const config = embeddedPortalConfig(html);
+    assert.deepEqual(config.plans, []);
+    assert.ok(calls.every(url => url.pathname !== "/api/plans/admin-context"));
+  } finally {
+    globalThis.fetch = realFetch;
+    await builder.cleanup();
+  }
+});
+
+test("assigned-port API failures do not silently create an empty preview or deployment", async () => {
+  const template = await readFile(templatePath, "utf8");
+  const builder = await loadExportBuilder();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async input => {
+    const url = new URL(String(input), "https://tenant.example.test");
+    if (url.pathname === "/hotspot/login.html") return new Response(template);
+    if (url.pathname === "/api/public/typography") return new Response("{}");
+    if (url.pathname === "/api/plans") return new Response("unavailable", { status: 503 });
+    throw new Error(`unexpected request: ${url}`);
+  };
+  try {
+    for (const previewOnly of [true, false]) {
+      await assert.rejects(
+        builder.buildPortalHtml(stagingSettings(), "tenant", {}, { portId: 88, previewOnly }),
+        /selected service's plans could not be loaded \(HTTP 503\)/,
+      );
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    await builder.cleanup();
+  }
+});
+
+test("reseller preview fallback remains restricted to the selected assigned port", async () => {
+  const template = await readFile(templatePath, "utf8");
+  const builder = await loadExportBuilder("reseller");
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async input => {
+    const url = new URL(String(input), "https://tenant.example.test");
+    if (url.pathname === "/hotspot/login.html") return new Response(template);
+    if (url.pathname === "/api/public/typography") return new Response("{}");
+    if (url.pathname === "/api/plans") return new Response("[]");
+    if (url.pathname === "/api/plans/admin-context") {
+      return new Response(JSON.stringify({ plans: [
+        { id: 1, name: "Selected port", type: "hotspot", router_id: 3, port_id: 88, price: 10 },
+        { id: 2, name: "Sibling port", type: "hotspot", router_id: 3, port_id: 89, price: 20 },
+        { id: 3, name: "Different router", type: "hotspot", router_id: 4, port_id: 88, price: 20 },
+      ] }));
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+  try {
+    const html = await builder.buildPortalHtml(stagingSettings(), "tenant", {}, { portId: 88, previewOnly: true });
+    const config = embeddedPortalConfig(html);
+    assert.deepEqual(config.plans.map(plan => plan.id), [1]);
+    assert.doesNotMatch(html, /Sibling port|Different router/);
+  } finally {
+    globalThis.fetch = realFetch;
+    await builder.cleanup();
+  }
+});
+
+test("assigned-service UI carries port scope into preview, export, and isolated deployment", async () => {
+  const source = await readFile(entry, "utf8");
+  assert.match(source, /label="Portal service"/);
+  assert.match(source, /port \? \{ \.\.\.settings, routerId: String\(port\.router_id\) \}/);
+  assert.match(source, /\{ portId: port\?\.id, previewOnly \}/);
+  assert.match(source, /return buildTargetPortal\(selectedPortalPort\)/);
+  assert.match(source, /const html = await buildTargetPortal\(port, true\)/);
+  const savePort = source.slice(source.indexOf("const saveAssignedPort"), source.indexOf("const deleteAssignedPort"));
+  assert.match(savePort, /usesGeneratedHotspotPortal\(draft\.hotspotFolderPath\)/);
+  assert.match(savePort, /await buildTargetPortal\(port\)/);
+  assert.match(savePort, /portalHtml \? \{ portalHtml \}/);
+  assert.match(savePort, /portalFileReplacementConsent: allowHotspotReplace/);
+  assert.match(source, /await saveAssignedPort\(selectedPortalPort\)/);
 });
 
 test("invalid or internal API origins fall back to the public tenant HTTPS origin", async () => {
@@ -244,8 +367,7 @@ test("invalid or internal API origins fall back to the public tenant HTTPS origi
 
   try {
     const html = await builder.buildPortalHtml(stagingSettings(), "tenant");
-    const configMatch = html.match(/window\.__HOTSPOT_CONFIG__=(.*);<\/script>/);
-    const config = JSON.parse(configMatch[1]);
+    const config = embeddedPortalConfig(html);
     assert.equal(config.apiBase, "https://tenant.isplatty.org");
     assert.doesNotMatch(html, /localhost:8080/);
     assert.doesNotMatch(html, /127\.0\.0\.1/);
@@ -282,7 +404,7 @@ test("deploy UI uses two confirmations and sends generated content through the d
   assert.match(deployActions, /deploy\(false\)/);
   assert.match(deployActions, /deploy\(true\)/);
   assert.match(deployActions, /status === 409/);
-  assert.match(deployActions, /JSON\.stringify\(\{ adminId, html, overwrite, destinationDirectory: "flash\/hotspot" \}\)/);
+  assert.match(deployActions, /JSON\.stringify\(\{\s*adminId,\s*html,\s*overwrite,\s*portalFileReplacementConsent: overwrite,\s*destinationDirectory: "flash\/hotspot",?\s*\}\)/);
   assert.doesNotMatch(deployActions, /routerSecret|routerPassword|paymentSecret|vpnPrivateKey/);
 });
 
@@ -322,7 +444,8 @@ test("default reseller portal deployment embeds the assigned router and port sco
   assert.match(deploy, /portalContextToken:\s*generateVlanHotspotPortalContextToken/);
   assert.match(deploy, /const sourceNameForContent = sourceName/);
   assert.match(deploy, /addVlanIdentityToRlogin/);
-  assert.match(deploy, /overwrite: true/);
+  assert.match(deploy, /overwrite: allowHotspotReplace/);
+  assert.match(deploy, /RouterFileExistsError/);
   assert.match(provision, /admin_id=eq\.\$\{port\.admin_id\}&router_id=eq\.\$\{port\.router_id\}&port_id=eq\.\$\{port\.id\}/);
 
   const login = await readFile(new URL("../../ochola-supernet/src/pages/portal/HotspotLogin.tsx", import.meta.url), "utf8");

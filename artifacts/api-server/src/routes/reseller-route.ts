@@ -2893,7 +2893,7 @@ router.post("/admin/reseller-handoffs/:portId/portal", requireAdmin(), async (re
       return;
     }
     if (!hasHotspotFileReplacementConsent(req.authUser, req.body?.portalFileReplacementConsent)) {
-      res.status(403).json({ ok: false, error: "Explicit administrator confirmation is required to replace existing Hotspot portal files." });
+      res.status(403).json({ ok: false, error: "Explicit Super Admin approval is required to replace existing Hotspot portal files." });
       return;
     }
 
