@@ -117,7 +117,10 @@ async function getPlanContext(req: Parameters<typeof authenticatedAccount>[0]): 
   };
 }
 
-async function planContextRows(context: PlanContext): Promise<{
+async function planContextRows(
+  context: PlanContext,
+  options: { includePortScopedHotspotPlans?: boolean } = {},
+): Promise<{
   plans: Record<string, unknown>[];
   bandwidths: Record<string, unknown>[];
   routers: Record<string, unknown>[];
@@ -152,7 +155,14 @@ async function planContextRows(context: PlanContext): Promise<{
       )
     : allPlans.filter(plan =>
         planBelongsToOwner(plan, null)
-        && (plan.port_id == null || String(plan.type ?? "").toLowerCase() === "vlan"),
+        && (
+          plan.port_id == null
+          || String(plan.type ?? "").toLowerCase() === "vlan"
+          || (
+            options.includePortScopedHotspotPlans === true
+            && ["hotspot", "trials", "trial"].includes(String(plan.type ?? "").toLowerCase())
+          )
+        ),
       );
   const filteredRouters = context.allowedRouterIds
     ? routers.filter(router => context.allowedRouterIds!.has(Number(router.id)))
@@ -294,7 +304,51 @@ router.get("/plans", async (req, res): Promise<void> => {
 router.get("/plans/admin-context", requireAdmin(), async (req, res): Promise<void> => {
   try {
     const context = await getPlanContext(req);
-    const rows = await planContextRows(context);
+    const hotspotPreview = req.query.hotspotPreview === "true";
+    const rows = await planContextRows(context, {
+      includePortScopedHotspotPlans: hotspotPreview,
+    });
+    if (hotspotPreview) {
+      const routerId = parseOptionalId(req.query.routerId);
+      if (!routerId) {
+        res.status(400).json({ error: "A valid routerId is required for hotspot preview context." });
+        return;
+      }
+      if (!rows.routers.some(router => Number(router.id) === routerId)) {
+        res.status(403).json({ error: "The selected router is outside this account's scope." });
+        return;
+      }
+
+      const rawPortId = req.query.portId;
+      const portId = parseOptionalId(rawPortId);
+      if (
+        rawPortId !== undefined
+        && rawPortId !== null
+        && rawPortId !== ""
+        && rawPortId !== "null"
+        && portId === null
+      ) {
+        res.status(400).json({ error: "portId must be a valid service port." });
+        return;
+      }
+      if (context.account.role === "reseller" && portId === null) {
+        res.status(400).json({ error: "A service port is required for reseller hotspot preview context." });
+        return;
+      }
+      if (portId !== null && !rows.ports.some(port =>
+        Number(port.id) === portId && Number(port.router_id) === routerId,
+      )) {
+        res.status(403).json({ error: "The selected service port is outside this account's scope." });
+        return;
+      }
+
+      rows.plans = rows.plans.filter(plan => {
+        if (Number(plan.router_id) !== routerId) return false;
+        if (portId !== null) return Number(plan.port_id) === portId;
+        return plan.port_id != null
+          && ["hotspot", "trials", "trial"].includes(String(plan.type ?? "").toLowerCase());
+      });
+    }
     res.json({ ...rows, tenantId: context.tenantId, reseller: context.account.role === "reseller" });
   } catch (error) {
     res.status(403).json({ error: error instanceof Error ? error.message : "Plan context could not be loaded." });

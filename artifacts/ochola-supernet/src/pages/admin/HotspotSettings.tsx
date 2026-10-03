@@ -536,8 +536,21 @@ export async function buildPortalHtml(
     // ISP-owned assigned services use the authoritative public port query.
     // Resellers retain their authenticated context fallback (their browser
     // account id differs from the parent ISP id), but only for this exact port.
-    if (!plans.length && scope.previewOnly && (!(Number(scope.portId) > 0) || getAdminRole() === "reseller")) {
-      const contextResponse = await fetch("/api/plans/admin-context", {
+    if (
+      !plans.length
+      && scope.previewOnly
+      && (!(Number(scope.portId) > 0) || getAdminRole() === "reseller")
+      && Number.isSafeInteger(routerId)
+      && routerId > 0
+    ) {
+      const contextQuery = new URLSearchParams({
+        hotspotPreview: "true",
+        routerId: String(routerId),
+      });
+      if (Number.isSafeInteger(portId) && portId > 0) {
+        contextQuery.set("portId", String(portId));
+      }
+      const contextResponse = await fetch(`/api/plans/admin-context?${contextQuery.toString()}`, {
         headers: adminApiHeaders(),
         cache: "no-store",
       });
@@ -550,17 +563,10 @@ export async function buildPortalHtml(
         const candidates = (context.plans ?? [])
           .filter(plan => ["hotspot", "trials", "trial"].includes(String(plan.type ?? "").toLowerCase()))
           .filter(plan => plan.is_active !== false && plan.client_can_purchase !== false)
-          .filter(plan => !(selectedPortId > 0)
-            || (Number(plan.router_id) === selectedRouterId && Number(plan.port_id) === selectedPortId))
-          .sort((a, b) => {
-            const score = (plan: Record<string, unknown>) => {
-              let value = 0;
-              if (selectedRouterId > 0 && Number(plan.router_id) === selectedRouterId) value += 4;
-              if (selectedPortId > 0 && Number(plan.port_id) === selectedPortId) value += 8;
-              return value;
-            };
-            return score(b) - score(a);
-          });
+          .filter(plan => Number(plan.router_id) === selectedRouterId)
+          .filter(plan => selectedPortId > 0
+            ? Number(plan.port_id) === selectedPortId
+            : plan.port_id != null);
         plans = candidates
           .map(plan => ({
             id: Number(plan.id) || 0,
@@ -870,7 +876,7 @@ function PreviewModal({
         <div className="hs-modal-head">
           <div>
             <div className="hs-modal-title"><Eye size={15} /> Captive-portal preview</div>
-            <p className="hs-modal-copy">This is the exact generated HTML that the download action produces.</p>
+            <p className="hs-modal-copy">If this router has no router-wide packages, the preview includes eligible packages from its assigned hotspot ports. Downloads and deployed portals remain service-scoped.</p>
           </div>
           <button type="button" className="hs-modal-close" onClick={onClose}><X size={13} /> Close</button>
         </div>
