@@ -594,8 +594,16 @@ window.fetch=function(input,init){
   }
   var headers=new Headers(input instanceof Request?input.headers:undefined);
   new Headers(init&&init.headers).forEach(function(value,key){headers.set(key,value);});
+  /* Router identity query hints do not turn an ISP-owned bridge into a
+     reseller portal. Signed and explicitly port/reseller-scoped portals keep
+     their identity headers so the server continues to verify their scope. */
+  var plainIspPortal=!!EMBEDDED_CONFIG
+    && Number.isSafeInteger(Number(EMBEDDED_CONFIG.adminId))&&Number(EMBEDDED_CONFIG.adminId)>0
+    && Number.isSafeInteger(Number(EMBEDDED_CONFIG.routerId))&&Number(EMBEDDED_CONFIG.routerId)>0
+    && Number(EMBEDDED_CONFIG.portId||0)===0
+    && Number(EMBEDDED_CONFIG.resellerId||0)===0;
   if(token)headers.set("X-Hotspot-Portal-Context",token);
-  if(token||PORTAL_QUERY.has("nasid")||PORTAL_QUERY.has("server")){
+  if(token||(!plainIspPortal&&(PORTAL_QUERY.has("nasid")||PORTAL_QUERY.has("server")))){
     headers.set("X-Hotspot-NAS-Identifier",PORTAL_NAS_IDENTIFIER);
     headers.set("X-Hotspot-Server-Name",PORTAL_HOTSPOT_SERVER_NAME);
   }
@@ -712,7 +720,7 @@ function applyPortalConfig(data){
   if(configuredPlans.length)EMBEDDED_PLANS=configuredPlans;
    var configuredName=typeof data.ispName==="string"?data.ispName.trim():"";
    var isPlatformName=configuredName.toLowerCase().replace(/[^a-z0-9]/g,"")==="ocholasupernet";
-   var name=configuredName&&!isPlatformName?configuredName:"OcholaSupernet";
+    var name=configuredName&&!isPlatformName?configuredName:"OcholaSupernet";
   setPortalText("portalNameHeader",name);setPortalText("portalNameFooter",name);
   setPortalText("portalHeroTitle","Connect with "+name);
   setPortalText("portalTagline",typeof data.tagline==="string"?data.tagline:"");
@@ -1073,6 +1081,30 @@ function renderModal(){
    });
  }
 
+function portalPaymentRequest(path,payload,label){
+  var url=apiUrl(path);
+  if(!/^https:\/\//i.test(PORTAL_API_BASE)){
+    return Promise.reject(new Error(label+" cannot start: this HTML file has no valid public payment API address."));
+  }
+  return Promise.resolve().then(function(){
+    return fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  }).then(function(response){
+    return response.text().then(function(text){
+      var data;
+      try{data=JSON.parse(text);}catch(error){
+        throw new Error(label+" received a non-JSON response (HTTP "+response.status+") from "+url+
+          (response.redirected?". The request was redirected; check the Hotspot sign-in rules.":". Check the portal API address and payment-server response."));
+      }
+      if(!data||typeof data!=="object"||Array.isArray(data)){
+        throw new Error(label+" received an invalid payment response (HTTP "+response.status+") from "+url+".");
+      }
+      return{ok:response.ok,data:data};
+    });
+  },function(){
+    throw new Error(label+" could not reach "+url+". Check HTTPS access before Hotspot login. No payment confirmation was received.");
+  });
+}
+
 function sendStk(){
   if(!MPESA_PROMPT_ENABLED)return;
   var phone=document.getElementById("stkPhoneInput")?document.getElementById("stkPhoneInput").value:"";
@@ -1086,24 +1118,23 @@ function sendStk(){
    if(tvPurchase&&tvDeviceName)checkout.device_name=tvDeviceName;
    if(tvPurchase&&tvDeviceRouterId)checkout.device_router_id=tvDeviceRouterId;
   if(DEVICE_IP)checkout.client_ip=DEVICE_IP;
-  fetch(apiUrl("/api/mpesa/intent"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(checkout)})
-    .then(function(r){return r.json().then(function(data){return{ok:r.ok,data:data};});})
-    .catch(function(){return{ok:false,data:{error:"Network error"}};})
+  portalPaymentRequest("/api/mpesa/intent",checkout,"Payment setup")
+    .catch(function(error){return{ok:false,data:{error:error&&error.message?error.message:"Payment setup failed before a response was received."}};})
     .then(function(data){
       if(!data.ok||!data.data||!data.data.paymentIntent){
         stkError=(data.data&&data.data.error)||"Could not start a secure payment checkout.";
         stkState="error";renderModal();return;
       }
       var intentData=data.data;
-      return fetch(apiUrl("/api/mpesa/stk"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      return portalPaymentRequest("/api/mpesa/stk",{
          phone:phone,plan_id:selectedPlan?selectedPlan.id:0,amount:intentData.amount,adminId:PORTAL_ADMIN_ID,
           ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
           ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{}),
          account_ref:"Hotspot",paymentIntent:intentData.paymentIntent,
          ...(tvPurchase&&tvDeviceName?{device_name:tvDeviceName}:{})
-      })}).then(function(r){return r.json().then(function(response){return{ok:r.ok,data:response};});});
+      },"M-Pesa prompt request");
     })
-    .catch(function(){return{ok:false,data:{error:"Network error"}};})
+    .catch(function(error){return{ok:false,data:{error:error&&error.message?error.message:"The M-Pesa request failed before a response was received."}};})
     .then(function(result){
       if(!result)return;
       var data=result.data||{};

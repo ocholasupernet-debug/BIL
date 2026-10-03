@@ -45,6 +45,7 @@ interface HotspotRuntimeConfig {
   adminId: number | null;
   routerId: number | null;
   portId: number | null;
+  resellerId: number | null;
   portalContextToken: string;
   previewOnly: boolean;
   portalLayout: HotspotPortalLayout;
@@ -140,6 +141,7 @@ function readHotspotRuntimeConfig(): HotspotRuntimeConfig {
     adminId: positivePortalId(raw?.adminId),
     routerId: positivePortalId(raw?.routerId),
     portId: positivePortalId(raw?.portId),
+    resellerId: positivePortalId(raw?.resellerId),
     portalContextToken: typeof raw?.portalContextToken === "string" ? raw.portalContextToken.trim() : "",
     previewOnly: raw?.previewOnly === true,
     portalLayout: normalizeHotspotPortalLayout(raw?.portalLayout),
@@ -172,6 +174,11 @@ function hotspotApiUrl(path: string): string {
 
 function hotspotPortalFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const token = HOTSPOT_RUNTIME_CONFIG.portalContextToken;
+  const plainIspPortal = HOTSPOT_RUNTIME_CONFIG.adminId !== null
+    && HOTSPOT_RUNTIME_CONFIG.routerId !== null
+    && HOTSPOT_RUNTIME_CONFIG.portId === null
+    && HOTSPOT_RUNTIME_CONFIG.resellerId === null;
+  if (!token && plainIspPortal) return fetch(input, init);
   if (!token && !HOTSPOT_NAS_IDENTIFIER.supplied && !HOTSPOT_SERVER_NAME.supplied) return fetch(input, init);
   const headers = new Headers(input instanceof Request ? input.headers : undefined);
   new Headers(init.headers).forEach((value, key) => headers.set(key, value));
