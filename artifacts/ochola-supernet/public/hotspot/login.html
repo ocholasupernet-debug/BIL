@@ -123,7 +123,7 @@
   <div style="max-width:44rem;margin:0 auto;position:relative" class="fade-up">
     <div style="display:inline-flex;align-items:center;gap:.5rem;border-radius:9999px;padding:.375rem 1rem;font-size:.75rem;font-weight:600;color:rgba(216,180,254,.8);margin-bottom:2rem;background:rgba(147,51,234,.12);border:1px solid rgba(147,51,234,.25)">
       <span class="dot-live dot-live-anim"></span>
-      Network Online · M-Pesa Payments Active
+      <span id="portalPaymentBadgeText" role="status" aria-live="polite">Checking online payment availability…</span>
     </div>
 
     <div style="display:flex;justify-content:center;margin-bottom:2rem">
@@ -185,15 +185,18 @@
   <div style="text-align:center;margin-bottom:2.5rem">
     <p style="font-size:.6875rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(192,38,211,.7);margin-bottom:.625rem">Our Packages</p>
     <h2 style="font-size:clamp(1.5rem,3vw,2rem);font-weight:800;letter-spacing:-.025em;color:white;margin-bottom:.625rem">Choose Your Plan</h2>
-    <p style="color:rgba(255,255,255,.4);font-size:.9375rem">All plans activate instantly after M-Pesa payment</p>
-    <button type="button" onclick="openTvModal()" style="margin-top:1rem;padding:.7rem 1.15rem;border-radius:.7rem;border:1px solid var(--portal-accent-border);background:var(--portal-accent-soft);color:white;font-size:.75rem;font-weight:800;letter-spacing:.03em;cursor:pointer">Connect to TV</button>
+    <p style="color:rgba(255,255,255,.4);font-size:.9375rem">Plans activate after your online payment is confirmed</p>
+    <button id="tvConnectButton" type="button" onclick="openTvModal()" disabled style="margin-top:1rem;padding:.7rem 1.15rem;border-radius:.7rem;border:1px solid var(--portal-accent-border);background:var(--portal-accent-soft);color:white;font-size:.75rem;font-weight:800;letter-spacing:.03em;cursor:not-allowed;opacity:.55">Checking payment availability…</button>
   </div>
   <div id="mpesaBanner" style="max-width:1200px;margin:0 auto 1.5rem">
     <div style="border-radius:.875rem;padding:.875rem 1.5rem;display:flex;align-items:center;gap:.875rem;background:linear-gradient(90deg,rgba(5,150,105,.15),rgba(6,182,212,.08));border:1px solid rgba(5,150,105,.25)">
       <div style="width:28px;height:28px;border-radius:.5rem;background:rgba(52,211,153,.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">
         <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="#34d399" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
       </div>
-      <span id="mpesaMessage" style="color:rgba(110,231,183,.9);font-size:.8375rem;font-weight:500">M-Pesa STK Push is active — click any plan to pay instantly and get connected</span>
+      <div style="display:grid;gap:.25rem">
+        <span id="mpesaStatusMessage" role="status" aria-live="polite" style="color:rgba(255,255,255,.7);font-size:.8375rem;font-weight:500">Checking the configured payment method…</span>
+        <span id="mpesaMessage" style="display:none;color:rgba(255,255,255,.6);font-size:.75rem;font-weight:400"></span>
+      </div>
     </div>
   </div>
   <div id="plansGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:1rem">
@@ -475,7 +478,8 @@ var COLORS=[
   {from:"#fb923c",to:"#c2410c",badge:"#7c2d12",glow:"#fb923c"},
 ];
 
- var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=true;
+ var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=false;
+ var PAYMENT_STATUS_LOADED=false, PAYMENT_METHOD_READY=false, PAYMENT_GATEWAY="";
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false;
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
@@ -511,6 +515,50 @@ function normalisePortalCardVisibility(value,legacy){
   return cards;
 }
 function portalCardEnabled(key){return PORTAL_CARD_VISIBILITY[key]!==false;}
+function isSupportedPaymentGateway(gateway){
+  return gateway==="mpesa_paybill"||gateway==="mpesa_till_push"||gateway==="bank_stk_push";
+}
+function canStartPaymentCheckout(){
+  return MPESA_PROMPT_ENABLED&&PAYMENT_STATUS_LOADED&&PAYMENT_METHOD_READY&&!PORTAL_PREVIEW_ONLY;
+}
+function paymentGatewayLabel(gateway){
+  if(gateway==="bank_stk_push")return "Bank STK Push";
+  if(gateway==="mpesa_till_push")return "M-Pesa Till";
+  return "M-Pesa PayBill";
+}
+function updatePaymentAvailability(){
+  var available=canStartPaymentCheckout();
+  var banner=document.getElementById("mpesaBanner");
+  var bannerMessage=document.getElementById("mpesaStatusMessage");
+  var badgeMessage=document.getElementById("portalPaymentBadgeText");
+  var showBanner=MPESA_PROMPT_ENABLED&&portalCardEnabled("paymentStatus");
+  var checking=MPESA_PROMPT_ENABLED&&!PAYMENT_STATUS_LOADED;
+  var statusMessage=checking
+    ?"Checking the configured payment method…"
+    :available
+      ?paymentGatewayLabel(PAYMENT_GATEWAY)+" is available — choose a package to pay"
+      :"Online payment is currently unavailable. Please contact the network administrator.";
+  if(banner)banner.style.display=showBanner?"":"none";
+  if(bannerMessage){
+    bannerMessage.textContent=statusMessage;
+    bannerMessage.style.color=available?"rgba(110,231,183,.9)":"rgba(255,255,255,.7)";
+  }
+  if(badgeMessage){
+    badgeMessage.textContent=checking
+      ?"Checking online payment availability…"
+      :available
+        ?"Network Online · "+paymentGatewayLabel(PAYMENT_GATEWAY)+" ready"
+        :"Network Online · Payments unavailable";
+  }
+  var tvButton=document.getElementById("tvConnectButton");
+  if(tvButton){
+    tvButton.disabled=!available;
+    tvButton.textContent=available?"Connect to TV":checking?"Checking payment availability…":"Online payment unavailable";
+    tvButton.style.cursor=available?"pointer":"not-allowed";
+    tvButton.style.opacity=available?"1":".55";
+  }
+  if(plansInitialised)renderPlans();
+}
 function applyPortalCardVisibility(){
   var targets=[
     ["header","portalHeader"],["hero","portalHero"],["announcement","portalAnnouncement"],
@@ -679,13 +727,15 @@ function normalisePlanList(value){
     };
   }).filter(function(p){return p.id>0&&p.name;});
 }
+/* Payment availability gates checkout, not whether customers can view packages. */
+function shouldHidePackageSection(maintenanceMode){
+  return Boolean(maintenanceMode)||!portalCardEnabled("packages");
+}
 function applyPortalConfig(data){
   if(!data||typeof data!=="object")return;
   PORTAL_CARD_VISIBILITY=normalisePortalCardVisibility(data.portalCards,data);
   applyPortalCardVisibility();
-  MPESA_PROMPT_ENABLED=data.mpesaPromptEnabled!==false;
-  var mpesaBanner=document.getElementById("mpesaBanner");
-  if(mpesaBanner)mpesaBanner.style.display=MPESA_PROMPT_ENABLED&&portalCardEnabled("paymentStatus")?"":"none";
+  MPESA_PROMPT_ENABLED=data.mpesaPromptEnabled===true;
   var colors=data.colors&&typeof data.colors==="object"?data.colors:{};
   var hexKeys=["bgColor","bgColor2","primaryColor","accentColor","cardColor","buttonColor","textColor","inputBgColor"];
   var cssNames={bgColor:"--portal-bg",bgColor2:"--portal-bg2",primaryColor:"--portal-accent",accentColor:"--portal-accent2",cardColor:"--portal-card",buttonColor:"--portal-button",textColor:"--portal-text",inputBgColor:"--portal-input"};
@@ -760,12 +810,16 @@ function applyPortalConfig(data){
     if(maintenance)announceText.style.background="rgba(245,158,11,.12)";
   }
   var plansSection=document.getElementById("plansSection");
-  if(plansSection&&(maintenance||!MPESA_PROMPT_ENABLED||!portalCardEnabled("packages")))plansSection.style.display="none";
+  if(plansSection&&shouldHidePackageSection(maintenance))plansSection.style.display="none";
   var voucherSection=document.getElementById("voucherSection");
   if(voucherSection&&(data.vouchersEnabled===false||!portalCardEnabled("voucher")))voucherSection.style.display="none";
   var paymentInstructions=typeof data.paymentInstructions==="string"?data.paymentInstructions.trim():"";
   PORTAL_PAYMENT_INSTRUCTIONS=paymentInstructions;
-  if(paymentInstructions)setPortalText("mpesaMessage",paymentInstructions);
+  var paymentMessage=document.getElementById("mpesaMessage");
+  if(paymentMessage){
+    paymentMessage.textContent=paymentInstructions;
+    paymentMessage.style.display=paymentInstructions?"":"none";
+  }
   if(paymentInstructions)setPortalText("paymentInstructionText",paymentInstructions);
   var terms=document.getElementById("portalTerms"),privacy=document.getElementById("portalPrivacy");
   if(terms&&typeof data.termsUrl==="string"&&/^https:\/\//i.test(data.termsUrl)){terms.style.display="";terms.href=data.termsUrl;document.getElementById("portalTermsDivider").style.display="";}
@@ -783,6 +837,7 @@ function applyPortalConfig(data){
   if(community&&testimonial&&data.testimonialsEnabled===true&&portalCardEnabled("testimonials")){testimonial.style.display="";setPortalText("testimonialText",String(data.testimonialText||""));}
   if(community&&faq&&data.faqEnabled===true&&portalCardEnabled("faq")){faq.style.display="";setPortalText("faqText",String(data.faqText||""));}
   if(community&&((testimonial&&testimonial.style.display!=="none")||(faq&&faq.style.display!=="none"))){community.style.display="";}
+  updatePaymentAvailability();
 }
 function applyPortalTypography(data){
   if(data&&typeof data.accentColor==="string"&&/^#[0-9a-f]{6}$/i.test(data.accentColor)){
@@ -812,6 +867,7 @@ function loadPortalTypography(done){
       served by the public API; reseller bundles do not include a local
       typography.json file. */
    applyPortalConfig(EMBEDDED_CONFIG);
+   loadPaymentStatus();
    var adminQuery=PORTAL_ADMIN_ID>0?"?adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"";
    var brandingUrl=PORTAL_API_BASE?apiUrl("/api/public/hotspot-branding"+adminQuery):"";
    var typographyUrl=PORTAL_API_BASE?apiUrl("/api/public/typography"+adminQuery):"";
@@ -842,6 +898,49 @@ function loadPortalTypography(done){
    });
   var timeout=new Promise(function(resolve){setTimeout(function(){resolve(null);},5000);});
   Promise.race([request,timeout]).then(function(){if(typeof done==="function")done();});
+}
+
+function loadPaymentStatus(){
+  PAYMENT_STATUS_LOADED=false;
+  PAYMENT_METHOD_READY=false;
+  PAYMENT_GATEWAY="";
+  updatePaymentAvailability();
+  if(PORTAL_PREVIEW_ONLY||!PORTAL_API_BASE||PORTAL_ADMIN_ID<1){
+    PAYMENT_STATUS_LOADED=true;
+    updatePaymentAvailability();
+    return Promise.resolve();
+  }
+  var query=["adminId="+encodeURIComponent(PORTAL_ADMIN_ID)];
+  if(PORTAL_ROUTER_ID>0)query.push("routerId="+encodeURIComponent(PORTAL_ROUTER_ID));
+  if(PORTAL_PORT_ID>0)query.push("portId="+encodeURIComponent(PORTAL_PORT_ID));
+  var url=apiUrl("/api/settings/mpesa?"+query.join("&"));
+  var timeoutId=0;
+  var timedOut=false;
+  var statusRequest=fetch(url,{cache:"no-store"}).then(function(response){
+    if(!response.ok)throw new Error("Payment availability could not be loaded.");
+    return response.json();
+  }).then(function(data){
+    if(timedOut)return;
+    var settings=data&&data.settings&&typeof data.settings==="object"?data.settings:{};
+    PAYMENT_GATEWAY=typeof settings.paymentGateway==="string"?settings.paymentGateway:"";
+    PAYMENT_METHOD_READY=data&&data.configured===true
+      &&settings.destinationConfigured===true
+      &&isSupportedPaymentGateway(PAYMENT_GATEWAY);
+  });
+  var timeout=new Promise(function(_resolve,reject){
+    timeoutId=window.setTimeout(function(){
+      timedOut=true;
+      reject(new Error("Payment availability check timed out."));
+    },5000);
+  });
+  return Promise.race([statusRequest,timeout]).catch(function(){
+    PAYMENT_METHOD_READY=false;
+    PAYMENT_GATEWAY="";
+  }).then(function(){
+    if(timeoutId)window.clearTimeout(timeoutId);
+    PAYMENT_STATUS_LOADED=true;
+    updatePaymentAvailability();
+  });
 }
 
  /* ── Load and keep hotspot plans fresh ── */
@@ -918,15 +1017,15 @@ function renderPlans(){
       '<span style="font-size:.8125rem;font-weight:600;color:'+c.from+'">Ksh</span>&nbsp;'+p.price+'</div>'+
       '<p style="font-size:.75rem;color:rgba(255,255,255,.5);margin-top:.625rem;font-weight:400">'+p.validity+' '+p.unit+' Unlimited</p>'+
       '</div>'+
-       '<button type="button" class="plan-connect-button" data-plan-index="'+i+'" style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:pointer;font-family:inherit;transition:opacity .15s" onmouseover="this.style.opacity=\'.88\'" onmouseout="this.style.opacity=\'1\'">'+
-      'Connect Now</button></div>';
+        '<button type="button" class="plan-connect-button" data-plan-index="'+i+'" '+(canStartPaymentCheckout()?'':'disabled aria-disabled="true"')+' style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:'+(canStartPaymentCheckout()?'pointer':'not-allowed')+';opacity:'+(canStartPaymentCheckout()?'1':'.55')+';font-family:inherit;transition:opacity .15s" onmouseover="if(!this.disabled)this.style.opacity=\'.88\'" onmouseout="if(!this.disabled)this.style.opacity=\'1\'">'+
+       (canStartPaymentCheckout()?'Connect Now':PAYMENT_STATUS_LOADED?'Online payment unavailable':'Checking payment…')+'</button></div>';
   }).join("");
    bindPlanButtons();
 }
 
 /* ── STK Modal ── */
 function openModal(i){
-  if(!MPESA_PROMPT_ENABLED)return;
+  if(!canStartPaymentCheckout())return;
   tvPurchase=false; tvDeviceName=""; tvDeviceRouterId=0;
   selectedPlan=PLANS[i]; stkState="idle"; stkPhone="";
   document.getElementById("modalPlanName").textContent=selectedPlan.name;
@@ -1106,7 +1205,7 @@ function portalPaymentRequest(path,payload,label){
 }
 
 function sendStk(){
-  if(!MPESA_PROMPT_ENABLED)return;
+  if(!canStartPaymentCheckout())return;
   var phone=document.getElementById("stkPhoneInput")?document.getElementById("stkPhoneInput").value:"";
   if(!phone.trim())return;
   if((!DEVICE_MAC&&!DEVICE_IP)||PORTAL_ADMIN_ID<1){stkError="The router could not identify this Wi-Fi session. Open the sign-in page from the connected Wi-Fi network and try again.";stkState="error";renderModal();return;}
@@ -1215,7 +1314,7 @@ function sendStk(){
      '</div>';
  }
  function openTvModal(){
-   if(!MPESA_PROMPT_ENABLED)return;
+   if(!canStartPaymentCheckout())return;
    tvPurchase=true; tvError=""; tvDeviceChoice=""; tvMacAddress=""; tvDeviceName=""; tvPlanId=PLANS[0]?String(PLANS[0].id):""; tvPhone=""; tvDeviceRouterId=0;
    document.getElementById("tvModal").style.display="flex";
    renderTvModal();

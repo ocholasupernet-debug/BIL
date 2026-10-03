@@ -20,3 +20,9 @@ Assigned-service previews must represent that exact service, unlike a generic br
 **Why:** A generic administrator plan listing and a customer-facing assigned-service listing have different visibility rules. Treating the former as a substitute made physical-port packages disappear from previews or risked displaying unrelated packages.
 
 **How to apply:** Carry the selected router and assigned port together through preview, export, and consent-gated service deployment. Any authenticated reseller preview fallback must remain restricted to the same router and port. Preserve custom asset selections rather than silently replacing their templates.
+
+Payment availability must disable checkout controls, not hide the package list. Hide packages only for maintenance or an explicit package-visibility setting.
+
+**Why:** The asynchronous branding configuration can arrive after the embedded package list renders; coupling package visibility to the M-Pesa prompt setting makes valid packages flash and then disappear.
+
+**How to apply:** Keep package-section visibility independent of payment readiness. Continue to fail closed for checkout until the scoped payment method is ready.

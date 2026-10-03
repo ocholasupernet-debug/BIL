@@ -23,6 +23,11 @@ on:
         required: false
         default: false
         type: boolean
+      portal_refresh_only:
+        description: "Run only the requested Hotspot portal refresh and skip all other one-time RouterOS actions"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: vps-deploy
@@ -42,6 +47,9 @@ jobs:
 
       - name: Test router-management VPN bootstrap decisions
         run: bash deploy/tests/bootstrap-router-management-vpn.test.sh
+
+      - name: Test scoped one-time RouterOS deployment actions
+        run: bash deploy/tests/router-one-shots.test.sh
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -128,7 +136,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -208,6 +216,7 @@ jobs:
             # install on the VPS. deploy.sh still fails explicitly if the
             # required workspace binaries are absent.
             DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP="${DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP:-false}" \
+            DEPLOY_PORTAL_REFRESH_ONLY="${DEPLOY_PORTAL_REFRESH_ONLY:-false}" \
             DEPLOY_FROM_ARCHIVE=1 \
             DEPLOY_SKIP_INSTALL=1 \
             DEPLOY_SKIP_BUILD=1 \
@@ -329,6 +338,7 @@ jobs:
           RECONCILE_RESELLER_INTERFACE: ${{ inputs.reconcile_reseller_interface }}
           INSPECT_RESELLER_PORT: ${{ inputs.inspect_reseller_port }}
           DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ inputs.skip_router_management_setup }}
+          DEPLOY_PORTAL_REFRESH_ONLY: ${{ inputs.portal_refresh_only }}
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
           WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN }}
           WHATSAPP_APP_SECRET: ${{ secrets.WHATSAPP_APP_SECRET }}

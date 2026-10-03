@@ -38,7 +38,10 @@ import {
   nextHotspotPortalTarget,
   usesGeneratedHotspotPortal,
 } from "@/lib/hotspot-portal-target";
-import { hotspotPortalApiOrigin } from "@/lib/hotspot-portal-origin";
+import {
+  hotspotApiOriginFromTenantContext,
+  resolveHotspotPortalApiOrigin,
+} from "@/lib/hotspot-portal-origin";
 import {
   AlertCircle, ArrowDownToLine, Check, ChevronDown, CircleHelp, Eye, FolderOpen,
   Image, Info, LayoutTemplate, Link2, Loader2, Mail, Palette, Phone,
@@ -259,10 +262,8 @@ async function embedPortalLogo(value: string): Promise<string> {
 
 function isValidPublicOrigin(value: string): boolean {
   try {
-    const url = new URL(value);
-    return url.protocol === "https:" &&
-      !!url.hostname &&
-      !/^(localhost|127\.|0\.0\.0\.0)/i.test(url.hostname);
+    hotspotApiOriginFromTenantContext(value);
+    return true;
   } catch {
     return false;
   }
@@ -478,9 +479,19 @@ export async function buildPortalHtml(
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
   const template = await response.text();
   const resolvedAppearance = await resolvePortalAppearance(domain, adminId);
-  const apiBase = scope.previewOnly === true
-    ? resolvedAppearance.apiBase
-    : hotspotPortalApiOrigin(settings.portalHostname, resolvedAppearance.apiBase, PUBLIC_BASE_DOMAIN);
+  // Keep a custom portal/API hostname only when its public health endpoint
+  // proves it serves this app. Otherwise use the tenant-resolved API origin.
+  const apiOrigin = scope.previewOnly === true
+    ? {
+        apiBase: hotspotApiOriginFromTenantContext(resolvedAppearance.apiBase),
+        source: "tenant_context" as const,
+      }
+    : await resolveHotspotPortalApiOrigin(
+        settings.portalHostname,
+        resolvedAppearance.apiBase,
+        PUBLIC_BASE_DOMAIN,
+      );
+  const apiBase = apiOrigin.apiBase;
   const appearance = {
     ...resolvedAppearance,
     apiBase,
@@ -1636,7 +1647,7 @@ export default function HotspotSettings() {
               <Field label="ISP name" help="Used in the page title, header, footer, and downloaded filename.">
                 <input className="hs-input" value={settings.ispName} maxLength={80} onChange={event => update("ispName", event.target.value)} placeholder="Your ISP name" />
               </Field>
-               <Field label="Customer portal hostname" help="Used by newly generated portal files. Point DNS to the shared application; HTTPS is provisioned after it resolves. Saving does not update files already on the router.">
+               <Field label="Customer portal hostname" help="Point DNS to the shared application; HTTPS is provisioned after it resolves. New exports use this host only if its API health check passes, otherwise they use the tenant API address. Saving does not update existing router files.">
                  <input className="hs-input" value={settings.portalHostname} maxLength={253} onChange={event => update("portalHostname", event.target.value)} placeholder="wifi.example.com" inputMode="url" />
                </Field>
               <Field label="Tagline" help="A short promise shown below the portal title.">

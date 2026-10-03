@@ -70,6 +70,7 @@ async function loadExportBuilder(role = "isp_admin") {
 function stagingSettings() {
   return {
     ispName: "Acme <script>alert('x')</script>",
+    portalHostname: "",
     freeTrial: "Enable",
     vouchers: "Yes",
     mpesaPrompt: "Enable",
