@@ -14,8 +14,8 @@ import {
   type SavedHotspotDevice,
 } from "@/lib/saved-hotspot-devices";
 import {
-  DEFAULT_HOTSPOT_LOGO_URL,
   DEFAULT_HOTSPOT_PORTAL_CARDS,
+  isDefaultPlatformPortalName,
   normalizeHotspotPortalCards,
   type HotspotPortalCardVisibility,
 } from "@/lib/hotspot-portal-cards";
@@ -286,6 +286,13 @@ const PLAN_GRADIENTS = [
   { bg: "linear-gradient(135deg, #0acffe 0%, #495aff 100%)", light: "#0acffe" },
 ];
 
+const GUEST_PLAN_GRADIENTS = [
+  { bg: "linear-gradient(135deg, #285b50 0%, #438863 100%)", light: "#285b50" },
+  { bg: "linear-gradient(135deg, #d9684c 0%, #e99a70 100%)", light: "#bd573d" },
+  { bg: "linear-gradient(135deg, #718b77 0%, #abc3a5 100%)", light: "#52705b" },
+  { bg: "linear-gradient(135deg, #bd7658 0%, #e1b28c 100%)", light: "#a75e43" },
+];
+
 function isDarajaGateway(paymentGateway: string): boolean {
   return paymentGateway === "mpesa_paybill"
     || paymentGateway === "mpesa_till_push"
@@ -358,12 +365,22 @@ function HotspotLoginView({
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
+  const configuredPortalName = portalBranding.ispName?.trim() ?? "";
+  const portalDisplayName = configuredPortalName
+    && !isDefaultPlatformPortalName(configuredPortalName)
+    ? configuredPortalName
+    : "Guest Wi-Fi";
+  const configuredLogoUrl = portalBranding.logoUrl?.trim() ?? "";
+  const portalLogoUrl = configuredLogoUrl
+    && !/ocholasupernet-logo\.png(?:$|[?#])/i.test(configuredLogoUrl)
+    ? configuredLogoUrl
+    : "";
   const portalBrand = {
     ...brand,
-    ispName: portalBranding.ispName || brand.ispName,
+    ispName: portalDisplayName,
     phone: portalBranding.supportPhone || brand.phone,
     supportEmail: portalBranding.supportEmail || brand.supportEmail,
-    domain: portalBranding.portalHostname || brand.domain,
+    domain: "",
   };
   const portalCards = portalBranding.portalCards ?? DEFAULT_HOTSPOT_PORTAL_CARDS;
   const [activeTab, setActiveTab] = useState<Tab>("plans");
@@ -2037,9 +2054,9 @@ function HotspotLoginView({
         {showTvSuccess && paymentMode === "tv" && accessReady && (
           <div className="hp-tv-success-screen" role="status" aria-live="polite">
             <div className="hp-tv-success-card">
-              <div className="hp-tv-watermark" aria-hidden="true">OCHOLASUPERNET</div>
+              <div className="hp-tv-watermark" aria-hidden="true">{portalDisplayName}</div>
               <div className="hp-tv-success-icon"><CheckCircle2 size={38} strokeWidth={1.8} /></div>
-              <p className="hp-tv-success-brand">OCHOLASUPERNET</p>
+              <p className="hp-tv-success-brand">{portalDisplayName}</p>
               <h1>You’re logged in.</h1>
               <p>{deviceName || "Your TV"} is connected to the hotspot.</p>
               {selectedPlan && <p>Package: <strong>{selectedPlan.name}</strong></p>}
@@ -2060,10 +2077,10 @@ function HotspotLoginView({
         {portalCards.header && (
           <header className="hp-header">
             <div className="hp-logo">
-              <img className="hp-logo-image" src={portalBranding.logoUrl || DEFAULT_HOTSPOT_LOGO_URL} alt={portalBrand.ispName} />
-              <div>
-                <div className="hp-logo-sub">{portalBrand.domain}</div>
-              </div>
+              {portalLogoUrl
+                ? <img className="hp-logo-image" src={portalLogoUrl} alt={`${portalDisplayName} logo`} />
+                : <div className="hp-brand-mark" aria-hidden="true"><Wifi size={21} strokeWidth={2.2} /></div>}
+              <div className="hp-brand-name">{portalDisplayName}</div>
             </div>
             <div className="hp-status">
               <span className="hp-status-dot" />
@@ -2073,7 +2090,7 @@ function HotspotLoginView({
         )}
 
         {/* Main */}
-        <main className="hp-main">
+        <main className={`hp-main${portalCards.hero ? " has-hero" : ""}`}>
           {/* Hero */}
           {portalCards.hero && (
             <div className="hp-hero">
@@ -2085,7 +2102,7 @@ function HotspotLoginView({
               <h1 className="hp-title">{troubleshootingOnly ? "Connection help" : "Your world, connected."}</h1>
               <p className="hp-subtitle">{troubleshootingOnly
                 ? "Check your package and router session, then retry the connection if needed."
-                : portalBranding.tagline || `Fast, reliable internet for your phone, home and TV — powered by ${portalBrand.ispName}.`}</p>
+                : portalBranding.tagline || "Fast, reliable Wi-Fi for the things you love."}</p>
               <div className="hp-badges">
                 <span className="hp-badge"><Shield size={12} /> Secure</span>
                 <span className="hp-badge"><Zap size={12} /> Instant</span>
@@ -2384,13 +2401,17 @@ function HotspotLoginView({
                       <Loader2 size={28} color="var(--isp-accent)" style={{ animation: "spin 1s linear infinite" }} />
                     </div>
                   ) : plans.length === 0 ? (
-                    <p style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", padding: "48px 0", fontSize: 14 }}>
+                    <p className="hp-empty-plans" style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", padding: "48px 0", fontSize: 14 }}>
                       No plans available at the moment.
                     </p>
                   ) : (
                     <div className={`hp-plans-grid${selectedPlan ? " has-expanded" : ""}`}>
                       {plans.map((plan, i) => {
-                        const grad = PLAN_GRADIENTS[i % PLAN_GRADIENTS.length];
+                        const planGradients = portalBranding.portalLayout === "classic"
+                          || (!portalBranding.portalLayout && HOTSPOT_RUNTIME_CONFIG.portalLayout === "classic")
+                          ? GUEST_PLAN_GRADIENTS
+                          : PLAN_GRADIENTS;
+                        const grad = planGradients[i % planGradients.length];
                         const isExpanded = selectedPlan?.id === plan.id;
                         const isCollapsed = selectedPlan && !isExpanded;
                         const dataLimitLabel = formatDataLimit(plan);
@@ -2987,10 +3008,10 @@ function HotspotLoginView({
           )}
 
           {portalCards.deviceIdentity && (
-            <div style={{ padding: "0 0 16px", textAlign: "center" }}>
+            <div className="hp-device-identity" style={{ padding: "0 0 16px", textAlign: "center" }}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 13px", borderRadius: 8, background: "rgba(255,255,255,0.035)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.45)", fontSize: 12 }}>
                 Your MAC address:
-                <strong style={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontWeight: 700 }}>
+                <strong className="hp-device-identity-value" style={{ color: "rgba(255,255,255,0.78)", fontFamily: "monospace", fontWeight: 700 }}>
                   {deviceMacAddress || "Resolved by router"}
                 </strong>
               </span>
@@ -2998,7 +3019,7 @@ function HotspotLoginView({
           )}
           {portalCards.footer && (
             <div className="hp-footer">
-              {new Date().getFullYear()} {portalBrand.ispName} &middot; {portalBrand.domain}
+              {new Date().getFullYear()} {portalDisplayName}
             </div>
           )}
             </>

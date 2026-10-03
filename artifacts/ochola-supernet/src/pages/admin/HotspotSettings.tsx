@@ -14,6 +14,7 @@ import {
   DEFAULT_HOTSPOT_LOGO_URL,
   DEFAULT_HOTSPOT_PORTAL_CARDS,
   HOTSPOT_PORTAL_CARD_OPTIONS,
+  isDefaultPlatformPortalName,
   normalizeHotspotPortalCards,
   type HotspotPortalCardKey,
   type HotspotPortalCardVisibility,
@@ -164,11 +165,11 @@ function draftFromAssignedHotspotPort(port: AssignedHotspotPort): AssignedHotspo
 }
 
 const DEFAULT_SETTINGS: HSettings = {
-  ispName: "OCHOLASUPERNET",
+  ispName: "Guest Wi-Fi",
   portalHostname: "",
   freeTrial: "Disable",
   vouchers: "Yes",
-  tagline: "Fast & Reliable Internet",
+  tagline: "Fast, reliable Wi-Fi for the things you love.",
   routerId: "",
   advertPos: "Bottom",
   enableAdvert: "Disable",
@@ -230,6 +231,7 @@ function safeText(value: string, fallback = ""): string {
 
 async function embedPortalLogo(value: string): Promise<string> {
   const source = value.trim() || DEFAULT_HOTSPOT_LOGO_URL;
+  if (!source || /ocholasupernet-logo\.png(?:$|[?#])/i.test(source)) return "";
   if (/^data:image\/(?:png|jpeg|webp);base64,/i.test(source)) return source;
 
   const response = await fetch(source, { cache: "force-cache" });
@@ -406,7 +408,9 @@ function makeExportConfig(
     previewOnly,
     apiBase,
     plans,
-    ispName: safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
+    ispName: isDefaultPlatformPortalName(safeText(settings.ispName, DEFAULT_SETTINGS.ispName))
+      ? "Guest Wi-Fi"
+      : safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
     tagline: safeText(settings.tagline, DEFAULT_SETTINGS.tagline),
     logoUrl: settings.logoUrl.trim() || DEFAULT_HOTSPOT_LOGO_URL,
     advertUrl: settings.advertUrl,
@@ -1945,7 +1949,9 @@ export default function HotspotSettings() {
                 <div className="hs-preview-screen" style={previewStyle}>
                   <div className="hs-mini-content">
                     <div className="hs-mini-logo">
-                      <img src={settings.logoUrl || "/ocholasupernet-logo.png"} alt="" />
+                      {settings.logoUrl
+                        ? <img src={settings.logoUrl} alt="" />
+                        : <Wifi size={22} aria-hidden="true" />}
                     </div>
                     <h3>{safeText(settings.ispName, "Your ISP")}</h3>
                     <p>{safeText(settings.tagline, "Fast and reliable internet")}</p>
