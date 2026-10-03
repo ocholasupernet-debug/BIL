@@ -18,6 +18,21 @@ test("accepts a complete generated portal with a public HTTPS API origin", () =>
   assert.equal(result.content.toString("utf8"), html());
 });
 
+test("accepts generated configuration followed by layout bootstrap code", () => {
+  const generated = html({
+    apiBase: "https://tenant.isplatty.org",
+    portalLayout: "split",
+    tenantMessage: "The characters }; inside text are not the end of the config.",
+  }).replace(
+    "</script>",
+    'document.documentElement.setAttribute("data-portal-layout",window.__HOTSPOT_CONFIG__.portalLayout);</script>',
+  );
+
+  const result = validateGeneratedHotspotPortal(generated);
+  assert.ok("content" in result);
+  assert.equal(result.content.toString("utf8"), generated);
+});
+
 test("rejects a portal missing RouterOS markers or generated configuration", () => {
   const missingMacro = validateGeneratedHotspotPortal(html().replace("$(link-orig)", ""));
   assert.deepEqual(missingMacro, {

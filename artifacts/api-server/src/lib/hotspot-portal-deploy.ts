@@ -11,6 +11,60 @@ const FORBIDDEN_PORTAL_CONFIG_KEYS = new Set([
   "privateKey",
 ]);
 
+export type EmbeddedHotspotConfig = {
+  config: Record<string, unknown>;
+  valueStart: number;
+  valueEnd: number;
+};
+
+export function findEmbeddedHotspotConfig(html: string): EmbeddedHotspotConfig | null {
+  const assignment = /window\.__HOTSPOT_CONFIG__\s*=/.exec(html);
+  if (!assignment) return null;
+
+  let cursor = assignment.index + assignment[0].length;
+  while (/\s/.test(html[cursor] ?? "")) cursor += 1;
+  if (html[cursor] !== "{") return null;
+
+  const valueStart = cursor;
+  let braceDepth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (; cursor < html.length; cursor += 1) {
+    const character = html[cursor];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === "\"") inString = false;
+      continue;
+    }
+
+    if (character === "\"") {
+      inString = true;
+    } else if (character === "{") {
+      braceDepth += 1;
+    } else if (character === "}") {
+      braceDepth -= 1;
+      if (braceDepth === 0) {
+        const valueEnd = cursor + 1;
+        try {
+          const parsed = JSON.parse(html.slice(valueStart, valueEnd)) as unknown;
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+          return {
+            config: parsed as Record<string, unknown>,
+            valueStart,
+            valueEnd,
+          };
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
 export function isPublicHttpsOrigin(value: unknown): boolean {
   try {
     const url = new URL(String(value));
@@ -40,14 +94,15 @@ export function validateGeneratedHotspotPortal(value: unknown): { content: Buffe
   for (const marker of ["$(link-login-only)", "$(link-orig)", "$(if error)", "$(endif)"]) {
     if (!value.includes(marker)) return { error: `Generated portal HTML is missing RouterOS marker ${marker}.` };
   }
-  const configMatch = value.match(/window\.__HOTSPOT_CONFIG__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/);
-  if (!configMatch) return { error: "Generated portal HTML is missing its portal configuration." };
-  let config: Record<string, unknown>;
-  try {
-    config = JSON.parse(configMatch[1]) as Record<string, unknown>;
-  } catch {
-    return { error: "Generated portal configuration is invalid." };
+  const embeddedConfig = findEmbeddedHotspotConfig(value);
+  if (!embeddedConfig) {
+    return {
+      error: value.includes("window.__HOTSPOT_CONFIG__")
+        ? "Generated portal configuration is invalid."
+        : "Generated portal HTML is missing its portal configuration.",
+    };
   }
+  const config = embeddedConfig.config;
   for (const key of Object.keys(config)) {
     if (FORBIDDEN_PORTAL_CONFIG_KEYS.has(key)) {
       return { error: "Generated portal configuration contains restricted credentials." };

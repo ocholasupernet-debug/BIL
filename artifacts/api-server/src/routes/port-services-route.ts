@@ -19,6 +19,7 @@ import {
   hasHotspotFileReplacementConsent,
   hasSuperAdminHotspotFileConsent,
 } from "../lib/hotspot-file-authorization.js";
+import { findEmbeddedHotspotConfig } from "../lib/hotspot-portal-deploy.js";
 import { logger } from "../lib/logger.js";
 import { sbDeleteStrict, sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
@@ -1302,9 +1303,14 @@ function injectHotspotRuntimeConfig(
   html: string,
   config: Record<string, unknown>,
 ): string {
-  const script = `<script>window.__HOTSPOT_CONFIG__=${JSON.stringify(config).replace(/</g, "\\u003c")};</script>`;
-  const existing = /<script\b[^>]*>\s*window\.__HOTSPOT_CONFIG__\s*=\s*(\{[\s\S]*?\})\s*;?\s*<\/script>/i;
-  if (existing.test(html)) return html.replace(existing, script);
+  const serializedConfig = JSON.stringify(config).replace(/</g, "\\u003c");
+  const embeddedConfig = findEmbeddedHotspotConfig(html);
+  if (embeddedConfig) {
+    return html.slice(0, embeddedConfig.valueStart)
+      + serializedConfig
+      + html.slice(embeddedConfig.valueEnd);
+  }
+  const script = `<script>window.__HOTSPOT_CONFIG__=${serializedConfig};</script>`;
   if (/<\/head\s*>/i.test(html)) return html.replace(/<\/head\s*>/i, `${script}\n</head>`);
   if (/<html\b[^>]*>/i.test(html)) return html.replace(/<html\b[^>]*>/i, (tag) => `${tag}\n${script}`);
   return `${script}\n${html}`;
@@ -1354,21 +1360,11 @@ async function buildScopedResellerPortalHtml(
     throw new Error("This NAS identity and VLAN assignment are already mapped to another service.");
   }
 
-  const embeddedConfigMatch = portalHtml.match(
-    /<script\b[^>]*>\s*window\.__HOTSPOT_CONFIG__\s*=\s*(\{[\s\S]*?\})\s*;?\s*<\/script>/i,
-  );
-  let embeddedConfig: Record<string, unknown> = {};
-  if (embeddedConfigMatch) {
-    try {
-      const parsed = JSON.parse(embeddedConfigMatch[1]) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("The portal configuration must be a JSON object.");
-      }
-      embeddedConfig = parsed as Record<string, unknown>;
-    } catch {
-      throw new Error("The reseller portal contains an invalid embedded configuration.");
-    }
+  const embeddedConfigMatch = findEmbeddedHotspotConfig(portalHtml);
+  if (!embeddedConfigMatch && /window\.__HOTSPOT_CONFIG__\s*=/.test(portalHtml)) {
+    throw new Error("The reseller portal contains an invalid embedded configuration.");
   }
+  const embeddedConfig = embeddedConfigMatch?.config ?? {};
 
   const config: Record<string, unknown> = {
     ...embeddedConfig,
