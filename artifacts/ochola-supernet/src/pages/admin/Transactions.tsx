@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { StatCard } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/badge";
-import { supabase, ADMIN_ID, type DbTransaction } from "@/lib/supabase";
+import { ADMIN_ID, getAdminApiToken, type DbTransaction } from "@/lib/supabase";
 import { Search, Download, Loader2 } from "lucide-react";
 import { fmtMoney } from "@/lib/utils";
 
@@ -15,11 +15,10 @@ type ImmutableRevenueSummary = {
 };
 
 async function fetchImmutableRevenueSummary(): Promise<ImmutableRevenueSummary> {
-  const token = (() => {
-    try { return localStorage.getItem("ochola_api_token") || ""; } catch { return ""; }
-  })();
+  const token = getAdminApiToken();
   const response = await fetch("/api/billing/revenue-summary", {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
+    cache: "no-store",
   });
   const data = await response.json() as ImmutableRevenueSummary & { error?: string };
   if (!response.ok) throw new Error(data.error ?? "Could not load immutable revenue totals.");
@@ -27,14 +26,16 @@ async function fetchImmutableRevenueSummary(): Promise<ImmutableRevenueSummary> 
 }
 
 async function fetchTransactions(): Promise<DbTransaction[]> {
-  const { data, error } = await supabase
-    .from("isp_transactions")
-    .select("*")
-    .eq("admin_id", ADMIN_ID)
-    .not("payment_method", "in", "(mpesa_registration,manual_registration,mpesa_platform_billing)")
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data ?? [];
+  const token = getAdminApiToken();
+  const response = await fetch("/api/transactions", {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    cache: "no-store",
+  });
+  const data = await response.json().catch(() => null) as (DbTransaction[] & { error?: string }) | null;
+  if (!response.ok || !Array.isArray(data)) {
+    throw new Error(data?.error ?? "Could not load transactions.");
+  }
+  return data;
 }
 
 function fmtDate(d: string) {
@@ -43,7 +44,12 @@ function fmtDate(d: string) {
 function fmtKsh(n: number) { return fmtMoney(n); }
 
 export default function Transactions() {
-  const { data: transactions = [], isLoading } = useQuery({
+  const {
+    data: transactions = [],
+    isLoading,
+    isError: transactionsFailed,
+    error: transactionsError,
+  } = useQuery({
     queryKey: ["isp_transactions", ADMIN_ID],
     queryFn: fetchTransactions,
     refetchInterval: 30_000,
@@ -146,6 +152,12 @@ export default function Transactions() {
                       </div>
                     </td>
                   </tr>
+                ) : transactionsFailed ? (
+                  <tr>
+                    <td colSpan={6} className="text-center py-12 text-destructive" role="alert">
+                      {transactionsError instanceof Error ? transactionsError.message : "Transactions could not be loaded."}
+                    </td>
+                  </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="text-center py-12 text-muted-foreground">
@@ -176,7 +188,7 @@ export default function Transactions() {
             </table>
           </div>
 
-          {!isLoading && (
+          {!isLoading && !transactionsFailed && (
             <div className="px-6 py-3 border-t border-border text-xs text-muted-foreground">
               Showing {filtered.length} of {transactions.length} transaction{transactions.length !== 1 ? "s" : ""}
             </div>

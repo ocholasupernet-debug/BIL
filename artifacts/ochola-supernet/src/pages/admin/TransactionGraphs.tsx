@@ -7,39 +7,30 @@ import {
   Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import { AdminLayout } from "@/components/layout/AdminLayout";
-import { supabase } from "@/lib/supabase";
-import type { DbTransaction } from "@/lib/supabase";
+import { ADMIN_ID, getAdminApiToken, type DbTransaction } from "@/lib/supabase";
 import { TrendingUp, TrendingDown, Minus, RefreshCw } from "lucide-react";
 
 /* ─── Types ─── */
 interface PlanRow  { id: number; router_id: number | null }
 interface RouterRow { id: number; name: string }
+interface TransactionOverview {
+  transactions: DbTransaction[];
+  plans: PlanRow[];
+  routers: RouterRow[];
+}
 
-/* ─── Data fetchers ─── */
-async function fetchTransactions(): Promise<DbTransaction[]> {
-  const { data, error } = await supabase
-    .from("isp_transactions")
-    .select("id,amount,status,plan_id,created_at,payment_method")
-    .not("payment_method", "in", "(mpesa_registration,manual_registration,mpesa_platform_billing)")
-    .order("created_at", { ascending: true });
-  if (error) throw error;
-  return (data ?? []) as DbTransaction[];
-}
-async function fetchPlans(): Promise<PlanRow[]> {
-  const { data, error } = await supabase
-    .from("isp_plans")
-    .select("id,router_id")
-    .is("port_id", null);
-  if (error) throw error;
-  return (data ?? []) as PlanRow[];
-}
-async function fetchRouters(): Promise<RouterRow[]> {
-  const { data, error } = await supabase
-    .from("isp_routers")
-    .select("id,name,status")
-    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
-  if (error) throw error;
-  return (data ?? []) as RouterRow[];
+/* ─── Authenticated, account-scoped data fetcher ─── */
+async function fetchTransactionOverview(): Promise<TransactionOverview> {
+  const token = getAdminApiToken();
+  const response = await fetch("/api/transactions/overview", {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    cache: "no-store",
+  });
+  const data = await response.json().catch(() => null) as (TransactionOverview & { error?: string }) | null;
+  if (!response.ok || !data) {
+    throw new Error(data?.error ?? "Could not load the transaction overview.");
+  }
+  return data;
 }
 
 /* ─── Date helpers ─── */
@@ -136,13 +127,14 @@ function ChartTooltip({ active, payload, label }: {
 export default function TransactionGraphs() {
   const now = new Date();
 
-  const { data: txns = [], isLoading: loadingTxns, refetch } = useQuery({
-    queryKey: ["txn_graphs"],
-    queryFn: fetchTransactions,
+  const { data: overview, isLoading: loadingTxns, isError, error, refetch } = useQuery({
+    queryKey: ["txn_graphs", ADMIN_ID],
+    queryFn: fetchTransactionOverview,
     refetchInterval: 60_000,
   });
-  const { data: plans = [] } = useQuery({ queryKey: ["plans_slim"], queryFn: fetchPlans });
-  const { data: routers = [] } = useQuery({ queryKey: ["routers_slim"], queryFn: fetchRouters });
+  const txns = overview?.transactions ?? [];
+  const plans = overview?.plans ?? [];
+  const routers = overview?.routers ?? [];
 
   /* Use only completed transactions for revenue numbers */
   const completed = useMemo(() =>
@@ -271,6 +263,10 @@ export default function TransactionGraphs() {
 
         {loadingTxns ? (
           <div className="telemetry-loading">Loading transactions…</div>
+        ) : isError ? (
+          <div className="telemetry-loading" role="alert">
+            {error instanceof Error ? error.message : "The transaction overview could not be loaded."}
+          </div>
         ) : (
           <>
             {/* Comparison cards */}
