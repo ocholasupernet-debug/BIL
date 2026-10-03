@@ -14,6 +14,7 @@ import {
   DEFAULT_HOTSPOT_LOGO_URL,
   DEFAULT_HOTSPOT_PORTAL_CARDS,
   HOTSPOT_PORTAL_CARD_OPTIONS,
+  isDefaultPlatformPortalName,
   normalizeHotspotPortalCards,
   type HotspotPortalCardKey,
   type HotspotPortalCardVisibility,
@@ -169,11 +170,11 @@ function draftFromAssignedHotspotPort(port: AssignedHotspotPort): AssignedHotspo
 }
 
 const DEFAULT_SETTINGS: HSettings = {
-  ispName: "OCHOLASUPERNET",
+  ispName: "Guest Wi-Fi",
   portalHostname: "",
   freeTrial: "Disable",
   vouchers: "Yes",
-  tagline: "Fast & Reliable Internet",
+  tagline: "Fast, reliable Wi-Fi for the things you love.",
   routerId: "",
   advertPos: "Bottom",
   enableAdvert: "Disable",
@@ -235,6 +236,7 @@ function safeText(value: string, fallback = ""): string {
 
 async function embedPortalLogo(value: string): Promise<string> {
   const source = value.trim() || DEFAULT_HOTSPOT_LOGO_URL;
+  if (!source || /ocholasupernet-logo\.png(?:$|[?#])/i.test(source)) return "";
   if (/^data:image\/(?:png|jpeg|webp);base64,/i.test(source)) return source;
 
   const response = await fetch(source, { cache: "force-cache" });
@@ -411,7 +413,9 @@ function makeExportConfig(
     previewOnly,
     apiBase,
     plans,
-    ispName: safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
+    ispName: isDefaultPlatformPortalName(safeText(settings.ispName, DEFAULT_SETTINGS.ispName))
+      ? "Guest Wi-Fi"
+      : safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
     tagline: safeText(settings.tagline, DEFAULT_SETTINGS.tagline),
     logoUrl: settings.logoUrl.trim() || DEFAULT_HOTSPOT_LOGO_URL,
     advertUrl: settings.advertUrl,
@@ -1105,7 +1109,7 @@ export default function HotspotSettings() {
   const saveAssignedPort = async (port: AssignedHotspotPort) => {
     const draft = portDrafts[port.id];
     if (!draft) return false;
-    const allowHotspotReplace = draft.hotspotEnabled
+    const allowHotspotReplace = isSuperAdmin() && draft.hotspotEnabled
       && window.confirm(
         "Confirm replacing existing Hotspot portal files for this assigned service? Cancel keeps existing files unchanged while still allowing missing files to be added.",
       );
@@ -1271,7 +1275,9 @@ export default function HotspotSettings() {
       let noticeText = "Hotspot settings saved on this admin workspace.";
 
        const canRefreshPortal = Number.isSafeInteger(routerId) && routerId > 0 && Boolean(adminId);
-       if (canRefreshPortal && !window.confirm(
+       if (canRefreshPortal && !isSuperAdmin()) {
+         noticeText = "Settings saved. Existing router portal files were left unchanged; a Super Admin must approve their replacement.";
+       } else if (canRefreshPortal && !window.confirm(
          "Saving these settings will replace the existing login.html and rlogin.html files on the selected router. Continue?",
        )) {
          noticeText = "Settings saved. Router portal files were left unchanged.";
@@ -1402,7 +1408,7 @@ export default function HotspotSettings() {
       return;
     }
     if (!window.confirm(
-        "Deploy the current branded portal to this router? The server will transfer login.html and rlogin.html. If either file already exists, you will be asked before it is replaced.",
+        "Deploy the current branded portal to this router? The server will transfer login.html and rlogin.html. Replacing existing files requires Super Admin approval.",
     )) return;
 
     setDeploying(true);
@@ -1460,6 +1466,13 @@ export default function HotspotSettings() {
       let result = await deploy(false);
       if (result.response.status === 409 && result.data.existingFile) {
         const existing = result.data.existingFile;
+        if (!isSuperAdmin()) {
+          setNotice({
+            type: "info",
+            text: `Existing ${existing.name} was left unchanged. A Super Admin must approve its replacement.`,
+          });
+          return;
+        }
         if (!window.confirm(
           `Replace the existing ${existing.name} (${existing.size} bytes) on the router?`,
         )) {
@@ -2018,7 +2031,9 @@ export default function HotspotSettings() {
                 <div className="hs-preview-screen" style={previewStyle}>
                   <div className="hs-mini-content">
                     <div className="hs-mini-logo">
-                      <img src={settings.logoUrl || "/ocholasupernet-logo.png"} alt="" />
+                      {settings.logoUrl
+                        ? <img src={settings.logoUrl} alt="" />
+                        : <Wifi size={22} aria-hidden="true" />}
                     </div>
                     <h3>{safeText(settings.ispName, "Your ISP")}</h3>
                     <p>{safeText(settings.tagline, "Fast and reliable internet")}</p>

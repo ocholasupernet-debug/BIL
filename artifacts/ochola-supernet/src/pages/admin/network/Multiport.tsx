@@ -330,7 +330,7 @@ export default function Multiport() {
       setError("Choose a router and physical port first.");
       return;
     }
-    const allowHotspotReplace = draft.hotspotEnabled
+    const allowHotspotReplace = isSuperAdmin() && draft.hotspotEnabled
       && window.confirm(
         "Confirm replacing existing Hotspot portal files during this deployment? Cancel keeps existing files unchanged while still allowing missing files to be added.",
       );
@@ -396,7 +396,7 @@ export default function Multiport() {
     }
     setError("");
     setSuccess("");
-    const allowHotspotReplace = selectedAssignment.hotspot_enabled
+    const allowHotspotReplace = isSuperAdmin() && selectedAssignment.hotspot_enabled
       && window.confirm(
         "Confirm replacing existing Hotspot portal files during this deployment? Cancel keeps existing files unchanged while still allowing missing files to be added.",
       );

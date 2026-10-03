@@ -85,7 +85,7 @@ const router: IRouter = Router();
 function requireHotspotFileReplacementConsent(req: Request, res: Response): boolean {
   if (hasHotspotFileReplacementConsent(req.authUser, req.body?.portalFileReplacementConsent)) return true;
   res.status(403).json({
-    error: "Replacing approved Hotspot files requires explicit administrator confirmation.",
+    error: "Replacing approved Hotspot files requires explicit Super Admin approval.",
   });
   return false;
 }

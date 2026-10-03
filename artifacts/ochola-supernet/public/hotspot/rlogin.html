@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="refresh" content="0;url=$(link-login-only)">
-  <title>OcholaSupernet — Hotspot Portal</title>
+  <title>Guest Wi-Fi — Hotspot Portal</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -13,28 +13,28 @@
       display: grid;
       place-items: center;
       padding: 24px;
-      color: #fff;
-      background: radial-gradient(circle at top, #35104e 0%, #0d0415 62%);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #183b39;
+      background: radial-gradient(ellipse at 50% 0%, #dcebe2 0%, transparent 58%), #f4f4ed;
+      font-family: "DM Sans", "Trebuchet MS", sans-serif;
     }
     .card {
       width: min(100%, 380px);
-      padding: 32px;
-      border: 1px solid rgba(255,255,255,.12);
+      padding: 36px;
+      border: 1px solid #dfe5dc;
       border-radius: 22px;
-      background: rgba(26,15,46,.92);
-      box-shadow: 0 24px 60px rgba(0,0,0,.45);
+      background: rgba(255,255,255,.92);
+      box-shadow: 0 24px 60px rgba(33,67,60,.12);
     }
     .brand { margin: 0 0 8px; font-size: 1.5rem; font-weight: 800; }
-    .hint { margin: 0 0 24px; color: rgba(255,255,255,.62); }
+    .hint { margin: 0 0 24px; color: #647773; }
     label { display: block; margin: 16px 0 7px; font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
     input {
       width: 100%;
       padding: 13px 14px;
-      border: 1px solid rgba(255,255,255,.14);
+      border: 1px solid #d8e1d9;
       border-radius: 10px;
-      color: #fff;
-      background: rgba(255,255,255,.06);
+      color: #183b39;
+      background: #f8f9f5;
       font: inherit;
     }
     button {
@@ -44,7 +44,7 @@
       border: 0;
       border-radius: 10px;
       color: #fff;
-      background: linear-gradient(135deg, #d96835, #9e3f1f);
+      background: #d9684c;
       font: inherit;
       font-weight: 800;
       cursor: pointer;
@@ -53,9 +53,9 @@
 </head>
 <body>
   <main class="card">
-    <p class="brand">OcholaSupernet</p>
+    <p class="brand">Guest Wi-Fi</p>
     <p class="hint">Opening the payment portal…</p>
-    <a href="$(link-login-only)" style="display:block;margin-top:24px;text-align:center;color:#fff;text-decoration:none;font-weight:800">Continue</a>
+    <a href="$(link-login-only)" style="display:block;margin-top:24px;text-align:center;color:#285b50;text-decoration:none;font-weight:800">Continue</a>
   </main>
 </body>
 </html>

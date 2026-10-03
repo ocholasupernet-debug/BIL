@@ -1,4 +1,11 @@
-export const DEFAULT_HOTSPOT_LOGO_URL = "/ocholasupernet-logo.png";
+// Empty means the portal should use its neutral built-in Guest Wi-Fi mark.
+// A tenant logo is only shown when that tenant has explicitly configured one.
+export const DEFAULT_HOTSPOT_LOGO_URL = "";
+
+export function isDefaultPlatformPortalName(value: unknown): boolean {
+  return typeof value === "string"
+    && value.trim().toLowerCase().replace(/[^a-z0-9]/g, "") === "ocholasupernet";
+}
 
 export const HOTSPOT_PORTAL_CARD_OPTIONS = [
   { key: "header", label: "Brand header", description: "ISP name, logo, and header contact." },

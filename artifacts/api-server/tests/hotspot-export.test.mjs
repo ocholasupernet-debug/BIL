@@ -51,6 +51,7 @@ async function loadExportBuilder(role = "isp_admin") {
               export function getAdminApiToken() { return ""; }
               export function getAdminRole() { return ${JSON.stringify(role)}; }
               export function getSelectedTenantId() { return 7; }
+              export function isSuperAdmin() { return ${JSON.stringify(role === "superadmin")}; }
               export function isLoggedIn() { return false; }
               export const supabase = { from() { throw new Error("supabase should not be called by HTML export"); } };
             `,

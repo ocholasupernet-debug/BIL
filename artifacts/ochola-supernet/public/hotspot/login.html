@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-portal-layout="classic">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OcholaSupernet — Hotspot Portal</title>
+  <title>Guest Wi-Fi — Hotspot Portal</title>
   <!-- RouterOS tenant title token is kept for the scoped portal exporter. -->
   <!-- $(login-title) -->
   <script src="/hotspot/md5.js"></script>
@@ -101,7 +101,7 @@
         <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
       </div>
       <div>
-        <p id="portalNameHeader" style="font-size:.9375rem;font-weight:800;letter-spacing:-.02em;color:white;line-height:1.1">OcholaSupernet</p>
+        <p id="portalNameHeader" style="font-size:.9375rem;font-weight:800;letter-spacing:-.02em;color:white;line-height:1.1">Guest Wi-Fi</p>
         <p style="font-size:.6875rem;color:rgba(216,180,254,.55);font-weight:500;letter-spacing:.04em">Hotspot Portal</p>
       </div>
     </div>
@@ -355,7 +355,7 @@
       <div style="display:flex;flex-direction:column;gap:1.125rem">
         <div>
           <label class="lbl" style="color:rgba(52,211,153,.8)">M-Pesa Confirmation SMS</label>
-          <textarea id="mpesaMsg" rows="4" placeholder="Paste your full M-Pesa SMS — e.g. QHJ3X1Y3ZA Confirmed. Ksh20.00 paid to OCHOLASUPERNET…" class="inp inp-green"></textarea>
+          <textarea id="mpesaMsg" rows="4" placeholder="Paste your M-Pesa confirmation message" class="inp inp-green"></textarea>
           <div id="mpesaMsgError" style="display:none;margin-top:.625rem;padding:.7rem .85rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>
         </div>
         <button onclick="submitMpesa()" class="btn btn-green btn-full" style="margin-top:.25rem">
@@ -408,7 +408,7 @@
     <div style="width:28px;height:28px;border-radius:.5rem;background:linear-gradient(135deg,#a855f7,#7c3aed);display:flex;align-items:center;justify-content:center">
       <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
     </div>
-     <span id="portalNameFooter" style="color:rgba(255,255,255,.6);font-size:.9375rem;font-weight:700;letter-spacing:-.01em">OcholaSupernet</span>
+     <span id="portalNameFooter" style="color:rgba(255,255,255,.6);font-size:.9375rem;font-weight:700;letter-spacing:-.01em">Guest Wi-Fi</span>
   </div>
   <div style="display:flex;align-items:center;justify-content:center;gap:1.25rem;flex-wrap:wrap;margin-bottom:.625rem">
      <a id="portalFooterPhone" href="#" style="display:none;color:rgba(255,255,255,.35);font-size:.8125rem;text-decoration:none;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.7)'" onmouseout="this.style.color='rgba(255,255,255,.35)'"></a>
@@ -421,7 +421,7 @@
      <span id="portalPrivacyDivider" style="display:none;color:rgba(255,255,255,.15)">·</span>
     <a href="$(link-status)" style="color:rgba(255,255,255,.35);font-size:.8125rem;text-decoration:none;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.7)'" onmouseout="this.style.color='rgba(255,255,255,.35)'">My Session</a>
   </div>
-  <p style="color:rgba(255,255,255,.2);font-size:.75rem">© 2026 OcholaSupernet. Reliable Internet, Always.</p>
+  <p style="color:rgba(255,255,255,.2);font-size:.75rem">© 2026 Guest Wi-Fi. Internet access for your stay.</p>
 </footer>
 
 <!-- STK Push Modal -->
@@ -710,7 +710,9 @@ function applyPortalConfig(data){
    PORTAL_PREVIEW_ONLY=data.previewOnly===true;
   var configuredPlans=normalisePlanList(data.plans);
   if(configuredPlans.length)EMBEDDED_PLANS=configuredPlans;
-  var name=typeof data.ispName==="string"&&data.ispName.trim()?data.ispName.trim():"OcholaSupernet";
+   var configuredName=typeof data.ispName==="string"?data.ispName.trim():"";
+   var isPlatformName=configuredName.toLowerCase().replace(/[^a-z0-9]/g,"")==="ocholasupernet";
+   var name=configuredName&&!isPlatformName?configuredName:"Guest Wi-Fi";
   setPortalText("portalNameHeader",name);setPortalText("portalNameFooter",name);
   setPortalText("portalHeroTitle","Connect with "+name);
   setPortalText("portalTagline",typeof data.tagline==="string"?data.tagline:"");
@@ -734,7 +736,7 @@ function applyPortalConfig(data){
   var wa=document.querySelector(".wa-btn");
   var waNumber=typeof data.whatsappNumber==="string"?data.whatsappNumber.replace(/\D/g,""):"";
   if(wa){wa.style.display=waNumber&&portalCardEnabled("whatsapp")?"flex":"none";if(waNumber)wa.setAttribute("href","https://wa.me/"+waNumber);}
-  var logo=typeof data.logoUrl==="string"?data.logoUrl:"";
+   var logo=typeof data.logoUrl==="string"&&!/ocholasupernet-logo\.png(?:$|[?#])/i.test(data.logoUrl)?data.logoUrl:"";
   var logoIcon=document.getElementById("portalLogoIcon");
   if(logoIcon&&logo){
     var image=document.createElement("img");image.src=logo;image.alt=name+" logo";image.style.cssText="width:100%;height:100%;object-fit:contain";

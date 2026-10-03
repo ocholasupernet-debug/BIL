@@ -5,10 +5,18 @@ import {
   hasSuperAdminHotspotFileConsent,
 } from "./hotspot-file-authorization.js";
 
-test("tenant administrators can explicitly approve approved Hotspot file replacement", () => {
-  assert.equal(hasHotspotFileReplacementConsent({ type: "a", uid: "42" }, true), true);
+test("only a Super Admin can explicitly approve approved Hotspot file replacement", () => {
+  assert.equal(hasHotspotFileReplacementConsent({ type: "a", uid: "42" }, true), false);
   assert.equal(hasHotspotFileReplacementConsent({ type: "a", uid: "superadmin" }, true), true);
   assert.equal(hasHotspotFileReplacementConsent({ type: "a", uid: "42" }, false), false);
+  assert.equal(
+    hasHotspotFileReplacementConsent({
+      type: "a",
+      uid: "42",
+      impersonationSessionId: "active-session",
+    }, true),
+    true,
+  );
   assert.equal(hasHotspotFileReplacementConsent({ type: "c", uid: "42" }, true), false);
   assert.equal(hasHotspotFileReplacementConsent(undefined, true), false);
 });

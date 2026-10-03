@@ -105,3 +105,4 @@
 - [Canvas action validation](canvas-action-validation.md) — Keep iframe update actions literal, cap suggestion labels at 60 characters, and attach three suggestions when marking design frames live.
 - [Tenant-facing role copy](tenant-facing-role-copy.md) — Keep platform-role disclosures out of ISP/reseller-facing copy while preserving internal authorization and privileged-only surfaces.
 - [Password minimum policy](password-minimum-policy.md) — Require six characters when setting passwords; preserve stronger minima and legacy login/sync compatibility.
+- [Guest portal brand separation](guest-portal-brand-separation.md) — Keep customer hotspot access visually independent from the ISP billing product while retaining explicit tenant branding.

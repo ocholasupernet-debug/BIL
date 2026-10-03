@@ -8,7 +8,7 @@ export function hasHotspotFileReplacementConsent(
   actor: HotspotFileAuthorizationActor | undefined,
   consent: unknown,
 ): boolean {
-  return actor?.type === "a" && consent === true;
+  return hasSuperAdminHotspotFileConsent(actor, consent);
 }
 
 export function hasSuperAdminHotspotFileConsent(
