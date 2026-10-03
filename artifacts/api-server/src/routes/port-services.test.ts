@@ -68,6 +68,27 @@ test("a port service gets isolated Hotspot and PPPoE resources", () => {
   assert.doesNotMatch(script, /interface=ether2 =profile=HS_ether2/);
 });
 
+test("custom portal hostnames are included in both physical-port and VLAN walled gardens", () => {
+  const physicalCommands = buildDualServiceCommands(
+    port,
+    "flash/hotspot/hs_ether2",
+    null,
+    "10.8.5.2",
+    { portalHostnames: ["ocholasupernet.com"] },
+  );
+  const vlanCommands = buildDualServiceCommands(
+    { ...port, handoff_mode: "vlan_services", vlan_tag: "210", bridge_name: "isp-bridge" },
+    "flash/hotspot/ochola_RS9_VLAN210",
+    null,
+    "10.8.5.2",
+    { portalHostnames: ["ocholasupernet.com"] },
+  );
+  for (const commands of [physicalCommands, vlanCommands]) {
+    const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
+    assert.match(script, /dst-host=ocholasupernet\.com/);
+  }
+});
+
 test("port service profiles accept independent DNS names and allow the Hotspot name", () => {
   const commands = buildDualServiceCommands(
     port,

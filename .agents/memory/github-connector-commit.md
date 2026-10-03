@@ -20,3 +20,9 @@ A GitHub Data API release can create a commit with a new SHA while preserving th
 **Why:** A full tree match does not mean the remote commit history matches the local branch, and assuming otherwise can cause a later push to diverge. A missing Web Crypto global can also break a tree-check after successful read-only API calls.
 
 **How to apply:** Compare the resulting Git tree SHA to the local `HEAD` tree SHA to verify exact content; after an API push, treat the returned remote commit SHA as authoritative. If an inventory digest is needed, import `createHash` from `node:crypto` inside the impure function.
+
+A temporary index seeded from the remote base can omit new local files under ignored directories because they are untracked relative to that base, even when the local branch diff includes them.
+
+**Why:** `git add -A` skips ignored paths absent from the remote-base index, producing an incomplete expected tree and a misleading tree-SHA mismatch.
+
+**How to apply:** When reconstructing a release tree from a remote base, force-add changed paths that are ignored in that context, then regenerate and compare the complete recursive leaf manifest before committing.

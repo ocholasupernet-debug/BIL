@@ -36,6 +36,15 @@ const siblingServicePort = {
   vlan_tag: "144",
   interface_name: "ether5",
 };
+const ispOwnedServicePort = {
+  ...servicePort,
+  id: 45,
+  assigned_reseller_id: null,
+  reseller_id: null,
+  handoff_mode: "services",
+  vlan_tag: null,
+  interface_name: "ether2",
+};
 
 const assignedPlan = {
   id: 501,
@@ -72,6 +81,20 @@ const siblingPlan = {
   router_id: 31,
   port_id: 44,
   owner_reseller_id: 20,
+};
+const ispOwnedPortPlan = {
+  ...assignedPlan,
+  id: 503,
+  name: "ISP port package",
+  port_id: 45,
+  owner_reseller_id: null,
+};
+const otherRouterPortPlan = {
+  ...ispOwnedPortPlan,
+  id: 504,
+  name: "Other router package",
+  router_id: 32,
+  port_id: 46,
 };
 
 const siblingTransaction = {
@@ -169,7 +192,7 @@ function matches(row: Record<string, unknown>, query: URLSearchParams): boolean 
 
 test("signed reseller portal requests stay within their assigned service", async (t) => {
   const [
-    { generatePaymentIntent, resolveVlanHotspotPortalRequest },
+    { generateAdminSessionToken, generatePaymentIntent, resolveVlanHotspotPortalRequest },
     { default: customersRouter },
     {
       default: mpesaRouter,
@@ -285,7 +308,7 @@ test("signed reseller portal requests stay within their assigned service", async
 
     let rows: Record<string, unknown>[] = [];
     if (table === "isp_reseller_ports") {
-      rows = [servicePort, siblingServicePort].filter(row => matches(row, query));
+      rows = [servicePort, siblingServicePort, ispOwnedServicePort].filter(row => matches(row, query));
     } else if (table === "isp_admins") {
       const admins = [
         { id: 7, parent_id: null, role: "isp_admin", is_active: true, name: "Parent ISP", subdomain: "parent-isp", font_family: "DM Sans", font_style: "normal", font_weight: 500, font_size: 18, payment_gateway: "mpesa_till_push", payment_gateway_config: {}, payment_collection_mode: "separate", payment_service_config: {} },
@@ -304,7 +327,7 @@ test("signed reseller portal requests stay within their assigned service", async
         router_secret: "router-test-secret",
       }] : []).filter(row => matches(row, query));
     } else if (table === "isp_plans") {
-      rows = [assignedPlan, siblingPlan].filter(row => matches(row, query));
+      rows = [assignedPlan, siblingPlan, ispOwnedPortPlan, otherRouterPortPlan].filter(row => matches(row, query));
     } else if (table === "isp_transactions") {
       rows = (legacyCheckout ? [
         { id: 701, admin_id: 23, customer_id: null, plan_id: null, reference: "legacy-checkout", status: "paid", payment_method: "mpesa" },
@@ -338,11 +361,13 @@ test("signed reseller portal requests stay within their assigned service", async
     method?: string;
     body?: Record<string, unknown>;
     token?: string | null;
+    adminToken?: string;
     nasIdentifier?: string;
     serverName?: string;
   } = {}) => {
     const headers = new Headers();
     if (options.token !== null) headers.set("X-Hotspot-Portal-Context", options.token ?? scopeToken);
+    if (options.adminToken) headers.set("Authorization", `Bearer ${options.adminToken}`);
     if (options.nasIdentifier !== undefined || options.token !== null) {
       headers.set("X-Hotspot-NAS-Identifier", options.nasIdentifier ?? servicePort.nas_identifier);
     }
@@ -441,7 +466,38 @@ test("signed reseller portal requests stay within their assigned service", async
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   });
 
+  await t.test("customer Hotspot lookup without router scope is an error, not an empty plan list", async () => {
+    clearRequests();
+    const response = await request(
+      "/api/plans?adminId=7&type=hotspot&activeOnly=true&purchasableOnly=true",
+      { token: null },
+    );
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      ok: false,
+      error: "The Hotspot portal is missing its router or service scope.",
+    });
+    assert.equal(dbRequests.some(row => row.table === "isp_plans"), false);
+    assertNoRouterOrWrites();
+  });
+
+  await t.test("valid router scope with no eligible plans remains an authoritative empty list", async () => {
+    clearRequests();
+    const response = await request(
+      "/api/plans?adminId=7&routerId=999&type=hotspot&activeOnly=true&purchasableOnly=true",
+      { token: null },
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), []);
+    assert.ok(dbRequests.some(row => row.table === "isp_plans"
+      && row.rawQuery.includes("router_id=eq.999")
+      && row.rawQuery.includes("port_id=is.null")
+      && row.rawQuery.includes("is_active=is.true")
+      && row.rawQuery.includes("client_can_purchase=is.true")));
+  });
+
   await t.test("tampered scopes and conflicting caller IDs stop before route handlers", async () => {
+    clearRequests();
     const [encoded, signature] = scopeToken.split(".");
     const tampered = `${encoded}.${signature.slice(0, -1)}${signature.endsWith("0") ? "1" : "0"}`;
     const invalid = await request("/api/plans", { token: tampered });
@@ -516,6 +572,58 @@ test("signed reseller portal requests stay within their assigned service", async
       && row.rawQuery.includes("router_id=eq.31")
       && row.rawQuery.includes("port_id=eq.43")
       && row.rawQuery.includes("owner_reseller_id=eq.19")));
+  });
+
+  await t.test("ISP hotspot preview context includes same-router port packages only", async () => {
+    includeRouterFixture = true;
+    clearRequests();
+    try {
+      const response = await request("/api/plans/admin-context?hotspotPreview=true&routerId=31", {
+        token: null,
+        adminToken: generateAdminSessionToken("7", 1),
+      });
+      assert.equal(response.status, 200, await response.clone().text());
+      const body = await response.json() as { plans: Array<{ id: number }> };
+      assert.deepEqual(body.plans.map(plan => plan.id), [ispOwnedPortPlan.id]);
+      assert.ok(dbRequests.some(row => row.table === "isp_plans"
+        && row.rawQuery.includes("admin_id=eq.7")
+        && row.rawQuery.includes("owner_reseller_id=is.null")));
+    } finally {
+      includeRouterFixture = false;
+    }
+  });
+
+  await t.test("regular ISP admin context keeps its existing plan scope", async () => {
+    clearRequests();
+    const response = await request("/api/plans/admin-context", {
+      token: null,
+      adminToken: generateAdminSessionToken("7", 1),
+    });
+    assert.equal(response.status, 200, await response.clone().text());
+    const body = await response.json() as { plans: Array<{ id: number }> };
+    assert.deepEqual(body.plans, []);
+  });
+
+  await t.test("reseller hotspot preview context remains on its selected assigned port", async () => {
+    includeRouterFixture = true;
+    clearRequests();
+    try {
+      const response = await request("/api/plans/admin-context?hotspotPreview=true&routerId=31&portId=43", {
+        token: null,
+        adminToken: generateAdminSessionToken("19", 1),
+      });
+      assert.equal(response.status, 200, await response.clone().text());
+      const body = await response.json() as { plans: Array<{ id: number }> };
+      assert.deepEqual(body.plans.map(plan => plan.id), [assignedPlan.id]);
+
+      const siblingPortResponse = await request("/api/plans/admin-context?hotspotPreview=true&routerId=31&portId=44", {
+        token: null,
+        adminToken: generateAdminSessionToken("19", 1),
+      });
+      assert.equal(siblingPortResponse.status, 403);
+    } finally {
+      includeRouterFixture = false;
+    }
   });
 
   await t.test("portal appearance and typography load from the mapped reseller", async () => {
