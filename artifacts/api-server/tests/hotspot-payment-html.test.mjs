@@ -37,6 +37,40 @@ async function checkout(respond, apiBase = "https://tenant.example.test") {
 
 const intent = () => Response.json({ paymentIntent: "local-test-intent", amount: 10 });
 
+const apiBaseHelpers = template.slice(
+  template.indexOf("function safePublicApiBase("),
+  template.indexOf("function normalisePortalBackground("),
+);
+
+test("appearance responses cannot replace the embedded public payment API with login DNS", () => {
+  const context = {
+    URL, String,
+    EMBEDDED_CONFIG: { apiBase: "https://ocholasupernet.isplatty.org" },
+  };
+  vm.createContext(context);
+  vm.runInContext(apiBaseHelpers, context);
+  assert.equal(
+    context.configuredPortalApiBase("https://ocholasupernet.org"),
+    "https://ocholasupernet.isplatty.org",
+  );
+  assert.equal(context.configuredPortalApiBase(""), "https://ocholasupernet.isplatty.org");
+});
+
+test("unconfigured templates still discover the public API from server settings", () => {
+  const context = { URL, String, EMBEDDED_CONFIG: null };
+  vm.createContext(context);
+  vm.runInContext(apiBaseHelpers, context);
+  assert.equal(context.configuredPortalApiBase("https://tenant.example.test/"), "https://tenant.example.test");
+  assert.equal(context.configuredPortalApiBase("http://localhost:8080"), "");
+});
+
+test("both branding and typography updates use the embedded-origin protection", () => {
+  assert.match(template.slice(template.indexOf("function applyPortalConfig("),
+    template.indexOf("function applyPortalTypography(")), /configuredPortalApiBase\(data\.apiBase\)/);
+  assert.match(template.slice(template.indexOf("function applyPortalTypography("),
+    template.indexOf("function loadPortalTypography(")), /configuredPortalApiBase\(data\.apiBase\)/);
+});
+
 test("checkout carries the secure intent and scoped fields to the public API", async () => {
   const { calls, context } = await checkout(url => url.endsWith("/intent")
     ? intent() : Response.json({ CheckoutRequestID: "local-test-checkout" }));

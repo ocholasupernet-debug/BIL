@@ -646,6 +646,11 @@ function safePublicApiBase(value){
     return url.origin;
   }catch(e){return "";}
 }
+function configuredPortalApiBase(value){
+  /* Router-served login DNS and payment API are separate. Appearance data
+     must never replace the public API origin embedded in this bundle. */
+  return safePublicApiBase(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.apiBase)||safePublicApiBase(value);
+}
 function normalisePortalBackground(value){
   var allowed=["midnight","ocean","aurora","forest","sunset","sand"];
   return allowed.indexOf(String(value||""))>=0?String(value):"midnight";
@@ -709,7 +714,7 @@ function applyPortalConfig(data){
   if(typeof colors.cardColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.cardColor))document.querySelectorAll(".sec-card").forEach(function(element){element.style.background=colors.cardColor;});
   if(typeof colors.inputBgColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.inputBgColor))document.querySelectorAll(".inp").forEach(function(element){element.style.background=colors.inputBgColor;});
   if(typeof data.apiBase==="string"){
-    var publicBase=safePublicApiBase(data.apiBase);
+    var publicBase=configuredPortalApiBase(data.apiBase);
     if(publicBase)PORTAL_API_BASE=publicBase;
   }
   if(Number.isSafeInteger(Number(data.adminId))&&Number(data.adminId)>0)PORTAL_ADMIN_ID=Number(data.adminId);
@@ -801,7 +806,7 @@ function applyPortalTypography(data){
   document.documentElement.style.setProperty("--portal-font-style",style);
   document.documentElement.style.setProperty("--portal-font-weight",String(weight));
   document.documentElement.style.setProperty("--portal-font-size",size+"px");
-   var publicBase=safePublicApiBase(data.apiBase);
+   var publicBase=configuredPortalApiBase(data.apiBase);
    if(publicBase)PORTAL_API_BASE=publicBase;
 }
 
