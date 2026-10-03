@@ -445,17 +445,21 @@ router.put("/super-admin/billing/platform-config", async (req, res): Promise<voi
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : fallback;
   };
-  const cutoffDay = numberField(req.body?.cutoff_day, 25);
-  const dueDay = numberField(req.body?.due_day, 5);
-  const threshold = numberField(req.body?.sales_threshold, 8000);
-  const lowFee = numberField(req.body?.low_sales_fee, 500);
-  const highFee = numberField(req.body?.high_sales_fee, 1400);
-  if (![cutoffDay, dueDay].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 28)
-      || ![threshold, lowFee, highFee].every(value => value >= 0 && value <= 100000000)) {
-    res.status(400).json({ ok: false, error: "Enter valid billing days, threshold, and non-negative fees." });
-    return;
-  }
   try {
+    const [currentConfig] = await sbSelectStrict<Record<string, unknown>>(
+      "platform_billing_config",
+      "id=eq.1&select=cutoff_day,due_day,sales_threshold,low_sales_fee,high_sales_fee&limit=1",
+    );
+    const cutoffDay = numberField(req.body?.cutoff_day, numberField(currentConfig?.cutoff_day, 25));
+    const dueDay = numberField(req.body?.due_day, numberField(currentConfig?.due_day, 5));
+    const threshold = numberField(req.body?.sales_threshold, numberField(currentConfig?.sales_threshold, 8000));
+    const lowFee = numberField(req.body?.low_sales_fee, numberField(currentConfig?.low_sales_fee, 500));
+    const highFee = numberField(req.body?.high_sales_fee, numberField(currentConfig?.high_sales_fee, 1400));
+    if (![cutoffDay, dueDay].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 28)
+        || ![threshold, lowFee, highFee].every(value => value >= 0 && value <= 100000000)) {
+      res.status(400).json({ ok: false, error: "Enter valid billing days, threshold, and non-negative fees." });
+      return;
+    }
     const [config] = await sbUpsertStrict<Record<string, unknown>>(
       "platform_billing_config",
       "id",

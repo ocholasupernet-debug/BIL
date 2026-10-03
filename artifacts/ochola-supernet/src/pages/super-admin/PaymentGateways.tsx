@@ -169,6 +169,11 @@ export default function SuperAdminPaymentGateways() {
   const [registrationWhatsappNumber, setRegistrationWhatsappNumber] = useState("+254798088650");
   const [registrationDestinationId, setRegistrationDestinationId] = useState("");
   const [renewalDestinationId, setRenewalDestinationId] = useState("");
+  const [renewalFees, setRenewalFees] = useState({ sales_threshold: "8000", low_sales_fee: "500", high_sales_fee: "1400" });
+  const [renewalFeeLoading, setRenewalFeeLoading] = useState(true);
+  const [renewalFeeSaving, setRenewalFeeSaving] = useState(false);
+  const [renewalFeeSaved, setRenewalFeeSaved] = useState(false);
+  const [renewalFeeError, setRenewalFeeError] = useState("");
   const [destinationForm, setDestinationForm] = useState(emptyDestination);
   const [destinationError, setDestinationError] = useState("");
   const [destinationSaved, setDestinationSaved] = useState(false);
@@ -211,6 +216,23 @@ export default function SuperAdminPaymentGateways() {
         applyDestinationData(data);
       })
       .catch(error => setDestinationError(error instanceof Error ? error.message : "Could not load payment destinations."));
+  }, [token]);
+
+  useEffect(() => {
+    fetch("/api/super-admin/billing/platform-config", { headers: { "x-sa-token": token } })
+      .then(async response => {
+        const data = await response.json() as { ok?: boolean; config?: Record<string, unknown>; error?: string };
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not load platform renewal fees.");
+        if (data.config) {
+          setRenewalFees(current => ({
+            sales_threshold: String(data.config?.sales_threshold ?? current.sales_threshold),
+            low_sales_fee: String(data.config?.low_sales_fee ?? current.low_sales_fee),
+            high_sales_fee: String(data.config?.high_sales_fee ?? current.high_sales_fee),
+          }));
+        }
+      })
+      .catch(error => setRenewalFeeError(error instanceof Error ? error.message : "Could not load platform renewal fees."))
+      .finally(() => setRenewalFeeLoading(false));
   }, [token]);
 
   const loadManualRegistrations = async () => {
@@ -417,6 +439,42 @@ export default function SuperAdminPaymentGateways() {
     }
   };
 
+  const saveRenewalFees = async () => {
+    setRenewalFeeError("");
+    setRenewalFeeSaved(false);
+    const amounts = Object.fromEntries(
+      Object.entries(renewalFees).map(([key, value]) => [key, Number(value)]),
+    ) as Record<keyof typeof renewalFees, number>;
+    if (Object.values(renewalFees).some(value => value.trim() === "")
+        || !Object.values(amounts).every(value => Number.isFinite(value) && value >= 0 && value <= 100_000_000)) {
+      setRenewalFeeError("Enter a valid non-negative KSh amount up to KSh 100,000,000 for each renewal setting.");
+      return;
+    }
+
+    setRenewalFeeSaving(true);
+    try {
+      const response = await fetch("/api/super-admin/billing/platform-config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "x-sa-token": token },
+        body: JSON.stringify(amounts),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; config?: Record<string, unknown> };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save platform renewal fees.");
+      if (data.config) {
+        setRenewalFees({
+          sales_threshold: String(data.config.sales_threshold ?? amounts.sales_threshold),
+          low_sales_fee: String(data.config.low_sales_fee ?? amounts.low_sales_fee),
+          high_sales_fee: String(data.config.high_sales_fee ?? amounts.high_sales_fee),
+        });
+      }
+      setRenewalFeeSaved(true);
+    } catch (error) {
+      setRenewalFeeError(error instanceof Error ? error.message : "Could not save platform renewal fees.");
+    } finally {
+      setRenewalFeeSaving(false);
+    }
+  };
+
   const removeDestination = async (id: string) => {
     setDestinationError("");
     setDestinationSaved(false);
@@ -467,8 +525,8 @@ export default function SuperAdminPaymentGateways() {
       <div style={{ maxWidth: 800 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 28 }}>
           <div>
-            <h1 style={{ fontSize: "1.4rem", fontWeight: 800, color: "white", margin: 0 }}>Payment Gateways</h1>
-            <p style={{ color: C.muted, margin: "4px 0 0", fontSize: "0.82rem" }}>Configure payment integrations available to all ISP admins.</p>
+            <h1 style={{ fontSize: "1.4rem", fontWeight: 800, color: "white", margin: 0 }}>Platform Fees &amp; Collections</h1>
+            <p style={{ color: C.muted, margin: "4px 0 0", fontSize: "0.82rem" }}>Manage registration and renewal fees, payment destinations, and platform payment integrations.</p>
           </div>
           <button onClick={save} style={{ display: "flex", alignItems: "center", gap: 8, background: saved ? "#065f46" : C.accent, border: "none", borderRadius: 10, padding: "10px 20px", color: "white", fontWeight: 700, fontSize: "0.82rem", cursor: "pointer" }}>
             {saved ? <CheckCircle2 size={15} /> : <Save size={15} />} {saved ? "Saved!" : "Save All"}
@@ -526,7 +584,7 @@ export default function SuperAdminPaymentGateways() {
             <div style={{ color: "white", fontWeight: 750 }}>Collection destinations</div>
           </div>
           <p style={{ color: C.sub, fontSize: "0.76rem", lineHeight: 1.5, margin: "0 0 18px" }}>
-            Choose where platform registration and renewal payments are collected. The Daraja Business shortcode above is used only for API authentication; select a separate Till or PayBill receiving destination here.
+            Set platform registration and renewal fees, and choose where those payments are collected. The Daraja Business shortcode above is used only for API authentication; select a separate Till or PayBill receiving destination here.
           </p>
 
           {destinationError && (
@@ -589,6 +647,62 @@ export default function SuperAdminPaymentGateways() {
                 <span style={{ fontSize: "0.76rem", color: destinationForm.active ? "#4ade80" : C.sub }}>{destinationForm.active ? "Active" : "Inactive"}</span>
               </div>
             </Field>
+          </div>
+          <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 16, marginTop: 2, marginBottom: 16 }}>
+            <div style={{ color: "white", fontWeight: 750, fontSize: "0.82rem", marginBottom: 5 }}>Platform renewal fees</div>
+            <p style={{ color: C.sub, fontSize: "0.72rem", lineHeight: 1.5, margin: "0 0 14px" }}>
+              Monthly renewal fees use the ISP’s previous-month sales: the lower fee applies at or below the threshold, and the higher fee applies above it.
+            </p>
+            {renewalFeeError && (
+              <div role="alert" style={{ color: "#fca5a5", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 8, padding: "9px 11px", fontSize: "0.75rem", marginBottom: 12 }}>
+                {renewalFeeError}
+              </div>
+            )}
+            {renewalFeeSaved && (
+              <div role="status" style={{ color: "#86efac", background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 8, padding: "9px 11px", fontSize: "0.75rem", marginBottom: 12 }}>
+                Platform renewal fees saved.
+              </div>
+            )}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px", marginBottom: 4 }}>
+              <Field label="Monthly sales threshold (KES)" hint="The higher fee applies when previous-month sales exceed this amount.">
+                <input
+                  style={inp}
+                  type="number"
+                  min="0"
+                  max="100000000"
+                  value={renewalFees.sales_threshold}
+                  onChange={e => { setRenewalFees(current => ({ ...current, sales_threshold: e.target.value })); setRenewalFeeSaved(false); }}
+                  disabled={renewalFeeLoading}
+                />
+              </Field>
+              <Field label="Renewal fee at or below threshold (KES)">
+                <input
+                  style={inp}
+                  type="number"
+                  min="0"
+                  max="100000000"
+                  value={renewalFees.low_sales_fee}
+                  onChange={e => { setRenewalFees(current => ({ ...current, low_sales_fee: e.target.value })); setRenewalFeeSaved(false); }}
+                  disabled={renewalFeeLoading}
+                />
+              </Field>
+              <Field label="Renewal fee above threshold (KES)">
+                <input
+                  style={inp}
+                  type="number"
+                  min="0"
+                  max="100000000"
+                  value={renewalFees.high_sales_fee}
+                  onChange={e => { setRenewalFees(current => ({ ...current, high_sales_fee: e.target.value })); setRenewalFeeSaved(false); }}
+                  disabled={renewalFeeLoading}
+                />
+              </Field>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={saveRenewalFees} disabled={renewalFeeLoading || renewalFeeSaving} style={{ border: 0, borderRadius: 8, background: "rgba(255,255,255,0.12)", color: "white", padding: "9px 12px", fontWeight: 700, fontSize: "0.76rem", cursor: renewalFeeLoading ? "not-allowed" : "pointer", opacity: renewalFeeLoading || renewalFeeSaving ? 0.6 : 1 }}>
+                {renewalFeeLoading ? "Loading fees…" : renewalFeeSaving ? "Saving…" : "Save renewal fees"}
+              </button>
+            </div>
           </div>
           <div style={{ maxWidth: 380 }}>
             <SecretField

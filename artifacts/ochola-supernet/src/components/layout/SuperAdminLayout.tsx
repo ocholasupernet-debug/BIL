@@ -42,7 +42,7 @@ const NAV: NavSection[] = [
     label: "Billing",
     items: [
       { name: "Payments & Packages", href: "/super-admin/payment-packages", icon: Package },
-      { name: "Payment Gateways", href: "/super-admin/payments", icon: CreditCard },
+      { name: "Platform Fees & Collections", href: "/super-admin/payments", icon: CreditCard },
       { name: "Billing Engine", href: "/super-admin/billing", icon: Receipt },
       { name: "Reports", href: "/super-admin/reports", icon: BarChart3 },
     ],
@@ -78,7 +78,7 @@ const PAGE_CONTEXT: { prefix: string; title: string }[] = [
   { prefix: "/super-admin/limits", title: "System limits" },
   { prefix: "/super-admin/settings", title: "System settings" },
   { prefix: "/super-admin/payment-packages", title: "Payments and packages" },
-  { prefix: "/super-admin/payments", title: "Payment gateways" },
+  { prefix: "/super-admin/payments", title: "Platform fees and collections" },
   { prefix: "/super-admin/billing", title: "Billing engine" },
   { prefix: "/super-admin/reports", title: "Reports" },
   { prefix: "/super-admin/security-logs", title: "Security logs" },
