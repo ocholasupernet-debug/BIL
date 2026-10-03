@@ -1,4 +1,4 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { randomBytes } from "crypto";
 import { preserveCumulativeUsage } from "../lib/prepaid-usage.js";
 import {
@@ -71,9 +71,24 @@ import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
+import {
+  isApprovedHotspotAssetDestination,
+  isBulkReplacementScopeAllowed,
+  parseBulkDeployMode,
+  type BulkDeployMode,
+} from "../lib/bulk-hotspot-deployment.js";
+import { hasSuperAdminHotspotFileConsent } from "../lib/hotspot-file-authorization.js";
 import { validateRouterTakeoverMainhotspot } from "../lib/router-takeover-template.js";
 
 const router: IRouter = Router();
+
+function requireSuperAdminHotspotFileConsent(req: Request, res: Response): boolean {
+  if (hasSuperAdminHotspotFileConsent(req.authUser, req.body?.superAdminConsent)) return true;
+  res.status(403).json({
+    error: "Replacing approved Hotspot files requires explicit Super Admin consent.",
+  });
+  return false;
+}
 
 interface PendingRouterFileSource {
   content: Buffer;
@@ -100,9 +115,11 @@ interface BulkDeployJob {
   adminId: number;
   status: BulkDeployJobStatus;
   scope: "hotspot" | "all";
+  mode: BulkDeployMode;
   total: number;
   processed: number;
   deployed: Array<{ sourceName: string; destinationPath: string; size: number }>;
+  replaced: Array<{ sourceName: string; destinationPath: string; size: number }>;
   skipped: Array<{ sourceName: string; destinationPath: string; reason: string }>;
   failed: Array<{ sourceName: string; destinationPath: string; error: string }>;
   sources: Array<{
@@ -1080,6 +1097,7 @@ router.post("/router/:id/files/deploy", requireAdmin(), async (req, res): Promis
     return;
   }
   const destinationPath = `${directory}/${source.source.name}`;
+  if (overwrite && !requireSuperAdminHotspotFileConsent(req, res)) return;
 
   cleanPendingRouterFileSources();
   const token = randomBytes(24).toString("hex");
@@ -1140,11 +1158,13 @@ router.post("/router/:id/files/deploy", requireAdmin(), async (req, res): Promis
 
 /* ─── POST /api/router/:id/files/deploy-bulk ─────────────────────────────── */
 /**
- * Publishes every approved file that is missing from its destination.
+ * Publishes approved files that are missing from their destination, or
+ * replaces matching Hotspot assets when the administrator explicitly chose
+ * replacement mode.
  * The request creates a short-lived server-side job so a large asset set does
  * not stay on an HTTP connection long enough for the reverse proxy to time
- * out. Existing files and assets whose parent directory is not present are
- * skipped; this job never overwrites router files.
+ * out. Install mode preserves existing files. Replacement mode is limited to
+ * approved Hotspot sources under flash/hotspot.
  */
 async function runBulkFileDeployment(
   job: BulkDeployJob,
@@ -1162,6 +1182,7 @@ async function runBulkFileDeployment(
       .replace(/^\/+|\/+$/g, "")
       .toLowerCase();
     const existingFiles = new Set(currentFiles.files.map(file => normaliseName(file.name)));
+    const existingFileTypes = new Map(currentFiles.files.map(file => [normaliseName(file.name), file.type.toLowerCase()]));
     const importableDestinations = new Set<string>();
 
     /* RouterOS only creates nested destinations when their parent directory
@@ -1194,9 +1215,20 @@ async function runBulkFileDeployment(
     for (const source of job.sources) {
       const { sourceName, destinationPath } = source;
       const normalisedDestination = normaliseName(destinationPath);
-      if (existingFiles.has(normalisedDestination)) {
+      const destinationExists = existingFiles.has(normalisedDestination);
+      if (destinationExists && job.mode === "install") {
         job.skipped.push({ sourceName, destinationPath, reason: "already exists" });
         importableDestinations.add(destinationPath);
+        job.processed += 1;
+        job.updatedAt = Date.now();
+        continue;
+      }
+      if (destinationExists && existingFileTypes.get(normalisedDestination)?.includes("directory")) {
+        job.failed.push({
+          sourceName,
+          destinationPath,
+          error: "The destination is a directory, not a file",
+        });
         job.processed += 1;
         job.updatedAt = Date.now();
         continue;
@@ -1223,15 +1255,24 @@ async function runBulkFileDeployment(
         const result = await deployRouterFile(creds, {
           destinationPath,
           sourceUrl: `${origin}/api/router-file-source/${token}`,
-          overwrite: false,
+          overwrite: job.mode === "replace" && destinationExists,
           uploadId: token.slice(0, 16),
         });
-        job.deployed.push({ sourceName, destinationPath: result.destinationPath, size: result.size });
+        const deployedFile = { sourceName, destinationPath: result.destinationPath, size: result.size };
+        if (result.replaced) {
+          job.replaced.push(deployedFile);
+        } else {
+          job.deployed.push(deployedFile);
+        }
         existingFiles.add(normalisedDestination);
         importableDestinations.add(destinationPath);
       } catch (error) {
         if (error instanceof RouterFileExistsError) {
-          job.skipped.push({ sourceName, destinationPath, reason: "already exists" });
+          job.skipped.push({
+            sourceName,
+            destinationPath,
+            reason: job.mode === "replace" ? "appeared during deployment; left unchanged" : "already exists",
+          });
           importableDestinations.add(destinationPath);
         } else {
           job.failed.push({
@@ -1253,8 +1294,10 @@ async function runBulkFileDeployment(
       routerId: job.routerId,
       adminId: job.adminId,
       scope: job.scope,
+      mode: job.mode,
       total: job.total,
       deployed: job.deployed.length,
+      replaced: job.replaced.length,
       skipped: job.skipped.length,
       failed: job.failed.length,
     }, "Bulk files processed");
@@ -1378,16 +1421,26 @@ router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): P
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
   if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
   const scope = String(req.body?.scope ?? "hotspot").trim().toLowerCase();
+  const mode = parseBulkDeployMode(req.body?.mode);
+  if (!mode) {
+    res.status(400).json({ error: "Bulk deployment mode must be install or replace" });
+    return;
+  }
   if (scope !== "hotspot" && scope !== "all") {
     res.status(400).json({ error: "Bulk deployment scope must be hotspot or all" });
     return;
   }
+  if (mode === "replace" && !requireSuperAdminHotspotFileConsent(req, res)) return;
   if (scope === "hotspot" && destinationDirectory.toLowerCase() !== "flash/hotspot") {
     res.status(400).json({ error: "Bulk hotspot deployment is restricted to flash/hotspot" });
     return;
   }
   if (scope === "all" && destinationDirectory.toLowerCase() !== "flash/hotspot") {
     res.status(400).json({ error: "Bulk deployment destination must be flash/hotspot for hotspot assets" });
+    return;
+  }
+  if (!isBulkReplacementScopeAllowed(mode, scope)) {
+    res.status(400).json({ error: "Replacement mode is restricted to approved Hotspot assets" });
     return;
   }
 
@@ -1413,6 +1466,13 @@ router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): P
       ? `flash/hotspot/${source.name.replaceAll("\\", "/").replace(/^\/+/, "")}`
       : source.name,
   }));
+  if (mode === "replace" && sources.some(source => (
+    source.type !== "hotspot"
+    || !isApprovedHotspotAssetDestination(source.destinationPath)
+  ))) {
+    res.status(500).json({ error: "An approved Hotspot source resolved outside flash/hotspot" });
+    return;
+  }
   if (sources.length === 0) {
     res.status(400).json({ error: scope === "all" ? "No approved files are available to deploy" : "No approved hotspot assets are available to deploy" });
     return;
@@ -1426,9 +1486,11 @@ router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): P
     adminId,
     status: "queued",
     scope,
+    mode,
     total: sources.length,
     processed: 0,
     deployed: [],
+    replaced: [],
     skipped: [],
     failed: [],
     sources,
@@ -1442,6 +1504,7 @@ router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): P
     status: job.status,
     total: job.total,
     scope,
+    mode,
     destinationDirectory: "flash/hotspot",
   });
   void runBulkFileDeployment(job, found.creds, requestOrigin(req));
@@ -1471,6 +1534,7 @@ router.get("/router/:id/files/deploy-bulk/:jobId", requireAdmin(), async (req, r
     total: job.total,
     processed: job.processed,
     deployed: job.deployed,
+    replaced: job.replaced,
     skipped: job.skipped,
     failed: job.failed,
     connectedHost: job.connectedHost,
@@ -1502,6 +1566,7 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
     res.status(400).json({ error: "Hotspot portals must be deployed to hotspot, flash/hotspot, or disk1/hotspot" });
     return;
   }
+  if (overwrite && !requireSuperAdminHotspotFileConsent(req, res)) return;
 
   const origin = requestOrigin(req);
   if (!origin.startsWith("https://")) {
@@ -1614,6 +1679,7 @@ router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), as
     res.status(400).json({ error: "Confirm overwrite:true before replacing the bridge portal files." });
     return;
   }
+  if (!requireSuperAdminHotspotFileConsent(req, res)) return;
 
   const origin = requestOrigin(req);
   if (!origin.startsWith("https://")) {

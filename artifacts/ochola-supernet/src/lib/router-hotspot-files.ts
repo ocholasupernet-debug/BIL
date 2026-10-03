@@ -11,6 +11,7 @@ export interface HotspotFileDeploymentResult {
   total: number;
   processed: number;
   deployed: HotspotFileDeploymentItem[];
+  replaced: HotspotFileDeploymentItem[];
   skipped: HotspotFileDeploymentItem[];
   failed: HotspotFileDeploymentItem[];
   error?: string;
@@ -29,6 +30,25 @@ export async function installHotspotFiles(
   token = "",
   onProgress?: (result: DeploymentResponse) => void,
 ): Promise<HotspotFileDeploymentResult> {
+  return deployHotspotFiles(routerId, adminId, "install", token, onProgress);
+}
+
+export async function replaceHotspotFiles(
+  routerId: number,
+  adminId: number,
+  token = "",
+  onProgress?: (result: DeploymentResponse) => void,
+): Promise<HotspotFileDeploymentResult> {
+  return deployHotspotFiles(routerId, adminId, "replace", token, onProgress);
+}
+
+async function deployHotspotFiles(
+  routerId: number,
+  adminId: number,
+  mode: "install" | "replace",
+  token = "",
+  onProgress?: (result: DeploymentResponse) => void,
+): Promise<HotspotFileDeploymentResult> {
   const headers = new Headers({ "Content-Type": "application/json" });
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
@@ -40,6 +60,8 @@ export async function installHotspotFiles(
       body: JSON.stringify({
         adminId,
         scope: "hotspot",
+        mode,
+        superAdminConsent: mode === "replace",
         destinationDirectory: "flash/hotspot",
       }),
     });
@@ -91,7 +113,8 @@ export async function installHotspotFiles(
 
     if (statusResponse.status === 404 && !recoveredLostJob) {
       /* API restarts can clear the in-memory job before any 5xx reaches the
-         browser. Requeue once; existing files are skipped and never replaced. */
+         browser. Requeue once, preserving the selected mode; existing files
+         are skipped and never replaced unless the request explicitly replaces. */
       queued = await startDeployment();
       result = queued;
       onProgress?.(result);
@@ -120,6 +143,7 @@ export async function installHotspotFiles(
     total: Number(result.total ?? 0),
     processed: Number(result.processed ?? 0),
     deployed: Array.isArray(result.deployed) ? result.deployed : [],
+    replaced: Array.isArray(result.replaced) ? result.replaced : [],
     skipped: Array.isArray(result.skipped) ? result.skipped : [],
     failed: Array.isArray(result.failed) ? result.failed : [],
     error: result.error,

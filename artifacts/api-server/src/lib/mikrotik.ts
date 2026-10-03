@@ -1099,7 +1099,7 @@ export async function reconcileGeneratedServiceConfiguration(
 
   const profileRows = await runRouterCommand(creds, [
     "/ip/hotspot/profile/print",
-    "=.proplist=.id,name",
+    "=.proplist=.id,name,html-directory",
   ]);
   const profile = (Array.isArray(profileRows) ? profileRows : []).find(row => row.name === hotspotProfile)
     ?? (Array.isArray(profileRows) ? profileRows : []).find(row => row.name === "hprofile");
@@ -1114,9 +1114,18 @@ export async function reconcileGeneratedServiceConfiguration(
       profile.name = hotspotProfile;
     }
   }
+  const configuredHotspotDirectory = String(profile?.["html-directory"] ?? "")
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\/+|\/+$/g, "");
+  const hotspotDirectory = configuredHotspotDirectory
+    && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(configuredHotspotDirectory)
+    && !configuredHotspotDirectory.includes("..")
+    ? configuredHotspotDirectory
+    : "flash/hotspot";
   const profileFields = [
     `=hotspot-address=${hotspotGateway}`,
-    "=html-directory=hotspot",
+    `=html-directory=${hotspotDirectory}`,
     "=login-by=http-chap,http-pap,cookie",
   ];
   if (profile?.[".id"]) {
@@ -2028,13 +2037,28 @@ export async function ensureRouterFileDirectory(
   }
 
   const findDirectory = async (): Promise<Record<string, string> | undefined> => {
+    /* A filtered no-match /file/print can return RouterOS !empty, which
+       node-routeros treats as an unknown reply. Inspect the full file list. */
     const rows = await runRouterCommand(creds, [
       "/file/print",
       "=.proplist=.id,name,type",
-      `?name=${directory}`,
     ]);
-    return (Array.isArray(rows) ? rows : [])
-      .find(row => row.name === directory);
+    const files = Array.isArray(rows) ? rows : [];
+    const normalisePath = (value: string): string => value
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^\/+|\/+$/g, "")
+      .toLowerCase();
+    const wantedPath = normalisePath(directory);
+    const exact = files.find(row => normalisePath(row.name ?? "") === wantedPath);
+    if (exact) return exact;
+
+    /* RouterOS may list children by full path without a separate row for
+       their parent directory. A child entry proves that the parent exists. */
+    if (files.some(row => normalisePath(row.name ?? "").startsWith(`${wantedPath}/`))) {
+      return { name: directory, type: "directory" };
+    }
+    return undefined;
   };
   const isDirectory = (row: Record<string, string> | undefined): boolean =>
     String(row?.type ?? "").toLowerCase().includes("directory");
@@ -6922,6 +6946,13 @@ ${routerOsCompatibilityPreflight(tag)}
 :set serviceError ""
 :local serviceFailures ""
 :local serviceStepFailed false
+:local storage ""
+:if ([:len [/file find where name="disk1" && type="directory"]] > 0) do={ :set storage "disk1" }
+:if ([:len [/file find where name~"^disk1/"]] > 0) do={ :set storage "disk1" }
+:if ([:len [/file find where name="flash" && type="directory"]] > 0) do={ :set storage "flash" }
+:if ([:len [/file find where name~"^flash/"]] > 0) do={ :set storage "flash" }
+:local hsdir "hotspot"
+:if ($storage != "") do={ :set hsdir ($storage . "/hotspot") }
 :put "${tag}: starting Hotspot and PPPoE service setup."
 :put "${tag}: service steps: 1 portal files; 2 bridge; 3 gateways; 4 Hotspot; 5 walled garden; 6 PPPoE; 7 NAT."
 
@@ -6930,21 +6961,21 @@ ${routerOsCompatibilityPreflight(tag)}
 :set serviceStepFailed false
 :put "${tag}: SERVICE STEP 1/7 - portal files starting."
 :do {
-    :do { /file make-dir dir-name="hotspot" } on-error={}
-${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0) do={
-    :do { /tool fetch url=${routerOsString(portalFileUrls.login)} dst-path="hotspot/login.html" mode=https check-certificate=yes } on-error={
+    :do { /file make-dir dir-name=$hsdir } on-error={}
+${portalFileUrls ? `:if ([:len [/file find where name=($hsdir . "/login.html")]] = 0) do={
+    :do { /tool fetch url=${routerOsString(portalFileUrls.login)} dst-path=($hsdir . "/login.html") mode=https check-certificate=yes } on-error={
         :set serviceError ("${tag}: default Hotspot login.html could not be downloaded: " . $error)
         :error $serviceError
     }
 }
-:if ([:len [/file find where name="hotspot/rlogin.html"]] = 0) do={
-    :do { /tool fetch url=${routerOsString(portalFileUrls.roamingLogin)} dst-path="hotspot/rlogin.html" mode=https check-certificate=yes } on-error={
+:if ([:len [/file find where name=($hsdir . "/rlogin.html")]] = 0) do={
+    :do { /tool fetch url=${routerOsString(portalFileUrls.roamingLogin)} dst-path=($hsdir . "/rlogin.html") mode=https check-certificate=yes } on-error={
         :set serviceError ("${tag}: default Hotspot rlogin.html could not be downloaded: " . $error)
         :error $serviceError
     }
 }
-:if ([:len [/file find where name="hotspot/md5.js"]] = 0) do={
-    :do { /tool fetch url=${routerOsString(portalFileUrls.md5)} dst-path="hotspot/md5.js" mode=https check-certificate=yes } on-error={
+:if ([:len [/file find where name=($hsdir . "/md5.js")]] = 0) do={
+    :do { /tool fetch url=${routerOsString(portalFileUrls.md5)} dst-path=($hsdir . "/md5.js") mode=https check-certificate=yes } on-error={
         :set serviceError ("${tag}: Hotspot login helper md5.js could not be downloaded: " . $error)
         :error $serviceError
     }
@@ -7063,9 +7094,9 @@ ${portalFileUrls ? `:if ([:len [/file find where name="hotspot/login.html"]] = 0
         /ip dhcp-server set [find where name=${routerOsString(dhcpServer)}] interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
     }
     :if ([:len [/ip hotspot profile find where name=${routerOsString(hotspotProfile)}]] = 0) do={
-        /ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString(hotspotGateway)}${hotspotDnsSetting} html-directory=hotspot login-by=http-chap,http-pap,cookie${radiusProfileSetting}
+        /ip hotspot profile add name=${routerOsString(hotspotProfile)} hotspot-address=${routerOsString(hotspotGateway)}${hotspotDnsSetting} html-directory=$hsdir login-by=http-chap,http-pap,cookie${radiusProfileSetting}
     } else={
-        /ip hotspot profile set [find where name=${routerOsString(hotspotProfile)}] hotspot-address=${routerOsString(hotspotGateway)}${hotspotDnsSetting} html-directory=hotspot login-by=http-chap,http-pap,cookie${radiusProfileSetting}
+        /ip hotspot profile set [find where name=${routerOsString(hotspotProfile)}] hotspot-address=${routerOsString(hotspotGateway)}${hotspotDnsSetting} html-directory=$hsdir login-by=http-chap,http-pap,cookie${radiusProfileSetting}
     }
     :if ([:len [/ip hotspot find where name=${routerOsString(hotspotServer)}]] = 0) do={
         /ip hotspot add name=${routerOsString(hotspotServer)} interface=${routerOsString(bridgeName)} profile=${routerOsString(hotspotProfile)} address-pool=${routerOsString(hotspotPool)} disabled=no

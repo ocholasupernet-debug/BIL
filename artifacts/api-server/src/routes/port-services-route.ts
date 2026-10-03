@@ -8,7 +8,14 @@ import {
 } from "../lib/api-auth.js";
 import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { encryptVpnSecret } from "../lib/vpn-crypto.js";
-import { deployRouterFile, readRouterSystemIdentity, runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
+import {
+  deployRouterFile,
+  readRouterSystemIdentity,
+  RouterFileExistsError,
+  runRouterCommand,
+  type RouterCredentials,
+} from "../lib/mikrotik.js";
+import { hasSuperAdminHotspotFileConsent } from "../lib/hotspot-file-authorization.js";
 import { logger } from "../lib/logger.js";
 import { sbDeleteStrict, sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
@@ -324,6 +331,8 @@ async function deployApprovedSource(
   sourceOrigin: string,
   sourcePath: string,
   destinationPath: string,
+  protectHotspotFile: boolean,
+  allowHotspotReplace: boolean,
 ): Promise<void> {
   const source = getDeployableSource("hotspot", sourcePath);
   if (!source) throw new Error(`Approved asset "${sourcePath}" could not be found.`);
@@ -335,12 +344,20 @@ async function deployApprovedSource(
     expiresAt: Date.now() + SOURCE_TTL_MS,
   });
   try {
-    await deployRouterFile(creds, {
-      destinationPath,
-      sourceUrl: `${sourceOrigin}/api/port-service-source/${token}`,
-      overwrite: true,
-      uploadId: token.slice(0, 16),
-    });
+    try {
+      await deployRouterFile(creds, {
+        destinationPath,
+        sourceUrl: `${sourceOrigin}/api/port-service-source/${token}`,
+        overwrite: !protectHotspotFile || allowHotspotReplace,
+        uploadId: token.slice(0, 16),
+      });
+    } catch (error) {
+      if (protectHotspotFile && !allowHotspotReplace && error instanceof RouterFileExistsError) {
+        logger.info({ destinationPath }, "[port-services] kept existing Hotspot file without Super Admin approval");
+        return;
+      }
+      throw error;
+    }
   } finally {
     sourceEntries.delete(token);
   }
@@ -351,6 +368,7 @@ async function deployPortalContent(
   sourceOrigin: string,
   html: string,
   destinationPath: string,
+  allowHotspotReplace: boolean,
 ): Promise<void> {
   const token = randomBytes(24).toString("hex");
   const content = Buffer.from(html, "utf8");
@@ -361,12 +379,20 @@ async function deployPortalContent(
     expiresAt: Date.now() + SOURCE_TTL_MS,
   });
   try {
-    await deployRouterFile(creds, {
-      destinationPath,
-      sourceUrl: `${sourceOrigin}/api/port-service-source/${token}`,
-      overwrite: true,
-      uploadId: token.slice(0, 16),
-    });
+    try {
+      await deployRouterFile(creds, {
+        destinationPath,
+        sourceUrl: `${sourceOrigin}/api/port-service-source/${token}`,
+        overwrite: allowHotspotReplace,
+        uploadId: token.slice(0, 16),
+      });
+    } catch (error) {
+      if (!allowHotspotReplace && error instanceof RouterFileExistsError) {
+        logger.info({ destinationPath }, "[port-services] kept existing Hotspot file without Super Admin approval");
+        return;
+      }
+      throw error;
+    }
   } finally {
     sourceEntries.delete(token);
   }
@@ -754,20 +780,32 @@ async function removePortServiceFiles(
   creds: RouterCredentials,
   port: PortServiceRow,
   resources: PortServiceResourceNames,
-): Promise<void> {
+  removeHotspotFiles: boolean,
+): Promise<boolean> {
   /* VLAN services share this directory with their sibling VLANs. Removing
      one assignment must never delete the files used by the others. */
-  if (port.handoff_mode === "vlan_services") return;
-  const directories = [resources.hotspotDirectory, resources.pppoeDirectory];
+  if (port.handoff_mode === "vlan_services") return false;
+  const directories = [...new Set([
+    ...(removeHotspotFiles ? [resources.hotspotDirectory] : []),
+    ...(resources.pppoeDirectory !== resources.hotspotDirectory ? [resources.pppoeDirectory] : []),
+  ])];
   const rows = await runRouterCommand(creds, ["/file/print", "=.proplist=.id,name"]);
   const ownedRows = rows
     .filter(row => row[".id"] && directories.some(directory =>
       row.name === directory || row.name.startsWith(`${directory}/`),
     ))
     .sort((left, right) => right.name.length - left.name.length);
+  let hotspotFilesRemoved = false;
   for (const row of ownedRows) {
     await runRouterCommand(creds, ["/file/remove", `=.id=${row[".id"]}`]);
+    if (
+      removeHotspotFiles
+      && (row.name === resources.hotspotDirectory || row.name.startsWith(`${resources.hotspotDirectory}/`))
+    ) {
+      hotspotFilesRemoved = true;
+    }
   }
+  return hotspotFilesRemoved;
 }
 
 /**
@@ -779,7 +817,8 @@ export async function removePortServiceResources(
   creds: RouterCredentials,
   port: PortServiceRow,
   resources: PortServiceResourceNames,
-): Promise<void> {
+  options: { removeHotspotFiles?: boolean } = {},
+): Promise<boolean> {
   const ownedComment = (row: RouterResourceRow) => isPortServiceComment(resources, row);
   const exactName = (name: string, requireBridge?: string) => (row: RouterResourceRow) =>
     row.name === name
@@ -879,12 +918,18 @@ export async function removePortServiceResources(
       row => row.name === port.interface_name && ownedComment(row),
     );
   }
-  await removePortServiceFiles(creds, port, resources);
+  const hotspotFilesRemoved = await removePortServiceFiles(
+    creds,
+    port,
+    resources,
+    options.removeHotspotFiles === true,
+  );
 
   logger.info(
-    { portId: port.id, routerId: port.router_id, interfaceName: port.interface_name },
+    { portId: port.id, routerId: port.router_id, interfaceName: port.interface_name, hotspotFilesRemoved },
     "[port-services] removed isolated port resources",
   );
+  return hotspotFilesRemoved;
 }
 
 router.get("/port-service-source/:token", (req, res): void => {
@@ -1210,12 +1255,22 @@ router.delete("/admin/port-services/:portId", requireAdmin(), validatePortAccess
     }
     const identity = await resourceIdentityForPort(port);
     const resources = portServiceResourceNames(port, identity);
-    await removePortServiceResources(found.creds, port, resources);
+    const removeHotspotFiles = hasSuperAdminHotspotFileConsent(req.authUser, req.body?.superAdminConsent);
+    const hotspotFilesRemoved = await removePortServiceResources(
+      found.creds,
+      port,
+      resources,
+      { removeHotspotFiles },
+    );
     await sbDeleteStrict(
       "isp_reseller_ports",
       `id=eq.${port.id}&admin_id=eq.${port.admin_id}`,
     );
-    res.json({ ok: true, interfaceName: port.interface_name });
+    res.json({
+      ok: true,
+      interfaceName: port.interface_name,
+      hotspotFilesRemoved,
+    });
   } catch (error) {
     const errorMessage = error instanceof Error
       ? error.message
@@ -1416,6 +1471,7 @@ async function executePortServiceDeployment(
   port: PortServiceRow,
   portalHtml: string,
   sourceOrigin: string,
+  allowHotspotReplace: boolean,
 ): Promise<void> {
   const found = await getRouterCreds(port.router_id, port.admin_id);
   if (!found) throw new Error("Router credentials are unavailable for this port.");
@@ -1496,7 +1552,16 @@ async function executePortServiceDeployment(
   const deployedDestinations = new Set<string>();
   const deploySourceOnce = async (sourcePath: string, destinationPath: string): Promise<void> => {
     if (deployedDestinations.has(destinationPath)) return;
-    await deployApprovedSource(found.creds, sourceOrigin, sourcePath, destinationPath);
+    const protectHotspotFile = destinationPath === resources.hotspotDirectory
+      || destinationPath.startsWith(`${resources.hotspotDirectory}/`);
+    await deployApprovedSource(
+      found.creds,
+      sourceOrigin,
+      sourcePath,
+      destinationPath,
+      protectHotspotFile,
+      allowHotspotReplace,
+    );
     deployedDestinations.add(destinationPath);
   };
   if (scopedResellerVlan && hotspotDestination) {
@@ -1509,7 +1574,7 @@ async function executePortServiceDeployment(
       portalHtml || source!.content.toString("utf8"),
       sourceOrigin,
     );
-    await deployPortalContent(found.creds, sourceOrigin, signedPortalHtml, hotspotDestination);
+    await deployPortalContent(found.creds, sourceOrigin, signedPortalHtml, hotspotDestination, allowHotspotReplace);
     deployedDestinations.add(hotspotDestination);
     const rloginDestination = `${sharedPortalDirectory}/rlogin.html`;
     const rloginSource = getDeployableSource("hotspot", "rlogin.html");
@@ -1519,13 +1584,14 @@ async function executePortServiceDeployment(
       sourceOrigin,
       addVlanIdentityToRlogin(rloginSource.content.toString("utf8")),
       rloginDestination,
+      allowHotspotReplace,
     );
     deployedDestinations.add(rloginDestination);
   } else if (portalHtml && hotspotDestination) {
-    await deployPortalContent(found.creds, sourceOrigin, portalHtml, hotspotDestination);
+    await deployPortalContent(found.creds, sourceOrigin, portalHtml, hotspotDestination, allowHotspotReplace);
     deployedDestinations.add(hotspotDestination);
     const rloginDestination = `${sharedPortalDirectory}/rlogin.html`;
-    await deployPortalContent(found.creds, sourceOrigin, portalHtml, rloginDestination);
+    await deployPortalContent(found.creds, sourceOrigin, portalHtml, rloginDestination, allowHotspotReplace);
     deployedDestinations.add(rloginDestination);
   } else if (hotspotSource && hotspotDestination) {
     await deploySourceOnce(hotspotSource, hotspotDestination);
@@ -1606,7 +1672,8 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
 
     await updatePortProvisioningState(port, "provisioning");
     const sourceOrigin = requestOrigin(req);
-    const job = executePortServiceDeployment(port, portalHtml, sourceOrigin)
+    const allowHotspotReplace = hasSuperAdminHotspotFileConsent(req.authUser, req.body?.superAdminConsent);
+    const job = executePortServiceDeployment(port, portalHtml, sourceOrigin, allowHotspotReplace)
       .catch(async (error) => {
         const errorMessage = error instanceof Error ? error.message : "Dual-service deployment failed.";
         try {

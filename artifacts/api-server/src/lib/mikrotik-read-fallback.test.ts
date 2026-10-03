@@ -533,9 +533,15 @@ test("RouterOS hotspot directories use the supported file/add API command", asyn
     let created = false;
     await withMockRouterApi((_username, command) => {
       if (command[0] === "/file/print") {
+        const existingFiles = [
+          { ".id": "*2", name: "hotspot/login.html", type: ".html file" },
+        ];
         return created
-          ? [{ ".id": "*1", name: "flash/hotspot/css", type: "directory" }]
-          : [];
+          ? [
+              { ".id": "*1", name: "flash/hotspot/css", type: "directory" },
+              ...existingFiles,
+            ]
+          : existingFiles;
       }
       if (command[0] === "/file/add") {
         created = true;
@@ -546,9 +552,25 @@ test("RouterOS hotspot directories use the supported file/add API command", asyn
       await ensureRouterFileDirectory(routerCredentials(port), "flash/hotspot/css");
 
       assert.deepEqual(commands.map(item => item.command), [
-        ["/file/print", "=.proplist=.id,name,type", "?name=flash/hotspot/css"],
+        ["/file/print", "=.proplist=.id,name,type"],
         ["/file/add", "=name=flash/hotspot/css", "=type=directory"],
-        ["/file/print", "=.proplist=.id,name,type", "?name=flash/hotspot/css"],
+        ["/file/print", "=.proplist=.id,name,type"],
+      ]);
+    });
+  });
+
+  await t.test("recognizes existing parent directories from descendant files", async () => {
+    await withMockRouterApi(() => [
+      { ".id": "*1", name: "FLASH\\HOTSPOT\\login.html", type: ".html file" },
+      { ".id": "*2", name: "flash/hotspot/css/main.css", type: ".css file" },
+    ], async ({ port, commands }) => {
+      const creds = routerCredentials(port);
+      await ensureRouterFileDirectory(creds, "flash/hotspot");
+      await ensureRouterFileDirectory(creds, "flash/hotspot/css");
+
+      assert.deepEqual(commands.map(item => item.command), [
+        ["/file/print", "=.proplist=.id,name,type"],
+        ["/file/print", "=.proplist=.id,name,type"],
       ]);
     });
   });

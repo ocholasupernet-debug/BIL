@@ -18,10 +18,21 @@ import {
 } from "../lib/supabase-client.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { normalizeSmsPhone } from "../services/sms/sms-service.js";
-import { fetchTraffic, reconcileHotspotUserAccess, reconcilePppoeUserAccess, removeHotspotUser, removePPPSecretByName, runRouterCommand, runRouterCommands, type RouterCredentials } from "../lib/mikrotik.js";
+import {
+  fetchTraffic,
+  reconcileHotspotUserAccess,
+  reconcilePppoeUserAccess,
+  removeHotspotUser,
+  removePPPSecretByName,
+  RouterFileExistsError,
+  runRouterCommand,
+  runRouterCommands,
+  type RouterCredentials,
+} from "../lib/mikrotik.js";
 import { removeRadiusCustomer, syncRadiusCustomer } from "../lib/radius.js";
 import { deployRouterFile } from "../lib/mikrotik.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
+import { hasSuperAdminHotspotFileConsent } from "../lib/hotspot-file-authorization.js";
 import { logger } from "../lib/logger.js";
 import { planOwnerFilter } from "../lib/plan-ownership.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
@@ -365,6 +376,7 @@ async function deployDefaultResellerPortalFile(
       validity_unit: string;
     }>;
   },
+  allowHotspotReplace = false,
 ): Promise<void> {
   // RouterOS uses rlogin.html as the redirect handoff and login.html as the
   // payment-first portal. Keep both files distinct so the redirect can carry
@@ -406,12 +418,20 @@ async function deployDefaultResellerPortalFile(
     expiresAt: Date.now() + RESELLER_PORTAL_SOURCE_TTL_MS,
   });
   try {
-    await deployRouterFile(creds, {
-      destinationPath,
-      sourceUrl: `${sourceOrigin}/api/reseller-portal-source/${token}`,
-      overwrite: true,
-      uploadId: token.slice(0, 16),
-    });
+    try {
+      await deployRouterFile(creds, {
+        destinationPath,
+        sourceUrl: `${sourceOrigin}/api/reseller-portal-source/${token}`,
+        overwrite: allowHotspotReplace,
+        uploadId: token.slice(0, 16),
+      });
+    } catch (error) {
+      if (!allowHotspotReplace && error instanceof RouterFileExistsError) {
+        logger.info({ destinationPath }, "[reseller] kept existing Hotspot file without Super Admin approval");
+        return;
+      }
+      throw error;
+    }
   } finally {
     resellerPortalSourceEntries.delete(token);
   }
@@ -2872,6 +2892,10 @@ router.post("/admin/reseller-handoffs/:portId/portal", requireAdmin(), async (re
       res.status(400).json({ ok: false, error: "Confirm overwrite:true before replacing the VLAN portal files." });
       return;
     }
+    if (!hasSuperAdminHotspotFileConsent(req.authUser, req.body?.superAdminConsent)) {
+      res.status(403).json({ ok: false, error: "Super Admin consent is required to replace existing Hotspot portal files." });
+      return;
+    }
 
     const port = await ownedPort(req, portId);
     if (port.handoff_mode !== "vlan_services" || port.status !== "active") {
@@ -2980,6 +3004,7 @@ router.post("/admin/reseller-handoffs/:portId/portal", requireAdmin(), async (re
         fileName,
         `${resources.hotspotDirectory}/${fileName}`,
         portalScope,
+        true,
       );
     }
 
@@ -3417,10 +3442,10 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
       `ochola-port-${servicePortName}`,
     );
     const hotspotPath = hotspotEnabled === true
-      ? cleanServicePath(hotspotTemplatePath, `hotspot/reseller_${servicePortName}_page`)
+      ? cleanServicePath(hotspotTemplatePath, `flash/hotspot/reseller_${servicePortName}_page`)
       : null;
     const pppoePath = pppoeEnabled === true
-      ? cleanServicePath(pppoeFolderPath, `hotspot/pppoe_${servicePortName}_page`)
+      ? cleanServicePath(pppoeFolderPath, `flash/hotspot/pppoe_${servicePortName}_page`)
       : null;
     const target = await tenantRouter(account.id, routerNumber);
     const conflict = await sbSelectStrict(

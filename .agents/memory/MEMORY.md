@@ -17,6 +17,7 @@
 - [Router management VPN failover](router-management-vpn-failover.md) — Self Install must prefer the 10.8.5.x client and activate the isolated 10.8.6.x client only after primary failure.
 - [Hotspot MAC payment access](hotspot-mac-payment-access.md) — Paid MAC bypasses must be paired with a persistent RouterOS expiry scheduler and must not expose router credentials to the portal.
 - [Hotspot forwarding auth gate](hotspot-forwarding-auth-gate.md) — Never put a blanket bridge-to-WAN accept before Hotspot processing; unauthenticated clients must stay behind the portal.
+- [Hotspot asset Super Admin consent](hotspot-asset-superadmin-consent.md) — Approved portal files may only be overwritten, removed, or blocked after explicit Super Admin approval enforced by the API.
 - [Hotspot M-Pesa reconnect](hotspot-mpesa-reconnect.md) — Require a stored active payment and live router confirmation of its linked device; SMS is only a receipt lookup key.
 - [Hotspot payment router selection](hotspot-payment-router-selection.md) — Payment flows must use the management VPN address, never the customer-facing hotspot gateway.
 - [Hotspot credential login](hotspot-credential-login.md) — Credential login must use the submitted account and server-side RouterOS activation; MAC troubleshooting is a separate recovery path.
@@ -25,6 +26,7 @@
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
 - [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
 - [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.
+- [RouterOS empty file queries](routeros-empty-file-queries.md) — Avoid filtered `/file/print` no-match queries; RouterOS may return `!empty` and node-routeros can crash.
 - [RouterOS HotSpot identity variables](routeros-hotspot-identity-macros.md) — Pair supported router-wide identity and per-service server-name macros; do not rely on nas-id.
 - [RouterOS version dispatch](routeros-version-dispatch.md) — Read the installed major version locally; never let RouterOS 7 receive or parse the RouterOS 6 child path.
 - [Router VPN fallback contract](router-management-vpn-fallback.md) — Keep fallback protocol material server-side, isolate child scripts, and treat intermediate protocol failures as recoverable.
@@ -69,7 +71,6 @@
 - [Router VPN firewall verification](router-vpn-firewall-verification.md) — Avoid pipefail false negatives on repeated iptables rules and handle UFW IPv6 errors on IPv4-only VPS hosts.
 - [Router management credential policy](router-management-credential-policy.md) — Dedicated management OpenVPN intentionally uses the router name for both username and password.
 - [Router management API account](router-management-api-account.md) — Self Install can leave a stable API account alongside the legacy stored username; try both on management VPN paths.
-- [RouterOS 6 file deployment](router-file-deployment-ros6.md) — RouterOS 6 accepts nested direct fetches but not reliable API file moves; verify final destinations after upload.
 - [Plan write boundary](plan-write-boundary.md) — Route admin plan creation through API normalization because the deployed schema is narrower than the evolving form.
 - [Portal upload host](portal-upload-host.md) — One-time RouterOS portal uploads must fetch from the same API process that created the token.
 - [Portal package scope](portal-package-scope.md) — Carry router/port scope through package listing and checkout validation; listing isolation alone does not protect payment.

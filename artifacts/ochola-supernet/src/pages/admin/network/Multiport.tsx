@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
+import { ADMIN_ID, getAdminApiToken, isSuperAdmin } from "@/lib/supabase";
 
 type Mode = "shared" | "multiport";
 type RouterOption = { id: number; name: string; status?: string; model?: string | null };
@@ -330,6 +330,11 @@ export default function Multiport() {
       setError("Choose a router and physical port first.");
       return;
     }
+    const allowHotspotReplace = draft.hotspotEnabled
+      && isSuperAdmin()
+      && window.confirm(
+        "As Super Admin, approve replacing existing Hotspot portal files during this deployment? Cancel keeps existing Hotspot files unchanged while still allowing missing approved files to be added.",
+      );
     setSaving(true);
     try {
       const payload = {
@@ -353,7 +358,10 @@ export default function Multiport() {
       let deploymentError = "";
       if (savedPortId && (draft.hotspotEnabled || draft.pppoeEnabled)) {
         try {
-          await apiJson(`/api/admin/port-services/${savedPortId}/deploy`, { method: "POST", body: JSON.stringify({}) });
+          await apiJson(`/api/admin/port-services/${savedPortId}/deploy`, {
+            method: "POST",
+            body: JSON.stringify({ superAdminConsent: allowHotspotReplace }),
+          });
         } catch (cause) {
           deploymentError = cause instanceof Error ? cause.message : "Router deployment failed.";
         }
@@ -363,7 +371,15 @@ export default function Multiport() {
       if (deploymentError) {
         setError(`Saved ${savedPortName}, but the router deployment failed: ${deploymentError}`);
       } else if (draft.hotspotEnabled || draft.pppoeEnabled) {
-        setSuccess(`Saved and deployed ${savedPortName} service configuration.`);
+        setSuccess(
+          `Saved and deployed ${savedPortName} service configuration.${
+            draft.hotspotEnabled
+              ? allowHotspotReplace
+                ? " Super Admin approved Hotspot file replacement."
+                : " Existing Hotspot files were left unchanged."
+              : ""
+          }`,
+        );
       } else {
         setSuccess(`Saved ${savedPortName} service configuration. Deployment was skipped because both services are disabled.`);
       }
@@ -381,10 +397,26 @@ export default function Multiport() {
     }
     setError("");
     setSuccess("");
+    const allowHotspotReplace = selectedAssignment.hotspot_enabled
+      && isSuperAdmin()
+      && window.confirm(
+        "As Super Admin, approve replacing existing Hotspot portal files during this deployment? Cancel keeps existing Hotspot files unchanged while still allowing missing approved files to be added.",
+      );
     setDeploying(true);
     try {
-      await apiJson(`/api/admin/port-services/${selectedAssignment.id}/deploy`, { method: "POST", body: JSON.stringify({}) });
-      setSuccess(`${selectedAssignment.interface_name} was deployed to the router.`);
+      await apiJson(`/api/admin/port-services/${selectedAssignment.id}/deploy`, {
+        method: "POST",
+        body: JSON.stringify({ superAdminConsent: allowHotspotReplace }),
+      });
+      setSuccess(
+        `${selectedAssignment.interface_name} was deployed to the router.${
+          selectedAssignment.hotspot_enabled
+            ? allowHotspotReplace
+              ? " Super Admin approved Hotspot file replacement."
+              : " Existing Hotspot files were left unchanged."
+            : ""
+        }`,
+      );
       await loadPorts(routerId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Deployment failed.");
@@ -398,13 +430,27 @@ export default function Multiport() {
       setError("Choose an assigned port before unassigning it.");
       return;
     }
+    if (!window.confirm(
+      `Unassign ${selectedAssignment.interface_name} and remove its RouterOS service resources? Hotspot portal files will be retained unless a Super Admin separately approves their removal.`,
+    )) return;
+    const removeHotspotFiles = isSuperAdmin()
+      && window.confirm(
+        "As Super Admin, approve removing the Hotspot portal files associated with this port? Choose Cancel to keep those files.",
+      );
     setError("");
     setSuccess("");
     setUnassigning(true);
     try {
-      await apiJson(`/api/admin/port-services/${selectedAssignment.id}`, { method: "DELETE" });
+      const result = await apiJson<{ hotspotFilesRemoved?: boolean }>(
+        `/api/admin/port-services/${selectedAssignment.id}`,
+        { method: "DELETE", body: JSON.stringify({ superAdminConsent: removeHotspotFiles }) },
+      );
       setSelectedPortKey("");
-      setSuccess(`${selectedAssignment.interface_name} was unassigned and its RouterOS resources were removed.`);
+      setSuccess(
+        `${selectedAssignment.interface_name} was unassigned and its RouterOS resources were removed. ${
+          result.hotspotFilesRemoved ? "Approved Hotspot files were removed." : "Hotspot files were left unchanged."
+        }`,
+      );
       await loadPorts(routerId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The port could not be unassigned.");

@@ -16,6 +16,7 @@ import {
   getAdminApiToken,
   getAdminRole,
   getSelectedTenantId,
+  isSuperAdmin,
 } from "@/lib/supabase";
 import type { DbRouter } from "@/lib/supabase";
 import { installHotspotFiles } from "@/lib/router-hotspot-files";
@@ -935,6 +936,11 @@ export default function HotspotSettings() {
   const saveAssignedPort = async (port: AssignedHotspotPort) => {
     const draft = portDrafts[port.id];
     if (!draft) return;
+    const allowHotspotReplace = draft.hotspotEnabled
+      && isSuperAdmin()
+      && window.confirm(
+        "As Super Admin, approve replacing existing Hotspot portal files during this deployment? Cancel keeps existing Hotspot files unchanged while still allowing missing approved files to be added.",
+      );
     setSavingPortId(port.id);
     setNotice(null);
     try {
@@ -963,7 +969,10 @@ export default function HotspotSettings() {
         const deployResponse = await fetch(`/api/admin/port-services/${port.id}/deploy`, {
           method: "POST",
           headers: adminApiHeaders(),
-          body: JSON.stringify(resellerPortalHtml ? { portalHtml: resellerPortalHtml } : {}),
+          body: JSON.stringify({
+            ...(resellerPortalHtml ? { portalHtml: resellerPortalHtml } : {}),
+            superAdminConsent: allowHotspotReplace,
+          }),
         });
         const deployData = await parseApiResponse<{ status?: string; accepted?: boolean }>(
           deployResponse,
@@ -980,7 +989,9 @@ export default function HotspotSettings() {
             setPortDrafts(previous => ({ ...previous, [port.id]: draftFromAssignedHotspotPort(data.port!) }));
             setNotice({
               type: "info",
-              text: "The router deployment is still running. This page will show the final result after the next refresh.",
+              text: `The router deployment is still running. Existing Hotspot files ${
+                allowHotspotReplace ? "may be replaced with Super Admin approval." : "will remain unchanged without Super Admin approval."
+              }`,
             });
             return;
           }
@@ -991,7 +1002,11 @@ export default function HotspotSettings() {
       setPortDrafts(previous => ({ ...previous, [port.id]: draftFromAssignedHotspotPort(data.port!) }));
       setNotice({
         type: "success",
-        text: `${port.interface_name} hotspot settings were saved and deployed to the router.`,
+        text: `${port.interface_name} hotspot settings were saved and deployed to the router. ${
+          allowHotspotReplace
+            ? "Existing Hotspot files may have been replaced with Super Admin approval."
+            : "Existing Hotspot files were left unchanged without Super Admin approval."
+        }`,
       });
     } catch (error) {
       setNotice({ type: "error", text: error instanceof Error ? error.message : "The assigned hotspot port could not be saved." });
@@ -1080,7 +1095,12 @@ export default function HotspotSettings() {
        const adminId = selectedRouter?.admin_id ?? getSelectedTenantId();
       let noticeText = "Hotspot settings saved on this admin workspace.";
 
-      if (Number.isSafeInteger(routerId) && routerId > 0 && adminId) {
+       const canRefreshPortal = Number.isSafeInteger(routerId) && routerId > 0 && Boolean(adminId);
+       if (canRefreshPortal && (!isSuperAdmin() || !window.confirm(
+         "Saving these settings will replace the existing login.html and rlogin.html files on the router. Approve this Hotspot file replacement as Super Admin?",
+       ))) {
+         noticeText = "Settings saved. Router portal files were left unchanged; only the Super Admin can approve replacing them.";
+       } else if (canRefreshPortal) {
          const html = await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, {
            portId: isResellerAccount ? Number(selectedAssignedPortId) : undefined,
          });
@@ -1101,7 +1121,13 @@ export default function HotspotSettings() {
         const response = await fetch(`/api/router/${routerId}/hotspot-portal/deploy`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ adminId, html, overwrite: true, destinationDirectory: "flash/hotspot" }),
+          body: JSON.stringify({
+            adminId,
+            html,
+            overwrite: true,
+            superAdminConsent: true,
+            destinationDirectory: "flash/hotspot",
+          }),
         });
         let data: { error?: string; detail?: string; destinationPath?: string } = {};
         try {
@@ -1117,7 +1143,7 @@ export default function HotspotSettings() {
         }
         noticeText = "Settings saved and the hotspot page was refreshed with the latest plans.";
       } else {
-        noticeText = "Settings saved. Select a linked router to refresh its hotspot page automatically.";
+       noticeText = "Settings saved. Select a linked router to refresh its hotspot page automatically.";
       }
 
       setSaved(true);
@@ -1181,7 +1207,7 @@ export default function HotspotSettings() {
       return;
     }
     if (!window.confirm(
-       "Deploy the current branded portal to this router? The server will transfer login.html and rlogin.html, and an existing file will require a second replacement confirmation.",
+        "Deploy the current branded portal to this router? The server will transfer login.html and rlogin.html. Replacing either existing file requires separate explicit Super Admin approval.",
     )) return;
 
     setDeploying(true);
@@ -1212,7 +1238,13 @@ export default function HotspotSettings() {
         const response = await fetch(`/api/router/${routerId}/hotspot-portal/deploy`, {
           method: "POST",
           headers,
-           body: JSON.stringify({ adminId, html, overwrite, destinationDirectory: "flash/hotspot" }),
+           body: JSON.stringify({
+             adminId,
+             html,
+             overwrite,
+             superAdminConsent: overwrite && isSuperAdmin(),
+             destinationDirectory: "flash/hotspot",
+           }),
         });
         let data: {
           error?: string;
@@ -1233,8 +1265,15 @@ export default function HotspotSettings() {
       let result = await deploy(false);
       if (result.response.status === 409 && result.data.existingFile) {
         const existing = result.data.existingFile;
+        if (!isSuperAdmin()) {
+          setNotice({
+            type: "error",
+            text: `${existing.name} already exists. It was left unchanged; only the Super Admin can approve replacing existing portal files.`,
+          });
+          return;
+        }
         if (!window.confirm(
-          `${existing.name} already exists on the router (${existing.size} bytes). Replace it with this export?`,
+          `Approve replacing ${existing.name} (${existing.size} bytes) on the router as Super Admin?`,
         )) {
           setNotice({ type: "info", text: "Deployment cancelled. The existing router portal was left unchanged." });
           return;
