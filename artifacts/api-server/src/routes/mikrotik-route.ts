@@ -77,15 +77,15 @@ import {
   parseBulkDeployMode,
   type BulkDeployMode,
 } from "../lib/bulk-hotspot-deployment.js";
-import { hasHotspotFileReplacementConsent } from "../lib/hotspot-file-authorization.js";
+import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authorization.js";
 import { validateRouterTakeoverMainhotspot } from "../lib/router-takeover-template.js";
 
 const router: IRouter = Router();
 
 function requireHotspotFileReplacementConsent(req: Request, res: Response): boolean {
-  if (hasHotspotFileReplacementConsent(req.authUser, req.body?.portalFileReplacementConsent)) return true;
+  if (hasHotspotFileMutationConfirmation(req.authUser, req.body?.portalFileReplacementConsent)) return true;
   res.status(403).json({
-    error: "Replacing approved Hotspot files requires explicit Super Admin approval.",
+    error: "Replacing existing Hotspot files requires explicit confirmation by an authorized admin.",
   });
   return false;
 }
