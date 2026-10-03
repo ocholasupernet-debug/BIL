@@ -20,6 +20,9 @@ const ispBridgeRouterId = parseOptionalId(marker.ispBridgeRouterId);
 const ispBridgeRouterName = marker.ispBridgeRouterName === undefined || marker.ispBridgeRouterName === null || marker.ispBridgeRouterName === ""
   ? null
   : validateExpectedRouterName(marker.ispBridgeRouterName);
+const ispBridgeName = marker.ispBridgeName === undefined || marker.ispBridgeName === null || marker.ispBridgeName === ""
+  ? null
+  : validateExpectedRouterName(marker.ispBridgeName);
 const adminId = parseOptionalId(marker.adminId) ?? 3;
 if (!/^[a-z0-9-]{1,80}$/.test(markerId)) {
   throw new Error("The one-time portal refresh marker has an invalid ID.");
@@ -35,6 +38,9 @@ if (ispBridgeRouterId !== null && (!Number.isSafeInteger(ispBridgeRouterId) || i
 }
 if (ispBridgeRouterId !== null && ispBridgeRouterName !== null) {
   throw new Error("Specify the ISP bridge target by ID or exact name, not both.");
+}
+if (ispBridgeName !== null && ispBridgeRouterName === null) {
+  throw new Error("An explicit ISP Hotspot interface requires an exact router name.");
 }
 if (resellerPortId === null && ispBridgeRouterId === null && ispBridgeRouterName === null) {
   throw new Error("The one-time portal refresh marker must identify at least one target.");
@@ -123,9 +129,11 @@ try {
     await refreshPortal(
       `/api/admin/router/${selectedRouterId}/hotspot-portal/bridge-deploy`,
       {
-        ...(ispBridgeRouterName !== null
-          ? { autoSelectBridgeServer: true }
-          : { bridgeName: "co-hotspot-bridge" }),
+        ...(ispBridgeName !== null
+          ? { bridgeName: ispBridgeName }
+          : ispBridgeRouterName !== null
+            ? { autoSelectBridgeServer: true }
+            : { bridgeName: "co-hotspot-bridge" }),
         overwrite: true,
         portalFileReplacementConsent: true,
         ...(ispBridgeRouterName !== null ? { expectedRouterName: ispBridgeRouterName } : {}),

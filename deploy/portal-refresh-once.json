@@ -1,5 +1,6 @@
 {
   "id": "isp-router-come3-bridge-packages-visible-20261003",
   "adminId": 3,
-  "ispBridgeRouterName": "come3"
+  "ispBridgeRouterName": "come3",
+  "ispBridgeName": "hotspot-bridge"
 }
