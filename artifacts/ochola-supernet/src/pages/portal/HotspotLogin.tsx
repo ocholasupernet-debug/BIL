@@ -369,7 +369,7 @@ function HotspotLoginView({
   const portalDisplayName = configuredPortalName
     && !isDefaultPlatformPortalName(configuredPortalName)
     ? configuredPortalName
-    : "Guest Wi-Fi";
+    : "OcholaSupernet";
   const configuredLogoUrl = portalBranding.logoUrl?.trim() ?? "";
   const portalLogoUrl = configuredLogoUrl
     && !/ocholasupernet-logo\.png(?:$|[?#])/i.test(configuredLogoUrl)

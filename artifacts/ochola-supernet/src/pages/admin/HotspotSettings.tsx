@@ -14,7 +14,6 @@ import {
   DEFAULT_HOTSPOT_LOGO_URL,
   DEFAULT_HOTSPOT_PORTAL_CARDS,
   HOTSPOT_PORTAL_CARD_OPTIONS,
-  isDefaultPlatformPortalName,
   normalizeHotspotPortalCards,
   type HotspotPortalCardKey,
   type HotspotPortalCardVisibility,
@@ -170,7 +169,7 @@ function draftFromAssignedHotspotPort(port: AssignedHotspotPort): AssignedHotspo
 }
 
 const DEFAULT_SETTINGS: HSettings = {
-  ispName: "Guest Wi-Fi",
+  ispName: "OCHOLASUPERNET",
   portalHostname: "",
   freeTrial: "Disable",
   vouchers: "Yes",
@@ -413,9 +412,7 @@ function makeExportConfig(
     previewOnly,
     apiBase,
     plans,
-    ispName: isDefaultPlatformPortalName(safeText(settings.ispName, DEFAULT_SETTINGS.ispName))
-      ? "Guest Wi-Fi"
-      : safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
+    ispName: safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
     tagline: safeText(settings.tagline, DEFAULT_SETTINGS.tagline),
     logoUrl: settings.logoUrl.trim() || DEFAULT_HOTSPOT_LOGO_URL,
     advertUrl: settings.advertUrl,

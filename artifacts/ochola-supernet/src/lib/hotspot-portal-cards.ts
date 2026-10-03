@@ -1,4 +1,4 @@
-// Empty means the portal should use its neutral built-in Guest Wi-Fi mark.
+// Empty means the portal should use its built-in default mark.
 // A tenant logo is only shown when that tenant has explicitly configured one.
 export const DEFAULT_HOTSPOT_LOGO_URL = "";
 

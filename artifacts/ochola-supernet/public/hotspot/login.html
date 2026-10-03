@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Guest Wi-Fi — Hotspot Portal</title>
+  <title>OcholaSupernet — Hotspot Portal</title>
   <!-- RouterOS tenant title token is kept for the scoped portal exporter. -->
   <!-- $(login-title) -->
   <script src="/hotspot/md5.js"></script>
@@ -101,7 +101,7 @@
         <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
       </div>
       <div>
-        <p id="portalNameHeader" style="font-size:.9375rem;font-weight:800;letter-spacing:-.02em;color:white;line-height:1.1">Guest Wi-Fi</p>
+        <p id="portalNameHeader" style="font-size:.9375rem;font-weight:800;letter-spacing:-.02em;color:white;line-height:1.1">OcholaSupernet</p>
         <p style="font-size:.6875rem;color:rgba(216,180,254,.55);font-weight:500;letter-spacing:.04em">Hotspot Portal</p>
       </div>
     </div>
@@ -408,7 +408,7 @@
     <div style="width:28px;height:28px;border-radius:.5rem;background:linear-gradient(135deg,#a855f7,#7c3aed);display:flex;align-items:center;justify-content:center">
       <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12 18.75h.008v.008H12v-.008z"/></svg>
     </div>
-     <span id="portalNameFooter" style="color:rgba(255,255,255,.6);font-size:.9375rem;font-weight:700;letter-spacing:-.01em">Guest Wi-Fi</span>
+     <span id="portalNameFooter" style="color:rgba(255,255,255,.6);font-size:.9375rem;font-weight:700;letter-spacing:-.01em">OcholaSupernet</span>
   </div>
   <div style="display:flex;align-items:center;justify-content:center;gap:1.25rem;flex-wrap:wrap;margin-bottom:.625rem">
      <a id="portalFooterPhone" href="#" style="display:none;color:rgba(255,255,255,.35);font-size:.8125rem;text-decoration:none;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.7)'" onmouseout="this.style.color='rgba(255,255,255,.35)'"></a>
@@ -421,7 +421,7 @@
      <span id="portalPrivacyDivider" style="display:none;color:rgba(255,255,255,.15)">·</span>
     <a href="$(link-status)" style="color:rgba(255,255,255,.35);font-size:.8125rem;text-decoration:none;transition:color .2s" onmouseover="this.style.color='rgba(255,255,255,.7)'" onmouseout="this.style.color='rgba(255,255,255,.35)'">My Session</a>
   </div>
-  <p style="color:rgba(255,255,255,.2);font-size:.75rem">© 2026 Guest Wi-Fi. Internet access for your stay.</p>
+  <p style="color:rgba(255,255,255,.2);font-size:.75rem">© 2026 OcholaSupernet. Reliable Internet, Always.</p>
 </footer>
 
 <!-- STK Push Modal -->
@@ -712,7 +712,7 @@ function applyPortalConfig(data){
   if(configuredPlans.length)EMBEDDED_PLANS=configuredPlans;
    var configuredName=typeof data.ispName==="string"?data.ispName.trim():"";
    var isPlatformName=configuredName.toLowerCase().replace(/[^a-z0-9]/g,"")==="ocholasupernet";
-   var name=configuredName&&!isPlatformName?configuredName:"Guest Wi-Fi";
+   var name=configuredName&&!isPlatformName?configuredName:"OcholaSupernet";
   setPortalText("portalNameHeader",name);setPortalText("portalNameFooter",name);
   setPortalText("portalHeroTitle","Connect with "+name);
   setPortalText("portalTagline",typeof data.tagline==="string"?data.tagline:"");
