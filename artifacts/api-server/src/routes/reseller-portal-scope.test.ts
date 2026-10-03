@@ -441,7 +441,38 @@ test("signed reseller portal requests stay within their assigned service", async
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   });
 
+  await t.test("customer Hotspot lookup without router scope is an error, not an empty plan list", async () => {
+    clearRequests();
+    const response = await request(
+      "/api/plans?adminId=7&type=hotspot&activeOnly=true&purchasableOnly=true",
+      { token: null },
+    );
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      ok: false,
+      error: "The Hotspot portal is missing its router or service scope.",
+    });
+    assert.equal(dbRequests.some(row => row.table === "isp_plans"), false);
+    assertNoRouterOrWrites();
+  });
+
+  await t.test("valid router scope with no eligible plans remains an authoritative empty list", async () => {
+    clearRequests();
+    const response = await request(
+      "/api/plans?adminId=7&routerId=999&type=hotspot&activeOnly=true&purchasableOnly=true",
+      { token: null },
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), []);
+    assert.ok(dbRequests.some(row => row.table === "isp_plans"
+      && row.rawQuery.includes("router_id=eq.999")
+      && row.rawQuery.includes("port_id=is.null")
+      && row.rawQuery.includes("is_active=is.true")
+      && row.rawQuery.includes("client_can_purchase=is.true")));
+  });
+
   await t.test("tampered scopes and conflicting caller IDs stop before route handlers", async () => {
+    clearRequests();
     const [encoded, signature] = scopeToken.split(".");
     const tampered = `${encoded}.${signature.slice(0, -1)}${signature.endsWith("0") ? "1" : "0"}`;
     const invalid = await request("/api/plans", { token: tampered });

@@ -331,76 +331,85 @@ NGINX
 }
 
 disable_bil_host
-# The router installer depends on the dedicated management services being
-# present before any router-specific profile is generated. This bootstrap is
-# idempotent and deliberately leaves legacy OpenVPN instances untouched.
-if [ -f "$PROJECT_DIR/deploy/bootstrap-router-management-vpn.sh" ]; then
-  echo "[8/10] Bootstrapping router-management OpenVPN..."
-  bash "$PROJECT_DIR/deploy/bootstrap-router-management-vpn.sh"
-fi
-# Keep the public per-router VPN ports aligned with generated RouterOS
-# profiles. The service is idempotent and survives VPS reboots.
-if [ -f "$PROJECT_DIR/deploy/configure-router-management-ports.sh" ]; then
-  echo "[9/10] Configuring per-router management VPN ports..."
-  bash "$PROJECT_DIR/deploy/configure-router-management-ports.sh"
-fi
+case "${DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP:-false}" in
+  1|true|TRUE|yes|YES) SKIP_ROUTER_MANAGEMENT_SETUP=1 ;;
+  *) SKIP_ROUTER_MANAGEMENT_SETUP=0 ;;
+esac
 
-normalize_management_interface() {
-  local config="$1"
-  local interface="$2"
-
-  if [ ! -s "$config" ]; then
-    echo "ERROR: Management OpenVPN config is missing: ${config}" >&2
-    return 1
+if [ "$SKIP_ROUTER_MANAGEMENT_SETUP" = "1" ]; then
+  echo "Skipping per-router management VPN, port-forward, and firewall setup/verification for this application-only release."
+else
+  # The router installer depends on the dedicated management services being
+  # present before any router-specific profile is generated. This bootstrap is
+  # idempotent and deliberately leaves legacy OpenVPN instances untouched.
+  if [ -f "$PROJECT_DIR/deploy/bootstrap-router-management-vpn.sh" ]; then
+    echo "[8/10] Bootstrapping router-management OpenVPN..."
+    bash "$PROJECT_DIR/deploy/bootstrap-router-management-vpn.sh"
   fi
-  if ! grep -Eq '^dev[[:space:]]+' "$config"; then
-    echo "ERROR: Management OpenVPN config has no dev directive: ${config}" >&2
-    return 1
+  # Keep the public per-router VPN ports aligned with generated RouterOS
+  # profiles. The service is idempotent and survives VPS reboots.
+  if [ -f "$PROJECT_DIR/deploy/configure-router-management-ports.sh" ]; then
+    echo "[9/10] Configuring per-router management VPN ports..."
+    bash "$PROJECT_DIR/deploy/configure-router-management-ports.sh"
   fi
 
-  sed -i -E "s/^dev[[:space:]].*/dev ${interface}/" "$config"
-}
+  normalize_management_interface() {
+    local config="$1"
+    local interface="$2"
 
-normalize_management_interface \
-  "/etc/openvpn/server/ochola-router.conf" "tun-router"
-normalize_management_interface \
-  "/etc/openvpn/server/ochola-router-backup.conf" "tun-router-bkp"
-ensure_management_tunnel() {
-  local stem="$1"
-  local interface="$2"
-  local unit=""
-  local attempt
-
-  if systemctl is-active --quiet "openvpn-server@${stem}" 2>/dev/null; then
-    unit="openvpn-server@${stem}"
-  elif systemctl is-active --quiet "openvpn@${stem}" 2>/dev/null; then
-    unit="openvpn@${stem}"
-  else
-    echo "ERROR: OpenVPN service ${stem} is not active." >&2
-    return 1
-  fi
-
-  if ! ip link show dev "$interface" >/dev/null 2>&1; then
-    echo "  ! ${interface} is absent; restarting ${unit}..."
-    systemctl restart "$unit"
-  fi
-
-  for attempt in $(seq 1 15); do
-    if ip link show dev "$interface" >/dev/null 2>&1; then
-      echo "  ✓ ${interface} is present"
-      return 0
+    if [ ! -s "$config" ]; then
+      echo "ERROR: Management OpenVPN config is missing: ${config}" >&2
+      return 1
     fi
-    sleep 1
-  done
+    if ! grep -Eq '^dev[[:space:]]+' "$config"; then
+      echo "ERROR: Management OpenVPN config has no dev directive: ${config}" >&2
+      return 1
+    fi
 
-  echo "ERROR: ${unit} is active but did not create ${interface}." >&2
-  systemctl status "$unit" --no-pager || true
-  journalctl -u "$unit" -n 60 --no-pager || true
-  return 1
-}
+    sed -i -E "s/^dev[[:space:]].*/dev ${interface}/" "$config"
+  }
 
-ensure_management_tunnel "ochola-router" "tun-router"
-ensure_management_tunnel "ochola-router-backup" "tun-router-bkp"
+  normalize_management_interface \
+    "/etc/openvpn/server/ochola-router.conf" "tun-router"
+  normalize_management_interface \
+    "/etc/openvpn/server/ochola-router-backup.conf" "tun-router-bkp"
+  ensure_management_tunnel() {
+    local stem="$1"
+    local interface="$2"
+    local unit=""
+    local attempt
+
+    if systemctl is-active --quiet "openvpn-server@${stem}" 2>/dev/null; then
+      unit="openvpn-server@${stem}"
+    elif systemctl is-active --quiet "openvpn@${stem}" 2>/dev/null; then
+      unit="openvpn@${stem}"
+    else
+      echo "ERROR: OpenVPN service ${stem} is not active." >&2
+      return 1
+    fi
+
+    if ! ip link show dev "$interface" >/dev/null 2>&1; then
+      echo "  ! ${interface} is absent; restarting ${unit}..."
+      systemctl restart "$unit"
+    fi
+
+    for attempt in $(seq 1 15); do
+      if ip link show dev "$interface" >/dev/null 2>&1; then
+        echo "  ✓ ${interface} is present"
+        return 0
+      fi
+      sleep 1
+    done
+
+    echo "ERROR: ${unit} is active but did not create ${interface}." >&2
+    systemctl status "$unit" --no-pager || true
+    journalctl -u "$unit" -n 60 --no-pager || true
+    return 1
+  }
+
+  ensure_management_tunnel "ochola-router" "tun-router"
+  ensure_management_tunnel "ochola-router-backup" "tun-router-bkp"
+fi
 # 10. Restart API via PM2
 #    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
 #    Explicitly unset SUPABASE_SERVICE_KEY after sourcing so PM2 doesn't inherit
@@ -474,7 +483,8 @@ else
   fi
 fi
 
-if [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then
+if [ "$SKIP_ROUTER_MANAGEMENT_SETUP" != "1" ] &&
+   [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then
   echo "[11/11] Verifying router-management OpenVPN state..."
   bash "$PROJECT_DIR/deploy/verify-router-management-vps.sh"
 fi

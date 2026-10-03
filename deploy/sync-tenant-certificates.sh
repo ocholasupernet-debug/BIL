@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Keep HTTPS tenant vhosts aligned with active ISP admin subdomains.
+# Keep HTTPS tenant vhosts aligned with active ISP admin subdomains and
+# externally configured Hotspot portal hostnames.
 #
 # This intentionally uses host-specific certificates. The production
 # isplatty.org zone is not managed by the Cloudflare hook, so a wildcard
@@ -54,51 +55,64 @@ import time
 import urllib.error
 import urllib.request
 
-url = (
-    os.environ["SUPABASE_URL"].rstrip("/")
-    + "/rest/v1/isp_admins?select=subdomain&is_active=eq.true"
-      "&subdomain=not.is.null&order=id.asc"
-)
 key = os.environ["SERVICE_KEY"]
-request = urllib.request.Request(
-    url,
-    headers={"apikey": key, "Authorization": "Bearer " + key},
-)
+base_url = os.environ["SUPABASE_URL"].rstrip("/") + "/rest/v1/"
 
-admin_data = None
-last_error = "unknown error"
-max_attempts = 4
-for attempt in range(1, max_attempts + 1):
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            admin_data = response.read()
-        break
-    except urllib.error.HTTPError as error:
-        if error.code not in (408, 429) and error.code < 500:
-            raise SystemExit(
-                f"Supabase admin lookup returned HTTP {error.code}."
-            ) from None
-        last_error = f"HTTP {error.code}"
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
-        last_error = type(error).__name__
+def fetch_rows(table, query, optional=False):
+    url = base_url + table + "?" + query
+    request = urllib.request.Request(
+        url,
+        headers={"apikey": key, "Authorization": "Bearer " + key},
+    )
+    last_error = "unknown error"
+    max_attempts = 4
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                rows = json.loads(response.read())
+            if not isinstance(rows, list):
+                raise SystemExit(f"Supabase {table} lookup returned invalid data.")
+            return rows
+        except urllib.error.HTTPError as error:
+            if optional and error.code == 404:
+                print(
+                    f"Supabase {table} is unavailable; custom portal hosts will be skipped.",
+                    file=sys.stderr,
+                )
+                return []
+            if error.code not in (408, 429) and error.code < 500:
+                raise SystemExit(
+                    f"Supabase {table} lookup returned HTTP {error.code}."
+                ) from None
+            last_error = f"HTTP {error.code}"
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            last_error = type(error).__name__
 
-    if attempt < max_attempts:
-        delay = 2 ** (attempt - 1)
-        print(
-            f"Supabase admin lookup failed ({last_error}); "
-            f"retrying in {delay}s ({attempt}/{max_attempts}).",
-            file=sys.stderr,
-        )
-        time.sleep(delay)
+        if attempt < max_attempts:
+            delay = 2 ** (attempt - 1)
+            print(
+                f"Supabase {table} lookup failed ({last_error}); "
+                f"retrying in {delay}s ({attempt}/{max_attempts}).",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
 
-if admin_data is None:
     raise SystemExit(
-        f"Supabase admin lookup failed after {max_attempts} attempts "
+        f"Supabase {table} lookup failed after {max_attempts} attempts "
         f"({last_error})."
     )
 
+admins = fetch_rows(
+    "isp_admins",
+    "select=id,subdomain&is_active=eq.true&order=id.asc",
+)
+branding = fetch_rows(
+    "isp_hotspot_branding",
+    "select=admin_id,portal_hostname&portal_hostname=not.is.null&order=admin_id.asc",
+    optional=True,
+)
 with open(os.environ["ADMIN_JSON"], "wb") as output:
-    output.write(admin_data)
+    output.write(json.dumps({"admins": admins, "branding": branding}).encode("utf-8"))
 PY
 
 mapfile -t subdomains < <(
@@ -116,12 +130,16 @@ print("register")
 print("latex")
 print("vpn")
 with open(sys.argv[1], encoding="utf-8") as source:
-    rows = json.load(source)
-for row in rows:
+    payload = json.load(source)
+for row in payload.get("admins", []):
     value = str(row.get("subdomain") or "").strip().lower()
     if value and pattern.fullmatch(value) and value not in reserved:
         print(value)
 PY
+)
+
+mapfile -t custom_hosts < <(
+  python3 "$PROJECT_DIR/deploy/tenant_portal_hosts.py" "$admin_json" "$BASE_DOMAIN"
 )
 
 if [[ -n "$REQUESTED_SUBDOMAIN" ]]; then
@@ -130,18 +148,43 @@ if [[ -n "$REQUESTED_SUBDOMAIN" ]]; then
     exit 1
   fi
   subdomains=("$REQUESTED_SUBDOMAIN")
+  custom_hosts=()
 fi
 
 rm -f "$VHOST_DIR/bil.isplatty.org.conf"
 
-if [[ "${#subdomains[@]}" -eq 0 ]]; then
-  echo "No active tenant subdomains found."
+route_hosts=()
+for subdomain in "${subdomains[@]}"; do
+  route_hosts+=("${subdomain}.${BASE_DOMAIN}")
+done
+for host in "${custom_hosts[@]}"; do
+  route_hosts+=("$host")
+done
+
+if [[ "${#route_hosts[@]}" -eq 0 ]]; then
+  echo "No active tenant or custom portal hosts found."
   exit 0
 fi
 
+resolve_ipv4_set() {
+  getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u
+}
+
+reference_ipv4="$(resolve_ipv4_set "$BASE_DOMAIN" || true)"
 failed=0
-for subdomain in "${subdomains[@]}"; do
-  host="${subdomain}.${BASE_DOMAIN}"
+for host in "${route_hosts[@]}"; do
+  if [[ "$host" != *".${BASE_DOMAIN}" ]]; then
+    host_ipv4="$(resolve_ipv4_set "$host" || true)"
+    if [[ -z "$host_ipv4" ]]; then
+      echo "Skipping custom portal hostname $host: it has no public IPv4 DNS record."
+      continue
+    fi
+    if [[ -z "$reference_ipv4" || "$host_ipv4" != "$reference_ipv4" ]]; then
+      echo "Skipping custom portal hostname $host: its IPv4 DNS must match $BASE_DOMAIN."
+      continue
+    fi
+  fi
+
   cert_dir="/etc/letsencrypt/live/$host"
   snippet="$VHOST_DIR/$host.conf"
 
@@ -224,4 +267,4 @@ if [[ "$failed" -ne 0 ]]; then
   exit 1
 fi
 
-echo "Tenant HTTPS synchronization complete (${#subdomains[@]} active tenants)."
+echo "Tenant HTTPS synchronization complete (${#route_hosts[@]} tenant and custom portal hosts)."

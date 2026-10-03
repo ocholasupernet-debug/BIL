@@ -38,6 +38,7 @@ import {
   nextHotspotPortalTarget,
   usesGeneratedHotspotPortal,
 } from "@/lib/hotspot-portal-target";
+import { hotspotPortalApiOrigin } from "@/lib/hotspot-portal-origin";
 import {
   AlertCircle, ArrowDownToLine, Check, ChevronDown, CircleHelp, Eye, FolderOpen,
   Image, Info, LayoutTemplate, Link2, Loader2, Mail, Palette, Phone,
@@ -477,8 +478,12 @@ export async function buildPortalHtml(
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
   const template = await response.text();
   const resolvedAppearance = await resolvePortalAppearance(domain, adminId);
+  const apiBase = scope.previewOnly === true
+    ? resolvedAppearance.apiBase
+    : hotspotPortalApiOrigin(settings.portalHostname, resolvedAppearance.apiBase, PUBLIC_BASE_DOMAIN);
   const appearance = {
     ...resolvedAppearance,
+    apiBase,
     portalBackground: safePortalBackground(appearanceOverride.portalBackground ?? resolvedAppearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearanceOverride.portalPackageShape ?? resolvedAppearance.portalPackageShape),
     portalLayout: normalizeHotspotPortalLayout(
@@ -1625,7 +1630,7 @@ export default function HotspotSettings() {
               <Field label="ISP name" help="Used in the page title, header, footer, and downloaded filename.">
                 <input className="hs-input" value={settings.ispName} maxLength={80} onChange={event => update("ispName", event.target.value)} placeholder="Your ISP name" />
               </Field>
-               <Field label="Customer portal hostname" help="Persisted for this tenant. Point DNS to the shared application separately; saving does not change DNS or RouterOS.">
+               <Field label="Customer portal hostname" help="Used by newly generated portal files. Point DNS to the shared application; HTTPS is provisioned after it resolves. Saving does not update files already on the router.">
                  <input className="hs-input" value={settings.portalHostname} maxLength={253} onChange={event => update("portalHostname", event.target.value)} placeholder="wifi.example.com" inputMode="url" />
                </Field>
               <Field label="Tagline" help="A short promise shown below the portal title.">

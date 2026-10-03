@@ -242,6 +242,15 @@ router.get("/plans", async (req, res): Promise<void> => {
    */
   const activeOnly = req.query.activeOnly === "true";
   const purchasableOnly = req.query.purchasableOnly === "true";
+  const customerHotspotRequest = requestedType === "hotspot" && activeOnly && purchasableOnly;
+  if (customerHotspotRequest && !adminId) {
+    res.status(400).json({ ok: false, error: "The Hotspot portal is missing its tenant scope." });
+    return;
+  }
+  if (customerHotspotRequest && !requestedRouterId && !requestedPortId) {
+    res.status(400).json({ ok: false, error: "The Hotspot portal is missing its router or service scope." });
+    return;
+  }
   const availabilityFilters = [
     activeOnly ? "is_active=is.true" : "",
     purchasableOnly ? "client_can_purchase=is.true" : "",
