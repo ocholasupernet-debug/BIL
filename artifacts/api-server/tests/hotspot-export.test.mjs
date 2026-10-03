@@ -441,6 +441,7 @@ test("only the come3 bridge portal opts out of maintenance package hiding", asyn
 
   assert.match(route, /getRouterCreds\(id, adminId\)/);
   assert.match(route, /found\.row\.name !== expectedRouterName/);
+  assert.match(route, /selectUniqueActiveHotspotServer\(servers, bridgeName \|\| undefined\)/);
   assert.ok(
     route.indexOf("found.row.name !== expectedRouterName") < route.indexOf("const read = async"),
     "exact target-name verification runs before any RouterOS command",

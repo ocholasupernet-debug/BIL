@@ -67,6 +67,7 @@ import {
   routerManagementVpnPortForRouter,
 } from "../lib/router-management-vpn.js";
 import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
+import { selectUniqueActiveHotspotServer } from "../lib/hotspot-portal-target.js";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
@@ -1702,11 +1703,20 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
 router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), async (req, res): Promise<void> => {
   const id = Number(req.params.id);
   const adminId = authenticatedAdminId(req, req.body?.adminId);
-  const bridgeName = String(req.body?.bridgeName ?? "").trim();
+  let bridgeName = String(req.body?.bridgeName ?? "").trim();
+  const autoSelectBridgeServer = req.body?.autoSelectBridgeServer === true;
   const expectedRouterName = req.body?.expectedRouterName;
   if (!Number.isSafeInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid router id" }); return; }
   if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bridgeName)) {
+  if (autoSelectBridgeServer && bridgeName) {
+    res.status(400).json({ error: "Choose an explicit bridge name or automatic active-server selection, not both." });
+    return;
+  }
+  if (autoSelectBridgeServer && expectedRouterName === undefined) {
+    res.status(400).json({ error: "Automatic active-server selection requires an exact expected router name." });
+    return;
+  }
+  if (!autoSelectBridgeServer && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(bridgeName)) {
     res.status(400).json({ error: "A valid existing Hotspot bridge name is required." });
     return;
   }
@@ -1746,21 +1756,35 @@ router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), as
     const servers = await read([
       "/ip/hotspot/print",
       "=.proplist=name,interface,profile,disabled",
-      `?interface=${bridgeName}`,
     ]);
-    const bridgeServers = servers.filter(row =>
-      String(row.interface ?? "") === bridgeName
-      && !/^(?:true|yes)$/i.test(String(row.disabled ?? "").trim()),
-    );
+    const selection = selectUniqueActiveHotspotServer(servers, bridgeName || undefined);
+    const bridgeServers = selection.candidates;
     if (bridgeServers.length !== 1) {
-      res.status(409).json({
-        error: bridgeServers.length
+      const error = bridgeName
+        ? bridgeServers.length
           ? `More than one active Hotspot server uses ${bridgeName}; no files were changed.`
-          : `No active Hotspot server uses ${bridgeName}; no files were changed.`,
+          : `No active Hotspot server uses ${bridgeName}; no files were changed.`
+        : bridgeServers.length
+          ? "More than one active Hotspot server is available for automatic selection; no files were changed."
+          : "No active Hotspot server is available for automatic selection; no files were changed.";
+      res.status(409).json({
+        error,
+        ...(autoSelectBridgeServer
+          ? {
+              availableHotspotServers: selection.activeServers.map(row => ({
+                name: String(row.name ?? ""),
+                interface: String(row.interface ?? ""),
+                profile: String(row.profile ?? ""),
+              })),
+            }
+          : {}),
       });
       return;
     }
 
+    if (autoSelectBridgeServer) {
+      bridgeName = String(bridgeServers[0].interface ?? "").trim();
+    }
     const profileName = String(bridgeServers[0].profile ?? "").trim();
     const profiles = await read(["/ip/hotspot/profile/print", "=.proplist=name,html-directory"]);
     const profile = profiles.find(row => String(row.name ?? "") === profileName);

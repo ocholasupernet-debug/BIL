@@ -20,6 +20,7 @@ test "$(grep -Fc 'portalFileReplacementConsent: true' "$SCRIPT_DIR/refresh-hotsp
 grep -Fq '"ispBridgeRouterName": "come3"' "$SCRIPT_DIR/portal-refresh-once.json"
 ! grep -Fq '"ispBridgeRouterId"' "$SCRIPT_DIR/portal-refresh-once.json"
 grep -Fq 'resolveRouterIdByExactName(routers, ispBridgeRouterName)' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
+grep -Fq 'autoSelectBridgeServer: true' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
 grep -Fq 'expectedRouterName: ispBridgeRouterName' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
 
 make_project() {

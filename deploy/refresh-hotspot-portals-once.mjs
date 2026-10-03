@@ -123,7 +123,9 @@ try {
     await refreshPortal(
       `/api/admin/router/${selectedRouterId}/hotspot-portal/bridge-deploy`,
       {
-        bridgeName: "co-hotspot-bridge",
+        ...(ispBridgeRouterName !== null
+          ? { autoSelectBridgeServer: true }
+          : { bridgeName: "co-hotspot-bridge" }),
         overwrite: true,
         portalFileReplacementConsent: true,
         ...(ispBridgeRouterName !== null ? { expectedRouterName: ispBridgeRouterName } : {}),
