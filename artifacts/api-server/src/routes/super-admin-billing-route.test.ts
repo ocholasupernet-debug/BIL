@@ -29,6 +29,14 @@ test("platform income summary is super-admin protected and returns separate tota
   let rpcCalls = 0;
   let transactionReads = 0;
   let accountReads = 0;
+  let platformConfig = {
+    id: 1,
+    cutoff_day: 24,
+    due_day: 6,
+    sales_threshold: 9500,
+    low_sales_fee: 650,
+    high_sales_fee: 1750,
+  };
   const supabaseRequests: string[] = [];
   globalThis.fetch = async (input, init) => {
     const url = new URL(String(input));
@@ -48,6 +56,13 @@ test("platform income summary is super-admin protected and returns separate tota
         renewal_total: "12500",
         renewal_transactions: "6",
       }]), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname.endsWith("/rest/v1/platform_billing_config")) {
+      if (init?.method === "POST") {
+        const update = JSON.parse(String(init.body)) as Partial<typeof platformConfig>;
+        platformConfig = { ...platformConfig, ...update };
+      }
+      return new Response(JSON.stringify([platformConfig]), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     if (url.pathname.endsWith("/rest/v1/isp_transactions")) {
       transactionReads += 1;
@@ -92,6 +107,46 @@ test("platform income summary is super-admin protected and returns separate tota
     });
     assert.equal(loginResponse.status, 200);
     const login = await loginResponse.json() as { token: string };
+    const renewalFeeResponse = await originalFetch(`${endpoint}/platform-config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "x-sa-token": login.token },
+      body: JSON.stringify({ sales_threshold: 11000, low_sales_fee: 800, high_sales_fee: 2100 }),
+    });
+    assert.equal(renewalFeeResponse.status, 200);
+    assert.deepEqual({
+      cutoff_day: platformConfig.cutoff_day,
+      due_day: platformConfig.due_day,
+      sales_threshold: platformConfig.sales_threshold,
+      low_sales_fee: platformConfig.low_sales_fee,
+      high_sales_fee: platformConfig.high_sales_fee,
+    }, {
+      cutoff_day: 24,
+      due_day: 6,
+      sales_threshold: 11000,
+      low_sales_fee: 800,
+      high_sales_fee: 2100,
+    });
+
+    const timingResponse = await originalFetch(`${endpoint}/platform-config`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "x-sa-token": login.token },
+      body: JSON.stringify({ cutoff_day: 26, due_day: 7 }),
+    });
+    assert.equal(timingResponse.status, 200);
+    assert.deepEqual({
+      cutoff_day: platformConfig.cutoff_day,
+      due_day: platformConfig.due_day,
+      sales_threshold: platformConfig.sales_threshold,
+      low_sales_fee: platformConfig.low_sales_fee,
+      high_sales_fee: platformConfig.high_sales_fee,
+    }, {
+      cutoff_day: 26,
+      due_day: 7,
+      sales_threshold: 11000,
+      low_sales_fee: 800,
+      high_sales_fee: 2100,
+    });
+
     const response = await originalFetch(`${endpoint}/income-summary`, {
       headers: { "x-sa-token": login.token },
     });
