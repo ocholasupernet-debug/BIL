@@ -16,6 +16,7 @@ const apiRoot = resolve(import.meta.dirname, "..");
 const webRoot = resolve(apiRoot, "../ochola-supernet");
 const entry = resolve(webRoot, "src/pages/admin/HotspotSettings.tsx");
 const templatePath = resolve(webRoot, "public/hotspot/login.html");
+const rloginTemplatePath = resolve(webRoot, "public/hotspot/rlogin.html");
 const mikrotikRoutePath = resolve(apiRoot, "src/routes/mikrotik-route.ts");
 const resellerRoutePath = resolve(apiRoot, "src/routes/reseller-route.ts");
 const mpesaRoutePath = resolve(apiRoot, "src/routes/mpesa-route.ts");
@@ -449,9 +450,14 @@ test("only the come3 bridge portal opts out of maintenance package hiding", asyn
   assert.match(route, /\.\.\.\(found\.row\.name === "come3" \? \{ allowPackagesDuringMaintenance: true \} : \{\}\)/);
   assert.doesNotMatch(route, /id === 85/);
   assert.match(route, /for \(const fileName of \["login\.html", "rlogin\.html"\] as const\)/);
+  assert.match(route, /getDeployableSource\("hotspot", "rlogin\.html"\)/);
+  assert.match(route, /rloginSource\.content\.toString\("utf8"\)\.includes\("\$\(link-login-only\)"\)/);
+  assert.match(route, /const pageContent = fileName === "login\.html" \? content : rloginSource\.content/);
   const portal = await readFile(templatePath, "utf8");
   assert.match(portal, /shouldHidePackageSection\(maintenance,allowPackagesDuringMaintenance\)/);
   assert.match(portal, /EMBEDDED_CONFIG&&EMBEDDED_CONFIG\.allowPackagesDuringMaintenance===true/);
+  const refreshHandoff = await readFile(rloginTemplatePath, "utf8");
+  assert.match(refreshHandoff, /http-equiv="refresh" content="0;url=\$\(link-login-only\)"/);
 
   const reseller = await readFile(resellerRoutePath, "utf8");
   assert.doesNotMatch(reseller, /allowPackagesDuringMaintenance/);

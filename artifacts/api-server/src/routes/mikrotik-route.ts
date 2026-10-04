@@ -1696,9 +1696,9 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
 
 /* ─── POST /api/admin/router/:id/hotspot-portal/bridge-deploy ─────────────── */
 /**
- * Refresh only the payment-first portal files used by a named existing
- * Hotspot bridge. RouterOS service configuration is read for verification
- * but never changed here.
+ * Refresh the payment-first login and RouterOS refresh/re-login handoff for a
+ * named existing Hotspot bridge. RouterOS service configuration is read for
+ * verification but never changed here.
  */
 router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), async (req, res): Promise<void> => {
   const id = Number(req.params.id);
@@ -1825,6 +1825,11 @@ router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), as
       res.status(500).json({ error: "The approved default Hotspot portal asset is unavailable." });
       return;
     }
+    const rloginSource = getDeployableSource("hotspot", "rlogin.html");
+    if (!rloginSource || !rloginSource.content.toString("utf8").includes("$(link-login-only)")) {
+      res.status(500).json({ error: "The approved Hotspot refresh handoff is unavailable." });
+      return;
+    }
     const config = JSON.stringify({
       apiBase: origin,
       adminId,
@@ -1847,8 +1852,9 @@ router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), as
     const content = Buffer.from(html, "utf8");
     const deployedFiles: Array<{ destinationPath: string; size: number; replaced: boolean }> = [];
     for (const fileName of ["login.html", "rlogin.html"] as const) {
+      const pageContent = fileName === "login.html" ? content : rloginSource.content;
       const token = createPendingRouterFileSource({
-        content,
+        content: pageContent,
         contentType: "text/html; charset=utf-8",
         fileName,
       });
