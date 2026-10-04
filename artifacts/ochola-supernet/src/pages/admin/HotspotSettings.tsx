@@ -1030,6 +1030,7 @@ export default function HotspotSettings() {
     setNotice(null);
   };
   const updatePortalCard = (key: HotspotPortalCardKey, enabled: boolean) => {
+    if (key === "packages") return;
     setSettings(previous => {
       const legacyValues: Partial<HSettings> = key === "voucher"
         ? { vouchers: enabled ? "Yes" : "No" }
@@ -1808,15 +1809,20 @@ export default function HotspotSettings() {
               <div className="hs-visibility-grid">
                 {HOTSPOT_PORTAL_CARD_OPTIONS.map(card => {
                   const enabled = settings.portalCards[card.key];
+                  const purchaseRequired = card.key === "packages";
                   return (
                     <button
                       key={card.key}
                       type="button"
                       className="hs-visibility-card"
+                      disabled={purchaseRequired}
                       role="switch"
                       aria-checked={enabled}
-                      aria-label={`${card.label} visibility`}
-                      onClick={() => updatePortalCard(card.key, !enabled)}
+                      aria-label={`${card.label} visibility${purchaseRequired ? " (always on for customer purchases)" : ""}`}
+                      title={purchaseRequired ? "Always enabled so customers can purchase hotspot plans." : undefined}
+                      onClick={() => {
+                        if (!purchaseRequired) updatePortalCard(card.key, !enabled);
+                      }}
                     >
                       <span className="hs-visibility-copy">
                         <strong>{card.label}</strong>

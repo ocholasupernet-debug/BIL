@@ -12,7 +12,7 @@ export const HOTSPOT_PORTAL_CARD_OPTIONS = [
   { key: "hero", label: "Welcome section", description: "Main introduction and service highlights." },
   { key: "announcement", label: "Announcement banner", description: "Promotion, outage, or maintenance notice." },
   { key: "expiryNotice", label: "Expiry notice", description: "Message shown when a package has expired or run out." },
-  { key: "packages", label: "Packages", description: "Package list and TV purchase entry point." },
+  { key: "packages", label: "Packages", description: "Package list and TV purchase entry point. Always enabled for customer purchases." },
   { key: "paymentStatus", label: "Payment status", description: "M-Pesa availability or checkout guidance." },
   { key: "connectionSupport", label: "Connection support", description: "Troubleshooting card and connection check." },
   { key: "accountLogin", label: "Account login", description: "Username and password sign-in form." },
@@ -65,8 +65,12 @@ export function normalizeHotspotPortalCards(
   const cards = { ...DEFAULT_HOTSPOT_PORTAL_CARDS };
 
   for (const { key } of HOTSPOT_PORTAL_CARD_OPTIONS) {
+    // Package checkout is a core customer flow and cannot be hidden by saved
+    // branding settings, including settings created before this restriction.
+    if (key === "packages") continue;
     if (typeof input[key] === "boolean") cards[key] = input[key];
   }
+  cards.packages = true;
 
   if (typeof input.voucher !== "boolean" && legacy.vouchers === "No") cards.voucher = false;
   if (typeof input.advert !== "boolean" && legacy.enableAdvert === "Enable") cards.advert = true;

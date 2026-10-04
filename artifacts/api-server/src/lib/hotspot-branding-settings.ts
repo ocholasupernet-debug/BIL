@@ -37,6 +37,9 @@ export function sanitizeHotspotBrandingSettings(value: unknown): Record<string, 
       for (const [cardKey, visible] of Object.entries(item)) {
         if (SAFE_PORTAL_CARD_KEYS.has(cardKey) && typeof visible === "boolean") cards[cardKey] = visible;
       }
+      // Existing portal bundles read this public setting at runtime; keep
+      // customer checkout visible without requiring a MikroTik file update.
+      cards.packages = true;
       output.portalCards = cards;
     } else if (key === "portalLayout") {
       if (typeof item === "string" && SAFE_PORTAL_LAYOUTS.has(item)) output.portalLayout = item;
