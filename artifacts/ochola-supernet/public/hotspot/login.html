@@ -518,6 +518,11 @@ function portalCardEnabled(key){return PORTAL_CARD_VISIBILITY[key]!==false;}
 function isSupportedPaymentGateway(gateway){
   return gateway==="mpesa_paybill"||gateway==="mpesa_till_push"||gateway==="bank_stk_push";
 }
+function portalMpesaPromptEnabled(config){
+  if(!config||typeof config!=="object")return false;
+  if(typeof config.mpesaPromptEnabled==="boolean")return config.mpesaPromptEnabled;
+  return config.mpesaPrompt==="Enable";
+}
 function canStartPaymentCheckout(){
   return MPESA_PROMPT_ENABLED&&PAYMENT_STATUS_LOADED&&PAYMENT_METHOD_READY&&!PORTAL_PREVIEW_ONLY;
 }
@@ -735,7 +740,7 @@ function applyPortalConfig(data){
   if(!data||typeof data!=="object")return;
   PORTAL_CARD_VISIBILITY=normalisePortalCardVisibility(data.portalCards,data);
   applyPortalCardVisibility();
-  MPESA_PROMPT_ENABLED=data.mpesaPromptEnabled===true;
+  MPESA_PROMPT_ENABLED=portalMpesaPromptEnabled(data);
   var colors=data.colors&&typeof data.colors==="object"?data.colors:{};
   var hexKeys=["bgColor","bgColor2","primaryColor","accentColor","cardColor","buttonColor","textColor","inputBgColor"];
   var cssNames={bgColor:"--portal-bg",bgColor2:"--portal-bg2",primaryColor:"--portal-accent",accentColor:"--portal-accent2",cardColor:"--portal-card",buttonColor:"--portal-button",textColor:"--portal-text",inputBgColor:"--portal-input"};
