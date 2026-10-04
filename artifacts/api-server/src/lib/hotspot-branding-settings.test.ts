@@ -23,6 +23,13 @@ test("keeps only allowlisted boolean hotspot card visibility settings", () => {
   });
 });
 
+test("forces package checkout visible when legacy branding settings hid it", () => {
+  assert.deepEqual(
+    sanitizeHotspotBrandingSettings({ portalCards: { packages: false, voucher: false } }),
+    { portalCards: { packages: true, voucher: false } },
+  );
+});
+
 test("drops malformed portal card maps without discarding other branding settings", () => {
   const sanitized = sanitizeHotspotBrandingSettings({
     tagline: "Fast internet",
