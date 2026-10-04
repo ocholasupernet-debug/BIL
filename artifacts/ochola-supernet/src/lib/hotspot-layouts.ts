@@ -522,6 +522,8 @@ const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
   `,
 };
 
+export const STATIC_PORTAL_LAYOUT_CSS_TEXT = Object.values(STATIC_PORTAL_LAYOUT_CSS).join("\n");
+
 export function renderStaticPortalLayoutCss(value: unknown): string {
   return STATIC_PORTAL_LAYOUT_CSS[normalizeHotspotPortalLayout(value)] ?? "";
 }

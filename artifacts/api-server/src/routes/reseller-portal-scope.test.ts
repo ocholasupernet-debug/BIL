@@ -337,7 +337,11 @@ test("signed reseller portal requests stay within their assigned service", async
     } else if (table === "isp_hotspot_branding") {
       rows = [
         { admin_id: 7, portal_hostname: "parent.example.test", settings: { ispName: "Parent ISP Theme" } },
-        { admin_id: 19, portal_hostname: "reseller.example.test", settings: { ispName: "Assigned Reseller Theme" } },
+        {
+          admin_id: 19,
+          portal_hostname: "reseller.example.test",
+          settings: { ispName: "Assigned Reseller Theme", portalLayout: "signal-grid" },
+        },
       ].filter(row => matches(row, query));
     } else if (table === "isp_dashboard_preferences") {
       rows = [
@@ -632,10 +636,11 @@ test("signed reseller portal requests stay within their assigned service", async
     assert.equal(brandingResponse.status, 200);
     const branding = await brandingResponse.json() as {
       adminId: number;
-      branding: { settings: { ispName?: string } };
+      branding: { settings: { ispName?: string; portalLayout?: string } };
     };
     assert.equal(branding.adminId, 7);
     assert.equal(branding.branding.settings.ispName, "Assigned Reseller Theme");
+    assert.equal(branding.branding.settings.portalLayout, "signal-grid");
     assert.ok(dbRequests.some(row => row.table === "isp_hotspot_branding"
       && row.rawQuery.includes("admin_id=eq.19")));
 
@@ -647,11 +652,13 @@ test("signed reseller portal requests stay within their assigned service", async
       fontFamily: string;
       accentColor: string;
       portalBackground: string;
+      portalPackageShape: string;
     };
     assert.equal(typography.adminId, 7);
     assert.equal(typography.fontFamily, "Roboto");
     assert.equal(typography.accentColor, "#e14b2f");
     assert.equal(typography.portalBackground, "ocean");
+    assert.equal(typography.portalPackageShape, "pill");
     assert.ok(dbRequests.some(row => row.table === "isp_admins"
       && row.rawQuery.includes("id=eq.19")));
     assert.ok(dbRequests.some(row => row.table === "isp_dashboard_preferences"

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   HOSTED_PORTAL_LAYOUT_CSS,
   HOTSPOT_PORTAL_LAYOUTS,
+  STATIC_PORTAL_LAYOUT_CSS_TEXT,
   normalizeHotspotPortalLayout,
   renderStaticPortalLayoutCss,
 } from "./hotspot-layouts.js";
@@ -20,12 +21,13 @@ test("unknown or legacy layout values fall back to the existing Classic design",
   assert.equal(normalizeHotspotPortalLayout(undefined), "classic");
   assert.equal(normalizeHotspotPortalLayout("legacy-dark-portal"), "classic");
   assert.equal(normalizeHotspotPortalLayout("split-horizon"), "split-horizon");
-  assert.equal(renderStaticPortalLayoutCss(undefined), "");
+  assert.match(renderStaticPortalLayoutCss(undefined), /data-portal-layout="classic"/);
 });
 
 test("every alternative has generated-portal and hosted-page styling", () => {
   for (const layout of HOTSPOT_PORTAL_LAYOUTS.slice(1)) {
     assert.match(renderStaticPortalLayoutCss(layout.value), new RegExp(`data-portal-layout="${layout.value}"`));
+    assert.match(STATIC_PORTAL_LAYOUT_CSS_TEXT, new RegExp(`data-portal-layout="${layout.value}"`));
     assert.match(HOSTED_PORTAL_LAYOUT_CSS, new RegExp(`data-portal-layout="${layout.value}"`));
   }
 });

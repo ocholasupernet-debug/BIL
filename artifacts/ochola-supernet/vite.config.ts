@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+import { hotspotLayoutsStylesheetPlugin } from "./src/lib/hotspot-layouts-vite-plugin";
 
 const rawPort = process.env.PORT ?? "5000";
 const port = Number(rawPort);
@@ -13,6 +14,7 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    hotspotLayoutsStylesheetPlugin(),
     runtimeErrorOverlay(),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
