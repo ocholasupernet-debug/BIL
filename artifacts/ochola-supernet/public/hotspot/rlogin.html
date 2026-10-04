@@ -3,19 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#0d0415">
+  <meta name="theme-color" content="#21180d">
   <meta http-equiv="refresh" content="0;url=$(link-login-only)">
   <title>OcholaSupernet — Hotspot Portal</title>
   <style>
     *,*::before,*::after{box-sizing:border-box}
     :root{
-      --portal-accent:#d96835;
-      --portal-accent-dark:#9e3f1f;
-      --portal-accent-border:#d9683555;
-      --portal-bg:#0d0415;
-      --portal-bg2:#1a0735;
-      --portal-card:#1a0f2e;
-      --portal-text:#fff;
+      --portal-accent:#16a34a;
+      --portal-accent-dark:#0f766e;
+      --portal-accent-border:rgba(74,222,128,.32);
+      --portal-bg:#21180d;
+      --portal-bg2:#713f12;
+      --portal-card:rgba(8,35,20,.93);
+      --portal-text:#f0fdf4;
     }
     html,body{min-height:100%;margin:0}
     body{
@@ -25,7 +25,7 @@
       justify-content:center;
       padding:1.25rem;
       color:var(--portal-text);
-      background:radial-gradient(ellipse 120% 80% at 50% -10%,var(--portal-accent-dark) 0%,var(--portal-bg) 55%);
+      background:radial-gradient(ellipse 120% 80% at 50% -10%,var(--portal-bg2) 0%,var(--portal-bg) 55%);
       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,ui-sans-serif,system-ui,sans-serif;
     }
     .card{
@@ -34,10 +34,10 @@
       overflow:hidden;
       padding:2.5rem 2rem;
       text-align:center;
-      border:1px solid rgba(255,255,255,.08);
-      border-radius:1.25rem;
-      background:rgba(255,255,255,.04);
-      box-shadow:0 32px 64px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.04);
+      border:1px solid rgba(74,222,128,.25);
+      border-radius:1.35rem;
+      background:var(--portal-card);
+      box-shadow:0 18px 42px rgba(0,0,0,.34),0 0 28px rgba(34,197,94,.05);
       backdrop-filter:blur(20px);
       -webkit-backdrop-filter:blur(20px);
     }
@@ -49,7 +49,7 @@
       height:16rem;
       transform:translateX(-50%);
       border-radius:50%;
-      background:radial-gradient(ellipse,rgba(147,51,234,.25),transparent 70%);
+      background:radial-gradient(ellipse,rgba(34,197,94,.2),transparent 70%);
       filter:blur(32px);
       pointer-events:none;
     }
@@ -60,7 +60,7 @@
       width:2.75rem;
       height:2.75rem;
       place-items:center;
-      border:1px solid rgba(255,255,255,.18);
+      border:1px solid rgba(74,222,128,.3);
       border-radius:.875rem;
       background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));
       box-shadow:0 4px 16px var(--portal-accent-border);
@@ -73,17 +73,17 @@
       align-items:center;
       gap:.5rem;
       padding:.4rem .75rem;
-      border:1px solid rgba(167,139,250,.25);
+      border:1px solid rgba(74,222,128,.25);
       border-radius:9999px;
-      background:rgba(124,58,237,.12);
-      color:#ddd6fe;
+      background:rgba(34,197,94,.12);
+      color:#bbf7d0;
       font-size:.65rem;
       font-weight:800;
       letter-spacing:.12em;
     }
     .status-dot{width:.45rem;height:.45rem;border-radius:50%;background:#4ade80;box-shadow:0 0 0 3px rgba(74,222,128,.15)}
-    h1{position:relative;z-index:1;margin:1.25rem 0 .65rem;font-size:clamp(1.4rem,5vw,1.8rem);font-weight:850;letter-spacing:-.025em}
-    .message{position:relative;z-index:1;margin:0;color:rgba(255,255,255,.62);font-size:.9rem;line-height:1.6}
+    h1{position:relative;z-index:1;margin:1.25rem 0 .65rem;font-size:clamp(1.4rem,5vw,1.8rem);font-weight:850;letter-spacing:-.025em;text-shadow:0 0 28px rgba(74,222,128,.18)}
+    .message{position:relative;z-index:1;margin:0;color:rgba(240,253,244,.7);font-size:.9rem;line-height:1.6}
     .continue-link{
       position:relative;
       z-index:1;
@@ -93,7 +93,7 @@
       gap:.5rem;
       margin-top:1.75rem;
       padding:.75rem 1rem;
-      border:1px solid rgba(255,255,255,.14);
+      border:1px solid rgba(74,222,128,.3);
       border-radius:.625rem;
       color:#fff;
       background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));
@@ -108,7 +108,7 @@
       height:1rem;
       margin:1.5rem auto 0;
       border:2px solid rgba(255,255,255,.2);
-      border-top-color:#c4b5fd;
+      border-top-color:#86efac;
       border-radius:50%;
       animation:spin .8s linear infinite;
     }
@@ -120,12 +120,12 @@
   <main class="card">
     <div class="glow" aria-hidden="true"></div>
     <div class="brand-row">
-      <span class="brand-mark" aria-hidden="true">O</span>
-      <span class="brand-name">OcholaSupernet</span>
+      <span class="brand-mark" aria-hidden="true">Z</span>
+      <span class="brand-name">ZOMBII ZOMBII</span>
     </div>
     <div class="status"><span class="status-dot" aria-hidden="true"></span>SECURE HOTSPOT</div>
     <h1>Returning to your payment portal</h1>
-    <p class="message" role="status" aria-live="polite">Taking you back to the M-Pesa login to continue.</p>
+    <p class="message" role="status" aria-live="polite">Taking you back to the ZOMBII ZOMBII M-Pesa login to continue.</p>
     <a class="continue-link" href="$(link-login-only)">
       Continue to M-Pesa login
       <span aria-hidden="true">→</span>

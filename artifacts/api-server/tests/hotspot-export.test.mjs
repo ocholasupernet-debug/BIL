@@ -463,18 +463,19 @@ test("only the come3 bridge portal opts out of maintenance package hiding", asyn
   assert.doesNotMatch(reseller, /allowPackagesDuringMaintenance/);
 });
 
-test("payment and refresh Hotspot pages share the same default appearance", async () => {
-  const portal = await readFile(templatePath, "utf8");
+test("come3 refresh handoff matches the forest-pulse portal while keeping its redirect", async () => {
   const refreshHandoff = await readFile(rloginTemplatePath, "utf8");
   for (const token of [
-    "--portal-accent:#d96835",
-    "--portal-accent-dark:#9e3f1f",
-    "--portal-bg:#0d0415",
-    "--portal-card:#1a0f2e",
+    "--portal-accent:#16a34a",
+    "--portal-accent-dark:#0f766e",
+    "--portal-bg:#21180d",
+    "--portal-bg2:#713f12",
+    "rgba(8,35,20,.93)",
+    "rgba(74,222,128,.25)",
   ]) {
-    assert.ok(portal.includes(token), `payment page should include ${token}`);
     assert.ok(refreshHandoff.includes(token), `refresh handoff should include ${token}`);
   }
+  assert.match(refreshHandoff, /ZOMBII ZOMBII/);
   assert.match(refreshHandoff, /http-equiv="refresh" content="0;url=\$\(link-login-only\)"/);
   assert.match(refreshHandoff, /href="\$\(link-login-only\)"/);
   assert.doesNotMatch(refreshHandoff, /function sendStk\(/);
