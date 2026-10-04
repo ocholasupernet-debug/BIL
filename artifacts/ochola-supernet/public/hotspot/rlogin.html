@@ -18,6 +18,8 @@
       --portal-text:#f0fdf4;
     }
     html,body{min-height:100%;margin:0}
+    /* RouterOS keeps this handoff file, but customers should not see a second portal. */
+    body[hidden]{display:none!important}
     body{
       min-height:100vh;
       display:flex;
@@ -116,7 +118,7 @@
     @media(prefers-reduced-motion:reduce){.spinner{animation:none}}
   </style>
 </head>
-<body>
+<body hidden>
   <main class="card">
     <div class="glow" aria-hidden="true"></div>
     <div class="brand-row">

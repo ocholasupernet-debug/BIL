@@ -716,25 +716,6 @@ function normalisePortalPackageShape(value){
   var allowed=["rounded","soft-square","compact","square","circle","pill","hexagon","octagon","squircle"];
   return allowed.indexOf(String(value||""))>=0?String(value):"rounded";
 }
-function normalisePortalLayout(value){
-  var allowed=["classic","split-horizon","coastal-light","signal-grid","warm-studio","forest-pulse"];
-  return allowed.indexOf(String(value||""))>=0?String(value):"classic";
-}
-function applyPortalLayout(value){
-  var layout=normalisePortalLayout(value);
-  document.documentElement.setAttribute("data-portal-layout",layout);
-  if(document.getElementById("hotspot-portal-layout"))return;
-  var publicBase=safePublicApiBase(PORTAL_API_BASE);
-  if(!publicBase)return;
-  var stylesheet=document.getElementById("hotspot-portal-layout-runtime");
-  if(!stylesheet){
-    stylesheet=document.createElement("link");
-    stylesheet.id="hotspot-portal-layout-runtime";
-    stylesheet.rel="stylesheet";
-    document.head.appendChild(stylesheet);
-  }
-  stylesheet.href=publicBase+"/hotspot/portal-layouts.css";
-}
 function applyPortalBackground(value){
   var backgrounds={
     midnight:"radial-gradient(ellipse 120% 80% at 50% -10%,#37104d 0%,#0d0415 55%)",
@@ -798,7 +779,6 @@ function applyPortalConfig(data){
   applyPortalBackground(data.portalBackground);
   PORTAL_PACKAGE_SHAPE=normalisePortalPackageShape(data.portalPackageShape);
   document.body.setAttribute("data-package-shape",PORTAL_PACKAGE_SHAPE);
-  applyPortalLayout(data.portalLayout);
   if(typeof colors.cardColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.cardColor))document.querySelectorAll(".sec-card").forEach(function(element){element.style.background=colors.cardColor;});
   if(typeof colors.inputBgColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.inputBgColor))document.querySelectorAll(".inp").forEach(function(element){element.style.background=colors.inputBgColor;});
 
