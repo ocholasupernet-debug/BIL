@@ -490,6 +490,7 @@ var ROUTER_HOTSPOT_SERVER_NAME="$(server-name)";
 var EMBEDDED_PLANS=[];
   var PORTAL_API_TIMEOUT_MS=4000;
   var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
+var planLoadError="", plansLoadedFromApi=false;
 var ROUTER_MAC="$(mac)";
 var ROUTER_IP="$(ip)";
 var ROUTER_CHAP_ID="$(chap-id)";
@@ -767,6 +768,13 @@ function applyPortalConfig(data){
   if(!data||typeof data!=="object")return;
   var publicBase=safePublicApiBase(data.apiBase);
   if(publicBase)PORTAL_API_BASE=publicBase;
+  /* Package context must survive optional appearance rendering failures. */
+  if(Number.isSafeInteger(Number(data.adminId))&&Number(data.adminId)>0)PORTAL_ADMIN_ID=Number(data.adminId);
+  if(Number.isSafeInteger(Number(data.routerId))&&Number(data.routerId)>0)PORTAL_ROUTER_ID=Number(data.routerId);
+  if(Number.isSafeInteger(Number(data.portId))&&Number(data.portId)>0)PORTAL_PORT_ID=Number(data.portId);
+  PORTAL_PREVIEW_ONLY=data.previewOnly===true;
+  var configuredPlans=normalisePlanList(data.plans);
+  if(configuredPlans.length)EMBEDDED_PLANS=configuredPlans;
   PORTAL_CARD_VISIBILITY=normalisePortalCardVisibility(data.portalCards,data);
   applyPortalCardVisibility();
   MPESA_PROMPT_ENABLED=portalMpesaPromptEnabled(data);
@@ -793,12 +801,7 @@ function applyPortalConfig(data){
   applyPortalLayout(data.portalLayout);
   if(typeof colors.cardColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.cardColor))document.querySelectorAll(".sec-card").forEach(function(element){element.style.background=colors.cardColor;});
   if(typeof colors.inputBgColor==="string"&&/^#[0-9a-f]{6}$/i.test(colors.inputBgColor))document.querySelectorAll(".inp").forEach(function(element){element.style.background=colors.inputBgColor;});
-  if(Number.isSafeInteger(Number(data.adminId))&&Number(data.adminId)>0)PORTAL_ADMIN_ID=Number(data.adminId);
-   if(Number.isSafeInteger(Number(data.routerId))&&Number(data.routerId)>0)PORTAL_ROUTER_ID=Number(data.routerId);
-   if(Number.isSafeInteger(Number(data.portId))&&Number(data.portId)>0)PORTAL_PORT_ID=Number(data.portId);
-   PORTAL_PREVIEW_ONLY=data.previewOnly===true;
-  var configuredPlans=normalisePlanList(data.plans);
-  if(configuredPlans.length)EMBEDDED_PLANS=configuredPlans;
+
    var configuredName=typeof data.ispName==="string"?data.ispName.trim():"";
    var isPlatformName=configuredName.toLowerCase().replace(/[^a-z0-9]/g,"")==="ocholasupernet";
     var name=configuredName&&!isPlatformName?configuredName:"OcholaSupernet";
@@ -928,7 +931,7 @@ function loadPortalTypography(done){
        }
        applyPortalConfig(merged);
      }
-     if(typographyData&&Number.isSafeInteger(Number(typographyData.adminId))){
+     if(!EMBEDDED_CONFIG&&typographyData&&Number.isSafeInteger(Number(typographyData.adminId))){
        PORTAL_ADMIN_ID=Number(typographyData.adminId);
      }
      applyPortalTypography(typographyData);
@@ -995,7 +998,13 @@ function loadPaymentStatus(){
  }
  function refreshPlansFromApi(){
     if(PORTAL_PREVIEW_ONLY||planRequestInFlight||(typeof document!=="undefined"&&document.hidden))return;
+   if(!(PORTAL_ADMIN_ID>0&&PORTAL_ROUTER_ID>0)){
+     planLoadError="This hotspot page is missing its router configuration. Please contact your internet provider.";
+     if(!PLANS.length)renderPlans();
+     return;
+   }
    planRequestInFlight=true;
+   var requestScope=[PORTAL_ADMIN_ID,PORTAL_ROUTER_ID,PORTAL_PORT_ID,PORTAL_API_BASE].join("|");
     var query=(PORTAL_ADMIN_ID>0?"&adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"")+
        (PORTAL_ROUTER_ID>0?"&routerId="+encodeURIComponent(PORTAL_ROUTER_ID):"")+
         (PORTAL_PORT_ID>0?"&portId="+encodeURIComponent(PORTAL_PORT_ID):"")+
@@ -1008,16 +1017,23 @@ function loadPaymentStatus(){
       if(timeoutId){window.clearTimeout(timeoutId);timeoutId=0;}
       if(didTimeout&&controller){try{controller.abort();}catch(e){}}
      planRequestInFlight=false;
+     if(requestScope!==[PORTAL_ADMIN_ID,PORTAL_ROUTER_ID,PORTAL_PORT_ID,PORTAL_API_BASE].join("|")){
+       refreshPlansFromApi();
+       return;
+     }
      var remotePlans=normalisePlanList(data);
       /* A successful empty response is authoritative: it clears stale
          embedded packages so a new router cannot show another router's plans. */
-      if(apiSucceeded){
-       var signature=planSignature(remotePlans);
-       if(signature!==lastPlanSignature){
-         PLANS=remotePlans;
-         lastPlanSignature=signature;
-         renderPlans();
-       }
+      if(apiSucceeded&&Array.isArray(data)&&remotePlans.length===data.length){
+       var shouldRender=planSignature(remotePlans)!==lastPlanSignature||!plansLoadedFromApi||Boolean(planLoadError);
+       PLANS=remotePlans;
+       lastPlanSignature=planSignature(remotePlans);
+       plansLoadedFromApi=true;
+       planLoadError="";
+       if(shouldRender)renderPlans();
+     }else{
+       planLoadError="Packages could not be loaded. Check your connection and try again, or contact your internet provider.";
+       if(!PLANS.length)renderPlans();
      }
    }
    /* A pre-authenticated RouterOS request can remain pending instead of
@@ -1040,6 +1056,10 @@ function loadPaymentStatus(){
      lastPlanSignature=planSignature(PLANS);
      renderPlans();
      plansInitialised=true;
+   }else if(!plansLoadedFromApi&&EMBEDDED_PLANS.length){
+     PLANS=EMBEDDED_PLANS.slice();
+     lastPlanSignature=planSignature(PLANS);
+     renderPlans();
    }
    refreshPlansFromApi();
    if(!planRefreshTimer){
@@ -1054,7 +1074,12 @@ function loadPaymentStatus(){
 
 function renderPlans(){
   var grid=document.getElementById("plansGrid");
-  if(!PLANS.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:2rem;color:rgba(255,255,255,.3)">No packages are configured for this hotspot.</div>';return;}
+  if(!PLANS.length){
+    grid.innerHTML='<div role="status" style="grid-column:1/-1;text-align:center;padding:2rem;color:rgba(255,255,255,.75)"><p id="planLoadMessage"></p><button type="button" id="retryPlansButton" class="btn" style="margin-top:1rem">Retry packages</button></div>';
+    document.getElementById("planLoadMessage").textContent=planLoadError||(plansLoadedFromApi||PORTAL_PREVIEW_ONLY?"No packages are currently available for this hotspot.":"Loading packages…");
+    document.getElementById("retryPlansButton").onclick=function(){loadPlans();};
+    return;
+  }
   grid.innerHTML=PLANS.map(function(p,i){
     var c=COLORS[i%COLORS.length];
     var checkoutAvailable=canStartPaymentCheckout();

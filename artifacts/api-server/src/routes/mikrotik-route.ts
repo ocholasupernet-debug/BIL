@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomBytes } from "crypto";
+import { prepareIspHotspotAsset } from "../lib/isp-hotspot-asset.js";
 import { preserveCumulativeUsage } from "../lib/prepaid-usage.js";
 import {
   fetchHotspotUsers,
@@ -1134,10 +1135,13 @@ router.post("/router/:id/files/deploy", requireAdmin(), async (req, res): Promis
   const destinationPath = `${directory}/${source.source.name}`;
   if (overwrite && !requireHotspotFileReplacementConsent(req, res)) return;
 
+  const configuredContent = await prepareIspHotspotAsset(source.source.name, source.content, {
+    adminId, routerId: id, apiBase: managementScriptSourceOrigin(req),
+  });
   cleanPendingRouterFileSources();
   const token = randomBytes(24).toString("hex");
   pendingRouterFileSources.set(token, {
-    content: source.content,
+    content: configuredContent,
     contentType: contentTypeForFile(source.source.name),
     fileName: source.source.name.split("/").pop() ?? source.source.name,
     expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
@@ -1277,10 +1281,13 @@ async function runBulkFileDeployment(
         continue;
       }
 
+      const configuredContent = await prepareIspHotspotAsset(sourceName, sourceContent.content, {
+        adminId: job.adminId, routerId: job.routerId, apiBase: origin,
+      });
       cleanPendingRouterFileSources();
       const token = randomBytes(24).toString("hex");
       pendingRouterFileSources.set(token, {
-        content: sourceContent.content,
+        content: configuredContent,
         contentType: contentTypeForFile(sourceName),
         fileName: sourceName.split("/").pop() ?? sourceName,
         expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
@@ -2420,11 +2427,14 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       roamingLogin: `${sourceOrigin}/api/router-file-source/${id}/hotspot-rlogin.html`,
       md5: `${sourceOrigin}/api/router-file-source/${id}/hotspot-md5.js`,
     };
-    const portalFileContents = defaultPortalFiles.map(file => {
+    const portalFileContents = await Promise.all(defaultPortalFiles.map(async file => {
       const source = getDeployableSource("hotspot", file.sourceName);
       if (!source) throw new Error(`Bundled Hotspot file "${file.sourceName}" is unavailable.`);
-      return { ...file, content: source.content };
-    });
+      const content = await prepareIspHotspotAsset(file.sourceName, source.content, {
+        adminId, routerId: id, apiBase: sourceOrigin,
+      });
+      return { ...file, content };
+    }));
     const vpnScript = generateRouterManagementVpnScript({
       vpsPublicIp: vpsIp,
       vpnPort: routerManagementVpnPortForRouter(id),
