@@ -10,6 +10,7 @@ import {
   forgetHotspotDevice,
   hotspotSavedDevicesStorageKey,
   readSavedHotspotDevices,
+  renameHotspotDevice,
   saveHotspotDevice,
   type SavedHotspotDevice,
 } from "@/lib/saved-hotspot-devices";
@@ -467,6 +468,8 @@ function HotspotLoginView({
     () => readSavedHotspotDevices(savedTvDevicesStorageKey),
   );
   const [rememberTvDevice, setRememberTvDevice] = useState(false);
+  const [renamingTvDeviceMac, setRenamingTvDeviceMac] = useState("");
+  const [renamingTvDeviceName, setRenamingTvDeviceName] = useState("");
   const [tvDeviceSaveNotice, setTvDeviceSaveNotice] = useState("");
   const [showTvSuccess, setShowTvSuccess] = useState(false);
   const [paidAccessExpiresAt, setPaidAccessExpiresAt] = useState<string | null>(null);
@@ -905,6 +908,33 @@ function HotspotLoginView({
     setTvMacAddress(device.macAddress);
     setTvDeviceName(device.name);
     setRememberTvDevice(true);
+    setRenamingTvDeviceMac("");
+    setRenamingTvDeviceName("");
+    setTvDialogError("");
+  };
+
+  const handleStartRenameSavedTvDevice = (device: SavedHotspotDevice) => {
+    setRenamingTvDeviceMac(device.macAddress);
+    setRenamingTvDeviceName(device.name);
+    setTvDialogError("");
+  };
+
+  const handleSaveRenamedTvDevice = (device: SavedHotspotDevice) => {
+    const name = renamingTvDeviceName.trim().replace(/\s+/g, " ").slice(0, 64);
+    if (!name) {
+      setTvDialogError("Enter a name for this saved device.");
+      return;
+    }
+    if (!renameHotspotDevice(savedTvDevicesStorageKey, device.macAddress, name)) {
+      setTvDialogError("This browser could not rename the saved device. Check its storage settings and try again.");
+      return;
+    }
+    setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
+    if (normalizeMacAddress(tvMacAddress) === normalizeMacAddress(device.macAddress)) {
+      setTvDeviceName(name);
+    }
+    setRenamingTvDeviceMac("");
+    setRenamingTvDeviceName("");
     setTvDialogError("");
   };
 
@@ -914,6 +944,10 @@ function HotspotLoginView({
       return;
     }
     setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
+    if (renamingTvDeviceMac === device.macAddress) {
+      setRenamingTvDeviceMac("");
+      setRenamingTvDeviceName("");
+    }
     if (normalizeMacAddress(tvMacAddress) === normalizeMacAddress(device.macAddress)) {
       setTvDeviceChoice("");
       setTvMacAddress("");
@@ -2838,30 +2872,60 @@ function HotspotLoginView({
                         {savedTvDevices.map(device => (
                           <div className="hp-tv-device-row" key={`saved-${device.macAddress}`}>
                             <Tv size={14} color="#34d399" />
-                            <div>
-                              <strong>{device.name}</strong>
-                              <span>{device.macAddress}</span>
-                            </div>
-                            <div className="hp-tv-device-actions">
-                              <button
-                                type="button"
-                                className="hp-tv-device-action"
-                                onClick={() => handleUseSavedTvDevice(device)}
-                              >
-                                Use
-                              </button>
-                              <button
-                                type="button"
-                                className="hp-tv-device-action"
-                                onClick={() => handleForgetSavedTvDevice(device)}
-                              >
-                                Forget
-                              </button>
-                            </div>
+                            {renamingTvDeviceMac === device.macAddress ? (
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <input
+                                  className="hp-tv-input"
+                                  aria-label={`New name for ${device.name}`}
+                                  value={renamingTvDeviceName}
+                                  onChange={e => setRenamingTvDeviceName(e.target.value)}
+                                  maxLength={64}
+                                  autoFocus
+                                />
+                                <div className="hp-tv-device-actions" style={{ marginTop: 6 }}>
+                                  <button type="button" className="hp-tv-device-action" onClick={() => handleSaveRenamedTvDevice(device)}>Save name</button>
+                                  <button type="button" className="hp-tv-device-action" onClick={() => {
+                                    setRenamingTvDeviceMac("");
+                                    setRenamingTvDeviceName("");
+                                  }}>Cancel</button>
+                                </div>
+                                <span>{device.macAddress}</span>
+                              </div>
+                            ) : (
+                              <>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <strong>{device.name}</strong>
+                                  <span>{device.macAddress}</span>
+                                </div>
+                                <div className="hp-tv-device-actions">
+                                  <button
+                                    type="button"
+                                    className="hp-tv-device-action"
+                                    onClick={() => handleUseSavedTvDevice(device)}
+                                  >
+                                    Use
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="hp-tv-device-action"
+                                    onClick={() => handleStartRenameSavedTvDevice(device)}
+                                  >
+                                    Rename
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="hp-tv-device-action"
+                                    onClick={() => handleForgetSavedTvDevice(device)}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </>
+                            )}
                           </div>
                         ))}
                       </div>
-                      <div className="hp-tv-help">Saved devices stay in this browser and can be removed here.</div>
+                      <div className="hp-tv-help">Saved devices stay in this browser. You can rename or remove them here.</div>
                     </div>
                   )}
 

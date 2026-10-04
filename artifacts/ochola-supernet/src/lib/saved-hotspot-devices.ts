@@ -92,6 +92,29 @@ export function saveHotspotDevice(
   }
 }
 
+export function renameHotspotDevice(
+  storageKey: string,
+  macAddress: string,
+  name: string,
+  storage: SavedHotspotDeviceStorage | null = getBrowserStorage(),
+): boolean {
+  if (!storage) return false;
+  const normalizedMac = normalizeMacAddress(macAddress);
+  const normalized = normalizeDevice({ macAddress: normalizedMac, name });
+  if (!normalizedMac || !normalized) return false;
+
+  try {
+    const devices = readSavedHotspotDevices(storageKey, storage);
+    const index = devices.findIndex(device => device.macAddress === normalizedMac);
+    if (index < 0) return false;
+    devices[index] = normalized;
+    storage.setItem(storageKey, JSON.stringify(devices));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function forgetHotspotDevice(
   storageKey: string,
   macAddress: string,
