@@ -4,6 +4,7 @@ import {
   forgetHotspotDevice,
   hotspotSavedDevicesStorageKey,
   readSavedHotspotDevices,
+  renameHotspotDevice,
   saveHotspotDevice,
   type SavedHotspotDeviceStorage,
 } from "./saved-hotspot-devices.js";
@@ -61,4 +62,19 @@ test("forgetting a device removes only the matching normalized MAC", () => {
   assert.deepEqual(readSavedHotspotDevices(key, storage), [
     { name: "Bedroom TV", macAddress: "11:22:33:44:55:66" },
   ]);
+});
+
+test("renaming a saved device changes its label without changing its MAC or other entries", () => {
+  const storage = createStorage();
+  const key = "saved";
+  saveHotspotDevice(key, { name: "Living Room TV", macAddress: "AA:BB:CC:DD:EE:FF" }, storage);
+  saveHotspotDevice(key, { name: "Bedroom TV", macAddress: "11:22:33:44:55:66" }, storage);
+
+  assert.equal(renameHotspotDevice(key, "aa-bb-cc-dd-ee-ff", "  Family   Room TV  ", storage), true);
+  assert.deepEqual(readSavedHotspotDevices(key, storage), [
+    { name: "Bedroom TV", macAddress: "11:22:33:44:55:66" },
+    { name: "Family Room TV", macAddress: "AA:BB:CC:DD:EE:FF" },
+  ]);
+  assert.equal(renameHotspotDevice(key, "aa-bb-cc-dd-ee-ff", "   ", storage), false);
+  assert.equal(renameHotspotDevice(key, "AA:00:00:00:00:00", "Unknown TV", storage), false);
 });

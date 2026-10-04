@@ -52,6 +52,8 @@
     .btn-amber:hover{box-shadow:0 6px 20px rgba(217,119,6,.45)}
     .btn-green{background:linear-gradient(135deg,#059669,#0891b2);color:white;box-shadow:0 4px 15px rgba(5,150,105,.3)}
     .btn-green:hover{box-shadow:0 6px 20px rgba(5,150,105,.45)}
+    .tv-saved-action{padding:.4rem .55rem;border:1px solid rgba(74,222,128,.23);border-radius:.5rem;background:rgba(255,255,255,.04);color:rgba(240,253,244,.88);font:700 .65rem/1.2 system-ui,sans-serif;cursor:pointer;white-space:nowrap}
+    .tv-saved-action:hover{background:rgba(34,197,94,.16)}
     .btn-full{width:100%}
 
     .lbl{display:block;font-size:.7rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem}
@@ -236,11 +238,10 @@
 
     <!-- MikroTik error (only shown when login fails) -->
     $(if error)
-    <div id="mikrotikError" style="margin:1rem 1.5rem 0;padding:.875rem 1rem;border-radius:.75rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);display:flex;align-items:flex-start;gap:.625rem">
+    <div id="mikrotikError" class="error-box" role="alert" style="margin:1rem 1.5rem 0;padding:.875rem 1rem;border-radius:.75rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);display:flex;align-items:flex-start;gap:.625rem">
       <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#f87171" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
       <div>
-        <div style="font-size:.775rem;font-weight:700;color:#f87171;margin-bottom:.15rem">Login Failed</div>
-        <div style="font-size:.775rem;color:#fca5a5">$(error)</div>
+        <div style="font-size:.775rem;color:#fca5a5"><strong style="font-weight:700;color:#f87171">Login Failed:</strong> $(error)</div>
       </div>
     </div>
     $(endif)
@@ -479,15 +480,16 @@ var COLORS=[
 ];
 
  var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=false;
- var PAYMENT_STATUS_LOADED=false, PAYMENT_METHOD_READY=false, PAYMENT_GATEWAY="";
- var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false;
+ var PAYMENT_STATUS_LOADED=false, PAYMENT_METHOD_READY=false, PAYMENT_STATUS_FAILED=false, PAYMENT_GATEWAY="";
+ var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="";
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var ROUTER_NAS_IDENTIFIER="$(identity)";
 var ROUTER_HOTSPOT_SERVER_NAME="$(server-name)";
 var EMBEDDED_PLANS=[];
- var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
+  var PORTAL_API_TIMEOUT_MS=4000;
+  var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
 var ROUTER_MAC="$(mac)";
 var ROUTER_IP="$(ip)";
 var ROUTER_CHAP_ID="$(chap-id)";
@@ -518,8 +520,14 @@ function portalCardEnabled(key){return PORTAL_CARD_VISIBILITY[key]!==false;}
 function isSupportedPaymentGateway(gateway){
   return gateway==="mpesa_paybill"||gateway==="mpesa_till_push"||gateway==="bank_stk_push";
 }
+function portalMpesaPromptEnabled(config){
+  if(!config||typeof config!=="object")return false;
+  if(typeof config.mpesaPromptEnabled==="boolean")return config.mpesaPromptEnabled;
+  return config.mpesaPrompt==="Enable";
+}
 function canStartPaymentCheckout(){
-  return MPESA_PROMPT_ENABLED&&PAYMENT_STATUS_LOADED&&PAYMENT_METHOD_READY&&!PORTAL_PREVIEW_ONLY;
+  return MPESA_PROMPT_ENABLED&&!PORTAL_PREVIEW_ONLY
+    &&(PAYMENT_METHOD_READY||PAYMENT_STATUS_FAILED);
 }
 function paymentGatewayLabel(gateway){
   if(gateway==="bank_stk_push")return "Bank STK Push";
@@ -528,6 +536,7 @@ function paymentGatewayLabel(gateway){
 }
 function updatePaymentAvailability(){
   var available=canStartPaymentCheckout();
+  var paymentReady=PAYMENT_STATUS_LOADED&&PAYMENT_METHOD_READY;
   var banner=document.getElementById("mpesaBanner");
   var bannerMessage=document.getElementById("mpesaStatusMessage");
   var badgeMessage=document.getElementById("portalPaymentBadgeText");
@@ -535,25 +544,29 @@ function updatePaymentAvailability(){
   var checking=MPESA_PROMPT_ENABLED&&!PAYMENT_STATUS_LOADED;
   var statusMessage=checking
     ?"Checking the configured payment method…"
-    :available
+    :paymentReady
       ?paymentGatewayLabel(PAYMENT_GATEWAY)+" is available — choose a package to pay"
-      :"Online payment is currently unavailable. Please contact the network administrator.";
+      :PAYMENT_STATUS_FAILED
+        ?"Payment status could not be checked. You can try checkout; the payment service will verify it."
+        :"No payment method is configured for this service.";
   if(banner)banner.style.display=showBanner?"":"none";
   if(bannerMessage){
     bannerMessage.textContent=statusMessage;
-    bannerMessage.style.color=available?"rgba(110,231,183,.9)":"rgba(255,255,255,.7)";
+    bannerMessage.style.color=paymentReady?"rgba(110,231,183,.9)":"rgba(255,255,255,.7)";
   }
   if(badgeMessage){
     badgeMessage.textContent=checking
-      ?"Checking online payment availability…"
-      :available
-        ?"Network Online · "+paymentGatewayLabel(PAYMENT_GATEWAY)+" ready"
-        :"Network Online · Payments unavailable";
+      ?"Checking payment availability…"
+      :paymentReady
+        ?paymentGatewayLabel(PAYMENT_GATEWAY)+" ready"
+        :PAYMENT_STATUS_FAILED
+          ?"Payment check unavailable · checkout will verify"
+          :"No payment method configured";
   }
   var tvButton=document.getElementById("tvConnectButton");
   if(tvButton){
     tvButton.disabled=!available;
-    tvButton.textContent=available?"Connect to TV":checking?"Checking payment availability…":"Online payment unavailable";
+    tvButton.textContent=available?"Connect to TV":checking?"Checking payment availability…":"Payment method not configured";
     tvButton.style.cursor=available?"pointer":"not-allowed";
     tvButton.style.opacity=available?"1":".55";
   }
@@ -728,14 +741,14 @@ function normalisePlanList(value){
   }).filter(function(p){return p.id>0&&p.name;});
 }
 /* Payment availability gates checkout, not whether customers can view packages. */
-function shouldHidePackageSection(maintenanceMode){
-  return Boolean(maintenanceMode)||!portalCardEnabled("packages");
+function shouldHidePackageSection(maintenanceMode,allowPackagesDuringMaintenance){
+  return (Boolean(maintenanceMode)&&allowPackagesDuringMaintenance!==true)||!portalCardEnabled("packages");
 }
 function applyPortalConfig(data){
   if(!data||typeof data!=="object")return;
   PORTAL_CARD_VISIBILITY=normalisePortalCardVisibility(data.portalCards,data);
   applyPortalCardVisibility();
-  MPESA_PROMPT_ENABLED=data.mpesaPromptEnabled===true;
+  MPESA_PROMPT_ENABLED=portalMpesaPromptEnabled(data);
   var colors=data.colors&&typeof data.colors==="object"?data.colors:{};
   var hexKeys=["bgColor","bgColor2","primaryColor","accentColor","cardColor","buttonColor","textColor","inputBgColor"];
   var cssNames={bgColor:"--portal-bg",bgColor2:"--portal-bg2",primaryColor:"--portal-accent",accentColor:"--portal-accent2",cardColor:"--portal-card",buttonColor:"--portal-button",textColor:"--portal-text",inputBgColor:"--portal-input"};
@@ -810,7 +823,8 @@ function applyPortalConfig(data){
     if(maintenance)announceText.style.background="rgba(245,158,11,.12)";
   }
   var plansSection=document.getElementById("plansSection");
-  if(plansSection&&shouldHidePackageSection(maintenance))plansSection.style.display="none";
+  var allowPackagesDuringMaintenance=Boolean(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.allowPackagesDuringMaintenance===true);
+  if(plansSection)plansSection.style.display=shouldHidePackageSection(maintenance,allowPackagesDuringMaintenance)?"none":"";
   var voucherSection=document.getElementById("voucherSection");
   if(voucherSection&&(data.vouchersEnabled===false||!portalCardEnabled("voucher")))voucherSection.style.display="none";
   var paymentInstructions=typeof data.paymentInstructions==="string"?data.paymentInstructions.trim():"";
@@ -903,6 +917,7 @@ function loadPortalTypography(done){
 function loadPaymentStatus(){
   PAYMENT_STATUS_LOADED=false;
   PAYMENT_METHOD_READY=false;
+  PAYMENT_STATUS_FAILED=false;
   PAYMENT_GATEWAY="";
   updatePaymentAvailability();
   if(PORTAL_PREVIEW_ONLY||!PORTAL_API_BASE||PORTAL_ADMIN_ID<1){
@@ -916,7 +931,11 @@ function loadPaymentStatus(){
   var url=apiUrl("/api/settings/mpesa?"+query.join("&"));
   var timeoutId=0;
   var timedOut=false;
-  var statusRequest=fetch(url,{cache:"no-store"}).then(function(response){
+  var controller=null;
+  try{if(typeof AbortController==="function")controller=new AbortController();}catch(e){}
+  var requestOptions={cache:"no-store"};
+  if(controller)requestOptions.signal=controller.signal;
+  var statusRequest=Promise.resolve().then(function(){return fetch(url,requestOptions);}).then(function(response){
     if(!response.ok)throw new Error("Payment availability could not be loaded.");
     return response.json();
   }).then(function(data){
@@ -930,12 +949,14 @@ function loadPaymentStatus(){
   var timeout=new Promise(function(_resolve,reject){
     timeoutId=window.setTimeout(function(){
       timedOut=true;
+        if(controller){try{controller.abort();}catch(e){}}
       reject(new Error("Payment availability check timed out."));
-    },5000);
+    },PORTAL_API_TIMEOUT_MS);
   });
   return Promise.race([statusRequest,timeout]).catch(function(){
     PAYMENT_METHOD_READY=false;
     PAYMENT_GATEWAY="";
+    PAYMENT_STATUS_FAILED=true;
   }).then(function(){
     if(timeoutId)window.clearTimeout(timeoutId);
     PAYMENT_STATUS_LOADED=true;
@@ -956,10 +977,13 @@ function loadPaymentStatus(){
        (PORTAL_ROUTER_ID>0?"&routerId="+encodeURIComponent(PORTAL_ROUTER_ID):"")+
         (PORTAL_PORT_ID>0?"&portId="+encodeURIComponent(PORTAL_PORT_ID):"")+
         "&activeOnly=true&purchasableOnly=true";
-   var finished=false;
-    function finish(data,apiSucceeded){
+    var finished=false,timeoutId=0,controller=null;
+    try{if(typeof AbortController==="function")controller=new AbortController();}catch(e){}
+     function finish(data,apiSucceeded,didTimeout){
      if(finished)return;
      finished=true;
+      if(timeoutId){window.clearTimeout(timeoutId);timeoutId=0;}
+      if(didTimeout&&controller){try{controller.abort();}catch(e){}}
      planRequestInFlight=false;
      var remotePlans=normalisePlanList(data);
       /* A successful empty response is authoritative: it clears stale
@@ -976,14 +1000,16 @@ function loadPaymentStatus(){
    /* A pre-authenticated RouterOS request can remain pending instead of
       rejecting when the walled garden blocks the API. Never make the initial
       package display wait for that request. */
-    fetch(apiUrl("/api/plans?type=hotspot"+query))
+    var requestOptions={cache:"no-store"};
+    if(controller)requestOptions.signal=controller.signal;
+    timeoutId=window.setTimeout(function(){finish(null,false,true);},PORTAL_API_TIMEOUT_MS);
+    Promise.resolve().then(function(){return fetch(apiUrl("/api/plans?type=hotspot"+query),requestOptions);})
       .then(function(r){
         if(!r.ok)return {ok:false,data:null};
         return r.json().then(function(data){return {ok:true,data:data};});
       })
       .then(function(result){finish(result.data,result.ok);})
       .catch(function(){finish(null,false);});
-    setTimeout(function(){finish(null,false);},5000);
  }
  function loadPlans(){
    if(!plansInitialised){
@@ -1005,9 +1031,13 @@ function loadPaymentStatus(){
 
 function renderPlans(){
   var grid=document.getElementById("plansGrid");
-  if(!PLANS.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:2rem;color:rgba(255,255,255,.3)">No plans available</div>';return;}
+  if(!PLANS.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:2rem;color:rgba(255,255,255,.3)">No packages are configured for this hotspot.</div>';return;}
   grid.innerHTML=PLANS.map(function(p,i){
     var c=COLORS[i%COLORS.length];
+    var checkoutAvailable=canStartPaymentCheckout();
+    var checkoutLabel=checkoutAvailable
+      ?PAYMENT_METHOD_READY?"Connect Now":"Try checkout"
+      :PAYMENT_STATUS_LOADED?"Payment method not configured":"Checking payment…";
      return '<div class="plan-card package-shape-'+PORTAL_PACKAGE_SHAPE+'" style="border:1px solid '+c.from+'22"'+
       ' onmouseover="this.style.boxShadow=\'0 16px 48px '+c.glow+'30,0 0 0 1px '+c.from+'40\'"'+
       ' onmouseout="this.style.boxShadow=\'0 8px 32px rgba(0,0,0,.4)\'">'+
@@ -1017,8 +1047,8 @@ function renderPlans(){
       '<span style="font-size:.8125rem;font-weight:600;color:'+c.from+'">Ksh</span>&nbsp;'+p.price+'</div>'+
       '<p style="font-size:.75rem;color:rgba(255,255,255,.5);margin-top:.625rem;font-weight:400">'+p.validity+' '+p.unit+' Unlimited</p>'+
       '</div>'+
-        '<button type="button" class="plan-connect-button" data-plan-index="'+i+'" '+(canStartPaymentCheckout()?'':'disabled aria-disabled="true"')+' style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:'+(canStartPaymentCheckout()?'pointer':'not-allowed')+';opacity:'+(canStartPaymentCheckout()?'1':'.55')+';font-family:inherit;transition:opacity .15s" onmouseover="if(!this.disabled)this.style.opacity=\'.88\'" onmouseout="if(!this.disabled)this.style.opacity=\'1\'">'+
-       (canStartPaymentCheckout()?'Connect Now':PAYMENT_STATUS_LOADED?'Online payment unavailable':'Checking payment…')+'</button></div>';
+        '<button type="button" class="plan-connect-button" data-plan-index="'+i+'" '+(checkoutAvailable?'':'disabled aria-disabled="true"')+' style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:'+(checkoutAvailable?'pointer':'not-allowed')+';opacity:'+(checkoutAvailable?'1':'.55')+';font-family:inherit;transition:opacity .15s" onmouseover="if(!this.disabled)this.style.opacity=\'.88\'" onmouseout="if(!this.disabled)this.style.opacity=\'1\'">'+
+       checkoutLabel+'</button></div>';
   }).join("");
    bindPlanButtons();
 }
@@ -1026,7 +1056,7 @@ function renderPlans(){
 /* ── STK Modal ── */
 function openModal(i){
   if(!canStartPaymentCheckout())return;
-  tvPurchase=false; tvDeviceName=""; tvDeviceRouterId=0;
+  tvPurchase=false; tvDeviceName=""; tvDeviceRouterId=0; tvRememberDevice=false; tvDeviceSaveNotice="";
   selectedPlan=PLANS[i]; stkState="idle"; stkPhone="";
   document.getElementById("modalPlanName").textContent=selectedPlan.name;
   document.getElementById("modalPlanDetails").textContent="Ksh "+selectedPlan.price+" · "+selectedPlan.validity+" "+selectedPlan.unit+" Unlimited";
@@ -1117,6 +1147,7 @@ function renderModal(){
        '<p style="font-size:1.0625rem;font-weight:800;color:#4ade80;margin-bottom:.5rem">Payment Received!</p>'+
        '<p style="color:rgba(255,255,255,.5);font-size:.875rem;margin-bottom:1rem">Your <span style="color:white;font-weight:600">'+(selectedPlan?selectedPlan.name:"")+'</span> plan is now active. These credentials have been entered on the sign-in form.</p>'+
        credentialBlock+
+        (tvDeviceSaveNotice?'<p style="margin:0 auto 1rem;max-width:300px;color:'+(tvDeviceSaveNotice.indexOf("Payment succeeded")===0?"#fcd34d":"#6ee7b7")+';font-size:.75rem;line-height:1.45">'+escapePortalText(tvDeviceSaveNotice)+'</p>':'')+
        '<button onclick="closeModal()" class="btn btn-green btn-full">Continue online</button></div>';
   }
 }
@@ -1166,6 +1197,10 @@ function renderModal(){
        if(!result.ok||!data.ok||!applyPaidHotspotCredentials(data.credentials)){
          throw new Error(data.error||"Payment was confirmed, but the hotspot account could not be updated.");
        }
+        if(tvPurchase&&tvRememberDevice){
+          var saved=saveSavedTvDevice(DEVICE_MAC||tvMacAddress,tvDeviceName);
+          tvDeviceSaveNotice=saved?"This TV is saved on this browser for next time.":"Payment succeeded, but this browser could not save the TV.";
+        }
        return data;
      });
  }
@@ -1270,52 +1305,242 @@ function sendStk(){
    tvError=""; tvDevicesLoading=false;
  }
  function tvEsc(value){return escapePortalText(value);}
+  function tvSavedDevicesStorageKey(){
+    return [
+      "ochola_hotspot_devices_v1",
+      window.location.host||"portal",
+      PORTAL_ADMIN_ID>0?String(PORTAL_ADMIN_ID):"tenant",
+      PORTAL_ROUTER_ID>0?String(PORTAL_ROUTER_ID):"router",
+      PORTAL_PORT_ID>0?String(PORTAL_PORT_ID):"port"
+    ].map(function(value){return encodeURIComponent(value);}).join(":");
+  }
+  function readSavedTvDevices(){
+    try{
+      var rows=JSON.parse(window.localStorage.getItem(tvSavedDevicesStorageKey())||"null");
+      if(!Array.isArray(rows))return [];
+      var seen={},devices=[];
+      for(var i=0;i<rows.length&&devices.length<20;i++){
+        var row=rows[i]||{};
+        var macAddress=normaliseMac(row.macAddress);
+        var name=typeof row.name==="string"?row.name.trim().replace(/\s+/g," ").slice(0,64):"";
+        if(!macAddress||!name||seen[macAddress])continue;
+        seen[macAddress]=true;
+        devices.push({name:name,macAddress:macAddress});
+      }
+      return devices;
+    }catch(e){return [];}
+  }
+  function saveSavedTvDevice(macAddress,name){
+    var mac=normaliseMac(macAddress);
+    var label=String(name||"").trim().replace(/\s+/g," ").slice(0,64);
+    if(!mac||!label)return false;
+    try{
+      var devices=readSavedTvDevices().filter(function(device){return device.macAddress!==mac;});
+      window.localStorage.setItem(tvSavedDevicesStorageKey(),JSON.stringify([{name:label,macAddress:mac}].concat(devices).slice(0,20)));
+      return true;
+    }catch(e){return false;}
+  }
+  function renameSavedTvDevice(macAddress,name){
+    var mac=normaliseMac(macAddress);
+    var label=String(name||"").trim().replace(/\s+/g," ").slice(0,64);
+    if(!mac||!label)return false;
+    try{
+      var devices=readSavedTvDevices();
+      var index=devices.findIndex(function(device){return device.macAddress===mac;});
+      if(index<0)return false;
+      devices[index]={name:label,macAddress:mac};
+      window.localStorage.setItem(tvSavedDevicesStorageKey(),JSON.stringify(devices));
+      return true;
+    }catch(e){return false;}
+  }
+  function forgetSavedTvDevice(macAddress){
+    var mac=normaliseMac(macAddress);
+    if(!mac)return false;
+    try{
+      var devices=readSavedTvDevices().filter(function(device){return device.macAddress!==mac;});
+      window.localStorage.setItem(tvSavedDevicesStorageKey(),JSON.stringify(devices));
+      return true;
+    }catch(e){return false;}
+  }
+  function useSavedTvDevice(macAddress){
+    var device=readSavedTvDevices().find(function(item){return item.macAddress===normaliseMac(macAddress);});
+    if(!device)return;
+    tvDeviceChoice=device.macAddress;
+    tvMacAddress=device.macAddress;
+    tvDeviceName=device.name;
+    tvRememberDevice=true;
+    var connected=tvDevices.find(function(item){return item.macAddress===device.macAddress;});
+    tvDeviceRouterId=connected?Number(connected.routerId)||0:0;
+    tvError="";
+    renderTvModal();
+  }
+  function renderSavedTvDeviceManager(devices){
+    if(!devices.length)return "";
+    var rows=devices.map(function(device){
+      var mac=tvEsc(device.macAddress);
+      if(tvSavedEditMac===device.macAddress){
+        return '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:.45rem;padding:.6rem .65rem;border:1px solid rgba(74,222,128,.18);border-radius:.7rem;background:rgba(34,197,94,.06)">'+
+          '<input class="inp tv-saved-rename-input" data-tv-saved-rename-input="'+mac+'" aria-label="New name for '+tvEsc(device.name)+'" maxlength="64" value="'+tvEsc(tvSavedEditName)+'" style="min-width:0;margin:0;padding:.55rem .65rem" />'+
+          '<button type="button" data-tv-saved-rename-save="'+mac+'" class="tv-saved-action">Save</button>'+
+          '<button type="button" data-tv-saved-rename-cancel class="tv-saved-action">Cancel</button></div>';
+      }
+      return '<div style="display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:.4rem;padding:.6rem .65rem;border:1px solid rgba(74,222,128,.18);border-radius:.7rem;background:rgba(34,197,94,.06)">'+
+        '<button type="button" data-tv-saved-use="'+mac+'" style="min-width:0;text-align:left;border:0;background:transparent;color:#fff;cursor:pointer;font:inherit">'+
+          '<strong style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.76rem">'+tvEsc(device.name)+'</strong>'+
+          '<span style="display:block;margin-top:.15rem;color:rgba(255,255,255,.45);font: .65rem monospace">'+mac+'</span></button>'+
+        '<button type="button" data-tv-saved-use="'+mac+'" class="tv-saved-action">Use</button>'+
+        '<button type="button" data-tv-saved-rename="'+mac+'" class="tv-saved-action">Rename</button>'+
+        '<button type="button" data-tv-saved-remove="'+mac+'" class="tv-saved-action" aria-label="Remove '+tvEsc(device.name)+'">Remove</button></div>';
+    }).join("");
+    return '<div style="margin-bottom:1rem">'+
+      '<label class="lbl" style="color:#6ee7b7">Saved on this browser</label>'+
+      '<div style="display:grid;gap:.45rem">'+rows+'</div>'+
+      '<p style="margin-top:.45rem;color:rgba(255,255,255,.38);font-size:.68rem;line-height:1.4">Only this browser stores the list. Saving a device does not grant network access.</p></div>';
+  }
+  function saveTvDeviceRename(macAddress){
+    var input=document.querySelector("[data-tv-saved-rename-input]");
+    var name=input?input.value:"";
+    var normalizedName=String(name||"").trim().replace(/\s+/g," ").slice(0,64);
+    if(!normalizedName){tvError="Enter a name for this saved device.";renderTvModal();return;}
+    if(!renameSavedTvDevice(macAddress,normalizedName)){tvError="This browser could not rename the saved device.";renderTvModal();return;}
+    if(normaliseMac(tvMacAddress)===normaliseMac(macAddress))tvDeviceName=normalizedName;
+    tvSavedEditMac="";tvSavedEditName="";tvError="";
+    renderTvModal();
+  }
+  function removeSavedTvDevice(macAddress){
+    var device=readSavedTvDevices().find(function(item){return item.macAddress===normaliseMac(macAddress);});
+    if(!device||!window.confirm("Remove "+device.name+" from the saved devices on this browser?"))return;
+    if(!forgetSavedTvDevice(macAddress)){tvError="This browser could not remove the saved device.";renderTvModal();return;}
+    if(normaliseMac(tvMacAddress)===device.macAddress){
+      tvDeviceChoice="";tvMacAddress="";tvDeviceName="";tvDeviceRouterId=0;tvRememberDevice=false;
+    }
+    if(tvSavedEditMac===device.macAddress){tvSavedEditMac="";tvSavedEditName="";}
+    tvError="";
+    renderTvModal();
+  }
  function tvDeviceChanged(value){
    tvDeviceChoice=value;
-   var device=tvDevices.find(function(item){return item.macAddress===value;});
-   if(device){
-     tvMacAddress=device.macAddress;
-     tvDeviceName=device.name;
-     tvDeviceRouterId=Number(device.routerId)||0;
+    var saved=readSavedTvDevices().find(function(item){return item.macAddress===value;});
+    var connected=tvDevices.find(function(item){return item.macAddress===value;});
+    var device=saved||connected;
+    if(device){
+      tvMacAddress=device.macAddress;
+      tvDeviceName=device.name;
+      tvDeviceRouterId=connected?Number(connected.routerId)||0:0;
+      tvRememberDevice=!!saved;
    }else{
      tvDeviceRouterId=0;
      tvMacAddress="";
      tvDeviceName="";
+      tvRememberDevice=false;
    }
    renderTvModal();
  }
  function renderTvModal(){
    var body=document.getElementById("tvModalBody");
    if(!body)return;
-   var deviceOptions='<option value="">Add a TV manually</option>'+tvDevices.map(function(device){
+   var savedDevices=readSavedTvDevices();
+   var savedOptions=savedDevices.map(function(device){
+     return '<option value="'+tvEsc(device.macAddress)+'"'+(tvDeviceChoice===device.macAddress?" selected":"")+'>'+tvEsc(device.name)+" — "+tvEsc(device.macAddress)+" · Saved</option>";
+   }).join("");
+   var connectedDevices=tvDevices.filter(function(device){
+     return !savedDevices.some(function(saved){return saved.macAddress===device.macAddress;});
+   });
+   var connectedOptions=connectedDevices.map(function(device){
      return '<option value="'+tvEsc(device.macAddress)+'"'+(tvDeviceChoice===device.macAddress?" selected":"")+'>'+tvEsc(device.name)+" — "+tvEsc(device.macAddress)+(device.address?" · "+tvEsc(device.address):"")+'</option>';
    }).join("");
+   var deviceOptions='<option value="">Add a TV manually</option>'+
+     (savedOptions?'<optgroup label="Saved on this browser">'+savedOptions+'</optgroup>':"")+
+     (connectedOptions?'<optgroup label="Connected now">'+connectedOptions+'</optgroup>':"");
    var planOptions='<option value="" disabled'+(tvPlanId?"":" selected")+'>Choose a package</option>'+PLANS.map(function(plan){
      return '<option value="'+plan.id+'"'+(String(plan.id)===String(tvPlanId)?" selected":"")+'>'+tvEsc(plan.name)+" — Ksh "+plan.price+" · "+tvEsc(plan.validity+" "+plan.unit)+'</option>';
    }).join("");
    body.innerHTML=
-     '<label class="lbl" style="color:#6ee7b7">Connected devices</label>'+
-     '<select id="tvDeviceChoice" class="inp" style="margin-bottom:.45rem" onchange="tvDeviceChanged(this.value)">'+deviceOptions+'</select>'+
+     renderSavedTvDeviceManager(savedDevices)+
+     '<label class="lbl" style="color:#6ee7b7">Choose a device (optional)</label>'+
+     '<select id="tvDeviceChoice" class="inp" style="margin-bottom:.45rem">'+deviceOptions+'</select>'+
      '<p style="color:rgba(255,255,255,.35);font-size:.7rem;line-height:1.45;margin-bottom:1rem">'+
-       (tvDevicesLoading?"Checking every device visible on this hotspot network…":(tvDevices.length?"Every device reported by the router is listed with its MAC address. Select one or add a TV manually.":"No devices were reported by the router. Add the TV MAC address manually."))+
+       (tvDevicesLoading?"Checking devices currently visible on this hotspot network…":(tvDevices.length?"Connected devices are listed here. Saved devices can be reused even when they are offline.":"Saved devices remain available here. You can also enter a new TV's MAC address manually."))+
      '</p>'+
      '<label class="lbl" style="color:#6ee7b7">Device MAC address</label>'+
-     '<input id="tvMacAddress" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvMacAddress)+'" placeholder="AA:BB:CC:DD:EE:FF" oninput="tvMacAddress=this.value.toUpperCase()" />'+
+     '<input id="tvMacAddress" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvMacAddress)+'" placeholder="AA:BB:CC:DD:EE:FF" />'+
      '<label class="lbl" style="color:#6ee7b7">Device name</label>'+
-     '<input id="tvDeviceName" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvDeviceName)+'" maxlength="64" placeholder="e.g. Living Room TV" oninput="tvDeviceName=this.value" />'+
+     '<input id="tvDeviceName" class="inp" style="margin-bottom:.75rem" value="'+tvEsc(tvDeviceName)+'" maxlength="64" placeholder="e.g. Living Room TV" />'+
+     '<label class="hp-tv-save-device" style="display:flex;align-items:flex-start;gap:.6rem;margin-bottom:1rem;padding:.75rem;border:1px solid rgba(74,222,128,.18);border-radius:.65rem;background:rgba(34,197,94,.06);cursor:pointer">'+
+       '<input id="tvRememberDevice" type="checkbox"'+(tvRememberDevice?" checked":"")+' style="margin:.15rem 0 0;accent-color:#4ade80">'+
+       '<span><strong style="display:block;color:#ecfdf5;font-size:.75rem">Remember this TV on this browser</strong><span style="display:block;margin-top:.2rem;color:rgba(255,255,255,.42);font-size:.65rem;line-height:1.4">Only this browser stores the device name and MAC. You can rename or remove it later.</span></span>'+
+     '</label>'+
      '<label class="lbl" style="color:#6ee7b7">Package to purchase</label>'+
-     '<select id="tvPlanId" class="inp" style="margin-bottom:1rem" onchange="tvPlanId=this.value">'+planOptions+'</select>'+
+     '<select id="tvPlanId" class="inp" style="margin-bottom:1rem">'+planOptions+'</select>'+
      '<label class="lbl" style="color:#6ee7b7">Phone number</label>'+
-     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="07XXXXXXXX or 2547XXXXXXXX" oninput="tvPhone=this.value" />'+
+     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="07XXXXXXXX or 2547XXXXXXXX" />'+
      '<div id="tvError" style="display:'+(tvError?"block":"none")+';margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem">'+tvEsc(tvError)+'</div>'+
      '<div style="display:flex;gap:.625rem">'+
        '<button type="button" onclick="closeTvModal()" class="btn btn-full" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);box-shadow:none">Cancel</button>'+
        '<button type="button" onclick="bindAndPayTv()" class="btn btn-green btn-full">Bind &amp; Pay</button>'+
      '</div>';
+   body.querySelectorAll("[data-tv-saved-use]").forEach(function(button){
+     button.addEventListener("click",function(){useSavedTvDevice(button.getAttribute("data-tv-saved-use"));});
+   });
+   body.querySelectorAll("[data-tv-saved-rename]").forEach(function(button){
+     button.addEventListener("click",function(){
+       var mac=button.getAttribute("data-tv-saved-rename");
+       var device=readSavedTvDevices().find(function(item){return item.macAddress===mac;});
+       tvSavedEditMac=mac;tvSavedEditName=device?device.name:"";tvError="";
+       renderTvModal();
+       var input=body.querySelector("[data-tv-saved-rename-input]");
+       if(input){input.focus();input.select();}
+     });
+   });
+   body.querySelectorAll("[data-tv-saved-rename-input]").forEach(function(input){
+     input.addEventListener("input",function(){tvSavedEditName=input.value;});
+   });
+   body.querySelectorAll("[data-tv-saved-rename-save]").forEach(function(button){
+     button.addEventListener("click",function(){saveTvDeviceRename(button.getAttribute("data-tv-saved-rename-save"));});
+   });
+   body.querySelectorAll("[data-tv-saved-rename-cancel]").forEach(function(button){
+     button.addEventListener("click",function(){tvSavedEditMac="";tvSavedEditName="";tvError="";renderTvModal();});
+   });
+   body.querySelectorAll("[data-tv-saved-remove]").forEach(function(button){
+     button.addEventListener("click",function(){removeSavedTvDevice(button.getAttribute("data-tv-saved-remove"));});
+   });
+   var deviceSelect=document.getElementById("tvDeviceChoice");
+   if(deviceSelect)deviceSelect.addEventListener("change",function(){tvDeviceChanged(this.value);});
+   var macInput=document.getElementById("tvMacAddress");
+   if(macInput)macInput.addEventListener("input",function(){
+     tvMacAddress=this.value.toUpperCase();
+     var mac=normaliseMac(tvMacAddress);
+     var saved=mac?readSavedTvDevices().find(function(item){return item.macAddress===mac;}):null;
+     var connected=mac?tvDevices.find(function(item){return item.macAddress===mac;}):null;
+     if(saved||connected){
+       tvDeviceChoice=mac;
+       tvDeviceName=saved?saved.name:connected.name;
+       tvDeviceRouterId=connected?Number(connected.routerId)||0:0;
+       tvRememberDevice=!!saved;
+       var nameInput=document.getElementById("tvDeviceName");
+       if(nameInput)nameInput.value=tvDeviceName;
+     }else{
+       tvDeviceChoice="";
+       tvDeviceRouterId=0;
+       tvRememberDevice=false;
+     }
+     var select=document.getElementById("tvDeviceChoice");
+     if(select)select.value=tvDeviceChoice;
+     var remember=document.getElementById("tvRememberDevice");
+     if(remember)remember.checked=tvRememberDevice;
+   });
+   var nameInput=document.getElementById("tvDeviceName");
+   if(nameInput)nameInput.addEventListener("input",function(){tvDeviceName=this.value;});
+   var planSelect=document.getElementById("tvPlanId");
+   if(planSelect)planSelect.addEventListener("change",function(){tvPlanId=this.value;});
+   var phoneInput=document.getElementById("tvPhone");
+   if(phoneInput)phoneInput.addEventListener("input",function(){tvPhone=this.value;});
+   var rememberInput=document.getElementById("tvRememberDevice");
+   if(rememberInput)rememberInput.addEventListener("change",function(){tvRememberDevice=this.checked;});
  }
  function openTvModal(){
    if(!canStartPaymentCheckout())return;
-   tvPurchase=true; tvError=""; tvDeviceChoice=""; tvMacAddress=""; tvDeviceName=""; tvPlanId=PLANS[0]?String(PLANS[0].id):""; tvPhone=""; tvDeviceRouterId=0;
+   tvPurchase=true; tvError=""; tvDeviceChoice=""; tvMacAddress=""; tvDeviceName=""; tvPlanId=PLANS[0]?String(PLANS[0].id):""; tvPhone=""; tvDeviceRouterId=0; tvRememberDevice=false; tvSavedEditMac=""; tvSavedEditName=""; tvDeviceSaveNotice="";
    document.getElementById("tvModal").style.display="flex";
    renderTvModal();
    tvDevicesLoading=true; renderTvModal();
@@ -1330,6 +1555,7 @@ function sendStk(){
    tvDeviceName=(document.getElementById("tvDeviceName")||{}).value||tvDeviceName;
    tvPlanId=(document.getElementById("tvPlanId")||{}).value||tvPlanId;
    tvPhone=(document.getElementById("tvPhone")||{}).value||tvPhone;
+   tvRememberDevice=!!(document.getElementById("tvRememberDevice")||{}).checked;
    var mac=normaliseMac(tvMacAddress);
    if(!mac){tvError="Enter a valid TV MAC address, for example AA:BB:CC:DD:EE:FF.";renderTvModal();return;}
    if(!tvDeviceName.trim()){tvError="Give the device a name so you can recognize it later.";renderTvModal();return;}
@@ -1613,7 +1839,10 @@ function submitMpesa(){
 
 function renderPortalDeviceMac(){
   var value=document.getElementById("portalDeviceMacValue");
-  if(value)value.textContent=DEVICE_MAC||"Resolved by router";
+  if(value){
+    var mac=DEVICE_MAC||normaliseMac(ROUTER_MAC)||normaliseMac(PORTAL_QUERY.get("mac")||PORTAL_QUERY.get("mac-address")||"");
+    value.textContent=mac||"Resolved by router";
+  }
 }
 try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
   EMBEDDED_PLANS=normalisePlanList(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.plans);

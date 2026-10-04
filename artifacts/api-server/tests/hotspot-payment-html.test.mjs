@@ -20,11 +20,21 @@ const checkoutReadinessScript = template.slice(
   template.indexOf("function canStartPaymentCheckout("),
   template.indexOf("function paymentGatewayLabel("),
 );
+const promptConfigScript = template.slice(
+  template.indexOf("function portalMpesaPromptEnabled("),
+  template.indexOf("function canStartPaymentCheckout("),
+);
+const portalConfigScript = template.slice(
+  template.indexOf("function applyPortalConfig("),
+  template.indexOf("function applyPortalTypography("),
+);
 
-test("payment prompt availability disables checkout without hiding packages", () => {
+test("maintenance can keep come3 packages visible without bypassing checkout readiness", () => {
   assert.ok(packageVisibilityScript.includes("function shouldHidePackageSection"));
+  assert.match(portalConfigScript, /MPESA_PROMPT_ENABLED=portalMpesaPromptEnabled\(data\)/);
+  let packageCardVisible = true;
   const context = {
-    portalCardEnabled: () => true,
+    portalCardEnabled: () => packageCardVisible,
     MPESA_PROMPT_ENABLED: false,
     PAYMENT_STATUS_LOADED: true,
     PAYMENT_METHOD_READY: true,
@@ -36,7 +46,29 @@ test("payment prompt availability disables checkout without hiding packages", ()
 
   assert.equal(vm.runInContext("shouldHidePackageSection(false)", context), false);
   assert.equal(vm.runInContext("shouldHidePackageSection(true)", context), true);
+  assert.equal(vm.runInContext("shouldHidePackageSection(true, true)", context), false);
+  packageCardVisible = false;
+  assert.equal(vm.runInContext("shouldHidePackageSection(true, true)", context), true);
   assert.equal(vm.runInContext("canStartPaymentCheckout()", context), false);
+  context.MPESA_PROMPT_ENABLED = true;
+  context.PAYMENT_METHOD_READY = false;
+  assert.equal(vm.runInContext("canStartPaymentCheckout()", context), false);
+  context.PAYMENT_METHOD_READY = true;
+  assert.equal(vm.runInContext("canStartPaymentCheckout()", context), true);
+  context.PORTAL_PREVIEW_ONLY = true;
+  assert.equal(vm.runInContext("canStartPaymentCheckout()", context), false);
+});
+
+test("portal prompt setting accepts the legacy Enable value and respects explicit booleans", () => {
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(promptConfigScript, context);
+
+  assert.equal(vm.runInContext('portalMpesaPromptEnabled({mpesaPrompt: "Enable"})', context), true);
+  assert.equal(vm.runInContext('portalMpesaPromptEnabled({mpesaPrompt: "Disable"})', context), false);
+  assert.equal(vm.runInContext('portalMpesaPromptEnabled({mpesaPromptEnabled: true})', context), true);
+  assert.equal(vm.runInContext('portalMpesaPromptEnabled({mpesaPromptEnabled: false, mpesaPrompt: "Enable"})', context), false);
+  assert.equal(vm.runInContext('portalMpesaPromptEnabled({})', context), false);
 });
 
 async function checkout(respond, apiBase = "https://tenant.example.test") {

@@ -10,6 +10,7 @@ import {
   forgetHotspotDevice,
   hotspotSavedDevicesStorageKey,
   readSavedHotspotDevices,
+  renameHotspotDevice,
   saveHotspotDevice,
   type SavedHotspotDevice,
 } from "@/lib/saved-hotspot-devices";
@@ -320,6 +321,12 @@ function isPaymentMethodReady(status: CheckoutPaymentStatus | null): boolean {
   );
 }
 
+function canAttemptHotspotCheckout(status: CheckoutPaymentStatus | null, previewOnly: boolean): boolean {
+  // A failed status lookup is not proof that payment is misconfigured. Let the
+  // payment endpoint make the authoritative decision when the user submits.
+  return !previewOnly && (status === null || isPaymentMethodReady(status));
+}
+
 function checkoutPaymentLabel(paymentGateway: string): string {
   if (paymentGateway === "bank_stk_push") return "Bank STK Push";
   if (paymentGateway === "mpesa_till_push") return "M-Pesa Till";
@@ -467,6 +474,8 @@ function HotspotLoginView({
     () => readSavedHotspotDevices(savedTvDevicesStorageKey),
   );
   const [rememberTvDevice, setRememberTvDevice] = useState(false);
+  const [renamingTvDeviceMac, setRenamingTvDeviceMac] = useState("");
+  const [renamingTvDeviceName, setRenamingTvDeviceName] = useState("");
   const [tvDeviceSaveNotice, setTvDeviceSaveNotice] = useState("");
   const [showTvSuccess, setShowTvSuccess] = useState(false);
   const [paidAccessExpiresAt, setPaidAccessExpiresAt] = useState<string | null>(null);
@@ -905,6 +914,33 @@ function HotspotLoginView({
     setTvMacAddress(device.macAddress);
     setTvDeviceName(device.name);
     setRememberTvDevice(true);
+    setRenamingTvDeviceMac("");
+    setRenamingTvDeviceName("");
+    setTvDialogError("");
+  };
+
+  const handleStartRenameSavedTvDevice = (device: SavedHotspotDevice) => {
+    setRenamingTvDeviceMac(device.macAddress);
+    setRenamingTvDeviceName(device.name);
+    setTvDialogError("");
+  };
+
+  const handleSaveRenamedTvDevice = (device: SavedHotspotDevice) => {
+    const name = renamingTvDeviceName.trim().replace(/\s+/g, " ").slice(0, 64);
+    if (!name) {
+      setTvDialogError("Enter a name for this saved device.");
+      return;
+    }
+    if (!renameHotspotDevice(savedTvDevicesStorageKey, device.macAddress, name)) {
+      setTvDialogError("This browser could not rename the saved device. Check its storage settings and try again.");
+      return;
+    }
+    setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
+    if (normalizeMacAddress(tvMacAddress) === normalizeMacAddress(device.macAddress)) {
+      setTvDeviceName(name);
+    }
+    setRenamingTvDeviceMac("");
+    setRenamingTvDeviceName("");
     setTvDialogError("");
   };
 
@@ -914,6 +950,10 @@ function HotspotLoginView({
       return;
     }
     setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
+    if (renamingTvDeviceMac === device.macAddress) {
+      setRenamingTvDeviceMac("");
+      setRenamingTvDeviceName("");
+    }
     if (normalizeMacAddress(tvMacAddress) === normalizeMacAddress(device.macAddress)) {
       setTvDeviceChoice("");
       setTvMacAddress("");
@@ -2409,7 +2449,7 @@ function HotspotLoginView({
                     </div>
                   ) : plans.length === 0 ? (
                     <p className="hp-empty-plans" style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", padding: "48px 0", fontSize: 14 }}>
-                      No plans available at the moment.
+                      No packages are configured for this hotspot.
                     </p>
                   ) : (
                     <div className={`hp-plans-grid${selectedPlan ? " has-expanded" : ""}`}>
@@ -2467,7 +2507,9 @@ function HotspotLoginView({
                                       <span style={{ fontSize: 13, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>
                                         {isPaymentMethodReady(mpesaStatus)
                                           ? `${isTvMode ? "Pay for TV with" : "Pay with"} ${checkoutPaymentLabel(mpesaStatus?.paymentGateway ?? "")}`
-                                          : paymentStatusLoaded ? "Online payment unavailable" : "Checking payment options…"}
+                                          : HOTSPOT_RUNTIME_CONFIG.previewOnly
+                                            ? "Checkout is disabled in preview"
+                                            : mpesaStatus ? "Payment method is not configured" : "Payment status will be checked at checkout"}
                                       </span>
                                     </div>
                                     {mpesaStatus && isPaymentMethodReady(mpesaStatus) && (
@@ -2483,51 +2525,55 @@ function HotspotLoginView({
                                     )}
                                   </div>
 
-                                  {!paymentStatusLoaded ? (
+                                  {!isPaymentMethodReady(mpesaStatus) && (
                                     <div style={{
-                                      padding: 14, borderRadius: 10, textAlign: "center",
-                                      background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)",
-                                      fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.5,
-                                    }}>
-                                      Checking available payment methods…
-                                    </div>
-                                  ) : !isPaymentMethodReady(mpesaStatus) ? (
-                                    <div style={{
-                                      padding: 14, borderRadius: 10, textAlign: "center",
+                                      padding: 10, borderRadius: 10, textAlign: "center", marginBottom: 12,
                                       background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)",
                                       fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.5,
                                     }}>
                                       <AlertCircle size={16} color="#f59e0b" style={{ marginBottom: 6 }} />
-                                       <p style={{ margin: 0 }}>No connected online payment method is currently available for this service.</p>
-                                       <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>Please contact the network administrator for payment options.</p>
+                                      <p style={{ margin: 0 }}>
+                                        {HOTSPOT_RUNTIME_CONFIG.previewOnly
+                                          ? "Payment checkout is disabled in preview."
+                                          : mpesaStatus
+                                          ? "This service has no configured payment method. The payment service will confirm availability."
+                                          : "Payment status could not be confirmed. You can continue; the payment service will verify checkout."}
+                                      </p>
                                     </div>
-                                  ) : (
-                                    <form onSubmit={handlePay}>
-                                      <div className="hp-input-group">
-                                        <div className="hp-input-wrap">
-                                          <span className="hp-input-icon" style={{ fontSize: 13, fontWeight: 700, left: 14 }}>+254</span>
-                                          <input className="hp-input hp-input-phone" type="tel"
-                                            placeholder="7XX XXX XXX" required
-                                            value={phone} onChange={e => setPhone(e.target.value)} />
-                                        </div>
-                                      </div>
-
-                                      {payError && (
-                                        <div className="hp-error">
-                                          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                                          {payError}
-                                        </div>
-                                      )}
-
-                                       <button type="submit" disabled={payLoading} className="hp-btn hp-btn-mpesa">
-                                        {payLoading ? (
-                                          <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending STK Push...</>
-                                        ) : (
-                                           <><Phone size={16} /> Pay {getCurrencySymbol()} {plan.price}{isTvMode ? " for TV" : ""}</>
-                                        )}
-                                      </button>
-                                    </form>
                                   )}
+                                  {HOTSPOT_RUNTIME_CONFIG.previewOnly ? (
+                                    <div style={{
+                                      padding: 12, borderRadius: 10, textAlign: "center",
+                                      background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.5)",
+                                      fontSize: 12,
+                                    }}>
+                                      Payment actions are disabled in the local preview.
+                                    </div>
+                                  ) : <form onSubmit={handlePay}>
+                                    <div className="hp-input-group">
+                                      <div className="hp-input-wrap">
+                                        <span className="hp-input-icon" style={{ fontSize: 13, fontWeight: 700, left: 14 }}>+254</span>
+                                        <input className="hp-input hp-input-phone" type="tel"
+                                          placeholder="7XX XXX XXX" required
+                                          value={phone} onChange={e => setPhone(e.target.value)} />
+                                      </div>
+                                    </div>
+
+                                    {payError && (
+                                      <div className="hp-error">
+                                        <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+                                        {payError}
+                                      </div>
+                                    )}
+
+                                    <button type="submit" disabled={payLoading || !canAttemptHotspotCheckout(mpesaStatus, HOTSPOT_RUNTIME_CONFIG.previewOnly)} className="hp-btn hp-btn-mpesa">
+                                      {payLoading ? (
+                                        <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending STK Push...</>
+                                      ) : (
+                                        <><Phone size={16} /> Pay {getCurrencySymbol()} {plan.price}{isTvMode ? " for TV" : ""}</>
+                                      )}
+                                    </button>
+                                  </form>}
 
                                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
                                     <div className="hp-secured" style={{ margin: 0 }}>
@@ -2540,9 +2586,11 @@ function HotspotLoginView({
                                             : mpesaStatus?.shortcode
                                               ? <>Daraja shortcode {mpesaStatus.shortcode} &middot; Safaricom Daraja</>
                                               : <>Secured by Safaricom M-Pesa</>
-                                        : paymentStatusLoaded
-                                          ? <>No connected payment method</>
-                                          : <>Checking payment methods</>}
+                                        : mpesaStatus
+                                          ? <>Payment method not configured</>
+                                          : paymentStatusLoaded
+                                            ? <>Payment service will verify checkout</>
+                                            : <>Payment status checked at checkout</>}
                                     </div>
                                       <button className="hp-plan-change" onClick={() => { setSelectedPlan(null); setPhone(""); setPayError(null); }}>
                                       <ArrowRight size={12} style={{ transform: "rotate(180deg)" }} /> Change plan
@@ -2838,30 +2886,60 @@ function HotspotLoginView({
                         {savedTvDevices.map(device => (
                           <div className="hp-tv-device-row" key={`saved-${device.macAddress}`}>
                             <Tv size={14} color="#34d399" />
-                            <div>
-                              <strong>{device.name}</strong>
-                              <span>{device.macAddress}</span>
-                            </div>
-                            <div className="hp-tv-device-actions">
-                              <button
-                                type="button"
-                                className="hp-tv-device-action"
-                                onClick={() => handleUseSavedTvDevice(device)}
-                              >
-                                Use
-                              </button>
-                              <button
-                                type="button"
-                                className="hp-tv-device-action"
-                                onClick={() => handleForgetSavedTvDevice(device)}
-                              >
-                                Forget
-                              </button>
-                            </div>
+                            {renamingTvDeviceMac === device.macAddress ? (
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <input
+                                  className="hp-tv-input"
+                                  aria-label={`New name for ${device.name}`}
+                                  value={renamingTvDeviceName}
+                                  onChange={e => setRenamingTvDeviceName(e.target.value)}
+                                  maxLength={64}
+                                  autoFocus
+                                />
+                                <div className="hp-tv-device-actions" style={{ marginTop: 6 }}>
+                                  <button type="button" className="hp-tv-device-action" onClick={() => handleSaveRenamedTvDevice(device)}>Save name</button>
+                                  <button type="button" className="hp-tv-device-action" onClick={() => {
+                                    setRenamingTvDeviceMac("");
+                                    setRenamingTvDeviceName("");
+                                  }}>Cancel</button>
+                                </div>
+                                <span>{device.macAddress}</span>
+                              </div>
+                            ) : (
+                              <>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <strong>{device.name}</strong>
+                                  <span>{device.macAddress}</span>
+                                </div>
+                                <div className="hp-tv-device-actions">
+                                  <button
+                                    type="button"
+                                    className="hp-tv-device-action"
+                                    onClick={() => handleUseSavedTvDevice(device)}
+                                  >
+                                    Use
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="hp-tv-device-action"
+                                    onClick={() => handleStartRenameSavedTvDevice(device)}
+                                  >
+                                    Rename
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="hp-tv-device-action"
+                                    onClick={() => handleForgetSavedTvDevice(device)}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </>
+                            )}
                           </div>
                         ))}
                       </div>
-                      <div className="hp-tv-help">Saved devices stay in this browser and can be removed here.</div>
+                      <div className="hp-tv-help">Saved devices stay in this browser. You can rename or remove them here.</div>
                     </div>
                   )}
 

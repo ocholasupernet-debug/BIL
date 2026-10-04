@@ -16,7 +16,7 @@
     "test:pppoe-portal": "node --test tests/pppoe-portal-reference.test.mjs",
     "test:pppoe-portal-live": "node --test tests/pppoe-portal-live-staging.test.mjs",
     "test:pppoe-renewal": "tsx --test tests/pppoe-renewal-staging.test.mjs",
-    "test:hotspot-export": "node --test tests/hotspot-export.test.mjs",
+    "test:hotspot-export": "node --test tests/hotspot-export.test.mjs tests/hotspot-saved-device-manager.test.mjs tests/hotspot-portal-resilience.test.mjs",
     "test:hotspot-router-staging": "tsx --test tests/hotspot-router-staging.test.ts",
     "test:hotspot-portal-live": "tsx --test tests/hotspot-router-staging.test.ts",
     "test:hotspot-portal-deploy": "tsx --test src/lib/hotspot-portal-deploy.test.ts",

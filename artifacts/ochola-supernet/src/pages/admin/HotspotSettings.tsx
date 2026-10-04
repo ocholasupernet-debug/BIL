@@ -376,24 +376,6 @@ function safePortalPackageShape(value: unknown): string {
   return typeof value === "string" && PORTAL_PACKAGE_SHAPE_KEYS.has(value) ? value : "rounded";
 }
 
-function renderStaticPlanCards(plans: PortalPlan[], packageShape: string): string {
-  const safeShape = safePortalPackageShape(packageShape);
-  return plans.map((plan, index) => {
-    const name = escapeHtml(plan.name);
-    const unit = escapeHtml(plan.validity_unit);
-    const price = Number.isFinite(plan.price) ? String(plan.price) : "0";
-    const validity = Number.isFinite(plan.validity) ? String(plan.validity) : "0";
-    return `<div class="plan-card package-shape-${safeShape}" data-plan-id="${plan.id}" style="border:1px solid rgba(167,139,250,.25);background:rgba(17,25,54,.92);overflow:hidden;display:flex;flex-direction:column">
-      <div style="padding:1.5rem 1rem 1.25rem;text-align:center;flex:1;background:linear-gradient(160deg,rgba(244,114,182,.1),rgba(124,58,237,.18));border-top:2px solid rgba(167,139,250,.5)">
-        <span style="display:inline-block;padding:.25rem .75rem;border-radius:9999px;font-size:.625rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:white;margin-bottom:1rem;background:#4c1d95">${name}</span>
-        <div style="font-size:2.375rem;font-weight:900;color:white;line-height:1;letter-spacing:-.03em"><span style="font-size:.8125rem;font-weight:600;color:#a78bfa">Ksh</span>&nbsp;${price}</div>
-        <p style="font-size:.75rem;color:rgba(255,255,255,.5);margin-top:.625rem;font-weight:400">${validity} ${unit} Unlimited</p>
-      </div>
-      <button type="button" class="plan-connect-button" data-plan-index="${index}" style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,#2f6fed,#7c3aed);border:none;cursor:pointer;font-family:inherit">Connect Now</button>
-    </div>`;
-  }).join("");
-}
-
 function makeExportConfig(
   settings: HSettings,
   adminId: number,
@@ -514,27 +496,24 @@ export async function buildPortalHtml(
     const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(adminId))}&type=hotspot&activeOnly=true&purchasableOnly=true${routerQuery}${portQuery}`, {
       cache: "no-store",
     });
-    if (!plansResponse.ok && portQuery) {
-      throw new Error(`The selected service's plans could not be loaded (HTTP ${plansResponse.status}).`);
+    const planScopeLabel = portQuery ? "The selected service's plans" : "Hotspot plans";
+    if (!plansResponse.ok) {
+      throw new Error(`${planScopeLabel} could not be loaded (HTTP ${plansResponse.status}).`);
     }
-    if (plansResponse.ok) {
-      const data = await plansResponse.json() as unknown;
-      if (!Array.isArray(data) && portQuery) {
-        throw new Error("The selected service's plans returned an invalid response.");
-      }
-      if (Array.isArray(data)) {
-        plans = data
-          .filter((plan): plan is Record<string, unknown> => !!plan && typeof plan === "object")
-          .map((plan) => ({
-            id: Number(plan.id) || 0,
-            name: typeof plan.name === "string" ? plan.name : "",
-            price: Number(plan.price) || 0,
-            validity: Number(plan.validity) || 0,
-            validity_unit: typeof plan.validity_unit === "string" ? plan.validity_unit : "days",
-          }))
-          .filter((plan) => plan.id > 0 && plan.name);
-      }
+    const data = await plansResponse.json() as unknown;
+    if (!Array.isArray(data)) {
+      throw new Error(`${planScopeLabel} returned an invalid response.`);
     }
+    plans = data
+      .filter((plan): plan is Record<string, unknown> => !!plan && typeof plan === "object")
+      .map((plan) => ({
+        id: Number(plan.id) || 0,
+        name: typeof plan.name === "string" ? plan.name : "",
+        price: Number(plan.price) || 0,
+        validity: Number(plan.validity) || 0,
+        validity_unit: typeof plan.validity_unit === "string" ? plan.validity_unit : "days",
+      }))
+      .filter((plan) => plan.id > 0 && plan.name);
 
     /*
      * The generated router file must stay strictly scoped to its router or
@@ -565,35 +544,36 @@ export async function buildPortalHtml(
         headers: adminApiHeaders(),
         cache: "no-store",
       });
-      if (contextResponse.ok) {
-        const context = await contextResponse.json() as {
-          plans?: Array<Record<string, unknown>>;
-        };
-        const selectedRouterId = Number(settings.routerId);
-        const selectedPortId = Number(scope.portId);
-        const candidates = (context.plans ?? [])
-          .filter(plan => ["hotspot", "trials", "trial"].includes(String(plan.type ?? "").toLowerCase()))
-          .filter(plan => plan.is_active !== false && plan.client_can_purchase !== false)
-          .filter(plan => Number(plan.router_id) === selectedRouterId)
-          .filter(plan => selectedPortId > 0
-            ? Number(plan.port_id) === selectedPortId
-            : plan.port_id != null);
-        plans = candidates
-          .map(plan => ({
-            id: Number(plan.id) || 0,
-            name: typeof plan.name === "string" ? plan.name : "",
-            price: Number(plan.price) || 0,
-            validity: Number(plan.validity) || 0,
-            validity_unit: typeof plan.validity_unit === "string" ? plan.validity_unit : "days",
-          }))
-          .filter(plan => plan.id > 0 && plan.name);
+      if (!contextResponse.ok) {
+        throw new Error(`The admin preview packages could not be loaded (HTTP ${contextResponse.status}).`);
       }
+      const context = await contextResponse.json() as {
+        plans?: Array<Record<string, unknown>>;
+      };
+      if (!Array.isArray(context.plans)) {
+        throw new Error("The admin preview packages returned an invalid response.");
+      }
+      const selectedRouterId = Number(settings.routerId);
+      const selectedPortId = Number(scope.portId);
+      const candidates = context.plans
+        .filter(plan => ["hotspot", "trials", "trial"].includes(String(plan.type ?? "").toLowerCase()))
+        .filter(plan => plan.is_active !== false && plan.client_can_purchase !== false)
+        .filter(plan => Number(plan.router_id) === selectedRouterId)
+        .filter(plan => selectedPortId > 0
+          ? Number(plan.port_id) === selectedPortId
+          : plan.port_id != null);
+      plans = candidates
+        .map(plan => ({
+          id: Number(plan.id) || 0,
+          name: typeof plan.name === "string" ? plan.name : "",
+          price: Number(plan.price) || 0,
+          validity: Number(plan.validity) || 0,
+          validity_unit: typeof plan.validity_unit === "string" ? plan.validity_unit : "days",
+        }))
+        .filter(plan => plan.id > 0 && plan.name);
     }
   } catch (error) {
-    if (scope.previewOnly || Number(scope.portId) > 0) {
-      throw new Error(error instanceof Error ? error.message : "The selected service's plans could not be loaded.");
-    }
-    /* The API fallback remains available when the admin panel is offline. */
+    throw new Error(error instanceof Error ? error.message : "Hotspot plans could not be loaded.");
   }
   const exportSettings = {
     ...settings,
@@ -604,14 +584,7 @@ export async function buildPortalHtml(
   const layoutCss = renderStaticPortalLayoutCss(config.portalLayout);
   const bootstrap = `${layoutCss ? `<style id="hotspot-portal-layout">${layoutCss}</style>` : ""}<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};document.documentElement.setAttribute("data-portal-layout",window.__HOTSPOT_CONFIG__.portalLayout);</script>`;
   const configuredTitle = escapeHtml(config.ispName);
-  const staticPlanCards = renderStaticPlanCards(plans, appearance.portalPackageShape);
-  const templateWithStaticPlans = staticPlanCards
-    ? template.replace(
-      /(<div id="plansGrid"[^>]*>)\s*<div[^>]*>Loading plans…<\/div>\s*(<\/div>)/,
-      `$1${staticPlanCards}$2`,
-    )
-    : template;
-  return templateWithStaticPlans
+  return template
     .replace("</head>", `${bootstrap}\n</head>`)
     .replace(/\$\(login-title\)/g, configuredTitle);
 }
@@ -922,7 +895,6 @@ export default function HotspotSettings() {
   const [saved, setSaved] = useState(false);
   const [notice, setNotice] = useState<{ type: "error" | "success" | "info"; text: string } | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [deploying, setDeploying] = useState(false);
   const [installingHotspotFiles, setInstallingHotspotFiles] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -1294,7 +1266,7 @@ export default function HotspotSettings() {
 
        const canRefreshPortal = Number.isSafeInteger(routerId) && routerId > 0 && Boolean(adminId);
        if (canRefreshPortal && !window.confirm(
-         "Saving these settings will replace the existing login.html and rlogin.html files on the selected router. Continue?",
+         "Save and push the updated Hotspot sign-in page to this router? This adds or replaces only flash/hotspot/login.html and flash/hotspot/rlogin.html. Existing copies are overwritten without an automatic backup; unrelated router files are left unchanged. Continue?",
        )) {
          noticeText = "Settings saved. Router portal files were left unchanged.";
        } else if (canRefreshPortal) {
@@ -1338,9 +1310,9 @@ export default function HotspotSettings() {
             .join(": ");
           throw new Error(serverMessage || `Portal refresh failed (HTTP ${response.status})`);
         }
-        noticeText = "Settings saved and the hotspot page was refreshed with the latest plans.";
+        noticeText = `Hotspot settings saved and the sign-in pages were pushed to ${selectedRouter?.name || "the selected MikroTik"}.`;
       } else {
-       noticeText = "Settings saved. Select a linked router to refresh its hotspot page automatically.";
+       noticeText = "Settings saved. Select a linked router to push the updated sign-in page to its MikroTik.";
       }
 
       setSaved(true);
@@ -1392,121 +1364,6 @@ export default function HotspotSettings() {
       setNotice({ type: "error", text: error instanceof Error ? error.message : "The portal HTML could not be generated." });
     } finally {
       setExporting(false);
-    }
-  };
-
-  const handleDeploy = async () => {
-    if (selectedAssignedPortId) {
-      if (!selectedPortalPort) {
-        setNotice({ type: "error", text: "The selected Hotspot service is no longer available. Choose a service again." });
-        return;
-      }
-      setDeploying(true);
-      try {
-        await savePreferences({ ...preferences, portalBackground, portalPackageShape });
-        await saveAssignedPort(selectedPortalPort);
-      } catch (error) {
-        setNotice({ type: "error", text: error instanceof Error ? error.message : "The service portal could not be deployed." });
-      } finally {
-        setDeploying(false);
-      }
-      return;
-    }
-    const routerId = Number(settings.routerId);
-     const selectedRouter = routers.find((router) => router.id === routerId);
-     const adminId = selectedRouter?.admin_id ?? getSelectedTenantId();
-    if (!Number.isSafeInteger(routerId) || routerId < 1) {
-      setNotice({ type: "error", text: "Choose a linked router before deploying the portal." });
-      return;
-    }
-    if (!adminId) {
-      setNotice({ type: "error", text: "Sign in to an ISP account before deploying the portal." });
-      return;
-    }
-    if (!window.confirm(
-        "Deploy the current branded portal to this router? The server will transfer login.html and rlogin.html. You will be asked before existing files are replaced.",
-    )) return;
-
-    setDeploying(true);
-    setNotice(null);
-    try {
-      await savePreferences({
-        ...preferences,
-        portalBackground,
-        portalPackageShape,
-      });
-      const html = await createExport();
-      if (!html) return;
-
-      const deploy = async (overwrite: boolean) => {
-        const headers = new Headers({ "Content-Type": "application/json" });
-        let token = "";
-        let role = "";
-        try {
-          token = localStorage.getItem("ochola_api_token")
-            || localStorage.getItem("ochola_superadmin_token")
-            || "";
-          role = localStorage.getItem("ochola_admin_role") || "isp_admin";
-        } catch {
-          /* The API also enforces tenant ownership server-side. */
-        }
-        if (token) headers.set("Authorization", `Bearer ${token}`);
-        if (role === "superadmin") headers.set("X-Impersonated-Admin-Id", String(adminId));
-        const response = await fetch(`/api/router/${routerId}/hotspot-portal/deploy`, {
-          method: "POST",
-          headers,
-           body: JSON.stringify({
-             adminId,
-             html,
-             overwrite,
-             portalFileReplacementConsent: overwrite,
-             destinationDirectory: "flash/hotspot",
-           }),
-        });
-        let data: {
-          error?: string;
-           detail?: string;
-           hint?: string;
-          destinationPath?: string;
-          replaced?: boolean;
-          existingFile?: { name: string; size: number; type: string };
-        } = {};
-        try {
-          data = await response.json();
-        } catch {
-          /* Use the HTTP status below when the server did not return JSON. */
-        }
-        return { response, data };
-      };
-
-      let result = await deploy(false);
-      if (result.response.status === 409 && result.data.existingFile) {
-        const existing = result.data.existingFile;
-        if (!window.confirm(
-          `Replace the existing ${existing.name} (${existing.size} bytes) on the router?`,
-        )) {
-          setNotice({ type: "info", text: "Deployment cancelled. The existing router portal was left unchanged." });
-          return;
-        }
-        result = await deploy(true);
-      }
-
-      if (!result.response.ok) {
-        const serverMessage = [result.data.error, result.data.detail]
-          .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
-          .join(": ");
-        throw new Error(serverMessage || `Portal deployment failed (HTTP ${result.response.status})`);
-      }
-      setNotice({
-        type: "success",
-        text: result.data.replaced
-          ? `${result.data.destinationPath ?? "hotspot/login.html"} was replaced successfully.`
-          : `${result.data.destinationPath ?? "hotspot/login.html"} was deployed successfully.`,
-      });
-    } catch (error) {
-      setNotice({ type: "error", text: error instanceof Error ? error.message : "The portal could not be deployed." });
-    } finally {
-      setDeploying(false);
     }
   };
 
@@ -1608,7 +1465,7 @@ export default function HotspotSettings() {
             <p className="hs-subtitle">
               {isResellerAccount
                 ? "Edit only the hotspot page assigned to your ISP-linked VLAN. Saving generates reseller-specific files and pushes them to the ISP MikroTik service directory."
-                : <>Shape what customers see when they join your Wi-Fi, then export one ready-to-upload <strong> login.html</strong> with the same payment and RouterOS behavior.</>}
+                : <>Choose what customers see when they join your Wi-Fi. With a linked router selected, <strong>Save settings</strong> updates its login.html and rlogin.html after you confirm.</>}
             </p>
           </div>
           <div className="hs-actions">
@@ -1618,18 +1475,15 @@ export default function HotspotSettings() {
             <button type="button" className="hs-btn hs-btn-soft" onClick={handleDownload} disabled={exporting || portsLoading}>
               {exporting ? <Loader2 size={14} className="animate-spin" /> : <ArrowDownToLine size={14} />} Download HTML
             </button>
-            {!isResellerAccount && <button type="button" className="hs-btn hs-btn-primary" onClick={handleDeploy} disabled={deploying || exporting || portsLoading || savingPortId !== null}>
-              {deploying ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {deploying ? "Deploying…" : "Deploy to router"}
-            </button>}
-            {!isResellerAccount && <button type="button" className="hs-btn hs-btn-soft" onClick={handleInstallHotspotFiles} disabled={installingHotspotFiles || deploying || exporting}>
-              {installingHotspotFiles ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />} {installingHotspotFiles ? "Installing files…" : "Install hotspot files"}
+            {!isResellerAccount && <button type="button" className="hs-btn hs-btn-soft" onClick={handleInstallHotspotFiles} disabled={installingHotspotFiles || saving || exporting}>
+              {installingHotspotFiles ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />} {installingHotspotFiles ? "Installing files…" : "Install support files"}
             </button>}
             {!isResellerAccount && <Link href="/admin/network/files" className="hs-btn hs-btn-quiet">
               <FolderOpen size={14} /> View router files
             </Link>}
-            <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving || portsLoading || deploying || savingPortId !== null}>
+            <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving || portsLoading || installingHotspotFiles || savingPortId !== null}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
-              {saving ? "Syncing…" : saved ? "Synced" : isResellerAccount ? "Sync to MikroTik" : "Save settings"}
+              {saving ? "Syncing…" : saved ? "Synced" : isResellerAccount ? "Sync to MikroTik" : settings.routerId ? "Save & sync to MikroTik" : "Save settings"}
             </button>
           </div>
         </header>
@@ -1647,13 +1501,13 @@ export default function HotspotSettings() {
               <Field label="ISP name" help="Used in the page title, header, footer, and downloaded filename.">
                 <input className="hs-input" value={settings.ispName} maxLength={80} onChange={event => update("ispName", event.target.value)} placeholder="Your ISP name" />
               </Field>
-               <Field label="Customer portal hostname" help="Point DNS to the shared application; HTTPS is provisioned after it resolves. New exports use this host only if its API health check passes, otherwise they use the tenant API address. Saving does not update existing router files.">
+               <Field label="Customer portal hostname" help="Saved for this tenant and embedded in the portal. A custom host is used only when its API health check passes; otherwise the tenant API address is used. Saving syncs the selected router’s sign-in files after confirmation but does not change DNS or RouterOS service configuration.">
                  <input className="hs-input" value={settings.portalHostname} maxLength={253} onChange={event => update("portalHostname", event.target.value)} placeholder="wifi.example.com" inputMode="url" />
                </Field>
               <Field label="Tagline" help="A short promise shown below the portal title.">
                 <input className="hs-input" value={settings.tagline} maxLength={120} onChange={event => update("tagline", event.target.value)} placeholder="Fast and reliable internet" />
               </Field>
-               <Field label={isResellerAccount ? "Assigned MikroTik VLAN interface" : "Linked router"} help={isResellerAccount ? "Use the VLAN interface name assigned on the MikroTik. Syncing this service writes changes to that VLAN interface." : "Keeps this workspace’s hotspot export associated with the selected router."}>
+               <Field label={isResellerAccount ? "Assigned MikroTik VLAN interface" : "Linked router"} help={isResellerAccount ? "Use the VLAN interface name assigned on the MikroTik. Syncing this service writes changes to that VLAN interface." : "Saving with a router selected pushes the updated customer sign-in pages to it."}>
                  {(!isResellerAccount && routersLoading) ? <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading routers…</div> : (
                   <div className="hs-select-wrap">
                      <select
@@ -1690,7 +1544,7 @@ export default function HotspotSettings() {
                 )}
               </Field>
                {!isResellerAccount && portalTargets.length > 0 && (
-                 <Field label="Portal service" help="Preview, download, save, and deploy use this exact service's plans and isolated Hotspot folder.">
+                 <Field label="Portal service" help="Preview, download, save, and sync use this exact service's plans and isolated Hotspot folder.">
                    <div className="hs-select-wrap">
                      <select className="hs-select" value={selectedAssignedPortId} onChange={event => setSelectedAssignedPortId(event.target.value)} disabled={portsLoading}>
                        <option value="">Router-wide portal (no assigned-port plans)</option>
@@ -2026,7 +1880,7 @@ export default function HotspotSettings() {
 
             <div className="hs-foot-actions">
               <button type="button" className="hs-btn hs-btn-quiet" onClick={() => void handlePreview()} disabled={previewLoading || portsLoading}><Eye size={14} /> Preview portal</button>
-              <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving}>{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {saving ? "Saving…" : "Save settings"}</button>
+              <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving || installingHotspotFiles || portsLoading || savingPortId !== null}>{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {saving ? "Saving…" : isResellerAccount ? "Sync to MikroTik" : settings.routerId ? "Save & sync to MikroTik" : "Save settings"}</button>
             </div>
           </main>
 

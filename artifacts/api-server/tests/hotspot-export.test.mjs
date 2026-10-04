@@ -16,6 +16,7 @@ const apiRoot = resolve(import.meta.dirname, "..");
 const webRoot = resolve(apiRoot, "../ochola-supernet");
 const entry = resolve(webRoot, "src/pages/admin/HotspotSettings.tsx");
 const templatePath = resolve(webRoot, "public/hotspot/login.html");
+const rloginTemplatePath = resolve(webRoot, "public/hotspot/rlogin.html");
 const mikrotikRoutePath = resolve(apiRoot, "src/routes/mikrotik-route.ts");
 const resellerRoutePath = resolve(apiRoot, "src/routes/reseller-route.ts");
 const mpesaRoutePath = resolve(apiRoot, "src/routes/mpesa-route.ts");
@@ -229,7 +230,8 @@ test("local hotspot preview keeps embedded plans instead of refreshing them away
       validity: 1,
       validity_unit: "days",
     }]);
-    assert.match(html, /data-plan-id="41"/);
+    assert.match(html, /function renderPlans\(\)/);
+    assert.doesNotMatch(html, /data-plan-id=/);
     assert.match(await readFile(templatePath, "utf8"), /PORTAL_PREVIEW_ONLY\|\|planRequestInFlight/);
   } finally {
     globalThis.fetch = realFetch;
@@ -308,6 +310,28 @@ test("assigned-port API failures do not silently create an empty preview or depl
   }
 });
 
+test("router-wide plan API failures abort export instead of producing an empty package portal", async () => {
+  const template = await readFile(templatePath, "utf8");
+  const builder = await loadExportBuilder();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async input => {
+    const url = new URL(String(input), "https://tenant.example.test");
+    if (url.pathname === "/hotspot/login.html") return new Response(template);
+    if (url.pathname === "/api/public/typography") return new Response("{}");
+    if (url.pathname === "/api/plans") return new Response("unavailable", { status: 503 });
+    throw new Error(`unexpected request: ${url}`);
+  };
+  try {
+    await assert.rejects(
+      builder.buildPortalHtml(stagingSettings(), "tenant"),
+      /Hotspot plans could not be loaded \(HTTP 503\)/,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    await builder.cleanup();
+  }
+});
+
 test("reseller preview fallback remains restricted to the selected assigned port", async () => {
   const template = await readFile(templatePath, "utf8");
   const builder = await loadExportBuilder("reseller");
@@ -362,6 +386,7 @@ test("invalid or internal API origins fall back to the public tenant HTTPS origi
   globalThis.fetch = async input => {
     const url = new URL(String(input), "https://tenant.example.test");
     if (url.pathname === "/hotspot/login.html") return new Response(template, { status: 200 });
+    if (url.pathname === "/api/plans") return new Response("[]", { status: 200 });
     return new Response(JSON.stringify({ apiBase: "http://localhost:8080" }), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -430,6 +455,54 @@ test("generated portal route keeps tenant scope and one-time source cleanup", as
   const sourceHandler = source.slice(source.indexOf('router.get("/router-file-source/:token"'), routeStart);
   assert.match(sourceHandler, /expiresAt <= Date\.now\(\)/);
   assert.match(sourceHandler, /pendingRouterFileSources\.delete\(token\)/);
+});
+
+test("only the come3 bridge portal opts out of maintenance package hiding", async () => {
+  const source = await readFile(mikrotikRoutePath, "utf8");
+  const routeStart = source.indexOf('router.post("/admin/router/:id/hotspot-portal/bridge-deploy"');
+  const routeEnd = source.indexOf('router.post("/router/:id/hotspot-portal/sync-tenant-host"', routeStart);
+  assert.ok(routeStart >= 0 && routeEnd > routeStart, "bridge portal deploy route is present");
+  const route = source.slice(routeStart, routeEnd);
+
+  assert.match(route, /getRouterCreds\(id, adminId\)/);
+  assert.match(route, /found\.row\.name !== expectedRouterName/);
+  assert.match(route, /selectUniqueActiveHotspotServer\(servers, bridgeName \|\| undefined\)/);
+  assert.ok(
+    route.indexOf("found.row.name !== expectedRouterName") < route.indexOf("const read = async"),
+    "exact target-name verification runs before any RouterOS command",
+  );
+  assert.match(route, /\.\.\.\(found\.row\.name === "come3" \? \{ allowPackagesDuringMaintenance: true \} : \{\}\)/);
+  assert.doesNotMatch(route, /id === 85/);
+  assert.match(route, /for \(const fileName of \["login\.html", "rlogin\.html"\] as const\)/);
+  assert.match(route, /getDeployableSource\("hotspot", "rlogin\.html"\)/);
+  assert.match(route, /rloginSource\.content\.toString\("utf8"\)\.includes\("\$\(link-login-only\)"\)/);
+  assert.match(route, /const pageContent = fileName === "login\.html" \? content : rloginSource\.content/);
+  const portal = await readFile(templatePath, "utf8");
+  assert.match(portal, /shouldHidePackageSection\(maintenance,allowPackagesDuringMaintenance\)/);
+  assert.match(portal, /EMBEDDED_CONFIG&&EMBEDDED_CONFIG\.allowPackagesDuringMaintenance===true/);
+  const refreshHandoff = await readFile(rloginTemplatePath, "utf8");
+  assert.match(refreshHandoff, /http-equiv="refresh" content="0;url=\$\(link-login-only\)"/);
+
+  const reseller = await readFile(resellerRoutePath, "utf8");
+  assert.doesNotMatch(reseller, /allowPackagesDuringMaintenance/);
+});
+
+test("come3 refresh handoff matches the forest-pulse portal while keeping its redirect", async () => {
+  const refreshHandoff = await readFile(rloginTemplatePath, "utf8");
+  for (const token of [
+    "--portal-accent:#16a34a",
+    "--portal-accent-dark:#0f766e",
+    "--portal-bg:#21180d",
+    "--portal-bg2:#713f12",
+    "rgba(8,35,20,.93)",
+    "rgba(74,222,128,.25)",
+  ]) {
+    assert.ok(refreshHandoff.includes(token), `refresh handoff should include ${token}`);
+  }
+  assert.match(refreshHandoff, /ZOMBII ZOMBII/);
+  assert.match(refreshHandoff, /http-equiv="refresh" content="0;url=\$\(link-login-only\)"/);
+  assert.match(refreshHandoff, /href="\$\(link-login-only\)"/);
+  assert.doesNotMatch(refreshHandoff, /function sendStk\(/);
 });
 
 test("default reseller portal deployment embeds the assigned router and port scope", async () => {
