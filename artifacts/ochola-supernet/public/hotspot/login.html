@@ -238,11 +238,10 @@
 
     <!-- MikroTik error (only shown when login fails) -->
     $(if error)
-    <div id="mikrotikError" style="margin:1rem 1.5rem 0;padding:.875rem 1rem;border-radius:.75rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);display:flex;align-items:flex-start;gap:.625rem">
+    <div id="mikrotikError" class="error-box" role="alert" style="margin:1rem 1.5rem 0;padding:.875rem 1rem;border-radius:.75rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);display:flex;align-items:flex-start;gap:.625rem">
       <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#f87171" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
       <div>
-        <div style="font-size:.775rem;font-weight:700;color:#f87171;margin-bottom:.15rem">Login Failed</div>
-        <div style="font-size:.775rem;color:#fca5a5">$(error)</div>
+        <div style="font-size:.775rem;color:#fca5a5"><strong style="font-weight:700;color:#f87171">Login Failed:</strong> $(error)</div>
       </div>
     </div>
     $(endif)
@@ -489,7 +488,8 @@ var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var ROUTER_NAS_IDENTIFIER="$(identity)";
 var ROUTER_HOTSPOT_SERVER_NAME="$(server-name)";
 var EMBEDDED_PLANS=[];
- var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
+  var PORTAL_API_TIMEOUT_MS=4000;
+  var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
 var ROUTER_MAC="$(mac)";
 var ROUTER_IP="$(ip)";
 var ROUTER_CHAP_ID="$(chap-id)";
@@ -924,7 +924,11 @@ function loadPaymentStatus(){
   var url=apiUrl("/api/settings/mpesa?"+query.join("&"));
   var timeoutId=0;
   var timedOut=false;
-  var statusRequest=fetch(url,{cache:"no-store"}).then(function(response){
+  var controller=null;
+  try{if(typeof AbortController==="function")controller=new AbortController();}catch(e){}
+  var requestOptions={cache:"no-store"};
+  if(controller)requestOptions.signal=controller.signal;
+  var statusRequest=Promise.resolve().then(function(){return fetch(url,requestOptions);}).then(function(response){
     if(!response.ok)throw new Error("Payment availability could not be loaded.");
     return response.json();
   }).then(function(data){
@@ -938,8 +942,9 @@ function loadPaymentStatus(){
   var timeout=new Promise(function(_resolve,reject){
     timeoutId=window.setTimeout(function(){
       timedOut=true;
+        if(controller){try{controller.abort();}catch(e){}}
       reject(new Error("Payment availability check timed out."));
-    },5000);
+    },PORTAL_API_TIMEOUT_MS);
   });
   return Promise.race([statusRequest,timeout]).catch(function(){
     PAYMENT_METHOD_READY=false;
@@ -964,10 +969,13 @@ function loadPaymentStatus(){
        (PORTAL_ROUTER_ID>0?"&routerId="+encodeURIComponent(PORTAL_ROUTER_ID):"")+
         (PORTAL_PORT_ID>0?"&portId="+encodeURIComponent(PORTAL_PORT_ID):"")+
         "&activeOnly=true&purchasableOnly=true";
-   var finished=false;
-    function finish(data,apiSucceeded){
+    var finished=false,timeoutId=0,controller=null;
+    try{if(typeof AbortController==="function")controller=new AbortController();}catch(e){}
+     function finish(data,apiSucceeded,didTimeout){
      if(finished)return;
      finished=true;
+      if(timeoutId){window.clearTimeout(timeoutId);timeoutId=0;}
+      if(didTimeout&&controller){try{controller.abort();}catch(e){}}
      planRequestInFlight=false;
      var remotePlans=normalisePlanList(data);
       /* A successful empty response is authoritative: it clears stale
@@ -984,14 +992,16 @@ function loadPaymentStatus(){
    /* A pre-authenticated RouterOS request can remain pending instead of
       rejecting when the walled garden blocks the API. Never make the initial
       package display wait for that request. */
-    fetch(apiUrl("/api/plans?type=hotspot"+query))
+    var requestOptions={cache:"no-store"};
+    if(controller)requestOptions.signal=controller.signal;
+    timeoutId=window.setTimeout(function(){finish(null,false,true);},PORTAL_API_TIMEOUT_MS);
+    Promise.resolve().then(function(){return fetch(apiUrl("/api/plans?type=hotspot"+query),requestOptions);})
       .then(function(r){
         if(!r.ok)return {ok:false,data:null};
         return r.json().then(function(data){return {ok:true,data:data};});
       })
       .then(function(result){finish(result.data,result.ok);})
       .catch(function(){finish(null,false);});
-    setTimeout(function(){finish(null,false);},5000);
  }
  function loadPlans(){
    if(!plansInitialised){
@@ -1817,7 +1827,10 @@ function submitMpesa(){
 
 function renderPortalDeviceMac(){
   var value=document.getElementById("portalDeviceMacValue");
-  if(value)value.textContent=DEVICE_MAC||"Resolved by router";
+  if(value){
+    var mac=DEVICE_MAC||normaliseMac(ROUTER_MAC)||normaliseMac(PORTAL_QUERY.get("mac")||PORTAL_QUERY.get("mac-address")||"");
+    value.textContent=mac||"Resolved by router";
+  }
 }
 try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
   EMBEDDED_PLANS=normalisePlanList(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.plans);
