@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { ADMIN_ID, getAdminApiToken, isSuperAdmin } from "@/lib/supabase";
-import { installHotspotFiles, replaceHotspotFiles, type HotspotFileDeploymentResult } from "@/lib/router-hotspot-files";
+import { installHotspotFiles, type HotspotFileDeploymentResult } from "@/lib/router-hotspot-files";
 import {
   AlertCircle,
   Check,
@@ -131,7 +131,6 @@ export default function Files() {
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [deployingHotspot, setDeployingHotspot] = useState(false);
   const [deploymentSummary, setDeploymentSummary] = useState<HotspotFileDeploymentResult | null>(null);
-  const [deploymentMode, setDeploymentMode] = useState<"install" | "replace">("install");
 
   const loadRouters = useCallback(async () => {
     setLoadingRouters(true);
@@ -215,7 +214,6 @@ export default function Files() {
     setDeployingHotspot(true);
     setError("");
     setDeploymentSummary(null);
-    setDeploymentMode("install");
     try {
       const token = getAdminApiToken();
       const result = await installHotspotFiles(selectedRouterId, ADMIN_ID, token);
@@ -226,31 +224,6 @@ export default function Files() {
       await loadFiles(selectedRouterId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Hotspot files could not be deployed.");
-    } finally {
-      setDeployingHotspot(false);
-    }
-  };
-
-  const replaceHotspotAssets = async () => {
-    if (!selectedRouterId || deployingHotspot) return;
-    if (!window.confirm(
-      `Replace approved website Hotspot files on ${selectedRouter?.name || "this router"}? Only matching files in flash/hotspot will be overwritten; missing approved files will be added, and unrelated router files will not be touched. RouterOS writes directly to each destination, so an interrupted transfer may leave that file incomplete. No automatic backup is made. Continue?`,
-    )) return;
-
-    setDeployingHotspot(true);
-    setError("");
-    setDeploymentSummary(null);
-    setDeploymentMode("replace");
-    try {
-      const token = getAdminApiToken();
-      const result = await replaceHotspotFiles(selectedRouterId, ADMIN_ID, token);
-      setDeploymentSummary(result);
-      if (result.status === "failed" || result.failed.length > 0 || result.error) {
-        setError(result.error || `Hotspot replacement finished with ${result.failed.length} failed file(s).`);
-      }
-      await loadFiles(selectedRouterId);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Hotspot files could not be replaced.");
     } finally {
       setDeployingHotspot(false);
     }
@@ -305,15 +278,6 @@ export default function Files() {
             {deployingHotspot ? <Loader2 size={15} style={{ animation: "self-install-spin 1s linear infinite" }} /> : <HardDrive size={15} />}
             {deployingHotspot ? "Installing hotspot files…" : "Install hotspot files"}
           </button>
-          <button
-            type="button"
-            onClick={() => void replaceHotspotAssets()}
-            disabled={!selectedRouterId || deployingHotspot}
-            style={{ ...buttonStyle, background: "rgba(248,113,113,0.12)", borderColor: "rgba(248,113,113,0.45)", color: "#fca5a5", cursor: selectedRouterId && !deployingHotspot ? "pointer" : "not-allowed", opacity: selectedRouterId && !deployingHotspot ? 1 : 0.6 }}
-          >
-            {deployingHotspot && deploymentMode === "replace" ? <Loader2 size={15} style={{ animation: "self-install-spin 1s linear infinite" }} /> : <HardDrive size={15} />}
-            {deployingHotspot && deploymentMode === "replace" ? "Replacing hotspot files…" : "Replace hotspot files"}
-          </button>
           <button type="button" onClick={() => void loadRouters()} disabled={loadingRouters} style={{ ...buttonStyle, cursor: loadingRouters ? "not-allowed" : "pointer" }}>
             {loadingRouters ? <Loader2 size={15} style={{ animation: "self-install-spin 1s linear infinite" }} /> : <Server size={15} />}
             Refresh routers
@@ -322,16 +286,16 @@ export default function Files() {
 
         <section style={{ ...panel, padding: "0.85rem 1rem", borderColor: "rgba(96,165,250,0.3)", background: "rgba(96,165,250,0.05)" }}>
           <p style={{ ...mutedText, margin: 0 }}>
-            Install adds missing approved files. Replace overwrites only approved files in flash/hotspot after confirmation; unrelated router files are not touched.
+            Install adds missing approved files without overwriting existing files. Update the customer sign-in page from Hotspot Sign In → Save settings; that replaces only its login and roaming pages after confirmation.
           </p>
         </section>
 
         <section style={{ ...panel, padding: "0.85rem 1rem", borderColor: "rgba(251,191,36,0.3)", background: "rgba(251,191,36,0.05)" }}>
           <div style={{ color: "#fbbf24", fontSize: "0.76rem", fontWeight: 800 }}>
-            Recovery if a replacement transfer fails
+            Portal update safety
           </div>
           <p style={{ ...mutedText, margin: "0.35rem 0 0" }}>
-            RouterOS fetch writes directly to the destination. Fix the reported connection or storage problem, run “Replace hotspot files” again, then refresh this list and verify the portal from a Hotspot client. A retry fetches the approved files into the same paths. Previous file contents are not backed up automatically; save any custom files separately before replacing them.
+            Saving Hotspot Sign In replaces only login.html and rlogin.html in flash/hotspot after you confirm. Other router files are left unchanged. Install remains available here for adding missing approved support files.
           </p>
         </section>
 
@@ -339,7 +303,7 @@ export default function Files() {
           <section style={{ ...panel, padding: "0.9rem 1rem", borderColor: deploymentSummary.failed.length || deploymentSummary.status === "failed" ? "rgba(248,113,113,0.35)" : "rgba(74,222,128,0.3)", background: deploymentSummary.failed.length || deploymentSummary.status === "failed" ? "rgba(248,113,113,0.06)" : "rgba(74,222,128,0.06)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", color: deploymentSummary.failed.length || deploymentSummary.status === "failed" ? "#fca5a5" : "#86efac", fontWeight: 800, fontSize: "0.82rem" }}>
               {deploymentSummary.failed.length || deploymentSummary.status === "failed" ? <AlertCircle size={16} /> : <Check size={16} />}
-              Hotspot file {deploymentMode === "replace" ? "replacement" : "installation"} {deploymentSummary.status === "complete" && !deploymentSummary.failed.length ? "complete" : "finished with errors"}
+              Hotspot file installation {deploymentSummary.status === "complete" && !deploymentSummary.failed.length ? "complete" : "finished with errors"}
             </div>
             <div style={{ ...mutedText, marginTop: "0.4rem" }}>
               {deploymentSummary.deployed.length} added · {deploymentSummary.replaced.length} replaced · {deploymentSummary.skipped.length} skipped · {deploymentSummary.failed.length} failed · {deploymentSummary.processed} of {deploymentSummary.total} processed
