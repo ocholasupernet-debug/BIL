@@ -253,6 +253,17 @@ router.get("/plans", async (req, res): Promise<void> => {
   const activeOnly = req.query.activeOnly === "true";
   const purchasableOnly = req.query.purchasableOnly === "true";
   const customerHotspotRequest = requestedType === "hotspot" && activeOnly && purchasableOnly;
+  const selectPortalRows = async <T>(table: string, query: string): Promise<T[] | null> => {
+    try {
+      return await sbSelectStrict<T>(table, query);
+    } catch {
+      res.status(503).json({
+        ok: false,
+        error: "Hotspot packages could not be loaded. Please try again.",
+      });
+      return null;
+    }
+  };
   if (customerHotspotRequest && !adminId) {
     res.status(400).json({ ok: false, error: "The Hotspot portal is missing its tenant scope." });
     return;
@@ -266,10 +277,17 @@ router.get("/plans", async (req, res): Promise<void> => {
     purchasableOnly ? "client_can_purchase=is.true" : "",
   ].filter(Boolean).map(filter => `&${filter}`).join("");
   if (adminId && requestedPortId) {
-    const ports = await sbSelect<{ id: number; router_id: number; assigned_reseller_id: number | null }>(
-      "isp_reseller_ports",
-      `id=eq.${requestedPortId}&admin_id=eq.${adminId}&status=neq.disabled&select=id,router_id,assigned_reseller_id&limit=1`,
-    );
+    const portQuery = `id=eq.${requestedPortId}&admin_id=eq.${adminId}&status=neq.disabled&select=id,router_id,assigned_reseller_id&limit=1`;
+    const ports = customerHotspotRequest
+      ? await selectPortalRows<{ id: number; router_id: number; assigned_reseller_id: number | null }>(
+        "isp_reseller_ports",
+        portQuery,
+      )
+      : await sbSelect<{ id: number; router_id: number; assigned_reseller_id: number | null }>(
+        "isp_reseller_ports",
+        portQuery,
+      );
+    if (!ports) return;
     if (!ports[0] || (requestedRouterId !== null && ports[0].router_id !== requestedRouterId)) {
       res.json([]);
       return;
@@ -281,10 +299,11 @@ router.get("/plans", async (req, res): Promise<void> => {
     const assignedResellerId = parseOptionalId(ports[0].assigned_reseller_id);
     const ownerFilter = planOwnerFilter(assignedResellerId);
     const scopeFilter = `&router_id=eq.${scopedRouterId}&port_id=eq.${requestedPortId}`;
-    const rows = await sbSelect(
-      "isp_plans",
-      `admin_id=eq.${adminId}${typeFilter}${scopeFilter}&${ownerFilter}${availabilityFilters}&select=*&order=price.asc,name.asc`,
-    );
+    const planQuery = `admin_id=eq.${adminId}${typeFilter}${scopeFilter}&${ownerFilter}${availabilityFilters}&select=*&order=price.asc,name.asc`;
+    const rows = customerHotspotRequest
+      ? await selectPortalRows<Record<string, unknown>>("isp_plans", planQuery)
+      : await sbSelect<Record<string, unknown>>("isp_plans", planQuery);
+    if (!rows) return;
     res.json(rows);
     return;
   }
@@ -293,9 +312,13 @@ router.get("/plans", async (req, res): Promise<void> => {
       ? `&router_id=eq.${scopedRouterId}&port_id=eq.${requestedPortId}`
       : `&router_id=eq.${scopedRouterId}&port_id=is.null`
     : "";
+  const planQuery = `admin_id=eq.${adminId}${typeFilter}${scopeFilter}&${planOwnerFilter(null)}${availabilityFilters}&select=*&order=price.asc,name.asc`;
   const rows = adminId && scopedRouterId
-    ? await sbSelect("isp_plans", `admin_id=eq.${adminId}${typeFilter}${scopeFilter}&${planOwnerFilter(null)}${availabilityFilters}&select=*&order=price.asc,name.asc`)
+    ? customerHotspotRequest
+      ? await selectPortalRows<Record<string, unknown>>("isp_plans", planQuery)
+      : await sbSelect<Record<string, unknown>>("isp_plans", planQuery)
     : [];
+  if (!rows) return;
   res.json(rows);
 });
 

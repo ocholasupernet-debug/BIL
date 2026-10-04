@@ -230,7 +230,8 @@ test("local hotspot preview keeps embedded plans instead of refreshing them away
       validity: 1,
       validity_unit: "days",
     }]);
-    assert.match(html, /data-plan-id="41"/);
+    assert.match(html, /function renderPlans\(\)/);
+    assert.doesNotMatch(html, /data-plan-id=/);
     assert.match(await readFile(templatePath, "utf8"), /PORTAL_PREVIEW_ONLY\|\|planRequestInFlight/);
   } finally {
     globalThis.fetch = realFetch;
@@ -309,6 +310,28 @@ test("assigned-port API failures do not silently create an empty preview or depl
   }
 });
 
+test("router-wide plan API failures abort export instead of producing an empty package portal", async () => {
+  const template = await readFile(templatePath, "utf8");
+  const builder = await loadExportBuilder();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async input => {
+    const url = new URL(String(input), "https://tenant.example.test");
+    if (url.pathname === "/hotspot/login.html") return new Response(template);
+    if (url.pathname === "/api/public/typography") return new Response("{}");
+    if (url.pathname === "/api/plans") return new Response("unavailable", { status: 503 });
+    throw new Error(`unexpected request: ${url}`);
+  };
+  try {
+    await assert.rejects(
+      builder.buildPortalHtml(stagingSettings(), "tenant"),
+      /Hotspot plans could not be loaded \(HTTP 503\)/,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    await builder.cleanup();
+  }
+});
+
 test("reseller preview fallback remains restricted to the selected assigned port", async () => {
   const template = await readFile(templatePath, "utf8");
   const builder = await loadExportBuilder("reseller");
@@ -363,6 +386,7 @@ test("invalid or internal API origins fall back to the public tenant HTTPS origi
   globalThis.fetch = async input => {
     const url = new URL(String(input), "https://tenant.example.test");
     if (url.pathname === "/hotspot/login.html") return new Response(template, { status: 200 });
+    if (url.pathname === "/api/plans") return new Response("[]", { status: 200 });
     return new Response(JSON.stringify({ apiBase: "http://localhost:8080" }), {
       status: 200,
       headers: { "content-type": "application/json" },

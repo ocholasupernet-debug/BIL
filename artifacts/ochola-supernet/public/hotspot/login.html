@@ -480,7 +480,7 @@ var COLORS=[
 ];
 
  var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=false;
- var PAYMENT_STATUS_LOADED=false, PAYMENT_METHOD_READY=false, PAYMENT_GATEWAY="";
+ var PAYMENT_STATUS_LOADED=false, PAYMENT_METHOD_READY=false, PAYMENT_STATUS_FAILED=false, PAYMENT_GATEWAY="";
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="";
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
@@ -526,7 +526,8 @@ function portalMpesaPromptEnabled(config){
   return config.mpesaPrompt==="Enable";
 }
 function canStartPaymentCheckout(){
-  return MPESA_PROMPT_ENABLED&&PAYMENT_STATUS_LOADED&&PAYMENT_METHOD_READY&&!PORTAL_PREVIEW_ONLY;
+  return MPESA_PROMPT_ENABLED&&!PORTAL_PREVIEW_ONLY
+    &&(PAYMENT_METHOD_READY||PAYMENT_STATUS_FAILED);
 }
 function paymentGatewayLabel(gateway){
   if(gateway==="bank_stk_push")return "Bank STK Push";
@@ -535,6 +536,7 @@ function paymentGatewayLabel(gateway){
 }
 function updatePaymentAvailability(){
   var available=canStartPaymentCheckout();
+  var paymentReady=PAYMENT_STATUS_LOADED&&PAYMENT_METHOD_READY;
   var banner=document.getElementById("mpesaBanner");
   var bannerMessage=document.getElementById("mpesaStatusMessage");
   var badgeMessage=document.getElementById("portalPaymentBadgeText");
@@ -542,25 +544,29 @@ function updatePaymentAvailability(){
   var checking=MPESA_PROMPT_ENABLED&&!PAYMENT_STATUS_LOADED;
   var statusMessage=checking
     ?"Checking the configured payment method…"
-    :available
+    :paymentReady
       ?paymentGatewayLabel(PAYMENT_GATEWAY)+" is available — choose a package to pay"
-      :"Online payment is currently unavailable. Please contact the network administrator.";
+      :PAYMENT_STATUS_FAILED
+        ?"Payment status could not be checked. You can try checkout; the payment service will verify it."
+        :"No payment method is configured for this service.";
   if(banner)banner.style.display=showBanner?"":"none";
   if(bannerMessage){
     bannerMessage.textContent=statusMessage;
-    bannerMessage.style.color=available?"rgba(110,231,183,.9)":"rgba(255,255,255,.7)";
+    bannerMessage.style.color=paymentReady?"rgba(110,231,183,.9)":"rgba(255,255,255,.7)";
   }
   if(badgeMessage){
     badgeMessage.textContent=checking
-      ?"Checking online payment availability…"
-      :available
-        ?"Network Online · "+paymentGatewayLabel(PAYMENT_GATEWAY)+" ready"
-        :"Network Online · Payments unavailable";
+      ?"Checking payment availability…"
+      :paymentReady
+        ?paymentGatewayLabel(PAYMENT_GATEWAY)+" ready"
+        :PAYMENT_STATUS_FAILED
+          ?"Payment check unavailable · checkout will verify"
+          :"No payment method configured";
   }
   var tvButton=document.getElementById("tvConnectButton");
   if(tvButton){
     tvButton.disabled=!available;
-    tvButton.textContent=available?"Connect to TV":checking?"Checking payment availability…":"Online payment unavailable";
+    tvButton.textContent=available?"Connect to TV":checking?"Checking payment availability…":"Payment method not configured";
     tvButton.style.cursor=available?"pointer":"not-allowed";
     tvButton.style.opacity=available?"1":".55";
   }
@@ -911,6 +917,7 @@ function loadPortalTypography(done){
 function loadPaymentStatus(){
   PAYMENT_STATUS_LOADED=false;
   PAYMENT_METHOD_READY=false;
+  PAYMENT_STATUS_FAILED=false;
   PAYMENT_GATEWAY="";
   updatePaymentAvailability();
   if(PORTAL_PREVIEW_ONLY||!PORTAL_API_BASE||PORTAL_ADMIN_ID<1){
@@ -949,6 +956,7 @@ function loadPaymentStatus(){
   return Promise.race([statusRequest,timeout]).catch(function(){
     PAYMENT_METHOD_READY=false;
     PAYMENT_GATEWAY="";
+    PAYMENT_STATUS_FAILED=true;
   }).then(function(){
     if(timeoutId)window.clearTimeout(timeoutId);
     PAYMENT_STATUS_LOADED=true;
@@ -1023,9 +1031,13 @@ function loadPaymentStatus(){
 
 function renderPlans(){
   var grid=document.getElementById("plansGrid");
-  if(!PLANS.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:2rem;color:rgba(255,255,255,.3)">No plans available</div>';return;}
+  if(!PLANS.length){grid.innerHTML='<div style="grid-column:1/-1;text-align:center;padding:2rem;color:rgba(255,255,255,.3)">No packages are configured for this hotspot.</div>';return;}
   grid.innerHTML=PLANS.map(function(p,i){
     var c=COLORS[i%COLORS.length];
+    var checkoutAvailable=canStartPaymentCheckout();
+    var checkoutLabel=checkoutAvailable
+      ?PAYMENT_METHOD_READY?"Connect Now":"Try checkout"
+      :PAYMENT_STATUS_LOADED?"Payment method not configured":"Checking payment…";
      return '<div class="plan-card package-shape-'+PORTAL_PACKAGE_SHAPE+'" style="border:1px solid '+c.from+'22"'+
       ' onmouseover="this.style.boxShadow=\'0 16px 48px '+c.glow+'30,0 0 0 1px '+c.from+'40\'"'+
       ' onmouseout="this.style.boxShadow=\'0 8px 32px rgba(0,0,0,.4)\'">'+
@@ -1035,8 +1047,8 @@ function renderPlans(){
       '<span style="font-size:.8125rem;font-weight:600;color:'+c.from+'">Ksh</span>&nbsp;'+p.price+'</div>'+
       '<p style="font-size:.75rem;color:rgba(255,255,255,.5);margin-top:.625rem;font-weight:400">'+p.validity+' '+p.unit+' Unlimited</p>'+
       '</div>'+
-        '<button type="button" class="plan-connect-button" data-plan-index="'+i+'" '+(canStartPaymentCheckout()?'':'disabled aria-disabled="true"')+' style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:'+(canStartPaymentCheckout()?'pointer':'not-allowed')+';opacity:'+(canStartPaymentCheckout()?'1':'.55')+';font-family:inherit;transition:opacity .15s" onmouseover="if(!this.disabled)this.style.opacity=\'.88\'" onmouseout="if(!this.disabled)this.style.opacity=\'1\'">'+
-       (canStartPaymentCheckout()?'Connect Now':PAYMENT_STATUS_LOADED?'Online payment unavailable':'Checking payment…')+'</button></div>';
+        '<button type="button" class="plan-connect-button" data-plan-index="'+i+'" '+(checkoutAvailable?'':'disabled aria-disabled="true"')+' style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:'+(checkoutAvailable?'pointer':'not-allowed')+';opacity:'+(checkoutAvailable?'1':'.55')+';font-family:inherit;transition:opacity .15s" onmouseover="if(!this.disabled)this.style.opacity=\'.88\'" onmouseout="if(!this.disabled)this.style.opacity=\'1\'">'+
+       checkoutLabel+'</button></div>';
   }).join("");
    bindPlanButtons();
 }

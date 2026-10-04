@@ -45,8 +45,10 @@ function createPaymentHarness(fetchImplementation) {
     PORTAL_ADMIN_ID: 3,
     PORTAL_ROUTER_ID: 108,
     PORTAL_PORT_ID: 0,
+    MPESA_PROMPT_ENABLED: true,
     PAYMENT_STATUS_LOADED: false,
     PAYMENT_METHOD_READY: false,
+    PAYMENT_STATUS_FAILED: false,
     PAYMENT_GATEWAY: "",
     apiUrl: path => "https://tenant.example.test" + path,
     fetch: fetchImplementation,
@@ -57,7 +59,8 @@ function createPaymentHarness(fetchImplementation) {
   };
 
   runInNewContext(
-    functionRange(portalHtml, "function loadPaymentStatus(){", "/* ── Load and keep hotspot plans fresh ── */")
+    functionRange(portalHtml, "function canStartPaymentCheckout(){", "function paymentGatewayLabel(")
+      + functionRange(portalHtml, "function loadPaymentStatus(){", "/* ── Load and keep hotspot plans fresh ── */")
       + "\nglobalThis.startPaymentCheck=loadPaymentStatus;",
     context,
   );
@@ -115,17 +118,20 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-test("payment availability failure and timeout fail closed within four seconds", async () => {
+test("payment status failures do not lock out checkout attempts; the payment service verifies them", async () => {
   for (const fetchImplementation of [
     () => Promise.reject(new Error("pre-login network blocked")),
     () => { throw new Error("fetch threw synchronously"); },
+    () => Promise.resolve({ ok: false, status: 503 }),
   ]) {
     const harness = createPaymentHarness(fetchImplementation);
     await harness.start();
 
     assert.equal(harness.context.PAYMENT_STATUS_LOADED, true);
     assert.equal(harness.context.PAYMENT_METHOD_READY, false);
+    assert.equal(harness.context.PAYMENT_STATUS_FAILED, true);
     assert.equal(harness.context.PAYMENT_GATEWAY, "");
+    assert.equal(harness.context.canStartPaymentCheckout(), true);
     assert.deepEqual(harness.updates, ["updated", "updated"]);
     assert.ok(harness.timers.some(timer => timer.delay === 4000 && timer.cleared));
   }
@@ -144,14 +150,28 @@ test("payment availability failure and timeout fail closed within four seconds",
 
   assert.equal(timeoutHarness.context.PAYMENT_STATUS_LOADED, true);
   assert.equal(timeoutHarness.context.PAYMENT_METHOD_READY, false);
+  assert.equal(timeoutHarness.context.PAYMENT_STATUS_FAILED, true);
+  assert.equal(timeoutHarness.context.canStartPaymentCheckout(), true);
   assert.equal(requestSignal.aborted, true);
   assert.deepEqual(timeoutHarness.updates, ["updated", "updated"]);
+
+  const explicitlyUnconfiguredHarness = createPaymentHarness(() => Promise.resolve({
+    ok: true,
+    json: async () => ({
+      configured: false,
+      settings: { destinationConfigured: false, paymentGateway: "mpesa_paybill" },
+    }),
+  }));
+  await explicitlyUnconfiguredHarness.start();
+  assert.equal(explicitlyUnconfiguredHarness.context.PAYMENT_STATUS_FAILED, false);
+  assert.equal(explicitlyUnconfiguredHarness.context.canStartPaymentCheckout(), false);
 });
 
 test("embedded packages render immediately and survive failed or timed-out plan lookups", async () => {
   for (const fetchImplementation of [
     () => Promise.reject(new Error("pre-login network blocked")),
     () => { throw new Error("fetch threw synchronously"); },
+    () => Promise.resolve({ ok: false, status: 503 }),
   ]) {
     const harness = createPlanHarness(fetchImplementation);
     harness.start();

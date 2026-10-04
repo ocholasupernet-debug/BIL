@@ -376,24 +376,6 @@ function safePortalPackageShape(value: unknown): string {
   return typeof value === "string" && PORTAL_PACKAGE_SHAPE_KEYS.has(value) ? value : "rounded";
 }
 
-function renderStaticPlanCards(plans: PortalPlan[], packageShape: string): string {
-  const safeShape = safePortalPackageShape(packageShape);
-  return plans.map((plan, index) => {
-    const name = escapeHtml(plan.name);
-    const unit = escapeHtml(plan.validity_unit);
-    const price = Number.isFinite(plan.price) ? String(plan.price) : "0";
-    const validity = Number.isFinite(plan.validity) ? String(plan.validity) : "0";
-    return `<div class="plan-card package-shape-${safeShape}" data-plan-id="${plan.id}" style="border:1px solid rgba(167,139,250,.25);background:rgba(17,25,54,.92);overflow:hidden;display:flex;flex-direction:column">
-      <div style="padding:1.5rem 1rem 1.25rem;text-align:center;flex:1;background:linear-gradient(160deg,rgba(244,114,182,.1),rgba(124,58,237,.18));border-top:2px solid rgba(167,139,250,.5)">
-        <span style="display:inline-block;padding:.25rem .75rem;border-radius:9999px;font-size:.625rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:white;margin-bottom:1rem;background:#4c1d95">${name}</span>
-        <div style="font-size:2.375rem;font-weight:900;color:white;line-height:1;letter-spacing:-.03em"><span style="font-size:.8125rem;font-weight:600;color:#a78bfa">Ksh</span>&nbsp;${price}</div>
-        <p style="font-size:.75rem;color:rgba(255,255,255,.5);margin-top:.625rem;font-weight:400">${validity} ${unit} Unlimited</p>
-      </div>
-      <button type="button" class="plan-connect-button" data-plan-index="${index}" style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,#2f6fed,#7c3aed);border:none;cursor:pointer;font-family:inherit">Connect Now</button>
-    </div>`;
-  }).join("");
-}
-
 function makeExportConfig(
   settings: HSettings,
   adminId: number,
@@ -514,27 +496,24 @@ export async function buildPortalHtml(
     const plansResponse = await fetch(`/api/plans?adminId=${encodeURIComponent(String(adminId))}&type=hotspot&activeOnly=true&purchasableOnly=true${routerQuery}${portQuery}`, {
       cache: "no-store",
     });
-    if (!plansResponse.ok && portQuery) {
-      throw new Error(`The selected service's plans could not be loaded (HTTP ${plansResponse.status}).`);
+    const planScopeLabel = portQuery ? "The selected service's plans" : "Hotspot plans";
+    if (!plansResponse.ok) {
+      throw new Error(`${planScopeLabel} could not be loaded (HTTP ${plansResponse.status}).`);
     }
-    if (plansResponse.ok) {
-      const data = await plansResponse.json() as unknown;
-      if (!Array.isArray(data) && portQuery) {
-        throw new Error("The selected service's plans returned an invalid response.");
-      }
-      if (Array.isArray(data)) {
-        plans = data
-          .filter((plan): plan is Record<string, unknown> => !!plan && typeof plan === "object")
-          .map((plan) => ({
-            id: Number(plan.id) || 0,
-            name: typeof plan.name === "string" ? plan.name : "",
-            price: Number(plan.price) || 0,
-            validity: Number(plan.validity) || 0,
-            validity_unit: typeof plan.validity_unit === "string" ? plan.validity_unit : "days",
-          }))
-          .filter((plan) => plan.id > 0 && plan.name);
-      }
+    const data = await plansResponse.json() as unknown;
+    if (!Array.isArray(data)) {
+      throw new Error(`${planScopeLabel} returned an invalid response.`);
     }
+    plans = data
+      .filter((plan): plan is Record<string, unknown> => !!plan && typeof plan === "object")
+      .map((plan) => ({
+        id: Number(plan.id) || 0,
+        name: typeof plan.name === "string" ? plan.name : "",
+        price: Number(plan.price) || 0,
+        validity: Number(plan.validity) || 0,
+        validity_unit: typeof plan.validity_unit === "string" ? plan.validity_unit : "days",
+      }))
+      .filter((plan) => plan.id > 0 && plan.name);
 
     /*
      * The generated router file must stay strictly scoped to its router or
@@ -565,35 +544,36 @@ export async function buildPortalHtml(
         headers: adminApiHeaders(),
         cache: "no-store",
       });
-      if (contextResponse.ok) {
-        const context = await contextResponse.json() as {
-          plans?: Array<Record<string, unknown>>;
-        };
-        const selectedRouterId = Number(settings.routerId);
-        const selectedPortId = Number(scope.portId);
-        const candidates = (context.plans ?? [])
-          .filter(plan => ["hotspot", "trials", "trial"].includes(String(plan.type ?? "").toLowerCase()))
-          .filter(plan => plan.is_active !== false && plan.client_can_purchase !== false)
-          .filter(plan => Number(plan.router_id) === selectedRouterId)
-          .filter(plan => selectedPortId > 0
-            ? Number(plan.port_id) === selectedPortId
-            : plan.port_id != null);
-        plans = candidates
-          .map(plan => ({
-            id: Number(plan.id) || 0,
-            name: typeof plan.name === "string" ? plan.name : "",
-            price: Number(plan.price) || 0,
-            validity: Number(plan.validity) || 0,
-            validity_unit: typeof plan.validity_unit === "string" ? plan.validity_unit : "days",
-          }))
-          .filter(plan => plan.id > 0 && plan.name);
+      if (!contextResponse.ok) {
+        throw new Error(`The admin preview packages could not be loaded (HTTP ${contextResponse.status}).`);
       }
+      const context = await contextResponse.json() as {
+        plans?: Array<Record<string, unknown>>;
+      };
+      if (!Array.isArray(context.plans)) {
+        throw new Error("The admin preview packages returned an invalid response.");
+      }
+      const selectedRouterId = Number(settings.routerId);
+      const selectedPortId = Number(scope.portId);
+      const candidates = context.plans
+        .filter(plan => ["hotspot", "trials", "trial"].includes(String(plan.type ?? "").toLowerCase()))
+        .filter(plan => plan.is_active !== false && plan.client_can_purchase !== false)
+        .filter(plan => Number(plan.router_id) === selectedRouterId)
+        .filter(plan => selectedPortId > 0
+          ? Number(plan.port_id) === selectedPortId
+          : plan.port_id != null);
+      plans = candidates
+        .map(plan => ({
+          id: Number(plan.id) || 0,
+          name: typeof plan.name === "string" ? plan.name : "",
+          price: Number(plan.price) || 0,
+          validity: Number(plan.validity) || 0,
+          validity_unit: typeof plan.validity_unit === "string" ? plan.validity_unit : "days",
+        }))
+        .filter(plan => plan.id > 0 && plan.name);
     }
   } catch (error) {
-    if (scope.previewOnly || Number(scope.portId) > 0) {
-      throw new Error(error instanceof Error ? error.message : "The selected service's plans could not be loaded.");
-    }
-    /* The API fallback remains available when the admin panel is offline. */
+    throw new Error(error instanceof Error ? error.message : "Hotspot plans could not be loaded.");
   }
   const exportSettings = {
     ...settings,
@@ -604,14 +584,7 @@ export async function buildPortalHtml(
   const layoutCss = renderStaticPortalLayoutCss(config.portalLayout);
   const bootstrap = `${layoutCss ? `<style id="hotspot-portal-layout">${layoutCss}</style>` : ""}<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};document.documentElement.setAttribute("data-portal-layout",window.__HOTSPOT_CONFIG__.portalLayout);</script>`;
   const configuredTitle = escapeHtml(config.ispName);
-  const staticPlanCards = renderStaticPlanCards(plans, appearance.portalPackageShape);
-  const templateWithStaticPlans = staticPlanCards
-    ? template.replace(
-      /(<div id="plansGrid"[^>]*>)\s*<div[^>]*>Loading plans…<\/div>\s*(<\/div>)/,
-      `$1${staticPlanCards}$2`,
-    )
-    : template;
-  return templateWithStaticPlans
+  return template
     .replace("</head>", `${bootstrap}\n</head>`)
     .replace(/\$\(login-title\)/g, configuredTitle);
 }
