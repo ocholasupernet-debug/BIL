@@ -463,6 +463,23 @@ test("only the come3 bridge portal opts out of maintenance package hiding", asyn
   assert.doesNotMatch(reseller, /allowPackagesDuringMaintenance/);
 });
 
+test("payment and refresh Hotspot pages share the same default appearance", async () => {
+  const portal = await readFile(templatePath, "utf8");
+  const refreshHandoff = await readFile(rloginTemplatePath, "utf8");
+  for (const token of [
+    "--portal-accent:#d96835",
+    "--portal-accent-dark:#9e3f1f",
+    "--portal-bg:#0d0415",
+    "--portal-card:#1a0f2e",
+  ]) {
+    assert.ok(portal.includes(token), `payment page should include ${token}`);
+    assert.ok(refreshHandoff.includes(token), `refresh handoff should include ${token}`);
+  }
+  assert.match(refreshHandoff, /http-equiv="refresh" content="0;url=\$\(link-login-only\)"/);
+  assert.match(refreshHandoff, /href="\$\(link-login-only\)"/);
+  assert.doesNotMatch(refreshHandoff, /function sendStk\(/);
+});
+
 test("default reseller portal deployment embeds the assigned router and port scope", async () => {
   const source = await readFile(resellerRoutePath, "utf8");
   const deployStart = source.indexOf("async function deployDefaultResellerPortalFile");
