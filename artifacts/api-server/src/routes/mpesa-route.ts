@@ -17,11 +17,12 @@ import { logger } from "../lib/logger.js";
 import { sendRegistrationConfirmationEmail } from "../lib/platform-email.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
-import { extractToken, generatePaymentIntent, requireAdmin, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
+import { authenticatedAdminId, extractToken, generatePaymentIntent, requireAdmin, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
 import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { hasGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import { planBelongsToOwner } from "../lib/plan-ownership.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
+import { latestMpesaStkPushHealth, withMpesaStkPushHealth, type MpesaStkPushStatus } from "../lib/mpesa-health.js";
 import {
   addHotspotIpBinding,
   addHotspotUser,
@@ -78,6 +79,68 @@ import {
 } from "../lib/reseller-payment-gateway.js";
 
 const router: IRouter = Router();
+
+interface StkPushHealthAttempt {
+  transactionId: number;
+  adminId: number;
+  paymentMetadata: unknown;
+  paymentGateway: string;
+  status: "checking" | MpesaStkPushStatus;
+  healthRecorded: boolean;
+}
+
+async function recordStkPushHealth(
+  attempt: StkPushHealthAttempt,
+  status: MpesaStkPushStatus,
+): Promise<boolean> {
+  attempt.status = status;
+  try {
+    await sbUpdateStrict(
+      "isp_transactions",
+      `id=eq.${attempt.transactionId}&admin_id=eq.${attempt.adminId}`,
+      {
+        payment_metadata: withMpesaStkPushHealth(attempt.paymentMetadata, {
+          status,
+          paymentGateway: attempt.paymentGateway,
+          checkedAt: new Date().toISOString(),
+        }),
+      },
+    );
+    attempt.healthRecorded = true;
+    return true;
+  } catch (error) {
+    logger.warn({
+      err: error,
+      adminId: attempt.adminId,
+      transactionId: attempt.transactionId,
+      status,
+    }, "Could not save the latest M-Pesa STK Push result");
+    return false;
+  }
+}
+
+router.get("/admin/dashboard/mpesa-stk-health", requireAdmin(), async (req: Request, res: Response): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  const adminId = authenticatedAdminId(req);
+  if (!adminId) {
+    res.status(403).json({ ok: false, error: "An ISP administrator account is required." });
+    return;
+  }
+
+  try {
+    const transactions = await sbSelectStrict<{
+      created_at: string;
+      payment_metadata: unknown;
+    }>(
+      "isp_transactions",
+      `admin_id=eq.${adminId}&payment_method=eq.mpesa&select=created_at,payment_metadata&order=created_at.desc&limit=100`,
+    );
+    res.json({ ok: true, health: latestMpesaStkPushHealth(transactions) });
+  } catch (error) {
+    logger.warn({ err: error, adminId }, "Could not load M-Pesa STK Push health for the admin dashboard");
+    res.status(503).json({ ok: false, error: "M-Pesa STK Push status is temporarily unavailable." });
+  }
+});
 
 /**
  * Keep paid Hotspot activation/reconnect operations behind one seam so route
@@ -1965,6 +2028,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
     ? raw
     : `254${raw}`;
 
+  let stkHealthAttempt: StkPushHealthAttempt | null = null;
   try {
     const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = await getAdminPaymentSettings(
       scopedAdminId,
@@ -2011,6 +2075,7 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       payment_method: "mpesa",
       payment_phone: formatted,
       mac_address: mac.value || null,
+      payment_metadata: {},
       reference: `initiating:${randomUUID()}`,
       status: "initiating",
       notes: `${paymentGatewayLabel(paymentGateway)} STK request is being created for ${formatted}`,
@@ -2021,6 +2086,14 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       res.status(503).json({ ok: false, error: "Could not safely create the payment request. Please try again." });
       return;
     }
+    stkHealthAttempt = {
+      transactionId: initiatedTransaction.id,
+      adminId: scopedAdminId,
+      paymentMetadata: {},
+      paymentGateway,
+      status: "checking",
+      healthRecorded: false,
+    };
     const { timestamp, password } = stkCredentials(businessShortcode, cfg.passkey);
     const token = await getDarajaToken(cfg);
 
@@ -2048,6 +2121,9 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
     logger.info({ phone: formatted, amount, data }, "[mpesa/stkpush] response");
 
     if (!stkRes.ok || data["ResponseCode"] !== "0") {
+      if (stkHealthAttempt) {
+        await recordStkPushHealth(stkHealthAttempt, "down");
+      }
       await sbUpdate("isp_transactions", `id=eq.${initiatedTransaction.id}&status=eq.initiating`, {
         status: "failed",
         notes: `STK prompt request failed: ${String(data["errorMessage"] ?? data["ResponseDescription"] ?? "Unknown error")}`,
@@ -2059,6 +2135,9 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       return;
     }
 
+    if (stkHealthAttempt) {
+      await recordStkPushHealth(stkHealthAttempt, "available");
+    }
     const checkoutId = String(data["CheckoutRequestID"] ?? "");
     const reconciled = checkoutId && await reconcileInitiatedStkRequest(
       initiatedTransaction.id,
@@ -2080,6 +2159,9 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
       ResponseDescription: data["ResponseDescription"],
     });
   } catch (e) {
+    if (stkHealthAttempt && !stkHealthAttempt.healthRecorded) {
+      await recordStkPushHealth(stkHealthAttempt, stkHealthAttempt.status === "available" ? "available" : "down");
+    }
     logger.error({ err: e }, "[mpesa/stkpush] error");
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
@@ -2333,6 +2415,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     return;
   }
 
+  let stkHealthAttempt: StkPushHealthAttempt | null = null;
   try {
       const serviceType = intent?.serviceType ?? requestedServiceType;
        const { paymentGateway, bankStkPush, mpesaTillPush, mpesaPaybill } = resellerRoute
@@ -2375,6 +2458,18 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        res.status(503).json({ ok: false, error: "M-Pesa requires a saved HTTPS callback URL." });
        return;
      }
+     const paymentMetadata: Record<string, unknown> = platformBillingInvoice
+       ? { source: "platform_billing", billing_invoice_id: platformBillingInvoice.id }
+       : resellerRoute
+         ? {
+             source: "reseller_daraja_bridge",
+             gatewayRouteId: resellerRoute.gatewayRouteId,
+             gatewayType: resellerRoute.paymentGateway,
+             destinationType: resellerRoute.paymentGateway === "mpesa_till_push" ? "till" : "paybill",
+             merchantIdentifier: resellerRoute.merchantIdentifier,
+             accountReference: resellerRoute.accountReference,
+           }
+         : {};
      const initiatedTransactions = await sbInsert<{ id: number }>("isp_transactions", {
        admin_id: scopedAdminId,
        plan_id: plan_id ?? null,
@@ -2385,18 +2480,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        payment_method: platformBillingInvoice ? "mpesa_platform_billing" : "mpesa",
        payment_phone: normalised,
         mac_address: mac.value || null,
-        payment_metadata: platformBillingInvoice
-          ? { source: "platform_billing", billing_invoice_id: platformBillingInvoice.id }
-          : resellerRoute
-          ? {
-              source: "reseller_daraja_bridge",
-              gatewayRouteId: resellerRoute.gatewayRouteId,
-              gatewayType: resellerRoute.paymentGateway,
-              destinationType: resellerRoute.paymentGateway === "mpesa_till_push" ? "till" : "paybill",
-              merchantIdentifier: resellerRoute.merchantIdentifier,
-              accountReference: resellerRoute.accountReference,
-            }
-          : {},
+        payment_metadata: paymentMetadata,
        reference: `initiating:${randomUUID()}`,
        status: "initiating",
        notes: `${paymentGatewayLabel(paymentGateway)} STK request is being created for ${normalised}`,
@@ -2406,6 +2490,16 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
      if (!initiatedTransaction) {
        res.status(503).json({ ok: false, error: "Could not safely create the payment request. Please try again." });
        return;
+     }
+     if (!resellerRoute && !platformBillingInvoice) {
+       stkHealthAttempt = {
+         transactionId: initiatedTransaction.id,
+         adminId: scopedAdminId,
+         paymentMetadata,
+         paymentGateway,
+         status: "checking",
+         healthRecorded: false,
+       };
      }
      const token = await getDarajaToken(cfg);
      const { timestamp, password } = stkCredentials(businessShortcode, cfg.passkey);
@@ -2434,6 +2528,9 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     logger.info({ phone: normalised, amount, data }, "[mpesa/stk] STK push response");
 
     if (!stkRes.ok || data["ResponseCode"] !== "0") {
+      if (stkHealthAttempt) {
+        await recordStkPushHealth(stkHealthAttempt, "down");
+      }
       await sbUpdate("isp_transactions", `id=eq.${initiatedTransaction.id}&status=eq.initiating`, {
         status: "failed",
         notes: `STK prompt request failed: ${String(data["errorMessage"] ?? data["ResponseDescription"] ?? "Unknown error")}`,
@@ -2442,6 +2539,9 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
+    if (stkHealthAttempt) {
+      await recordStkPushHealth(stkHealthAttempt, "available");
+    }
     const checkoutId = String(data["CheckoutRequestID"] ?? "");
     const reconciled = checkoutId && await reconcileInitiatedStkRequest(
       initiatedTransaction.id,
@@ -2458,6 +2558,9 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
 
     res.json({ ok: true, CheckoutRequestID: data["CheckoutRequestID"], MerchantRequestID: data["MerchantRequestID"] });
   } catch (e) {
+    if (stkHealthAttempt && !stkHealthAttempt.healthRecorded) {
+      await recordStkPushHealth(stkHealthAttempt, stkHealthAttempt.status === "available" ? "available" : "down");
+    }
     logger.error({ err: e }, "[mpesa/stk] error");
     res.status(500).json({ ok: false, error: (e as Error).message });
   }

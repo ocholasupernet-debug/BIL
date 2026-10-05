@@ -208,16 +208,49 @@ async function fetchTransactions(customerIds: number[]): Promise<DbTransaction[]
 }
 
 type PaymentSettingsResponse = {
+  configured?: boolean;
   settings?: {
     paymentGateway?: string;
+    destinationConfigured?: boolean;
   };
 };
 
-async function fetchConfiguredGateway(): Promise<string> {
+type ConfiguredGateway = {
+  id: string;
+  configured: boolean;
+  destinationConfigured: boolean;
+};
+
+async function fetchConfiguredGateway(): Promise<ConfiguredGateway> {
   const response = await fetch(`/api/settings/mpesa?adminId=${ADMIN_ID}`);
   if (!response.ok) throw new Error("Could not load payment gateway settings.");
   const data = await response.json() as PaymentSettingsResponse;
-  return data.settings?.paymentGateway || "mpesa_paybill";
+  return {
+    id: data.settings?.paymentGateway || "mpesa_paybill",
+    configured: data.configured === true,
+    destinationConfigured: data.settings?.destinationConfigured === true,
+  };
+}
+
+type MpesaStkPushHealth = {
+  status: "available" | "down";
+  paymentGateway: string;
+  checkedAt: string;
+};
+
+async function fetchMpesaStkPushHealth(): Promise<MpesaStkPushHealth | null> {
+  const token = getAdminApiToken();
+  const response = await fetch("/api/admin/dashboard/mpesa-stk-health", {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    cache: "no-store",
+  });
+  const data = await response.json() as { health?: MpesaStkPushHealth | null; error?: string };
+  if (!response.ok) throw new Error(data.error ?? "Could not load M-Pesa STK Push status.");
+  return data.health ?? null;
+}
+
+function isMpesaStkGateway(gatewayId: string): boolean {
+  return gatewayId === "mpesa_paybill" || gatewayId === "mpesa_till_push";
 }
 
 const PAYMENT_GATEWAY_LABELS: Record<string, string> = {
@@ -363,13 +396,23 @@ export default function Dashboard() {
   const now = new Date();
 
   const {
-    data: configuredGatewayId,
+    data: gatewaySettings,
     isLoading: gatewayLoading,
     isError: gatewayError,
   } = useQuery({
     queryKey: ["isp_payment_gateway", ADMIN_ID],
     queryFn: fetchConfiguredGateway,
     refetchOnWindowFocus: true,
+  });
+  const {
+    data: mpesaStkHealth,
+    isLoading: mpesaStkHealthLoading,
+    isError: mpesaStkHealthError,
+  } = useQuery({
+    queryKey: ["mpesa-stk-push-health", ADMIN_ID],
+    queryFn: fetchMpesaStkPushHealth,
+    refetchInterval: 15_000,
+    retry: false,
   });
   const {
     data: revenueSummary,
@@ -391,9 +434,44 @@ export default function Dashboard() {
     refetchInterval: 15_000,
   });
 
-  const gatewayId = configuredGatewayId || "";
+  const gatewayId = gatewaySettings?.id || "";
   const currentGatewayMode = gatewayLoading ? "Loading…" : gatewayError ? "Unavailable" : gatewayMode(gatewayId);
   const currentGatewayLabel = gatewayId ? gatewayLabel(gatewayId) : "Payment gateway";
+  const isMpesaPushGateway = isMpesaStkGateway(gatewayId);
+  const gatewayIsConfigured = gatewaySettings?.configured === true && gatewaySettings.destinationConfigured;
+  const healthMatchesGateway = mpesaStkHealth?.paymentGateway === gatewayId;
+  const mpesaPushStatus = !isMpesaPushGateway
+    ? null
+    : gatewayLoading || mpesaStkHealthLoading
+      ? "checking"
+      : gatewayError || mpesaStkHealthError
+        ? "unknown"
+        : !gatewayIsConfigured
+          ? "not_configured"
+          : healthMatchesGateway
+            ? mpesaStkHealth.status
+            : "not_checked";
+  const mpesaPushBadge = mpesaPushStatus === "available"
+    ? { label: "Available", className: "isp-badge-green", detail: `Safaricom accepted the last STK request ${fmtSince(mpesaStkHealth?.checkedAt)}` }
+    : mpesaPushStatus === "down"
+      ? { label: "Down", className: "isp-badge-red", detail: `The last STK request failed ${fmtSince(mpesaStkHealth?.checkedAt)}` }
+      : mpesaPushStatus === "checking"
+        ? { label: "Checking", className: "isp-badge-amber", detail: "Loading the latest STK Push result…" }
+        : mpesaPushStatus === "not_configured"
+          ? { label: "Not configured", className: "isp-badge-amber", detail: "Check M-Pesa credentials and the selected Till or PayBill." }
+          : mpesaPushStatus === "not_checked"
+            ? { label: "Not checked", className: "isp-badge-amber", detail: "Waiting for a real STK Push request to confirm availability." }
+            : mpesaPushStatus === "unknown"
+              ? { label: "Status unavailable", className: "isp-badge-amber", detail: "Could not load the latest STK Push result." }
+              : null;
+  const genericGatewayStatus = gatewayError
+    ? { label: "Unavailable", className: "isp-badge-red" }
+    : gatewayIsConfigured
+      ? { label: "Configured", className: "isp-badge-green" }
+      : { label: "Not configured", className: "isp-badge-amber" };
+  const displayedGatewayStatus = mpesaPushBadge ?? genericGatewayStatus;
+  const displayedGatewayDetail = mpesaPushBadge?.detail
+    ?? (gatewayIsConfigured ? "Payment method settings are complete." : "Complete payment gateway setup to accept payments.");
 
   const {
     data: routers = [],
@@ -580,12 +658,16 @@ export default function Dashboard() {
         <section className="gateway-strip" aria-label="Payment gateway status">
           <span className="gateway-icon" aria-hidden="true"><Landmark size={17} /></span>
           <span className="gateway-copy">
-            <strong>{currentGatewayMode}</strong>
-            <span>{currentGatewayLabel}</span>
+            <strong>{isMpesaPushGateway ? "M-Pesa STK Push" : currentGatewayMode}</strong>
+            <span>{isMpesaPushGateway ? displayedGatewayDetail : currentGatewayLabel}</span>
           </span>
-          <span className={`isp-badge ${gatewayError ? "isp-badge-red" : "isp-badge-green"}`}>
-            {gatewayError ? <CircleAlert size={12} /> : <CircleCheck size={12} />}
-            {gatewayError ? "Unavailable" : "Active"}
+          <span className={`isp-badge ${displayedGatewayStatus.className}`}>
+            {mpesaPushStatus === "down" || gatewayError
+              ? <CircleAlert size={12} />
+              : mpesaPushStatus === "available" || (mpesaPushStatus === null && gatewayIsConfigured)
+                ? <CircleCheck size={12} />
+                : <Activity size={12} />}
+            {displayedGatewayStatus.label}
           </span>
         </section>
 
@@ -824,11 +906,21 @@ export default function Dashboard() {
             <section className="section-card gateway-card">
               <div className="panel-heading panel-heading--compact">
                 <div className="panel-title"><span className="panel-title-icon panel-title-icon--soft"><CreditCard size={16} /></span><h2>Payment gateway</h2></div>
-                <span className="isp-badge isp-badge-green"><CircleCheck size={12} /> Active</span>
+                <span className={`isp-badge ${displayedGatewayStatus.className}`}>
+                  {mpesaPushStatus === "down" || gatewayError
+                    ? <CircleAlert size={12} />
+                    : mpesaPushStatus === "available" || (mpesaPushStatus === null && gatewayIsConfigured)
+                      ? <CircleCheck size={12} />
+                      : <Activity size={12} />}
+                  {displayedGatewayStatus.label}
+                </span>
               </div>
               <div className="gateway-detail">
                 <span className="gateway-detail-icon"><Banknote size={18} /></span>
-                <div><strong>{currentGatewayMode}</strong><span>{currentGatewayLabel} · Ready to accept payments</span></div>
+                <div>
+                  <strong>{isMpesaPushGateway ? "M-Pesa STK Push" : currentGatewayMode}</strong>
+                  <span>{displayedGatewayDetail}</span>
+                </div>
               </div>
             </section>
             <section className="section-card insight-card">
