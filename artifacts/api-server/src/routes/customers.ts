@@ -34,7 +34,7 @@ import {
   removeHotspotUser,
   removePPPSecretByName,
   getPaidHotspotBindingSnapshot,
-  reconcilePaidHotspotBindingExpiry,
+  reconcilePaidHotspotBinding,
   type PaidHotspotBindingSnapshot,
 } from "../lib/mikrotik.js";
 import {
@@ -297,7 +297,6 @@ async function reconcileCustomerAccess(
     onRadiusIdentity?: (exists: boolean) => void;
     onRadiusMutation?: () => void;
     assertLock?: () => Promise<void>;
-    allowPaidHotspotExpiryAdjustment?: boolean;
     paidHotspotBindingSnapshot?: PaidHotspotBindingSnapshot | null;
     onPaidHotspotBindingSnapshot?: (snapshot: PaidHotspotBindingSnapshot) => void;
   } = {},
@@ -438,17 +437,6 @@ async function reconcileCustomerAccess(
       const paidHotspotAccess = Boolean(paidHotspotBindingSnapshot)
         || (accessChanged && await hasPaidHotspotAccess(creds, { name: currentName, macAddress: current.mac_address }));
       if (paidHotspotAccess) {
-        const expiryOnlyChange = options.allowPaidHotspotExpiryAdjustment === true
-          && nextName === currentName
-          && plan.id === current.plan_id
-          && address === oldAddress
-          && newMac === oldMac
-          && !sameExpiry;
-        if (!expiryOnlyChange) {
-          throw new Error(
-            "This Hotspot user has a paid MikroTik device binding. Only an expiry-only adjustment is supported here; other changes need a dedicated service migration.",
-          );
-        }
         paidHotspotBindingSnapshot ??= await getPaidHotspotBindingSnapshot(creds, {
           name: currentName,
           macAddress: current.mac_address,
@@ -556,13 +544,6 @@ async function reconcileCustomerAccess(
       });
     } else if (planType === "hotspot") {
       await options.onRouterMutation?.();
-      if (paidHotspotBindingSnapshot && !sameExpiry) {
-        await reconcilePaidHotspotBindingExpiry(creds, {
-          snapshot: paidHotspotBindingSnapshot,
-          expiresAt: nextExpiry,
-          enabled,
-        });
-      }
       await reconcileHotspotUserAccess(creds, {
         name: nextName,
         password: nextPassword,
@@ -599,6 +580,20 @@ async function reconcileCustomerAccess(
           await removeHotspotIpBinding(creds, { macAddress: current.mac_address, comment: currentName });
         }
       }
+    }
+    if (planType === "hotspot" && paidHotspotBindingSnapshot) {
+      await options.onRouterMutation?.();
+      await reconcilePaidHotspotBinding(creds, {
+        snapshot: paidHotspotBindingSnapshot,
+        currentName,
+        currentMacAddress: current.mac_address,
+        nextName,
+        nextMacAddress: String(
+          updates.mac_address === undefined ? current.mac_address ?? "" : updates.mac_address ?? "",
+        ).trim() || null,
+        expiresAt: nextExpiry,
+        enabled,
+      });
     }
     routerSynced = true;
     syncedRouterId = router.id;
@@ -932,10 +927,6 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
   if (updates.status === null || updates.status === "") {
     return { status: 400, body: { error: "Choose a valid prepaid user status before saving." } };
   }
-  const expiryOnlyEdit = normalizedExpiry !== undefined
-    && status === undefined
-    && Object.keys(updates).every(key => ["updated_at", "expires_at", "status"].includes(key));
-
   const account = await authenticatedAccount(req);
   if (!account) {
     return { status: 401, body: { error: "A valid signed-in account is required." } };
@@ -1017,7 +1008,6 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
           },
           onRadiusIdentity: exists => { hadRadiusBefore = exists; },
           onRadiusMutation: () => { radiusMutationAttempted = true; },
-          allowPaidHotspotExpiryAdjustment: expiryOnlyEdit,
           onPaidHotspotBindingSnapshot: snapshot => { paidHotspotBindingSnapshot = snapshot; },
           assertLock,
           allowInactivePlan: unchangedPlan,
@@ -1033,7 +1023,6 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
           allowInactivePlan: true,
           restoreIdentity: true,
           skipRadius: !radiusMutationAttempted || !hadRadiusBefore,
-          allowPaidHotspotExpiryAdjustment: expiryOnlyEdit,
           paidHotspotBindingSnapshot,
           onRouterMutation: assertLock,
           assertLock,

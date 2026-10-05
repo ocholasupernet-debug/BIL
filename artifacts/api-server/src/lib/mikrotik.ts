@@ -2647,33 +2647,82 @@ export async function getPaidHotspotBindingSnapshot(
   });
 }
 
-export async function reconcilePaidHotspotBindingExpiry(
+export type PaidHotspotBindingEditIdentity = {
+  macAddress: string;
+  comment: string;
+};
+
+export function paidHotspotBindingEditPlan(opts: {
+  snapshot: PaidHotspotBindingSnapshot;
+  currentName: string;
+  currentMacAddress?: string | null;
+  nextName: string;
+  nextMacAddress?: string | null;
+  enabled: boolean;
+}): {
+  remove: PaidHotspotBindingEditIdentity[];
+  ensure: PaidHotspotBindingEditIdentity | null;
+} {
+  const identity = (name: string, macAddress?: string | null): PaidHotspotBindingEditIdentity | null => {
+    const comment = String(name ?? "").trim();
+    const mac = validRouterMac(String(macAddress ?? "").trim().replace(/-/g, ":"));
+    return comment && mac ? { macAddress: mac, comment } : null;
+  };
+  const key = (value: PaidHotspotBindingEditIdentity) =>
+    `${value.macAddress.replace(/[:-]/g, "").toUpperCase()}:${value.comment}`;
+  const original = identity(opts.snapshot.comment, opts.snapshot.macAddress);
+  const current = identity(opts.currentName, opts.currentMacAddress);
+  const ensure = opts.enabled ? identity(opts.nextName, opts.nextMacAddress) : null;
+  const desiredKey = ensure ? key(ensure) : null;
+  const remove = new Map<string, PaidHotspotBindingEditIdentity>();
+  for (const value of [original, current]) {
+    if (!value || key(value) === desiredKey) continue;
+    remove.set(key(value), value);
+  }
+  return { remove: Array.from(remove.values()), ensure };
+}
+
+export async function reconcilePaidHotspotBinding(
   creds: RouterCredentials,
-  opts: { snapshot: PaidHotspotBindingSnapshot; expiresAt: string | null; enabled: boolean },
+  opts: {
+    snapshot: PaidHotspotBindingSnapshot;
+    currentName: string;
+    currentMacAddress?: string | null;
+    nextName: string;
+    nextMacAddress?: string | null;
+    expiresAt: string | null;
+    enabled: boolean;
+  },
 ): Promise<void> {
-  if (!opts.expiresAt) {
-    throw new Error("Paid Hotspot access must keep an expiry date. Choose a specific date and time.");
+  const plan = paidHotspotBindingEditPlan(opts);
+  let expiryMs: number | null = null;
+  if (plan.ensure) {
+    if (!opts.expiresAt) {
+      throw new Error("Paid Hotspot access must keep an expiry date. Choose a specific date and time.");
+    }
+    expiryMs = Date.parse(opts.expiresAt);
+    if (!Number.isFinite(expiryMs)) {
+      throw new Error("A valid expiry date is required for the paid Hotspot binding.");
+    }
+    if (expiryMs <= Date.now()) {
+      throw new Error("The paid Hotspot binding expiry must be in the future.");
+    }
   }
-  const expiryMs = Date.parse(opts.expiresAt);
-  if (!Number.isFinite(expiryMs)) {
-    throw new Error("A valid expiry date is required for the paid Hotspot binding.");
+  for (const binding of plan.remove) {
+    await removeHotspotIpBinding(creds, binding);
   }
-  if (!opts.enabled || expiryMs <= Date.now()) {
-    await removeHotspotIpBinding(creds, {
-      macAddress: opts.snapshot.macAddress,
-      comment: opts.snapshot.comment,
-    });
-    return;
-  }
+  if (!plan.ensure || expiryMs === null) return;
+
+  const sameDevice = sameMacAddress(plan.ensure.macAddress, opts.snapshot.macAddress);
   const updated = await addHotspotIpBinding(creds, {
-    macAddress: opts.snapshot.macAddress,
-    ipAddress: opts.snapshot.ipAddress ?? undefined,
-    comment: opts.snapshot.comment,
+    macAddress: plan.ensure.macAddress,
+    ipAddress: sameDevice ? opts.snapshot.ipAddress ?? undefined : undefined,
+    comment: plan.ensure.comment,
     expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
     bindingType: opts.snapshot.bindingType,
   });
   if (!updated) {
-    throw new Error("The paid Hotspot binding could not be safely updated. No customer changes were saved.");
+    throw new Error("The paid Hotspot device binding could not be synchronized. No customer changes were saved.");
   }
 }
 
@@ -3838,6 +3887,8 @@ export interface WirelessInterface {
   mode: string;
   masterInterface: string;
   managedByApp: boolean;
+  securitySummary?: string;
+  channelLabel?: string;
 }
 
 export interface WirelessSecurityProfile {
@@ -3851,24 +3902,68 @@ export interface WirelessSecurityProfile {
 export async function fetchWireless(
   creds: RouterCredentials,
   routerId?: number,
-): Promise<{ interfaces: WirelessInterface[]; profiles: WirelessSecurityProfile[] }> {
+): Promise<{
+  apiMode: "legacy" | "wifi";
+  interfaces: WirelessInterface[];
+  profiles: WirelessSecurityProfile[];
+}> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
 
-    let ifaceRows: Record<string, string>[], profileRows: Record<string, string>[];
+    let ifaceRows: Record<string, string>[];
     try {
-      [ifaceRows, profileRows] = await Promise.all([
-        withTimeout(conn.write(["/interface/wireless/print"]), ms) as Promise<Record<string, string>[]>,
-        withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Promise<Record<string, string>[]>,
-      ]);
+      ifaceRows = await withTimeout(
+        conn.write(["/interface/wireless/print"]),
+        ms,
+      ) as Record<string, string>[];
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (/no such command|unknown command|bad command|not found|invalid item/i.test(message)) {
-        throw new Error(`RouterOS wireless package is unsupported: ${message}`);
+      if (!/no such command|unknown command|bad command|not found|invalid item/i.test(message)) {
+        throw error;
       }
-      throw error;
+
+      const wifiRows = await withTimeout(
+        conn.write(["/interface/wifi/print"]),
+        ms,
+      ) as Record<string, string>[];
+      const rawWifiInterfaces = Array.isArray(wifiRows) ? wifiRows : [];
+      const namesById = new Map(
+        rawWifiInterfaces.map(row => [String(row[".id"] ?? ""), String(row.name ?? "")]),
+      );
+      const interfaces: WirelessInterface[] = rawWifiInterfaces.map(row => {
+        const authenticationTypes = String(row["security.authentication-types"] ?? "").trim();
+        const hasAuthenticationTypes = Object.prototype.hasOwnProperty.call(row, "security.authentication-types");
+        const frequency = String(row["channel.frequency"] ?? "").trim();
+        const masterId = String(row["master-interface"] ?? "");
+        return {
+          id: row[".id"] ?? "",
+          name: row.name ?? "",
+          ssid: row["configuration.ssid"] ?? row.ssid ?? "",
+          disabled: parseBool(row.disabled),
+          band: row["channel.band"] ?? row.band ?? "",
+          channel: frequency || row["channel.number"] || row.channel || "",
+          channelLabel: frequency ? "freq" : "ch",
+          macAddress: row["mac-address"] ?? "",
+          securityProfile: row.security ?? row["configuration.security"] ?? "",
+          mode: row["configuration.mode"] ?? row.mode ?? "",
+          masterInterface: namesById.get(masterId) ?? masterId,
+          managedByApp: routerId !== undefined
+            ? new RegExp(`^ochola-wireless-app:${routerId}:`, "i").test(String(row.comment ?? "").trim())
+            : false,
+          securitySummary: authenticationTypes
+            ? `Secured (${authenticationTypes})`
+            : hasAuthenticationTypes
+              ? "Open Wi-Fi"
+              : "Security not reported",
+        };
+      });
+      return { apiMode: "wifi", interfaces, profiles: [] };
     }
 
+    const profileRows = await withTimeout(
+      conn.write(["/interface/wireless/security-profiles/print"]),
+      ms,
+    ) as Record<string, string>[];
     const rawInterfaces = Array.isArray(ifaceRows) ? ifaceRows : [];
     const namesById = new Map(rawInterfaces.map(row => [String(row[".id"] ?? ""), String(row.name ?? "")]));
     const interfaces: WirelessInterface[] = rawInterfaces.map(r => ({
@@ -3895,7 +3990,7 @@ export async function fetchWireless(
       mode:             r.mode                    ?? "",
     }));
 
-    return { interfaces, profiles };
+    return { apiMode: "legacy", interfaces, profiles };
   });
 }
 
