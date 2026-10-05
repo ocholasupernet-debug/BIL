@@ -488,6 +488,14 @@ var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var ROUTER_NAS_IDENTIFIER="$(identity)";
 var ROUTER_HOTSPOT_SERVER_NAME="$(server-name)";
 var EMBEDDED_PLANS=[];
+/* Billing-backed fallback for account 33 / router 243 only. */
+var DEFAULT_HOTSPOT_PLANS=[
+  {id:42,name:"BASIC",price:5,validity:50,validity_unit:"mins"},
+  {id:43,name:"3 HOURS",price:10,validity:150,validity_unit:"mins"},
+  {id:44,name:"SILVER",price:20,validity:8,validity_unit:"days"},
+  {id:45,name:"12 HOURS",price:25,validity:12,validity_unit:"hours"},
+  {id:46,name:"DAILY",price:35,validity:1,validity_unit:"days"}
+];
   var PORTAL_API_TIMEOUT_MS=4000;
   var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
 var planLoadError="", plansLoadedFromApi=false;
@@ -815,7 +823,7 @@ function applyPortalConfig(data){
     logoIcon.replaceChildren(image);
   }
   var announce=typeof data.announcement==="string"?data.announcement.trim():"";
-  var maintenance=Boolean(data.maintenanceMode);
+  var maintenance=data.maintenanceMode===true||data.maintenanceMode==="Maintenance";
   var announceSection=document.getElementById("portalAnnouncement");
   var announceText=document.getElementById("portalAnnouncementText");
   if(announceSection&&announceText&&portalCardEnabled("announcement")&&(announce||maintenance)){
@@ -976,6 +984,13 @@ function loadPaymentStatus(){
      return [plan.id,plan.name,plan.price,plan.validity,plan.unit].join("~");
    }).join("|");
  }
+ function hasDefaultPlanFallback(){
+   return !PORTAL_PREVIEW_ONLY&&PORTAL_ADMIN_ID===33&&PORTAL_ROUTER_ID===243&&PORTAL_PORT_ID===0;
+ }
+ function fallbackPlanList(){
+   if(!hasDefaultPlanFallback())return [];
+   return EMBEDDED_PLANS.length?EMBEDDED_PLANS.slice():normalisePlanList(DEFAULT_HOTSPOT_PLANS);
+ }
  function refreshPlansFromApi(){
     if(PORTAL_PREVIEW_ONLY||planRequestInFlight||(typeof document!=="undefined"&&document.hidden))return;
    if(!(PORTAL_ADMIN_ID>0&&PORTAL_ROUTER_ID>0)){
@@ -1001,10 +1016,23 @@ function loadPaymentStatus(){
        refreshPlansFromApi();
        return;
      }
-     var remotePlans=normalisePlanList(data);
-      /* A successful empty response is authoritative: it clears stale
-         embedded packages so a new router cannot show another router's plans. */
-      if(apiSucceeded&&Array.isArray(data)&&remotePlans.length===data.length){
+      var remotePlans=normalisePlanList(data);
+      var validResponse=apiSucceeded&&Array.isArray(data)&&remotePlans.length===data.length;
+      if(hasDefaultPlanFallback()&&(!validResponse||remotePlans.length===0)){
+        var fallbackPlans=fallbackPlanList();
+        if(fallbackPlans.length){
+          var fallbackSignature=planSignature(fallbackPlans);
+          var fallbackShouldRender=fallbackSignature!==lastPlanSignature||!plansLoadedFromApi||Boolean(planLoadError);
+          PLANS=fallbackPlans;
+          lastPlanSignature=fallbackSignature;
+          plansLoadedFromApi=Boolean(apiSucceeded);
+          planLoadError="";
+          if(fallbackShouldRender)renderPlans();
+          return;
+        }
+      }
+       /* For other router scopes, a successful empty response is authoritative. */
+       if(validResponse){
        var shouldRender=planSignature(remotePlans)!==lastPlanSignature||!plansLoadedFromApi||Boolean(planLoadError);
        PLANS=remotePlans;
        lastPlanSignature=planSignature(remotePlans);
@@ -1032,9 +1060,9 @@ function loadPaymentStatus(){
  }
  function loadPlans(){
    if(!plansInitialised){
-      PLANS=EMBEDDED_PLANS.slice();
+       PLANS=EMBEDDED_PLANS.length?EMBEDDED_PLANS.slice():fallbackPlanList();
      lastPlanSignature=planSignature(PLANS);
-     renderPlans();
+      renderPlans(PLANS.length===0&&!PORTAL_PREVIEW_ONLY);
      plansInitialised=true;
    }else if(!plansLoadedFromApi&&EMBEDDED_PLANS.length){
      PLANS=EMBEDDED_PLANS.slice();
@@ -1052,9 +1080,10 @@ function loadPaymentStatus(){
    }
  }
 
-function renderPlans(){
+function renderPlans(preserveLoadingMarkup){
   var grid=document.getElementById("plansGrid");
   if(!PLANS.length){
+    if(preserveLoadingMarkup)return;
     grid.innerHTML='<div role="status" style="grid-column:1/-1;text-align:center;padding:2rem;color:rgba(255,255,255,.75)"><p id="planLoadMessage"></p><button type="button" id="retryPlansButton" class="btn" style="margin-top:1rem">Retry packages</button></div>';
     document.getElementById("planLoadMessage").textContent=planLoadError||(plansLoadedFromApi||PORTAL_PREVIEW_ONLY?"No packages are currently available for this hotspot.":"Loading packages…");
     document.getElementById("retryPlansButton").onclick=function(){loadPlans();};
