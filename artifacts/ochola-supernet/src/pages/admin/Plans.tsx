@@ -576,7 +576,7 @@ function AddServicePlanForm({
 /* ═══════════════════════════════════════════════════════════
    DELETE CONFIRM MODAL
 ═══════════════════════════════════════════════════════════ */
-function DeleteModal({ name, onConfirm, onCancel, deleting }: { name: string; onConfirm: () => void; onCancel: () => void; deleting?: boolean }) {
+function DeleteModal({ name, onConfirm, onCancel, deleting, isPlan = false }: { name: string; onConfirm: () => void; onCancel: () => void; deleting?: boolean; isPlan?: boolean }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
       <div style={{ background: "var(--isp-card, #1a2440)", border: "1px solid var(--isp-border)", borderRadius: 14, padding: "2rem", maxWidth: 400, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
@@ -586,15 +586,25 @@ function DeleteModal({ name, onConfirm, onCancel, deleting }: { name: string; on
           </div>
           <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)" }}><X size={18} /></button>
         </div>
-        <h3 style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: "1rem", margin: "0 0 8px" }}>Delete Plan?</h3>
+        <h3 style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: "1rem", margin: "0 0 8px" }}>
+          {isPlan ? "Remove Plan?" : "Delete Bandwidth Profile?"}
+        </h3>
         <p style={{ color: "var(--isp-text-muted)", fontSize: "0.83rem", lineHeight: 1.6, margin: "0 0 20px" }}>
-          You are about to permanently delete <strong style={{ color: "var(--isp-text)" }}>{name}</strong>. This cannot be undone.
+          {isPlan ? (
+            <>
+              Removing <strong style={{ color: "var(--isp-text)" }}>{name}</strong> archives it if customers or payment records exist, retaining package details and any valid access through its original expiry. Plans with no purchase records are deleted. Archived plans are not offered for new purchases.
+            </>
+          ) : (
+            <>
+              You are about to permanently delete <strong style={{ color: "var(--isp-text)" }}>{name}</strong>. This cannot be undone.
+            </>
+          )}
         </p>
         <div style={{ display: "flex", gap: 10 }}>
           <button onClick={onConfirm} disabled={deleting}
             style={{ flex: 1, padding: "0.55rem", borderRadius: 8, background: "#ef4444", color: "white", border: "none", fontWeight: 700, fontSize: "0.85rem", cursor: deleting ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
             {deleting && <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />}
-            {deleting ? "Deleting…" : "Yes, Delete"}
+            {deleting ? (isPlan ? "Removing…" : "Deleting…") : (isPlan ? "Yes, Remove" : "Yes, Delete")}
           </button>
           <button onClick={onCancel} style={{ flex: 1, padding: "0.55rem", borderRadius: 8, background: "transparent", color: "var(--isp-text-muted)", border: "1px solid var(--isp-border)", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit" }}>
             Cancel
@@ -1047,7 +1057,7 @@ export default function Plans() {
       <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
 
       {deletingPlan && (
-        <DeleteModal name={deletingPlan.name} deleting={deleteMut.isPending}
+        <DeleteModal name={deletingPlan.name} deleting={deleteMut.isPending} isPlan
           onConfirm={() => deleteMut.mutate(deletingPlan.id)}
           onCancel={() => setDeletingPlan(null)} />
       )}

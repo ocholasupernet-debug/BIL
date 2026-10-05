@@ -902,9 +902,10 @@ export async function autoProvision(opts: {
     await sbUpdate("isp_customers", `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`, {
       status: "payment_cleared_router_pending",
       plan_id: plan.id,
+      router_id: plan.router_id,
+      port_id: plan.port_id,
       expires_at: expiresAt,
       ...((planType !== "pppoe" && planType !== "vlan") ? { username } : {}),
-      ...(planType === "vlan" ? { router_id: plan.router_id, port_id: plan.port_id } : {}),
       updated_at: new Date().toISOString(),
     });
     await logEvent({
@@ -957,8 +958,9 @@ async function activateCustomer(
     status:     "active",
     depletion_reason: null,
     expires_at: expiresAt ?? calcExpiry(plan.validity, plan.validity_unit, plan.validity_days),
+    router_id: plan.router_id,
+    port_id: plan.port_id,
     ...(username && planType !== "pppoe" && planType !== "vlan" ? { username } : {}),
-    ...(planType === "vlan" ? { router_id: plan.router_id, port_id: plan.port_id } : {}),
     ...(resetHotspotUsage ? { data_used_bytes: 0, data_used_mb: 0 } : {}),
     updated_at: new Date().toISOString(),
   });

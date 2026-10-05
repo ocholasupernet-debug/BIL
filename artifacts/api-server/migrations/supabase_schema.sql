@@ -178,7 +178,7 @@ create table if not exists isp_customers (
   email           text,
   username        text,
   password        text,
-  plan_id         bigint references isp_plans(id) on delete set null,
+  plan_id         bigint references isp_plans(id) on delete restrict,
   type            text not null default 'hotspot',  -- hotspot | pppoe | static
   ip_address      text,
   mac_address     text,
@@ -605,7 +605,7 @@ create table if not exists isp_transactions (
   id              bigserial primary key,
   admin_id        bigint not null references isp_admins(id) on delete cascade,
   customer_id     bigint references isp_customers(id) on delete set null,
-  plan_id         bigint references isp_plans(id) on delete set null,
+  plan_id         bigint references isp_plans(id) on delete restrict,
   amount          numeric(12,2) not null,
   payment_method  text not null default 'mpesa',  -- mpesa | cash | stripe | flutterwave
   payment_phone   text,

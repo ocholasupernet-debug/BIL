@@ -2981,6 +2981,8 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     username: hotspotUsername,
     password: hotspotPassword,
     plan_id: plan.id,
+    router_id: plan.router_id,
+    port_id: plan.port_id,
     type: "hotspot",
     mac_address: mac,
     ip_address: routerAddress || null,
