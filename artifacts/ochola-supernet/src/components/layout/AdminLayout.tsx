@@ -181,6 +181,7 @@ const navSections: NavSection[] = [
           { name: "Bandwidth",     href: "/admin/plans?type=bandwidth" },
           { name: "Trials",        href: "/admin/plans?type=trials" },
           { name: "FUP",           href: "/admin/plans?type=fup" },
+          { name: "Roaming",       href: "/admin/plans/roaming" },
         ],
       },
       {

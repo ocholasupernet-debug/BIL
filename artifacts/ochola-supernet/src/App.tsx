@@ -30,6 +30,7 @@ import NetworkMigration from "./pages/admin/network/Migration";
 import Webhooks from "./pages/admin/Webhooks";
 import ActivityLogs from "./pages/admin/ActivityLogs";
 import AdminPlans from "./pages/admin/Plans";
+import AdminHotspotRoaming from "./pages/admin/HotspotRoaming";
 import AdminTransactions from "./pages/admin/Transactions";
 import TransactionGraphs from "./pages/admin/TransactionGraphs";
 import HotspotSettings from "./pages/admin/HotspotSettings";
@@ -168,6 +169,7 @@ function Router() {
        <Route path="/admin/network/self-install" component={getAdminRole() === "reseller" ? ResellerBlockedPage : NetworkSelfInstall} />
       <Route path="/admin/network/files" component={NetworkFiles} />
       <Route path="/admin/plans" component={AdminPlans} />
+      <Route path="/admin/plans/roaming" component={AdminHotspotRoaming} />
       <Route path="/admin/transactions/graphs" component={TransactionGraphs} />
       <Route path="/admin/transactions" component={AdminTransactions} />
       <Route path="/admin/vouchers"         component={AdminVouchers}    />

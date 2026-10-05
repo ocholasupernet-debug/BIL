@@ -1038,6 +1038,8 @@ function HotspotLoginView({
         body: JSON.stringify({
           adminId,
           action,
+          ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
+          ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
           ...(expiryOnly ? { expiry_only: true } : {}),
           ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
           mac_address: portalContext.mac,
