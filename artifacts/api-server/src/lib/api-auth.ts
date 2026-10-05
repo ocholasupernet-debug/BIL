@@ -12,6 +12,7 @@ import {
   type PageAuthMethod,
 } from "./platform-auth-security.js";
 import { getActiveSuperAdminAccessActor } from "./platform-auth-store.js";
+import { isKenyanMobileNumber } from "./kenyan-phone.js";
 
 declare global {
   namespace Express {
@@ -312,7 +313,7 @@ export function validatePaymentIntent(token: string): PaymentIntentPayload | nul
     const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as PaymentIntentPayload;
     if (!Number.isSafeInteger(payload.adminId) || !Number.isSafeInteger(payload.planId) ||
         !Number.isFinite(payload.amount) || payload.amount <= 0 ||
-        !/^2547\d{8}$/.test(payload.phone) || !payload.nonce ||
+        !isKenyanMobileNumber(payload.phone) || !payload.nonce ||
          (payload.serviceType !== undefined && payload.serviceType !== "hotspot" && payload.serviceType !== "pppoe" && payload.serviceType !== "vlan") ||
          (payload.routerId !== undefined && (!Number.isSafeInteger(payload.routerId) || payload.routerId <= 0)) ||
          (payload.portId !== undefined && (!Number.isSafeInteger(payload.portId) || payload.portId <= 0)) ||

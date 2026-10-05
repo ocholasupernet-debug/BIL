@@ -484,6 +484,7 @@ var COLORS=[
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="";
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
+  var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalPaidLoginHandoff=false;
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var ROUTER_NAS_IDENTIFIER="$(identity)";
 var ROUTER_HOTSPOT_SERVER_NAME="$(server-name)";
@@ -709,6 +710,68 @@ function checkPortalExpiryOnLanding(){
     notice.hidden=false;
   }).catch(function(){});
 }
+function schedulePortalAutoReconnect(delay){
+  if(portalAutoReconnectDone||portalAutoReconnectAttempts>=5)return;
+  if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
+  portalAutoReconnectTimer=setTimeout(function(){
+    portalAutoReconnectTimer=0;
+    attemptPortalAutoReconnect();
+  },delay);
+}
+function attemptPortalAutoReconnect(){
+  if(PORTAL_PREVIEW_ONLY||portalPaidLoginHandoff||portalAutoReconnectDone||portalAutoReconnectBusy
+    ||PORTAL_ADMIN_ID<1||!DEVICE_MAC||PORTAL_QUERY.get("page")==="troubleshoot")return;
+  portalAutoReconnectBusy=true;
+  portalAutoReconnectAttempts+=1;
+  fetch(apiUrl("/api/customers/hotspot-troubleshoot"),{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      adminId:PORTAL_ADMIN_ID,
+      action:"login",
+      mac_address:DEVICE_MAC,
+      ...(DEVICE_IP?{client_ip:DEVICE_IP}:{}),
+      ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+      ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})
+    })
+  }).then(function(response){
+    return response.json().then(function(data){return{statusCode:response.status,data:data||{}};});
+  }).then(function(result){
+    portalAutoReconnectBusy=false;
+    var data=result.data||{};
+    if(data.connected===true){
+      portalAutoReconnectDone=true;
+      if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
+      portalAutoReconnectTimer=0;
+      return;
+    }
+    if(data.status==="expired"||data.status==="depleted")return;
+    if(portalAutoReconnectAttempts<5){
+      var retryable=data.retryable===true||result.statusCode===409||result.statusCode>=500
+        ||data.status==="active"||data.status==="unavailable"||data.status==="not_found";
+      if(retryable)schedulePortalAutoReconnect([700,1800,4000,8000][portalAutoReconnectAttempts-1]||8000);
+    }
+  }).catch(function(){
+    portalAutoReconnectBusy=false;
+    if(portalAutoReconnectAttempts<5){
+      schedulePortalAutoReconnect([700,1800,4000,8000][portalAutoReconnectAttempts-1]||8000);
+    }
+  });
+}
+function retryPortalAutoReconnectOnReturn(){
+  if(portalAutoReconnectDone||portalPaidLoginHandoff||portalAutoReconnectBusy)return;
+  var now=Date.now();
+  if(now-portalAutoReconnectEventAt<5000)return;
+  portalAutoReconnectEventAt=now;
+  portalAutoReconnectAttempts=0;
+  if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
+  portalAutoReconnectTimer=0;
+  attemptPortalAutoReconnect();
+}
+window.addEventListener("online",retryPortalAutoReconnectOnReturn);
+document.addEventListener("visibilitychange",function(){
+  if(document.visibilityState==="visible")retryPortalAutoReconnectOnReturn();
+});
 function safePublicApiBase(value){
   try{
     var url=new URL(String(value||""));
@@ -1771,7 +1834,9 @@ function troubleshootConnection(){
        adminId:PORTAL_ADMIN_ID,
        action:action,
        mac_address:DEVICE_MAC,
-       ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+        ...(DEVICE_IP?{client_ip:DEVICE_IP}:{}),
+        ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+        ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})
      })
    }).then(function(response){
      return response.json().then(function(data){return{ok:response.ok,data:data||{}};});
@@ -1815,7 +1880,7 @@ function troubleshootConnection(){
 }
 function applyCredentialsFromHash(){
   var hash=(window.location.hash||"").replace(/^#/,"");
-  if(!hash)return;
+  if(!hash)return false;
   try{
     var params=new URLSearchParams(hash);
     if(applyPaidHotspotCredentials({
@@ -1823,8 +1888,11 @@ function applyCredentialsFromHash(){
       password:params.get("hotspot_password")||""
     })){
       if(window.history&&window.history.replaceState)window.history.replaceState(null,"",window.location.pathname+window.location.search);
+      portalPaidLoginHandoff=true;
+      return true;
     }
   }catch(e){}
+  return false;
 }
 
 /* ── MikroTik login ──
@@ -1906,11 +1974,18 @@ try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
 }
 loadPlans();
 bindPlanButtons();
-loadPortalTypography(loadPlans);
 renderPortalDeviceMac();
-applyCredentialsFromHash();
+var portalPaidHandoffStarted=applyCredentialsFromHash();
+loadPortalTypography(function(){
+  loadPlans();
+  checkPortalExpiryOnLanding();
+  if(!portalPaidHandoffStarted)attemptPortalAutoReconnect();
+});
 if(PORTAL_QUERY.get("page")==="troubleshoot")openTroubleshootModule();
-else checkPortalExpiryOnLanding();
+else{
+  checkPortalExpiryOnLanding();
+  if(!portalPaidHandoffStarted)attemptPortalAutoReconnect();
+}
 </script>
 </body>
 </html>

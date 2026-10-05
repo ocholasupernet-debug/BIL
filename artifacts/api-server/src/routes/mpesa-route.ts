@@ -21,6 +21,7 @@ import { authenticatedAdminId, extractToken, generatePaymentIntent, requireAdmin
 import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { hasGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import { planBelongsToOwner } from "../lib/plan-ownership.js";
+import { isPrepaidCustomerEntitled } from "../lib/prepaid-entitlement.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { latestMpesaStkPushHealth, withMpesaStkPushHealth, type MpesaStkPushStatus } from "../lib/mpesa-health.js";
 import {
@@ -35,7 +36,6 @@ import {
   scheduleHotspotUserFup,
   removeHotspotUserFup,
   disconnectHotspotActiveUser,
-  removeHotspotUser,
   resetHotspotUserCounters,
   ensureHotspotUserRateQueue,
   updateHotspotUser,
@@ -62,6 +62,7 @@ import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
+import { isKenyanMobileNumber, normaliseKenyanMobile } from "../lib/kenyan-phone.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 import { portServiceResourceNames, type PortServiceResourceInput } from "../lib/port-service-resources.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
@@ -713,9 +714,7 @@ async function resolvePortalAdminId(req: Request, requestedAdminId: unknown): Pr
 }
 
 function normaliseKenyanPhone(value: string): string {
-  const raw = value.replace(/\D/g, "");
-  if (raw.startsWith("0")) return `254${raw.slice(1)}`;
-  return raw.startsWith("254") ? raw : `254${raw}`;
+  return normaliseKenyanMobile(value);
 }
 
 function normaliseMacAddress(value: unknown): string {
@@ -1826,7 +1825,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   const requestedCustomerId = Number(req.body?.customer_id);
   const mac = readMacAddress(req.body?.mac_address);
   const clientIp = readClientIp(req.body?.client_ip);
-  if (adminId === null || !Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(planId) || planId < 1 || !/^2547\d{8}$/.test(phone)) {
+  if (adminId === null || !Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(planId) || planId < 1 || !isKenyanMobileNumber(phone)) {
     res.status(400).json({ ok: false, error: "Choose an active plan and enter a valid Kenyan mobile number." });
     return;
   }
@@ -1980,7 +1979,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
  * POST /api/mpesa/stkpush
  * Body: { phone, amount, account_ref? }
  * Uses shortcode 174379 (sandbox default), passkey, timestamp-derived password.
- * Formats phone to 2547XXXXXXXX and sends STK Push via Daraja API.
+ * Formats phone to 254[17]XXXXXXXX and sends STK Push via Daraja API.
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void> => {
   const { phone, amount, account_ref, adminId, mac_address, plan_id, customer_id, reseller_id, port_id } = req.body as {
@@ -2037,14 +2036,11 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
     return;
   }
 
-  const raw = String(phone).replace(/\D/g, "");
-  const formatted = raw.startsWith("0")
-    ? `254${raw.slice(1)}`
-    : raw.startsWith("+254")
-    ? raw.slice(1)
-    : raw.startsWith("254")
-    ? raw
-    : `254${raw}`;
+  const formatted = normaliseKenyanPhone(String(phone));
+  if (!isKenyanMobileNumber(formatted)) {
+    res.status(400).json({ ok: false, error: "Enter a valid Kenyan mobile number beginning with 07 or 01." });
+    return;
+  }
 
   let stkHealthAttempt: StkPushHealthAttempt | null = null;
   try {
@@ -2733,7 +2729,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}` : ""}&select=id,name,type,router_id,port_id,speed_down,speed_up,validity,validity_unit,validity_days,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}` : ""}&select=id,name,type,router_id,port_id,speed_down,speed_up,validity,validity_unit,validity_days,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, checkoutId, planId: transaction.plan_id }, "[mpesa/hotspot-mac-access] plan schema lookup failed");
@@ -2895,7 +2891,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     }
   }
   const paymentPhone = normaliseKenyanPhone(String(transaction.payment_phone ?? ""));
-  if (!/^254\d{9}$/.test(paymentPhone)) {
+  if (!isKenyanMobileNumber(paymentPhone)) {
     res.status(409).json({ ok: false, error: "The paid checkout has no valid Kenyan purchase phone number." });
     return;
   }
@@ -2924,7 +2920,6 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
      : [];
   const now = Date.now();
   const linkedCustomer = linkedCustomers[0];
-  const linkedExpiry = linkedCustomer?.expires_at ? Date.parse(linkedCustomer.expires_at) : 0;
   if (linkedCustomer && linkedCustomer.depletion_reason === "data_limit") {
     res.status(409).json({
       ok: false,
@@ -2932,25 +2927,27 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     });
     return;
   }
-  if (linkedCustomer && linkedCustomer.status === "expired") {
+  if (linkedCustomer && !isPrepaidCustomerEntitled(
+    linkedCustomer.status,
+    linkedCustomer.expires_at,
+    linkedCustomer.depletion_reason,
+    now,
+    true,
+  )) {
     res.status(409).json({
       ok: false,
-      error: "The package from this paid checkout has expired. Purchase a new package to reconnect.",
-    });
-    return;
-  }
-  if (linkedCustomer && (!Number.isFinite(linkedExpiry) || linkedExpiry <= now)) {
-    res.status(409).json({
-      ok: false,
-      error: "The package from this paid checkout has expired. Purchase a new package to reconnect.",
+      error: "The paid hotspot package is unavailable or has expired. Contact support or purchase a new package.",
     });
     return;
   }
   const isReusable = (customer: typeof linkedCustomers[number]) => {
-    const expiresAt = customer.expires_at ? Date.parse(customer.expires_at) : 0;
-    return (customer.status === "active" || customer.status === "payment_cleared_router_pending") &&
-      Number.isFinite(expiresAt) &&
-      expiresAt > now &&
+    return isPrepaidCustomerEntitled(
+      customer.status,
+      customer.expires_at,
+      customer.depletion_reason,
+      now,
+      true,
+    ) &&
       typeof customer.username === "string";
   };
   const reusableCustomer = linkedCustomers[0] && isReusable(linkedCustomers[0])
@@ -3059,10 +3056,12 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       }),
       hotspotPaymentOperations.requireHotspotUserProfile(credentials, hotspotProfile),
     ]);
-    if (reusableCustomer?.username && reusableCustomer.username !== hotspotUsername) {
-      await disconnectHotspotActiveUser(credentials, reusableCustomer.username).catch(() => {});
-      await removeHotspotUser(credentials, reusableCustomer.username).catch(() => {});
-    }
+    /* A reusable customer's existing RouterOS identity may own an unexpired
+       session. Do not delete or disconnect it during paid account renewal. */
+    await hotspotPaymentOperations.scheduleHotspotUserExpiry(credentials, {
+      name: hotspotUsername,
+      expiresInSeconds: remainingExpirySeconds,
+    });
     await hotspotPaymentOperations.upsertHotspotUser(credentials, {
       name: hotspotUsername,
       password: hotspotPassword,
@@ -3073,7 +3072,6 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       limitBytesTotal,
     });
     if (!isSameCheckoutRetry) {
-      await hotspotPaymentOperations.disconnectHotspotActiveUser(credentials, hotspotUsername);
       await hotspotPaymentOperations.resetHotspotUserCounters(credentials, hotspotUsername);
       const usageRows = await sbUpdateStrict(
         "isp_customers",
@@ -3093,10 +3091,6 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
         })
       : hotspotPaymentOperations.removeHotspotUserFup(credentials, hotspotUsername);
     await Promise.all([
-      hotspotPaymentOperations.scheduleHotspotUserExpiry(credentials, {
-        name: hotspotUsername,
-        expiresInSeconds: remainingExpirySeconds,
-      }),
       fupSchedule,
     ]);
 
@@ -3279,14 +3273,13 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   const transactionPhone = normaliseKenyanPhone(String(transaction.payment_phone ?? ""));
   const customerPhone = normaliseKenyanPhone(String(customer.phone ?? ""));
   if (
-    !/^254\d{9}$/.test(transactionPhone) ||
-    !/^254\d{9}$/.test(customerPhone) ||
+    !isKenyanMobileNumber(transactionPhone) ||
+    !isKenyanMobileNumber(customerPhone) ||
     transactionPhone !== customerPhone
   ) {
     res.status(409).json({ ok: false, error: "This M-Pesa payment is not attached to the saved prepaid account." });
     return;
   }
-  const expiresAtMs = customer.expires_at ? Date.parse(customer.expires_at) : 0;
   if (customer.depletion_reason === "data_limit") {
     res.status(409).json({
       ok: false,
@@ -3295,15 +3288,18 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     });
     return;
   }
-  if (
-    (customer.status !== "active" && customer.status !== "payment_cleared_router_pending")
-    || !Number.isFinite(expiresAtMs)
-    || expiresAtMs <= Date.now()
-  ) {
-    res.status(409).json({ ok: false, error: "This hotspot package has expired. Purchase a new package to reconnect." });
+  if (!isPrepaidCustomerEntitled(
+    customer.status,
+    customer.expires_at,
+    customer.depletion_reason,
+    Date.now(),
+    true,
+  )) {
+    res.status(409).json({ ok: false, error: "This paid hotspot package is unavailable or has expired. Contact support or purchase a new package." });
     return;
   }
 
+  const expiresAtMs = Date.parse(String(customer.expires_at));
   let plans: Array<{
     id: number;
     name: string;
@@ -3324,7 +3320,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   try {
     plans = await sbSelectStrict(
       "isp_plans",
-      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}&is_active=is.true${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}` : ""}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}` : ""}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
     );
   } catch (error) {
     logger.error({ err: error, receipt, planId: transaction.plan_id }, "[mpesa/verify] plan schema lookup failed");
@@ -3333,7 +3329,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   }
   const plan = plans[0];
   if (!plan || normalizePlanServiceType(plan.type) !== "hotspot" || !plan.router_id) {
-    res.status(409).json({ ok: false, error: "The verified payment is not attached to an active hotspot package." });
+    res.status(409).json({ ok: false, error: "The verified payment is not attached to a hotspot package." });
     return;
   }
   if (

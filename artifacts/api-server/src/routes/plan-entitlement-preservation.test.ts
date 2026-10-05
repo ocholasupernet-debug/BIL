@@ -29,6 +29,13 @@ test("customer and transaction plan links reject direct deletion and migration i
 
 test("prepaid payment writers persist the service scope from the verified plan", () => {
   assert.match(mpesaRoute, /plan_id: plan\.id,\s*router_id: plan\.router_id,\s*port_id: plan\.port_id,\s*type: "hotspot"/);
-  assert.match(autoProvision, /status:\s+"active",[\s\S]*?router_id: plan\.router_id,[\s\S]*?port_id: plan\.port_id/);
+  const activateCustomerHelper = autoProvision.slice(
+    autoProvision.indexOf("async function activateCustomer("),
+    autoProvision.indexOf("async function recordTransaction("),
+  );
+  assert.match(autoProvision, /await activateCustomer\(\s*customer,\s*plan,/);
+  assert.match(activateCustomerHelper, /status:\s+customer\.status === "suspended" \? "suspended" : "active"/);
+  assert.match(activateCustomerHelper, /router_id: plan\.router_id/);
+  assert.match(activateCustomerHelper, /port_id: plan\.port_id/);
   assert.match(autoProvision, /status: "payment_cleared_router_pending",[\s\S]*?router_id: plan\.router_id,[\s\S]*?port_id: plan\.port_id/);
 });

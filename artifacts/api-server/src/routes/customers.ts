@@ -14,6 +14,10 @@ import {
 import { logActivity } from "../lib/activity-log.js";
 import { logger } from "../lib/logger.js";
 import {
+  isPrepaidCustomerEntitled,
+  isPrepaidCustomerExpired,
+} from "../lib/prepaid-entitlement.js";
+import {
   reconcileVlanCustomerQueue,
   removeVlanCustomerQueue,
   reconcileHotspotUserAccess,
@@ -398,6 +402,15 @@ async function reconcileCustomerAccess(
     ))[0];
     if (!router) throw new Error("The selected router was not found for this ISP account");
     const creds = routerCredentials(router);
+    if (planType === "hotspot" && currentName !== nextName && enabled) {
+      await options.assertLock?.();
+      const activeUsers = await fetchHotspotUsers(creds);
+      if (activeUsers.some(user => user.user === currentName)) {
+        throw new Error(
+          "This Hotspot username cannot be changed while its session is active. Suspend the account or retry after the session ends.",
+        );
+      }
+    }
     const rawDataLimitMb = Number(updates.fup_limit_mb ?? current.fup_limit_mb ?? plan.data_limit_mb);
     const dataLimitMb = Number.isFinite(rawDataLimitMb) && rawDataLimitMb > 0 ? rawDataLimitMb : null;
     const planDataPolicy = validateFupPolicy(
@@ -1126,12 +1139,27 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     res.status(403).json({ error: "Account is suspended. Contact support." });
     return;
   }
-  if (customer.status === "expired") {
+  if (customer.depletion_reason === "data_limit") {
+    res.status(403).json({ error: "The package data allowance has been used. Purchase a new package to reconnect." });
+    return;
+  }
+  const customerEntitlementNow = Date.now();
+  if (isPrepaidCustomerExpired(
+    customer.status,
+    customer.expires_at,
+    customer.depletion_reason,
+    customerEntitlementNow,
+  )) {
     res.status(403).json({ error: "Account has expired. Please renew your plan." });
     return;
   }
-  if (customer.expires_at && Date.parse(String(customer.expires_at)) <= Date.now()) {
-    res.status(403).json({ error: "Account has expired. Please renew your plan." });
+  if (!isPrepaidCustomerEntitled(
+    customer.status,
+    customer.expires_at,
+    customer.depletion_reason,
+    customerEntitlementNow,
+  )) {
+    res.status(403).json({ error: "Account is not active. Contact support." });
     return;
   }
 
@@ -1685,19 +1713,7 @@ async function lookupLatestHotspotPurchase(
   }
 
   const expiresAt = customer.expires_at;
-  const expiresAtMs = expiresAt ? Date.parse(expiresAt) : NaN;
-  if (Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now()) {
-    return {
-      found: true,
-      status: "expired",
-      expiresAt,
-      planName: plan.name,
-      username: customer.username,
-      error: "This hotspot package has expired. Purchase a new package to reconnect.",
-      customer,
-      plan,
-    };
-  }
+  const entitlementNow = Date.now();
   if (customer.depletion_reason === "data_limit") {
     return {
       found: true,
@@ -1710,7 +1726,7 @@ async function lookupLatestHotspotPurchase(
       plan,
     };
   }
-  if (customer.status === "expired") {
+  if (isPrepaidCustomerExpired(customer.status, expiresAt, customer.depletion_reason, entitlementNow)) {
     return {
       found: true,
       status: "expired",
@@ -1722,10 +1738,12 @@ async function lookupLatestHotspotPurchase(
       plan,
     };
   }
-  if (
-    (customer.status !== "active" && customer.status !== "payment_cleared_router_pending")
-    || (expiresAt && !Number.isFinite(expiresAtMs))
-  ) {
+  if (!isPrepaidCustomerEntitled(
+    customer.status,
+    expiresAt,
+    customer.depletion_reason,
+    entitlementNow,
+  )) {
     return {
       found: true,
       status: "unavailable",

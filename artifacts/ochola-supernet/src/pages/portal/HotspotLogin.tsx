@@ -1934,7 +1934,7 @@ function HotspotLoginView({
         }
         .hp-input::placeholder { color: rgba(255,255,255,0.2); font-weight: 500; }
         .hp-input-left { padding-left: 42px; }
-        .hp-input-phone { padding-left: 62px; }
+        .hp-input-phone { padding-left: 14px; }
         .hp-textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 
         .hp-btn {
@@ -2554,9 +2554,8 @@ function HotspotLoginView({
                                   ) : <form onSubmit={handlePay}>
                                     <div className="hp-input-group">
                                       <div className="hp-input-wrap">
-                                        <span className="hp-input-icon" style={{ fontSize: 13, fontWeight: 700, left: 14 }}>+254</span>
                                         <input className="hp-input hp-input-phone" type="tel"
-                                          placeholder="7XX XXX XXX" required
+                                          inputMode="tel" placeholder="07XX XXX XXX or 01XX XXX XXX" required
                                           value={phone} onChange={e => setPhone(e.target.value)} />
                                       </div>
                                     </div>
@@ -3063,7 +3062,7 @@ function HotspotLoginView({
                       type="tel"
                       value={tvPhone}
                       onChange={e => setTvPhone(e.target.value)}
-                      placeholder="7XX XXX XXX"
+                      placeholder="07XX XXX XXX or 01XX XXX XXX"
                       inputMode="tel"
                       required
                     />

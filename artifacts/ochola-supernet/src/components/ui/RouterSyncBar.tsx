@@ -7,6 +7,7 @@ import {
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 import { useAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
 import { installHotspotFiles, type HotspotFileDeploymentResult } from "@/lib/router-hotspot-files";
+import { SyncUserStatusList, type SyncUserStatus } from "./SyncUserStatusList";
 
 type DbRouterMin = AdminContextRouter;
 const INCOMPLETE_ROUTER_STATUSES = new Set([
@@ -427,7 +428,12 @@ export interface RouterSyncBarProps {
 export function RouterSyncBar({ label, description, icon, endpoint, buildPayload, color = "var(--isp-accent)" }: RouterSyncBarProps) {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [syncing,    setSyncing]    = useState(false);
-  const [result,     setResult]     = useState<{ logs: string[]; ok: boolean; error?: string } | null>(null);
+  const [result,     setResult]     = useState<{
+    logs: string[];
+    ok: boolean;
+    error?: string;
+    syncUsers?: SyncUserStatus[];
+  } | null>(null);
   const [showMeta,   setShowMeta]   = useState(false);
 
   const { data: context, isLoading: routersLoading, error: routersError } = useAdminRouterContext();
@@ -462,12 +468,18 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
       }
        const token = getAdminApiToken();
        const res  = await fetch(apiUrl(endpoint), { method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(payload) });
-      const data = await parseJsonResponse<{ ok: boolean; logs?: string[]; error?: string }>(res);
+       const data = await parseJsonResponse<{
+         ok: boolean;
+         logs?: string[];
+         error?: string;
+         syncUsers?: SyncUserStatus[];
+       }>(res);
       if (!res.ok) {
         setResult({
           ok: false,
           logs: data.logs ?? [],
           error: data.error || `Sync failed (HTTP ${res.status}).`,
+           syncUsers: data.syncUsers,
         });
         return;
       }
@@ -475,6 +487,7 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
         ok: data.ok === true && res.ok,
         logs: data.logs ?? [],
         error: data.ok === true && res.ok ? undefined : (data.error || `Sync failed (HTTP ${res.status}).`),
+         syncUsers: data.syncUsers,
       });
     } catch (err) {
       setResult({ ok: false, logs: [], error: String(err) });
@@ -616,6 +629,9 @@ export function RouterSyncBar({ label, description, icon, endpoint, buildPayload
           onClose={() => setResult(null)}
           onRetry={handleSync}
         />
+      )}
+      {result && Array.isArray(result.syncUsers) && (
+        <SyncUserStatusList users={result.syncUsers} />
       )}
     </div>
   );

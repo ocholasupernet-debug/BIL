@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { RouterOSAPI } from "node-routeros";
 import { readVpnClients, syncIppEntry, vpnIpFor, VPN_STATUS_PATHS } from "../lib/vpn-status";
 import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
-import { sbSelect } from "../lib/supabase-client.js";
+import { sbSelect, sbSelectStrict } from "../lib/supabase-client.js";
 import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
 import {
   ROUTER_MANAGEMENT_API_USERNAME,
@@ -17,6 +17,13 @@ import {
   scheduleHotspotUserFup,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
+import {
+  isSyncAccountEntitled,
+  isSyncAccountExpired,
+  reconcileRouterAccountForSync,
+  routerSyncAccountIsConfirmed,
+  syncUserDisplayStatus,
+} from "../lib/sync-user-reconciliation.js";
 import {
   guardRouterOSConnection,
   RouterOSConnectionLostError,
@@ -85,6 +92,98 @@ async function requireExistingRouterProfile(
       `RouterOS profile '${name}' does not exist. Sync the created plan before syncing its users.`,
     );
   }
+}
+
+async function ensureSyncUserPlanProfile(
+  conn: RouterOSAPI,
+  plan: {
+    type: string;
+    validity: number | null;
+    validity_unit: string | null;
+    shared_users: number | null;
+    speed_down: number | null;
+    speed_up: number | null;
+    speed_down_unit: string | null;
+    speed_up_unit: string | null;
+  },
+  profileName: string,
+  activeIpPool: string,
+): Promise<boolean> {
+  const isPppoe = String(plan.type).trim().toLowerCase() === "pppoe";
+  const path = isPppoe ? "/ppp/profile" : "/ip/hotspot/user/profile";
+  const rows = await readRouterRows(conn, path, `?name=${profileName}`);
+  if (rows.some(row => row.name === profileName && row[".id"])) return false;
+
+  const rateLimit = toRateLimit(
+    Number(plan.speed_down ?? 0),
+    Number(plan.speed_up ?? 0),
+    plan.speed_down_unit || "Mbps",
+    plan.speed_up_unit || plan.speed_down_unit || "Mbps",
+  );
+  const props: Record<string, string> = isPppoe
+    ? {
+        name: profileName,
+        "rate-limit": rateLimit,
+        ...(activeIpPool ? { "remote-address": activeIpPool } : {}),
+      }
+    : {
+        name: profileName,
+        "rate-limit": rateLimit,
+        "session-timeout": toSessionTimeout(
+          Number(plan.validity ?? 1),
+          plan.validity_unit || "Days",
+        ),
+        "shared-users": String(Number(plan.shared_users) || 1),
+        ...(activeIpPool ? { "address-pool": activeIpPool } : {}),
+      };
+  await conn.write([`${path}/add`, ...Object.entries(props).map(([key, value]) => `=${key}=${value}`)]);
+  return true;
+}
+
+async function readRouterRows(
+  conn: RouterOSAPI,
+  path: string,
+  filter?: string,
+): Promise<Record<string, string>[]> {
+  const args = [`${path}/print`];
+  if (filter) args.push(filter);
+  const rows = await conn.write(args);
+  if (!Array.isArray(rows)) throw new Error(`MikroTik did not return ${path} rows.`);
+  return rows as Record<string, string>[];
+}
+
+async function disconnectRouterSessions(
+  conn: RouterOSAPI,
+  activePath: string,
+  filterKey: "user" | "name",
+  username: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const rows = await readRouterRows(conn, activePath, `?${filterKey}=${username}`);
+    if (rows.length === 0) return;
+    for (const row of rows) {
+      const id = row[".id"];
+      if (!id) throw new Error(`MikroTik returned an active ${filterKey} without an item ID.`);
+      await conn.write([`${activePath}/remove`, `=.id=${id}`]);
+    }
+  }
+  const remaining = await readRouterRows(conn, activePath, `?${filterKey}=${username}`);
+  if (remaining.length > 0) {
+    throw new Error(`MikroTik still reports ${remaining.length} active session(s) for '${username}'.`);
+  }
+}
+
+async function disableRouterAccountIfPresent(
+  conn: RouterOSAPI,
+  accountPath: "/ip/hotspot/user" | "/ppp/secret",
+  username: string,
+): Promise<boolean> {
+  const rows = await readRouterRows(conn, accountPath, `?name=${username}`);
+  const row = rows.find(candidate => candidate.name === username);
+  const id = row?.[".id"];
+  if (!id) return false;
+  await conn.write([`${accountPath}/set`, `=.id=${id}`, "=disabled=yes"]);
+  return true;
 }
 
 async function cleanupLegacyPlanProfiles(
@@ -865,12 +964,41 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         speed_up: number | null;
         speed_down_unit: string | null;
         speed_up_unit: string | null;
+        validity: number | null;
+        validity_unit: string | null;
+        shared_users: number | null;
+        active_ip_pool: string | null;
       }>(
         "isp_plans",
-        `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${planIds.join(",")})&is_active=is.true&select=id,name,type,router_id,port_id,owner_reseller_id,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit&limit=1000`,
+         `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${planIds.join(",")})&select=id,name,type,router_id,port_id,owner_reseller_id,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit,validity,validity_unit,shared_users,active_ip_pool&limit=1000`,
       )
     : [];
   const plansById = new Map(planRows.map(plan => [Number(plan.id), plan]));
+  const planPortIds = [...new Set(planRows
+    .map(plan => Number(plan.port_id))
+    .filter(id => Number.isSafeInteger(id) && id > 0))];
+  const planPorts = planPortIds.length
+    ? await sbSelect<{
+        id: number;
+        router_id: number;
+        interface_name: string;
+        bridge_name: string | null;
+        handoff_mode: string | null;
+        reseller_id: number | null;
+        assigned_reseller_id: number | null;
+        vlan_tag: string | null;
+      }>(
+        "isp_reseller_ports",
+        `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${planPortIds.join(",")})&select=id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag&limit=1000`,
+      )
+    : [];
+  const planResourcesByPortId = new Map(planPorts.map(port => [
+    Number(port.id),
+    portServiceResourceNames({
+      ...port,
+      handoff_mode: port.handoff_mode as "services" | "isp_router" | "vlan_services" | null,
+    }),
+  ]));
   const customerIds = [...new Set(users
     .map(user => Number(user.customer_id))
     .filter(id => Number.isSafeInteger(id) && id > 0))];
@@ -880,9 +1008,12 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         username: string | null;
         pppoe_username: string | null;
         fup_limit_mb: number | null;
+        status: string | null;
+        expires_at: string | null;
+        depletion_reason: string | null;
       }>(
         "isp_customers",
-        `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${customerIds.join(",")})&select=id,username,pppoe_username,fup_limit_mb&limit=5000`,
+         `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${customerIds.join(",")})&select=id,username,pppoe_username,fup_limit_mb,status,expires_at,depletion_reason&limit=5000`,
       )
     : [];
   const customersById = new Map(customerRows.map(customer => [Number(customer.id), customer]));
@@ -904,23 +1035,155 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
     log(`  pushing ${users.length} user(s)\n`);
 
     let created = 0, updated = 0, skipped = 0;
+    let disabled = 0;
+    let failed = 0;
+    const syncUsers: Array<{
+      username: string;
+      planName: string;
+      status: "active" | "expired";
+      expiresAt: string | null;
+    }> = [];
 
     for (const u of users) {
       const plan = u.plan_id ? plansById.get(Number(u.plan_id)) : undefined;
-      const storedCustomer = customersById.get(Number(u.customer_id));
-      const suppliedRadiusUsername = String(u.pppoe_username || u.username || "").trim();
+      const normalizedType = String(u.type ?? "").trim().toLowerCase();
+      const username = normalizedType === "pppoe"
+        ? String(u.pppoe_username || u.username || "").trim()
+        : String(u.username ?? "").trim();
+      const customerId = Number(u.customer_id);
+      const hasCustomerId = Number.isSafeInteger(customerId) && customerId > 0;
+      if (u.customer_id !== undefined && u.customer_id !== null && !hasCustomerId) {
+        log(`  ❌ Skipping '${username || "(blank)"}': invalid customer record`);
+        skipped++;
+        continue;
+      }
+      const storedCustomer = hasCustomerId ? customersById.get(customerId) : undefined;
+      if (hasCustomerId && !storedCustomer) {
+        log(`  ❌ Skipping '${username || "(blank)"}': customer record was not found for this ISP`);
+        skipped++;
+        continue;
+      }
+      const suppliedRadiusUsername = username;
       const storedRadiusUsername = String(storedCustomer?.pppoe_username || storedCustomer?.username || "").trim();
       const customerFupLimitMb = storedCustomer && storedRadiusUsername === suppliedRadiusUsername
         ? Number(storedCustomer.fup_limit_mb)
         : 0;
-      const isHotspotUser = u.type === "hotspot" || u.type === "voucher";
+      const isHotspotUser = ["hotspot", "voucher", "trial", "trials"].includes(normalizedType);
+      const isPppoeUser = normalizedType === "pppoe";
       if (u.router_id !== undefined && routerId !== undefined && Number(u.router_id) !== Number(routerId)) {
-        log(`  — Skipping '${u.username}': assigned to a different router`);
+        log(`  — Skipping '${username}': assigned to a different router`);
         skipped++;
         continue;
       }
+      if (!username) {
+        log("  ❌ Skipping a router account with a blank username");
+        skipped++;
+        continue;
+      }
+      const validUsername = isPppoeUser
+        ? /^[A-Za-z0-9_.@-]{1,64}$/.test(username)
+        : /^[A-Za-z0-9_.:@-]{1,64}$/.test(username);
+      if ((isHotspotUser || isPppoeUser) && !validUsername) {
+        log(`  ❌ Skipping '${username}': username is not safe for MikroTik`);
+        skipped++;
+        continue;
+      }
+      let effectiveStatus = storedCustomer?.status ?? u.status ?? "active";
+      let effectiveExpiry = storedCustomer ? storedCustomer.expires_at : u.expires_at;
+      let depletionReason = storedCustomer?.depletion_reason;
+      let entitlementCheckedAt = Date.now();
+      let expiredForDisplay = isSyncAccountExpired(
+        effectiveStatus,
+        effectiveExpiry,
+        entitlementCheckedAt,
+        depletionReason,
+      );
+      let enabled = isSyncAccountEntitled(
+        effectiveStatus,
+        effectiveExpiry,
+        entitlementCheckedAt,
+        depletionReason,
+      );
+
+      if (!enabled && (isHotspotUser || isPppoeUser)) {
+        if (storedCustomer) {
+          try {
+            const latestCustomer = (await sbSelectStrict<{
+              status: string | null;
+              expires_at: string | null;
+              depletion_reason: string | null;
+            }>(
+              "isp_customers",
+              `id=eq.${customerId}&admin_id=eq.${account.parent_id ?? account.id}&select=status,expires_at,depletion_reason&limit=1`,
+            ))[0];
+            if (!latestCustomer) {
+              log(`  ⚠ ${username}: current paid expiry could not be confirmed; leaving the router account unchanged`);
+              skipped++;
+              continue;
+            }
+            effectiveStatus = latestCustomer.status ?? effectiveStatus;
+            effectiveExpiry = latestCustomer.expires_at;
+            depletionReason = latestCustomer.depletion_reason;
+            entitlementCheckedAt = Date.now();
+            expiredForDisplay = isSyncAccountExpired(
+              effectiveStatus,
+              effectiveExpiry,
+              entitlementCheckedAt,
+              depletionReason,
+            );
+            enabled = isSyncAccountEntitled(
+              effectiveStatus,
+              effectiveExpiry,
+              entitlementCheckedAt,
+              depletionReason,
+            );
+          } catch (error) {
+            log(`  ⚠ ${username}: could not re-check paid expiry; leaving the router account unchanged (${error instanceof Error ? error.message : String(error)})`);
+            skipped++;
+            continue;
+          }
+        }
+      }
+
+      if (!enabled && (isHotspotUser || isPppoeUser)) {
+        const accountPath = isHotspotUser ? "/ip/hotspot/user" : "/ppp/secret";
+        const activePath = isHotspotUser ? "/ip/hotspot/active" : "/ppp/active";
+        const filterKey = isHotspotUser ? "user" : "name";
+        try {
+          const result = await reconcileRouterAccountForSync(false, {
+            isOnline: async () => false,
+            push: async () => {
+              await disableRouterAccountIfPresent(conn, accountPath, username);
+            },
+            applyPolicy: async () => {
+              if (isHotspotUser) await removeHotspotUserFup(routerCredentials, username);
+            },
+            disconnect: async () => {
+              await disconnectRouterSessions(conn, activePath, filterKey, username);
+            },
+            confirmActive: async () => false,
+          });
+          log(`  ✓ ${result.action}: ${username} (${storedCustomer?.status ?? u.status ?? "inactive"})`);
+          disabled++;
+        } catch (error) {
+          if (error instanceof RouterOSConnectionLostError) throw error;
+          log(`  ❌ ${username}: ${error instanceof Error ? error.message : String(error)}`);
+          failed++;
+          skipped++;
+        }
+        if (expiredForDisplay) {
+          syncUsers.push({
+            username,
+            planName: plan?.name ?? u.plan_name ?? "Unknown plan",
+            status: "expired",
+            expiresAt: effectiveExpiry ? String(effectiveExpiry) : null,
+          });
+        }
+        continue;
+      }
+
       if (isHotspotUser && !u.plan_id) {
-        log(`  ❌ Hotspot user '${u.username}' has no assigned plan; refusing request-supplied access`);
+        log(`  ❌ Hotspot user '${username}' has no assigned plan; refusing request-supplied access`);
         skipped++;
         continue;
       }
@@ -929,10 +1192,14 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         : u.plan_name
           ? hotspotPlanProfileName(u.plan_name)
           : "default";
-      const comment = u.type === "hotspot" ? u.username : (u.comment || u.username);
-      const expiresAt = u.expires_at ? Date.parse(u.expires_at) : NaN;
-      const enabled = String(u.status ?? "active").toLowerCase() === "active" &&
-        (!Number.isFinite(expiresAt) || expiresAt > Date.now());
+      const activeIpPool = plan
+        ? String(
+            plan.active_ip_pool
+              || planServicePoolName(plan.type, planResourcesByPortId.get(Number(plan.port_id)))
+              || "",
+          ).trim()
+        : "";
+      const comment = normalizedType === "hotspot" ? username : (u.comment || username);
       let limitBytesTotal = Number(u.data_limit_mb) > 0
         ? String(Math.floor(Number(u.data_limit_mb) * 1_000_000))
         : "0";
@@ -1011,102 +1278,213 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
           : "0";
       }
 
-      if (u.type === "pppoe") {
+      let quotaDepleted = false;
+      if (
+        isHotspotUser
+        && planFup?.mode === "disconnect"
+        && planFup.capBytes !== null
+      ) {
+        const rows = await readRouterRows(conn, "/ip/hotspot/user", `?name=${username}`);
+        const current = rows.find(row => row.name === username);
+        const bytesIn = Number(current?.["bytes-in"] ?? 0);
+        const bytesOut = Number(current?.["bytes-out"] ?? 0);
+        quotaDepleted = Number.isFinite(bytesIn)
+          && Number.isFinite(bytesOut)
+          && bytesIn + bytesOut >= planFup.capBytes;
+        if (quotaDepleted) {
+          enabled = false;
+          log(`  ⚠ ${username}: data cap is exhausted; disabling and disconnecting it`);
+        }
+      }
+
+      if (isPppoeUser) {
         /* ── PPPoE secret ── */
-        const secretName = u.pppoe_username || u.username;
-        log(`▶ PPPoE secret: ${secretName} | profile: ${profileName}`);
+        log(`▶ PPPoE secret: ${username} | profile: ${profileName}`);
         try {
-          await requireExistingRouterProfile(conn, "/ppp/profile", profileName);
           const props: Record<string, string> = {
-            name:     secretName,
+            name:     username,
             password: u.password || "",
             service:  "ppp",
             profile:  profileName,
             comment,
-            disabled:  enabled ? "no" : "yes",
+            disabled: "no",
           };
           if (u.ip_address) props["remote-address"] = u.ip_address;
-          const action = await upsertByFilter(conn, "/ppp/secret", "name", secretName, props);
-          log(`  ✓ ${action}`);
-          action === "created" ? created++ : updated++;
+          let action: "created" | "updated" | null = null;
+          let profileCreated = false;
+          let hasActiveSession = false;
+          const checkActiveSession = async () => {
+            const sessions = await readRouterRows(conn, "/ppp/active", `?name=${username}`);
+            hasActiveSession = sessions.some(row => row.name === username);
+            return hasActiveSession;
+          };
+          const result = await reconcileRouterAccountForSync(enabled, {
+            isOnline: checkActiveSession,
+            push: async () => {
+              if (plan) {
+                profileCreated = await ensureSyncUserPlanProfile(conn, plan, profileName, activeIpPool);
+              } else {
+                await requireExistingRouterProfile(conn, "/ppp/profile", profileName);
+              }
+              action = await upsertByFilter(conn, "/ppp/secret", "name", username, props);
+            },
+            applyPolicy: async () => {},
+            disconnect: async () => disconnectRouterSessions(conn, "/ppp/active", "name", username),
+            confirmActive: async () => {
+              const rows = await readRouterRows(conn, "/ppp/secret", `?name=${username}`);
+              const confirmed = routerSyncAccountIsConfirmed(
+                rows.find(row => row.name === username),
+                username,
+                profileName,
+              );
+              hasActiveSession = confirmed && await checkActiveSession();
+              return confirmed;
+            },
+          });
+          if (result.action === "preserved-online") {
+            log(`  ✓ Online account preserved without router changes`);
+          } else if (result.action === "disabled") {
+            log(`  ✓ Disabled and disconnected`);
+            disabled++;
+          } else {
+            if (profileCreated) log(`  ✓ Restored missing paid-plan profile '${profileName}'`);
+            log(`  ✓ ${action ?? "updated"}`);
+            action === "created" ? created++ : updated++;
+          }
+          const displayStatus = syncUserDisplayStatus(false, result.confirmedActive, hasActiveSession);
+          if (displayStatus) {
+            syncUsers.push({
+              username,
+              planName: plan?.name ?? profileName,
+              status: displayStatus,
+              expiresAt: effectiveExpiry ? String(effectiveExpiry) : null,
+            });
+          } else if (result.confirmedActive) {
+            log(`  — '${username}' is enabled, but has no live PPPoE session; omitted from the active list`);
+          } else if (enabled) {
+            log(`  ❌ MikroTik did not confirm '${username}' enabled with profile '${profileName}'`);
+            failed++;
+          }
         } catch (e) {
           if (e instanceof RouterOSConnectionLostError) throw e;
           log(`  ❌ ${e instanceof Error ? e.message : String(e)}`);
+          failed++;
           skipped++;
         }
-      } else if (u.type === "hotspot" || u.type === "voucher") {
+      } else if (isHotspotUser) {
         /* ── Hotspot user ── */
-        log(`▶ Hotspot user: ${u.username} | profile: ${profileName}`);
+        log(`▶ Hotspot user: ${username} | profile: ${profileName}`);
         try {
-          await requireExistingRouterProfile(conn, "/ip/hotspot/user/profile", profileName);
           const props: Record<string, string> = {
-            name:     u.username,
+            name:     username,
             password: u.password || "",
             profile:  profileName,
             comment,
-            disabled:  enabled ? "no" : "yes",
+            disabled: "no",
             "limit-bytes-total": limitBytesTotal,
           };
           if (u.mac_address) props["mac-address"] = u.mac_address;
           if (u.ip_address) props.address = u.ip_address;
-          const previousRows = await conn.write([
-            "/ip/hotspot/user/print",
-            "=.proplist=.id,name,password,profile,disabled,limit-bytes-total,mac-address,address",
-            `?name=${u.username}`,
-          ]) as Record<string, string>[];
-          const previous = Array.isArray(previousRows) ? previousRows[0] : undefined;
-          const previousLimitRaw = previous?.["limit-bytes-total"];
-          const previousLimit = Number(previousLimitRaw ?? 0);
-          const desiredLimit = Number(limitBytesTotal);
-          const previousDisabled = previous?.disabled === undefined
-            ? undefined
-            : ["true", "yes", "1"].includes(String(previous.disabled).toLowerCase());
-          const accessChanged = !!previous && (
-            (previous.profile !== undefined && previous.profile !== profileName)
-            || (previousDisabled !== undefined && previousDisabled === enabled)
-            || (previousLimitRaw !== undefined && previousLimit !== desiredLimit)
-            || (u.mac_address !== undefined && previous["mac-address"] !== u.mac_address)
-            || (u.ip_address !== undefined && previous.address !== u.ip_address)
-          );
-          const action = await upsertByFilter(conn, "/ip/hotspot/user", "name", u.username, props);
-          if (!enabled || accessChanged) {
-            const activeRows = await conn.write(["/ip/hotspot/active/print", `?user=${u.username}`]) as Record<string, string>[];
-            for (const active of Array.isArray(activeRows) ? activeRows : []) {
-              if (active[".id"]) {
-                await conn.write(["/ip/hotspot/active/remove", `=.id=${active[".id"]}`]);
+          let action: "created" | "updated" | null = null;
+          let profileCreated = false;
+          let hasActiveSession = false;
+          const checkActiveSession = async () => {
+            const sessions = await readRouterRows(conn, "/ip/hotspot/active", `?user=${username}`);
+            hasActiveSession = sessions.some(row => row.user === username);
+            return hasActiveSession;
+          };
+          const result = await reconcileRouterAccountForSync(enabled, {
+            isOnline: checkActiveSession,
+            push: async () => {
+              if (!enabled) {
+                await disableRouterAccountIfPresent(conn, "/ip/hotspot/user", username);
+                return;
               }
-            }
-          }
-          if (u.plan_id && planFup?.mode === "throttle" && planFup.capBytes !== null
-            && planFup.speedDown !== null && planFup.speedUp !== null) {
-            await scheduleHotspotUserFup(routerCredentials, {
-              username: u.username,
-              thresholdBytes: planFup.capBytes,
-              speedDownMbps: planFup.speedDown,
-              speedUpMbps: planFup.speedUp,
-            });
+              if (plan) {
+                profileCreated = await ensureSyncUserPlanProfile(conn, plan, profileName, activeIpPool);
+              } else {
+                await requireExistingRouterProfile(conn, "/ip/hotspot/user/profile", profileName);
+              }
+              action = await upsertByFilter(conn, "/ip/hotspot/user", "name", username, props);
+            },
+            applyPolicy: async () => {
+              if (enabled && u.plan_id && planFup?.mode === "throttle" && planFup.capBytes !== null
+                && planFup.speedDown !== null && planFup.speedUp !== null) {
+                await scheduleHotspotUserFup(routerCredentials, {
+                  username,
+                  thresholdBytes: planFup.capBytes,
+                  speedDownMbps: planFup.speedDown,
+                  speedUpMbps: planFup.speedUp,
+                });
+              } else {
+                await removeHotspotUserFup(routerCredentials, username);
+              }
+            },
+            disconnect: async () => disconnectRouterSessions(conn, "/ip/hotspot/active", "user", username),
+            confirmActive: async () => {
+              const rows = await readRouterRows(conn, "/ip/hotspot/user", `?name=${username}`);
+              const confirmed = routerSyncAccountIsConfirmed(
+                rows.find(row => row.name === username),
+                username,
+                profileName,
+              );
+              hasActiveSession = confirmed && await checkActiveSession();
+              return confirmed;
+            },
+          });
+          if (result.action === "preserved-online") {
+            log(`  ✓ Online account preserved without router changes`);
+          } else if (result.action === "disabled") {
+            log(`  ✓ ${quotaDepleted ? "Data cap enforced" : "Disabled and disconnected"}`);
+            disabled++;
           } else {
-            /* Disconnect, unlimited, and legacy request-only users must not
-             * retain a scheduler from an earlier throttle assignment. */
-            await removeHotspotUserFup(routerCredentials, u.username);
+            if (profileCreated) log(`  ✓ Restored missing paid-plan profile '${profileName}'`);
+            log(`  ✓ ${action ?? "updated"}`);
+            action === "created" ? created++ : updated++;
           }
-          log(`  ✓ ${action}`);
-          action === "created" ? created++ : updated++;
+          const displayStatus = syncUserDisplayStatus(false, result.confirmedActive, hasActiveSession);
+          if (displayStatus) {
+            syncUsers.push({
+              username,
+              planName: plan?.name ?? profileName,
+              status: displayStatus,
+              expiresAt: effectiveExpiry ? String(effectiveExpiry) : null,
+            });
+          } else if (result.confirmedActive) {
+            log(`  — '${username}' is enabled, but has no live Hotspot session; omitted from the active list`);
+          } else if (enabled) {
+            log(`  ❌ MikroTik did not confirm '${username}' enabled with profile '${profileName}'`);
+            failed++;
+          }
         } catch (e) {
           if (e instanceof RouterOSConnectionLostError) throw e;
           log(`  ❌ ${e instanceof Error ? e.message : String(e)}`);
+          failed++;
           skipped++;
         }
       } else {
-        log(`  — Skipping static/unknown user '${u.username}'`);
+        log(`  — Skipping static/unknown user '${username}'`);
         skipped++;
       }
     }
 
+    const uniqueSyncUsers = Array.from(
+      new Map(
+        syncUsers.map(user => [`${user.username}\u0000${user.planName}\u0000${user.status}`, user] as const),
+      ).values(),
+    );
+    const activeSessionCount = uniqueSyncUsers.filter(user => user.status === "active").length;
+    const expiredCount = uniqueSyncUsers.filter(user => user.status === "expired").length;
     await conn.write(["/log/info", `=message=OcholaNet: Synced ${created + updated} users`]);
-    log(`\n✅ Done — ${created} created, ${updated} updated, ${skipped} skipped`);
+    log(`\n✅ Done — ${created} created, ${updated} updated, ${disabled} disabled, ${activeSessionCount} live sessions, ${expiredCount} expired, ${skipped} skipped, ${failed} failed`);
     conn.close();
-    res.json({ ok: true, logs });
+    res.json({
+      ok: failed === 0,
+      ...(failed > 0 ? { error: `${failed} account(s) could not be fully synchronized or confirmed.` } : {}),
+      logs,
+      syncUsers: uniqueSyncUsers,
+      summary: { created, updated, disabled, activeSessions: activeSessionCount, expired: expiredCount, skipped, failed },
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`❌ ${msg}`);
