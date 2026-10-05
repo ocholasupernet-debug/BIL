@@ -15,7 +15,6 @@
 - [RouterOS migration boundary](routeros-migration-boundary.md) — Copy only approved RouterOS configuration; never clone billing data or promote a source during inspection.
 - [Router management VPN pool](router-management-vpn-pool.md) — Keep persistent MikroTik management clients on the isolated 10.8.5.x OpenVPN instance; preserve legacy end-user 10.8.0.x clients.
 - [Router management VPN failover](router-management-vpn-failover.md) — Self Install must prefer the 10.8.5.x client and activate the isolated 10.8.6.x client only after primary failure.
-- [Hotspot MAC payment access](hotspot-mac-payment-access.md) — Paid MAC bypasses must be paired with a persistent RouterOS expiry scheduler and must not expose router credentials to the portal.
 - [Hotspot forwarding auth gate](hotspot-forwarding-auth-gate.md) — Never put a blanket bridge-to-WAN accept before Hotspot processing; unauthenticated clients must stay behind the portal.
 - [Hotspot file confirmation](hotspot-file-confirmation.md) — Any authorized tenant/router admin can confirm Hotspot file overwrites or removals; no separate Super Admin approval.
 - [Hotspot M-Pesa reconnect](hotspot-mpesa-reconnect.md) — Require a stored active payment and live router confirmation of its linked device; SMS is only a receipt lookup key.
@@ -71,13 +70,14 @@
 - [Router VPN firewall verification](router-vpn-firewall-verification.md) — Avoid pipefail false negatives on repeated iptables rules and handle UFW IPv6 errors on IPv4-only VPS hosts.
 - [Router management credential policy](router-management-credential-policy.md) — Dedicated management OpenVPN intentionally uses the router name for both username and password.
 - [Router management API account](router-management-api-account.md) — Self Install can leave a stable API account alongside the legacy stored username; try both on management VPN paths.
-- [Plan write boundary](plan-write-boundary.md) — Route admin plan creation through API normalization because the deployed schema is narrower than the evolving form.
+- [RouterOS 6 file deployment](router-file-deployment-ros6.md) — RouterOS 6 accepts nested direct fetches but not reliable API file moves; verify final destinations after upload.
 - [Portal upload host](portal-upload-host.md) — One-time RouterOS portal uploads must fetch from the same API process that created the token.
 - [Portal package scope](portal-package-scope.md) — Carry router/port scope through package listing and checkout validation; listing isolation alone does not protect payment.
 - [Onboarding deployment modes](onboarding-deployment-modes.md) — Greenfield, Brownfield, and Zero-Touch need separate safety boundaries with legacy aliases normalized centrally.
 - [Unified script compiler migration](unified-script-compiler-migration.md) — Introduce a new RouterOS compiler behind existing installer boundaries; retire old families only after hardware validation.
 - [Self Install script scope](self-install-script-scope.md) — Use a one-time bootstrap to fetch/import mainhotspot.rsc; keep the management .ovpn recovery download separate.
 - [Prepaid session enforcement](prepaid-session-enforcement.md) — Keep expiry disconnects, lightweight portal notices, and full quota checks aligned.
+- [Prepaid user time adjustment](prepaid-user-time-adjustment.md) — Adjust existing expiry per user and reconcile live access; do not bulk-change unverified affected accounts.
 - [Hotspot FUP enforcement](hotspot-fup-enforcement.md) — Throttle policies must suppress hard byte caps and RADIUS Max-Data, while keeping router-local FUP enforcement and expiry separate.
 - [Multi-port service isolation](multi-port-service-isolation.md) — Separate Hotspot pages per physical port require one bridge, subnet, and uniquely named server/profile per port.
 - [ISP-owned port services](isp-owned-port-services.md) — Legacy port rows require reseller_id; ISP-owned multiport rows use the tenant owner while assigned_reseller_id stays empty.

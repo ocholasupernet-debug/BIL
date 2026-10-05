@@ -2582,6 +2582,101 @@ export function paidHotspotBindingMatchesCustomer(
     || (Boolean(opts.macAddress) && sameMacAddress(row["mac-address"], opts.macAddress!) && isLegacyPaidHotspotBinding(row));
 }
 
+export type PaidHotspotBindingSnapshot = {
+  macAddress: string;
+  ipAddress: string | null;
+  comment: string;
+  bindingType: "regular" | "bypassed";
+};
+
+export function paidHotspotBindingSnapshotForCustomer(
+  rows: ReadonlyArray<Record<string, string>>,
+  opts: { name: string; macAddress?: string | null },
+): PaidHotspotBindingSnapshot | null {
+  const macAddress = validRouterMac(opts.macAddress);
+  if (!macAddress) return null;
+  const matches = rows.filter((row) =>
+    sameMacAddress(row["mac-address"], macAddress)
+    && paidHotspotBindingMatchesCustomer(row, { name: opts.name, macAddress }),
+  );
+  if (matches.length !== 1) return null;
+  const row = matches[0];
+  if (row.type !== "regular" && row.type !== "bypassed") return null;
+  const comment = String(row.comment ?? "").trim();
+  if (!comment) return null;
+  return {
+    macAddress,
+    ipAddress: String(row.address ?? "").trim() || null,
+    comment,
+    bindingType: row.type,
+  };
+}
+
+export async function getPaidHotspotBindingSnapshot(
+  creds: RouterCredentials,
+  opts: { name: string; macAddress?: string | null },
+): Promise<PaidHotspotBindingSnapshot | null> {
+  const macAddress = validRouterMac(opts.macAddress);
+  if (!macAddress) return null;
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write(["/ip/hotspot/ip-binding/print", "=.proplist=.id,mac-address,address,comment,type"]),
+      ms,
+    ) as Record<string, string>[];
+    if (!Array.isArray(rows)) throw new Error("MikroTik did not return its paid Hotspot binding details.");
+    const snapshot = paidHotspotBindingSnapshotForCustomer(rows, { ...opts, macAddress });
+    if (!snapshot) return null;
+    const matchedRow = rows.find((row) =>
+      sameMacAddress(row["mac-address"], snapshot.macAddress)
+      && row.comment === snapshot.comment,
+    );
+    if (matchedRow && isLegacyPaidHotspotBinding(matchedRow)) return snapshot;
+    const schedulerName = hotspotPaidExpirySchedulerName(snapshot.comment);
+    const schedulers = await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    ) as Record<string, string>[];
+    if (!Array.isArray(schedulers)) {
+      throw new Error("MikroTik did not return the paid Hotspot expiry scheduler details.");
+    }
+    return schedulers.some((row) =>
+      row.name === schedulerName
+      && String(row.comment ?? "").trim().toLowerCase() === "ocholasupernet paid access expiry",
+    ) ? snapshot : null;
+  });
+}
+
+export async function reconcilePaidHotspotBindingExpiry(
+  creds: RouterCredentials,
+  opts: { snapshot: PaidHotspotBindingSnapshot; expiresAt: string | null; enabled: boolean },
+): Promise<void> {
+  if (!opts.expiresAt) {
+    throw new Error("Paid Hotspot access must keep an expiry date. Choose a specific date and time.");
+  }
+  const expiryMs = Date.parse(opts.expiresAt);
+  if (!Number.isFinite(expiryMs)) {
+    throw new Error("A valid expiry date is required for the paid Hotspot binding.");
+  }
+  if (!opts.enabled || expiryMs <= Date.now()) {
+    await removeHotspotIpBinding(creds, {
+      macAddress: opts.snapshot.macAddress,
+      comment: opts.snapshot.comment,
+    });
+    return;
+  }
+  const updated = await addHotspotIpBinding(creds, {
+    macAddress: opts.snapshot.macAddress,
+    ipAddress: opts.snapshot.ipAddress ?? undefined,
+    comment: opts.snapshot.comment,
+    expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
+    bindingType: opts.snapshot.bindingType,
+  });
+  if (!updated) {
+    throw new Error("The paid Hotspot binding could not be safely updated. No customer changes were saved.");
+  }
+}
+
 /** Detect paid bypasses and their expiry schedulers before an admin edit. */
 export async function hasPaidHotspotAccess(
   creds: RouterCredentials,

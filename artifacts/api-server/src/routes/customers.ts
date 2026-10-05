@@ -31,6 +31,9 @@ import {
   removePppUserExpiry,
   removeHotspotUser,
   removePPPSecretByName,
+  getPaidHotspotBindingSnapshot,
+  reconcilePaidHotspotBindingExpiry,
+  type PaidHotspotBindingSnapshot,
 } from "../lib/mikrotik.js";
 import {
   assertRadiusTargetEmptyStrict,
@@ -56,6 +59,7 @@ import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
 import { saveCustomerEditWithRouter } from "../lib/customer-edit-consistency.js";
 import { withCustomerEditLock } from "../lib/customer-edit-lock.js";
+import { customerStatusForExpiryEdit } from "../lib/customer-expiry-edit.js";
 
 const router: IRouter = Router();
 
@@ -280,6 +284,9 @@ async function reconcileCustomerAccess(
     onRadiusIdentity?: (exists: boolean) => void;
     onRadiusMutation?: () => void;
     assertLock?: () => Promise<void>;
+    allowPaidHotspotExpiryAdjustment?: boolean;
+    paidHotspotBindingSnapshot?: PaidHotspotBindingSnapshot | null;
+    onPaidHotspotBindingSnapshot?: (snapshot: PaidHotspotBindingSnapshot) => void;
   } = {},
 ): Promise<{ routerSynced: boolean; routerId: number | null; routerName: string | null }> {
   const currentName = current.type === "pppoe"
@@ -302,6 +309,8 @@ async function reconcileCustomerAccess(
   const nextExpiry = updates.expires_at !== undefined
     ? (updates.expires_at as string | null)
     : current.expires_at;
+  const sameExpiry = nextExpiry === current.expires_at
+    || Boolean(nextExpiry && current.expires_at && Date.parse(nextExpiry) === Date.parse(current.expires_at));
   const plan = nextPlanId
     ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
@@ -364,6 +373,7 @@ async function reconcileCustomerAccess(
   let syncedRouterId: number | null = null;
   let syncedRouterName: string | null = null;
   let dataPolicy: ReturnType<typeof validateFupPolicy> | null = null;
+  let paidHotspotBindingSnapshot = options.paidHotspotBindingSnapshot ?? null;
   if (plan && (nextName || planType === "vlan")) {
     const routerId = nextRouterId ?? plan.router_id;
     if (!routerId) throw new Error("Assign this prepaid user to a router before saving changes");
@@ -406,18 +416,36 @@ async function reconcileCustomerAccess(
       const oldAddress = String(current.ip_address ?? "").trim();
       const oldMac = String(current.mac_address ?? "").trim().toLowerCase();
       const newMac = String(updates.mac_address === undefined ? current.mac_address ?? "" : updates.mac_address ?? "").trim().toLowerCase();
-      const sameExpiry = nextExpiry === current.expires_at
-        || Boolean(nextExpiry && current.expires_at && Date.parse(nextExpiry) === Date.parse(current.expires_at));
       const accessChanged = nextName !== currentName
         || plan.id !== current.plan_id
         || nextStatus !== String(current.status ?? "").toLowerCase()
         || !sameExpiry
         || address !== oldAddress
         || newMac !== oldMac;
-      if (accessChanged && await hasPaidHotspotAccess(creds, { name: currentName, macAddress: current.mac_address })) {
-        throw new Error(
-          "This Hotspot user has a paid MikroTik device bypass. Changing access, phone, plan, or expiry here would leave its binding out of sync. No changes were saved.",
-        );
+      const paidHotspotAccess = Boolean(paidHotspotBindingSnapshot)
+        || (accessChanged && await hasPaidHotspotAccess(creds, { name: currentName, macAddress: current.mac_address }));
+      if (paidHotspotAccess) {
+        const expiryOnlyChange = options.allowPaidHotspotExpiryAdjustment === true
+          && nextName === currentName
+          && plan.id === current.plan_id
+          && address === oldAddress
+          && newMac === oldMac
+          && !sameExpiry;
+        if (!expiryOnlyChange) {
+          throw new Error(
+            "This Hotspot user has a paid MikroTik device binding. Only an expiry-only adjustment is supported here; other changes need a dedicated service migration.",
+          );
+        }
+        paidHotspotBindingSnapshot ??= await getPaidHotspotBindingSnapshot(creds, {
+          name: currentName,
+          macAddress: current.mac_address,
+        });
+        if (!paidHotspotBindingSnapshot) {
+          throw new Error(
+            "The paid Hotspot binding could not be identified safely. No changes were saved; verify the user's router binding first.",
+          );
+        }
+        options.onPaidHotspotBindingSnapshot?.(paidHotspotBindingSnapshot);
       }
     }
 
@@ -515,6 +543,13 @@ async function reconcileCustomerAccess(
       });
     } else if (planType === "hotspot") {
       await options.onRouterMutation?.();
+      if (paidHotspotBindingSnapshot && !sameExpiry) {
+        await reconcilePaidHotspotBindingExpiry(creds, {
+          snapshot: paidHotspotBindingSnapshot,
+          expiresAt: nextExpiry,
+          enabled,
+        });
+      }
       await reconcileHotspotUserAccess(creds, {
         name: nextName,
         password: nextPassword,
@@ -879,12 +914,14 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
   if (status     !== undefined) updates.status     = status;
   if (normalizedExpiry !== undefined) updates.expires_at = normalizedExpiry;
   if (normalizedExpiry !== undefined && status === undefined) {
-    const expiryMs = normalizedExpiry ? Date.parse(normalizedExpiry) : NaN;
-    updates.status = Number.isFinite(expiryMs) && expiryMs <= Date.now() ? "expired" : "active";
+    updates.status = customerStatusForExpiryEdit(current.status, normalizedExpiry);
   }
   if (updates.status === null || updates.status === "") {
     return { status: 400, body: { error: "Choose a valid prepaid user status before saving." } };
   }
+  const expiryOnlyEdit = normalizedExpiry !== undefined
+    && status === undefined
+    && Object.keys(updates).every(key => ["updated_at", "expires_at", "status"].includes(key));
 
   const account = await authenticatedAccount(req);
   if (!account) {
@@ -950,6 +987,7 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
     : current.username || current.pppoe_username || "";
   previousFields.username = current.username;
   previousFields.pppoe_username = current.type === "pppoe" ? previousLogin : current.pppoe_username;
+  let paidHotspotBindingSnapshot: PaidHotspotBindingSnapshot | null = null;
   let hadRadiusBefore = false;
   let radiusMutationAttempted = false;
   let saved: {
@@ -966,6 +1004,8 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
           },
           onRadiusIdentity: exists => { hadRadiusBefore = exists; },
           onRadiusMutation: () => { radiusMutationAttempted = true; },
+          allowPaidHotspotExpiryAdjustment: expiryOnlyEdit,
+          onPaidHotspotBindingSnapshot: snapshot => { paidHotspotBindingSnapshot = snapshot; },
           assertLock,
           allowInactivePlan: unchangedPlan,
         });
@@ -980,6 +1020,8 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
           allowInactivePlan: true,
           restoreIdentity: true,
           skipRadius: !radiusMutationAttempted || !hadRadiusBefore,
+          allowPaidHotspotExpiryAdjustment: expiryOnlyEdit,
+          paidHotspotBindingSnapshot,
           onRouterMutation: assertLock,
           assertLock,
         });

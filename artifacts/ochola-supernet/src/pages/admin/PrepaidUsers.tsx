@@ -614,6 +614,100 @@ function EditUserDialog({
   );
 }
 
+function AdjustExpiryDialog({
+  user, onClose, onSave,
+}: { user: Customer; onClose: () => void; onSave: (expiresAt: string) => Promise<void> }) {
+  const currentExpiryLocal = toDateTimeLocal(user.expires_at);
+  const [expiresAt, setExpiresAt] = useState(currentExpiryLocal);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const nextExpiry = fromDateTimeLocal(expiresAt);
+  const nextExpiryMs = nextExpiry ? Date.parse(nextExpiry) : Number.NaN;
+  const unchanged = expiresAt === currentExpiryLocal;
+  const willExpireImmediately = Number.isFinite(nextExpiryMs)
+    && nextExpiryMs <= Date.now()
+    && user.status !== "expired"
+    && !isExpired(user.expires_at);
+  const submit = async () => {
+    const normalizedExpiry = fromDateTimeLocal(expiresAt);
+    if (!normalizedExpiry) {
+      setError("Choose a valid expiry date and time.");
+      return;
+    }
+    if (willExpireImmediately && !window.confirm(
+      `This will expire ${purchaseUsername(user)} immediately and disconnect their service. Continue?`,
+    )) return;
+    setError("");
+    setSaving(true);
+    try {
+      await onSave(normalizedExpiry);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not adjust this user's expiry.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const currentExpiryMs = user.expires_at ? Date.parse(user.expires_at) : Number.NaN;
+  const direction = !Number.isFinite(nextExpiryMs)
+    ? ""
+    : !Number.isFinite(currentExpiryMs) || nextExpiryMs > currentExpiryMs
+      ? "This moves expiry later and extends access."
+      : nextExpiryMs < currentExpiryMs
+        ? "This moves expiry earlier and shortens access."
+        : "The expiry is unchanged.";
+  const inputStyle: React.CSSProperties = {
+    width: "100%", boxSizing: "border-box", padding: "0.6rem 0.7rem", borderRadius: 7,
+    background: "var(--isp-input-bg)", border: "1px solid var(--isp-border)", color: "var(--isp-text)",
+    font: "inherit", fontSize: "0.8rem",
+  };
+  return (
+    <div className="prepaid-modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !saving) onClose(); }}>
+      <div className="prepaid-modal prepaid-small-modal" role="dialog" aria-modal="true" aria-labelledby="adjust-prepaid-user-title">
+        <div className="prepaid-modal-heading">
+          <div><h2 id="adjust-prepaid-user-title">Adjust access time</h2><p>{purchaseUsername(user)}</p></div>
+          <button type="button" onClick={onClose} disabled={saving} style={iconButton("#94a3b8")} aria-label="Close expiry adjustment"><X size={15} /></button>
+        </div>
+        <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
+          <div>
+            <div className="prepaid-help" style={{ marginBottom: 3 }}>Current expiry</div>
+            <div style={{ color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 650 }}>
+              {user.expires_at ? fmtDate(user.expires_at) : "No expiry set"}
+            </div>
+          </div>
+          <label>
+            New expiry date and time
+            <input
+              autoFocus
+              required
+              style={inputStyle}
+              type="datetime-local"
+              step={60}
+              value={expiresAt}
+              onChange={event => setExpiresAt(event.target.value)}
+            />
+          </label>
+          {direction && <p className="prepaid-help" style={{ margin: 0 }}>{direction}</p>}
+          {willExpireImmediately && (
+            <p role="alert" style={{ margin: 0, color: "#f87171", fontSize: "0.74rem" }}>
+              This date is in the past. Saving will expire the service and disconnect the user.
+            </p>
+          )}
+          <p className="prepaid-help" style={{ margin: 0 }}>
+            Use the local time shown on this admin panel. Changing expiry keeps a suspended account suspended.
+          </p>
+        </div>
+        {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.75rem", marginTop: 12 }}>{error}</div>}
+        <div className="prepaid-modal-actions">
+          <button type="button" onClick={onClose} disabled={saving} className="prepaid-secondary-button">Cancel</button>
+          <button type="button" onClick={() => void submit()} disabled={saving || !nextExpiry || unchanged} className="prepaid-primary-button">
+            {saving ? <Loader2 size={13} className="prepaid-spin" /> : <Save size={13} />} Save expiry
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ExtendUserDialog({
   user, onClose, onExtend,
 }: { user: Customer; onClose: () => void; onExtend: (days: number) => Promise<void> }) {
@@ -730,6 +824,7 @@ export default function PrepaidUsers() {
   const [detailUser,  setDetailUser]  = useState<Customer | null>(null);
   const [editingUser, setEditingUser] = useState<Customer | null>(null);
   const [extendingUser, setExtendingUser] = useState<Customer | null>(null);
+  const [adjustingExpiryUser, setAdjustingExpiryUser] = useState<Customer | null>(null);
   const [rechargePickerOpen, setRechargePickerOpen] = useState(false);
   const [addingVlanUser, setAddingVlanUser] = useState(false);
   const [rechargeTargetId, setRechargeTargetId] = useState("");
@@ -788,11 +883,16 @@ export default function PrepaidUsers() {
     }
   }
 
+  async function handleAdjustExpiry(user: Customer, expiresAt: string) {
+    await updateUser(user, { expires_at: expiresAt });
+    setAdjustingExpiryUser(null);
+  }
+
   async function handleExtend(user: Customer, days: number) {
     const current = user.expires_at && !isExpired(user.expires_at) ? new Date(user.expires_at) : new Date();
     current.setDate(current.getDate() + days);
     try {
-      await updateUser(user, { expires_at: current.toISOString(), status: "active" });
+      await updateUser(user, { expires_at: current.toISOString() });
       setExtendingUser(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Could not extend this user.");
@@ -1007,6 +1107,13 @@ export default function PrepaidUsers() {
             setActionError("");
             setActionNotice("VLAN prepaid user added and applied to the existing VLAN service.");
           }}
+        />
+      )}
+      {adjustingExpiryUser && (
+        <AdjustExpiryDialog
+          user={adjustingExpiryUser}
+          onClose={() => setAdjustingExpiryUser(null)}
+          onSave={expiresAt => handleAdjustExpiry(adjustingExpiryUser, expiresAt)}
         />
       )}
       {extendingUser && (
@@ -1330,7 +1437,9 @@ export default function PrepaidUsers() {
                           <button title="Edit user" aria-label={`Edit ${username}`} onClick={() => setEditingUser(user)} disabled={actionBusy === user.id}
                             style={{ ...iconButton("#60a5fa"), opacity: actionBusy === user.id ? 0.5 : 1 }}><Edit3 size={13} /></button>
                           <button title="Extend access" aria-label={`Extend ${username}`} onClick={() => setExtendingUser(user)} disabled={actionBusy === user.id}
-                            style={iconButton("#a78bfa")}><PlusCircle size={13} /></button>
+                            style={iconButton("#c084fc")}><PlusCircle size={13} /></button>
+                          <button title="Adjust access time" aria-label={`Adjust access time for ${username}`} onClick={() => setAdjustingExpiryUser(user)} disabled={actionBusy === user.id}
+                            style={iconButton("#a78bfa")}><CalendarDays size={13} /></button>
                           <button title={user.status === "active" ? "Disable user" : "Enable user"} aria-label={`${user.status === "active" ? "Disable" : "Enable"} ${username}`} onClick={() => void handleStatus(user, user.status === "active" ? "suspended" : "active")} disabled={actionBusy === user.id}
                             style={iconButton(user.status === "active" ? "#f59e0b" : "#22c55e")}>{user.status === "active" ? <Power size={13} /> : <CheckCircle2 size={13} />}</button>
                           <button title="Delete user" aria-label={`Delete ${username}`} onClick={() => void handleDelete(user)} disabled={actionBusy === user.id}
