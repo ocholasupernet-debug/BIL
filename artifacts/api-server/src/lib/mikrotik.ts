@@ -2525,7 +2525,7 @@ export async function addHotspotUser(
   creds: RouterCredentials,
   opts: {
     name: string; password: string; profile?: string; comment?: string;
-    server?: string; email?: string;
+    server?: string; email?: string; disabled?: boolean;
     address?: string; limitUptime?: string; limitBytesTotal?: string;
   }
 ): Promise<void> {
@@ -2537,6 +2537,7 @@ export async function addHotspotUser(
       `=password=${opts.password}`,
       `=profile=${opts.profile ?? "default"}`,
     ];
+    if (opts.disabled !== undefined) params.push(`=disabled=${opts.disabled ? "yes" : "no"}`);
     if (opts.comment)         params.push(`=comment=${opts.comment}`);
     if (opts.server)          params.push(`=server=${opts.server}`);
     if (opts.email)           params.push(`=email=${opts.email}`);
@@ -2975,8 +2976,9 @@ export async function scheduleHotspotUserFup(
 
 /**
  * Reconcile one hotspot account after an admin changes its plan, expiry, or
- * lifecycle status. RouterOS creates the bandwidth queue at login, so an
- * existing active session must be removed after a profile change.
+ * lifecycle status. Keep enabled sessions online; their live queue is updated
+ * separately and RouterOS applies profile changes on the next authentication.
+ * Disabled or expired accounts are still disconnected immediately.
  */
 export async function reconcileHotspotUserAccess(
   creds: RouterCredentials,
@@ -3015,6 +3017,15 @@ export async function reconcileHotspotUserAccess(
   };
 
   await requireHotspotUserProfile(creds, opts.profile);
+
+  if (Number.isFinite(expiryMs) && enabled) {
+    await scheduleHotspotUserExpiry(creds, {
+      name: opts.name,
+      expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
+    });
+  } else if (enabled) {
+    await removeHotspotUserExpiry(creds, opts.name);
+  }
 
   try {
     await updateHotspotUser(creds, opts.name, fields);
@@ -3072,17 +3083,6 @@ export async function reconcileHotspotUserAccess(
     });
   } else {
     await removeHotspotUserFup(creds, opts.name);
-  }
-
-  /* Force RouterOS to recreate the active queue with the current profile. */
-  if (!opts.preserveActiveSession) await disconnectHotspotActiveUser(creds, opts.name);
-  if (Number.isFinite(expiryMs)) {
-    await scheduleHotspotUserExpiry(creds, {
-      name: opts.name,
-      expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
-    });
-  } else {
-    await removeHotspotUserExpiry(creds, opts.name);
   }
 }
 

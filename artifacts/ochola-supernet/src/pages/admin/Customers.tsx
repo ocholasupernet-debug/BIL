@@ -890,7 +890,7 @@ export default function Customers() {
         {/* ─── Sync to Router ─── */}
         <RouterSyncBar
           label="Sync Customers to Router"
-          description="Push Hotspot and PPPoE customer accounts to MikroTik. VLAN customer access is provisioned with its plan through the customer creation flow."
+          description="Repair offline Hotspot and PPPoE accounts without changing eligible live sessions. Suspended, expired, and exhausted Hotspot accounts are disabled and disconnected."
           icon={<UploadCloud size={18} />}
           endpoint="/api/admin/sync/users"
           color="var(--isp-accent)"
@@ -911,6 +911,8 @@ export default function Customers() {
                   type:          c.type ?? "hotspot",
                   plan_id:       c.plan_id ?? undefined,
                   plan_name:     c.plan_id ? (planMap[c.plan_id] ?? "default") : "default",
+                  status:        c.status,
+                  expires_at:    c.expires_at ?? undefined,
                   pppoe_username: c.pppoe_username ?? undefined,
                   mac_address:   c.mac_address ?? undefined,
                   ip_address:    c.ip_address ?? undefined,

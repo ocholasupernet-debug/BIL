@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Wifi, Phone, Zap, CheckCircle2, Ticket,
-  AlertCircle, Loader2, Shield, Clock,
+  AlertCircle, Loader2, Shield, Clock, Users,
   ArrowRight, ArrowUpRight, CreditCard, Tv, Sparkles, Database,
 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
 import { getCurrencySymbol } from "@/lib/utils";
+import { formatHotspotDataAllowance, formatHotspotSharedDevices } from "@/lib/hotspot-plan-labels";
 import {
   forgetHotspotDevice,
   hotspotSavedDevicesStorageKey,
@@ -37,6 +38,7 @@ interface Plan {
   /** Reduced speeds used only when fup_policy is throttle. */
   fup_speed_down?: number | null;
   fup_speed_up?: number | null;
+  shared_users?: number;
   description: string | null; type?: string;
   router_id?: number | null; port_id?: number | null;
 }
@@ -107,6 +109,7 @@ function normalizeRuntimePlan(value: unknown): Plan | null {
   const throttleUp = Number(
     row.fup_speed_up ?? row.throttle_speed_up ?? row.speed_after_limit_up ?? row.reduced_speed_up,
   );
+  const rawSharedUsers = Number(row.shared_users ?? row.sharedUsers);
   return {
     id,
     name,
@@ -123,6 +126,7 @@ function normalizeRuntimePlan(value: unknown): Plan | null {
     data_cap_mode: fupPolicy === "throttle" ? "throttle" : "disconnect",
     fup_speed_down: Number.isFinite(throttleDown) && throttleDown > 0 ? throttleDown : null,
     fup_speed_up: Number.isFinite(throttleUp) && throttleUp > 0 ? throttleUp : null,
+    shared_users: Number.isFinite(rawSharedUsers) && rawSharedUsers >= 1 ? Math.floor(rawSharedUsers) : 1,
     description: typeof row.description === "string" ? row.description : null,
     type: typeof row.type === "string" ? row.type : undefined,
     router_id: positivePortalId(row.router_id),
@@ -225,20 +229,6 @@ function formatValidity(plan: Plan): string {
 function formatSpeed(mbps: number): string {
   if (mbps >= 1000) return `${mbps / 1000} Gbps`;
   return `${mbps} Mbps`;
-}
-
-function formatDataLimit(plan: Plan): string | null {
-  const limitMb = Number(plan.data_limit_mb);
-  if (!Number.isFinite(limitMb) || limitMb <= 0) return null;
-  const limit = limitMb >= 1000
-    ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(limitMb / 1000)} GB`
-    : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(limitMb)} MB`;
-  if (plan.fup_policy === "throttle" && (plan.fup_speed_down ?? 0) > 0) {
-    const down = formatSpeed(plan.fup_speed_down!);
-    const up = (plan.fup_speed_up ?? 0) > 0 ? ` / ${formatSpeed(plan.fup_speed_up!)}` : "";
-    return `${limit} FUP cap · then ${down}${up}`;
-  }
-  return `${limit} cap · disconnects when used`;
 }
 
 function formatSessionExpiry(value: string | null): string {
@@ -1934,7 +1924,7 @@ function HotspotLoginView({
         }
         .hp-input::placeholder { color: rgba(255,255,255,0.2); font-weight: 500; }
         .hp-input-left { padding-left: 42px; }
-        .hp-input-phone { padding-left: 62px; }
+        .hp-input-phone { padding-left: 14px; }
         .hp-textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
 
         .hp-btn {
@@ -2463,7 +2453,8 @@ function HotspotLoginView({
                         const grad = planGradients[i % planGradients.length];
                         const isExpanded = selectedPlan?.id === plan.id;
                         const isCollapsed = selectedPlan && !isExpanded;
-                        const dataLimitLabel = formatDataLimit(plan);
+                        const dataLimitLabel = formatHotspotDataAllowance(plan);
+                        const sharedDevicesLabel = formatHotspotSharedDevices(plan.shared_users);
                         return (
                           <div key={plan.id}
                             className={`hp-plan${isExpanded ? " expanded" : ""}${isCollapsed ? " collapsed" : ""}`}
@@ -2488,11 +2479,12 @@ function HotspotLoginView({
                                   <div className="hp-plan-meta-row">
                                     <Clock size={12} color={grad.light} /> {formatValidity(plan)}
                                   </div>
-                                  {dataLimitLabel && (
-                                    <div className="hp-plan-meta-row">
-                                      <Database size={12} color={grad.light} /> {dataLimitLabel}
-                                    </div>
-                                  )}
+                                  <div className="hp-plan-meta-row">
+                                    <Database size={12} color={grad.light} /> {dataLimitLabel}
+                                  </div>
+                                  <div className="hp-plan-meta-row">
+                                    <Users size={12} color={grad.light} /> {sharedDevicesLabel}
+                                  </div>
                                   {plan.speed_down > 0 && (
                                     <div className="hp-plan-meta-row">
                                       <Zap size={12} color={grad.light} /> {formatSpeed(plan.speed_down)}
@@ -2554,9 +2546,8 @@ function HotspotLoginView({
                                   ) : <form onSubmit={handlePay}>
                                     <div className="hp-input-group">
                                       <div className="hp-input-wrap">
-                                        <span className="hp-input-icon" style={{ fontSize: 13, fontWeight: 700, left: 14 }}>+254</span>
                                         <input className="hp-input hp-input-phone" type="tel"
-                                          placeholder="7XX XXX XXX" required
+                                          inputMode="tel" placeholder="07XX XXX XXX or 01XX XXX XXX" required
                                           value={phone} onChange={e => setPhone(e.target.value)} />
                                       </div>
                                     </div>
@@ -2610,11 +2601,12 @@ function HotspotLoginView({
                                   <div className="hp-plan-meta-row">
                                     <Clock size={12} color={grad.light} /> {formatValidity(plan)}
                                   </div>
-                                  {dataLimitLabel && (
-                                    <div className="hp-plan-meta-row">
-                                      <Database size={12} color={grad.light} /> {dataLimitLabel}
-                                    </div>
-                                  )}
+                                   <div className="hp-plan-meta-row">
+                                     <Database size={12} color={grad.light} /> {dataLimitLabel}
+                                   </div>
+                                   <div className="hp-plan-meta-row">
+                                     <Users size={12} color={grad.light} /> {sharedDevicesLabel}
+                                   </div>
                                   {plan.speed_down > 0 && (
                                     <div className="hp-plan-meta-row">
                                       <Zap size={12} color={grad.light} /> {formatSpeed(plan.speed_down)}
@@ -3063,7 +3055,7 @@ function HotspotLoginView({
                       type="tel"
                       value={tvPhone}
                       onChange={e => setTvPhone(e.target.value)}
-                      placeholder="7XX XXX XXX"
+                      placeholder="07XX XXX XXX or 01XX XXX XXX"
                       inputMode="tel"
                       required
                     />

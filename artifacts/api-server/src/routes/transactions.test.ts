@@ -52,7 +52,7 @@ test("transaction APIs enforce ISP and reseller ownership from the signed-in acc
       assert.equal(url.searchParams.get("limit"), "10000");
       assert.equal(
         url.searchParams.get("select"),
-        "id,customer_id,plan_id,amount,payment_method,reference,status,notes,created_at",
+        "id,customer_id,plan_id,amount,payment_method,reference,mpesa_receipt,status,notes,created_at",
       );
       if (activeAccountId === 41) {
         assert.equal(url.searchParams.get("admin_id"), "eq.41");
@@ -72,6 +72,7 @@ test("transaction APIs enforce ISP and reseller ownership from the signed-in acc
         amount: "250",
         payment_method: "mpesa",
         reference: `TX-${activeAccountId}`,
+        mpesa_receipt: "UJ5QQ8VB9M",
         status: "completed",
         notes: null,
         created_at: "2026-10-03T08:00:00.000Z",

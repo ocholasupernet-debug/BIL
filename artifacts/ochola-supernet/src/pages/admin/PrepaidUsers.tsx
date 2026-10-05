@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 import { fetchAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
+import { SyncUserStatusList, type SyncUserStatus } from "@/components/ui/SyncUserStatusList";
+import { transactionDisplayId } from "@/lib/transaction-reference";
 
 const PAGE_SIZE = 20;
 
@@ -30,6 +32,7 @@ interface Customer extends DbCustomer {
   data_used_bytes?: number | string | null;
   service_online?: boolean | null;
   fup_limit_mb?: number | null;
+  depletion_reason?: string | null;
 }
 interface DisplayCustomer extends Customer {
   mergedCustomerIds: number[];
@@ -175,7 +178,7 @@ function purchaseUsername(user: Customer) {
 function paymentLabel(payment?: Payment) {
   if (!payment) return "—";
   const method = payment.payment_method.toLowerCase();
-  const transactionId = payment.mpesa_receipt || payment.reference || String(payment.id);
+  const transactionId = transactionDisplayId(payment);
   const notes = (payment.notes ?? "").toLowerCase();
   if (method.includes("till") || notes.includes("till")) return `MpesatillStk-${transactionId}`;
   if (method.includes("paybill") || notes.includes("paybill")) return `MpesapaybillStk-${transactionId}`;
@@ -221,7 +224,7 @@ function customerUsageBytes(user: Customer, liveUsage: Map<string, number>) {
   return live ?? null;
 }
 function customerIsOnline(user: Customer, onlineUsers: Set<string>) {
-  if (isExpired(user.expires_at)) return false;
+  if (!hasUnexpiredPaidAccess(user)) return false;
   if (String(user.type ?? "").toLowerCase() === "vlan") return user.status === "active" && user.service_online === true;
   return [user.username, user.pppoe_username, purchaseUsername(user)]
     .filter(Boolean)
@@ -234,7 +237,24 @@ function isExpiringSoon(d?: string | null) {
 }
 function isExpired(d?: string | null) {
   if (!d) return false;
-  return new Date(d).getTime() < Date.now();
+  const expiry = Date.parse(d);
+  return Number.isFinite(expiry) && expiry <= Date.now();
+}
+function hasUnexpiredPaidAccess(user: Customer) {
+  const status = String(user.status ?? "").trim().toLowerCase();
+  if (status === "suspended" || user.depletion_reason === "data_limit") return false;
+  const allowedStatus = ["active", "payment_cleared_router_pending", "expired"].includes(status);
+  if (!allowedStatus) return false;
+  if (!user.expires_at) return status === "active";
+  const expiry = Date.parse(user.expires_at);
+  return Number.isFinite(expiry) && expiry > Date.now();
+}
+function isCustomerExpired(user: Customer) {
+  if (user.status === "suspended") return false;
+  if (user.depletion_reason === "data_limit") return true;
+  if (!user.expires_at) return user.status === "expired";
+  const expiry = Date.parse(user.expires_at);
+  return Number.isFinite(expiry) ? expiry <= Date.now() : user.status === "expired";
 }
 
 const TYPE_META: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
@@ -352,8 +372,11 @@ async function syncUsersToRouter(
   users:  Customer[],
   plans:  Plan[],
   log:    (m: string) => void,
-): Promise<boolean> {
-  if (!router.host && !router.bridge_ip) { log(`  ⚠ ${router.name}: no IP address — skipped`); return false; }
+): Promise<{ ok: boolean; syncUsers: SyncUserStatus[] | null }> {
+  if (!router.host && !router.bridge_ip) {
+    log(`  ⚠ ${router.name}: no IP address — skipped`);
+    return { ok: false, syncUsers: null };
+  }
   log(`\n▶ ${router.name}`);
   const planMap = Object.fromEntries(plans.map(p => [p.id, p]));
   const payload = {
@@ -388,15 +411,23 @@ async function syncUsersToRouter(
       },
       body: JSON.stringify(payload),
     });
-    const data = await parseJsonResponse<{ ok: boolean; error?: string; logs?: string[] }>(res);
+    const data = await parseJsonResponse<{
+      ok: boolean;
+      error?: string;
+      logs?: string[];
+      syncUsers?: SyncUserStatus[];
+    }>(res);
     (data.logs ?? []).forEach((l: string) => log(l));
     if (!res.ok) {
       throw new Error(data.error || `User sync failed (HTTP ${res.status}).`);
     }
-    return data.ok;
+    return {
+      ok: data.ok,
+      syncUsers: Array.isArray(data.syncUsers) ? data.syncUsers : [],
+    };
   } catch (e) {
     log(`  ✗ ${e instanceof Error ? e.message : e}`);
-    return false;
+    return { ok: false, syncUsers: null };
   }
 }
 
@@ -947,6 +978,7 @@ export default function PrepaidUsers() {
   const [syncing,         setSyncing]         = useState(false);
   const [syncLogs,        setSyncLogs]        = useState<string[] | null>(null);
   const [syncOk,          setSyncOk]          = useState<boolean | null>(null);
+  const [syncUserStatuses, setSyncUserStatuses] = useState<SyncUserStatus[] | null>(null);
 
   async function updateUser(user: Customer, updates: Record<string, unknown>) {
     setActionError("");
@@ -1022,8 +1054,8 @@ export default function PrepaidUsers() {
   /* ── Stats ── */
   const stats = useMemo(() => ({
     total:     displayCustomers.length,
-    active:    displayCustomers.filter(c => c.status === "active" && !isExpired(c.expires_at)).length,
-    expired:   displayCustomers.filter(c => c.status === "expired" || isExpired(c.expires_at)).length,
+    active:    displayCustomers.filter(hasUnexpiredPaidAccess).length,
+    expired:   displayCustomers.filter(isCustomerExpired).length,
     suspended: displayCustomers.filter(c => c.status === "suspended").length,
   }), [displayCustomers]);
 
@@ -1031,8 +1063,8 @@ export default function PrepaidUsers() {
   const filtered = useMemo(() => {
     let list = displayCustomers;
     if (statusTab === "online") list = list.filter(c => customerIsOnline(c, onlineUsers));
-    else if (statusTab === "active") list = list.filter(c => c.status === "active" && !isExpired(c.expires_at));
-    else if (statusTab === "expired") list = list.filter(c => c.status === "expired" || isExpired(c.expires_at));
+    else if (statusTab === "active") list = list.filter(hasUnexpiredPaidAccess);
+    else if (statusTab === "expired") list = list.filter(isCustomerExpired);
     else if (statusTab !== "all") list = list.filter(c => c.status === statusTab);
     if (typeFilter) list = list.filter(c => prepaidServiceType(c.type) === typeFilter);
     if (packageFilter === "none") {
@@ -1069,11 +1101,11 @@ export default function PrepaidUsers() {
     if (!pickedRouter) return;
     const router = routers.find(r => String(r.id) === pickedRouter);
     if (!router) return;
-    setSyncing(true); setSyncLogs([]); setSyncOk(null);
+    setSyncing(true); setSyncLogs([]); setSyncOk(null); setSyncUserStatuses(null);
     const logs: string[] = [];
     const log = (m: string) => { logs.push(m); setSyncLogs([...logs]); };
     log("Starting user sync…");
-    const ok = await syncUsersToRouter(
+    const result = await syncUsersToRouter(
       router,
       customers.filter(c => c.type !== "vlan" && Number(
         c.router_id ?? (c.plan_id ? planMap[c.plan_id]?.router_id : null),
@@ -1081,8 +1113,9 @@ export default function PrepaidUsers() {
       plans,
       log,
     );
-    log(ok ? "\n✅ Sync complete." : "\n⚠ Sync finished with errors.");
-    setSyncOk(ok);
+    log(result.ok ? "\n✅ Sync complete." : "\n⚠ Sync finished with errors.");
+    setSyncOk(result.ok);
+    setSyncUserStatuses(result.syncUsers);
     setSyncing(false);
     setShowSyncPicker(false);
   }
@@ -1256,7 +1289,7 @@ export default function PrepaidUsers() {
               Prepaid Users
             </h1>
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: 0 }}>
-              Manage prepaid accounts, renewals, expiry, service status, and measured usage.
+              Manage prepaid access and sync router issues without interrupting valid online sessions. Sync results list only accounts confirmed active on MikroTik.
             </p>
           </div>
 
@@ -1359,6 +1392,9 @@ export default function PrepaidUsers() {
               {syncLogs.map((l, i) => <span key={i}>{l}</span>)}
             </div>
           </div>
+        )}
+        {syncUserStatuses !== null && (
+          <SyncUserStatusList users={syncUserStatuses} />
         )}
 
         {/* ── Compact filter toolbar ── */}
@@ -1513,12 +1549,12 @@ export default function PrepaidUsers() {
                   const online = customerIsOnline(user, onlineUsers);
                   const fup = user.fup_limit_mb ?? plan?.data_limit_mb ?? null;
                   const expiring = isExpiringSoon(user.expires_at);
-                  const expired  = isExpired(user.expires_at);
-                  const serviceStatus = expired || user.status === "expired" ? "offline" : online ? "online" : user.status;
+                   const expired  = isCustomerExpired(user);
+                   const serviceStatus = expired ? "expired" : online ? "online" : hasUnexpiredPaidAccess(user) ? "active" : user.status;
                   const usageBytes = customerUsageBytes(user, liveUsage);
                   return (
                     <tr key={user.id}
-                      className={expired || user.status === "expired" ? "prepaid-row-expired" : undefined}
+                       className={expired ? "prepaid-row-expired" : undefined}
                       style={{ transition: "background 0.1s" }}
                     >
                       <td style={TD}>

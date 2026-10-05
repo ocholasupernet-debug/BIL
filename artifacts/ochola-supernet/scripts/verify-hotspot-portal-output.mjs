@@ -24,6 +24,17 @@ assert.equal(
 );
 assert.match(output, /function applyPortalConfig\(/);
 assert.match(output, /function renderPlans\(/);
+assert.match(output, /function formatPortalDataAllowance\(/);
+assert.match(output, /function formatPortalSharedDevices\(/);
+assert.match(output, /data_limit_mb/);
+assert.match(output, /shared_users/);
+assert.match(output, /Unlimited data/);
+assert.match(output, /Limited ·/);
+assert.doesNotMatch(
+  output,
+  /p\.validity\+'\s+'\+p\.unit\+' Unlimited/,
+  "package cards must not label every plan as unlimited",
+);
 assert.match(output, /data-portal-layout="classic"/);
 assert.match(output, /\/api\/public\/hotspot-branding/);
 assert.doesNotMatch(

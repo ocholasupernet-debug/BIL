@@ -20,3 +20,14 @@ test("the standalone portal applies saved layouts using the shared stylesheet as
   assert.match(portalTemplate, /hotspot\/portal-layouts\.css/);
   assert.match(portalTemplate, /if\(document\.getElementById\("hotspot-portal-layout"\)\)return/);
 });
+
+test("the captive portal reconnects a valid device session and keeps payment handoff separate", () => {
+  assert.match(portalTemplate, /function attemptPortalAutoReconnect\(\)/);
+  assert.match(portalTemplate, /action:"login"/);
+  assert.match(portalTemplate, /router_id:PORTAL_ROUTER_ID/);
+  assert.match(portalTemplate, /port_id:PORTAL_PORT_ID/);
+  assert.match(portalTemplate, /data\.connected===true/);
+  assert.match(portalTemplate, /window\.addEventListener\("online",retryPortalAutoReconnectOnReturn\)/);
+  assert.match(portalTemplate, /if\(!portalPaidHandoffStarted\)attemptPortalAutoReconnect\(\)/);
+  assert.match(portalTemplate, /data\.status==="expired"\|\|data\.status==="depleted"/);
+});

@@ -292,6 +292,9 @@ test("signed reseller portal requests stay within their assigned service", async
     recordRouterOperation("connectUser", { username: options.user, server: options.server });
     return true;
   };
+  hotspotPaymentOperations.disconnectHotspotActiveUser = async (_credentials, username) => {
+    recordRouterOperation("disconnectUser", { username });
+  };
 
   globalThis.fetch = async (input, init) => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
@@ -712,6 +715,7 @@ test("signed reseller portal requests stay within their assigned service", async
       assert.equal(body.ok, true);
       assert.equal(body.credentials?.username, assignedCustomer.username);
       assert.equal(body.connected, true);
+      assert.deepEqual(routerOperations.filter(row => row.name === "disconnectUser"), []);
       assertAssignedRouterOperations();
     } finally {
       includeRouterFixture = false;
@@ -745,6 +749,11 @@ test("signed reseller portal requests stay within their assigned service", async
       assert.equal(body.portal_login_handoff, true);
       assert.equal(body.credentials?.username, assignedCustomer.username);
       assert.deepEqual(routerOperations.filter(row => row.name === "connectUser"), []);
+      assert.deepEqual(routerOperations.filter(row => row.name === "disconnectUser"), []);
+      const expiryUpdateIndex = routerOperations.findIndex(row => row.name === "scheduleExpiry");
+      const accountUpdateIndex = routerOperations.findIndex(row => row.name === "upsertUser");
+      assert.ok(expiryUpdateIndex >= 0 && accountUpdateIndex >= 0 && expiryUpdateIndex < accountUpdateIndex,
+        "extend expiry before updating the paid RouterOS account");
       assert.deepEqual(routerOperations.filter(row => row.name === "ensurePool"), [{
         name: "ensurePool",
         server: "HS_RS19_VLAN143",
@@ -857,7 +866,11 @@ test("signed reseller portal requests stay within their assigned service", async
 
   await t.test("manual receipt reconnect refuses an expired hotspot package", async () => {
     transactions = [{ ...assignedTransaction }];
-    customers = [{ ...assignedCustomer, status: "expired" }];
+    customers = [{
+      ...assignedCustomer,
+      status: "expired",
+      expires_at: new Date(Date.now() - 60_000).toISOString(),
+    }];
     routerOperations.length = 0;
     clearRequests();
     const expired = await request("/api/mpesa/verify", {
@@ -869,7 +882,7 @@ test("signed reseller portal requests stay within their assigned service", async
       },
     });
     assert.equal(expired.status, 409);
-    assert.match((await expired.json() as { error: string }).error, /package has expired/i);
+    assert.match((await expired.json() as { error: string }).error, /package.*expired/i);
     assert.deepEqual(routerOperations, []);
   });
 

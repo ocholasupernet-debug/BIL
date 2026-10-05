@@ -144,7 +144,7 @@ function callbackFixture(overrides = {}) {
     tx: {
       id: 31, admin_id: 4, customer_id: 22, plan_id: 9, amount: 1200,
       payment_method: "mpesa", payment_phone: "0723456789", mac_address: null,
-      status: "pending",
+      reference: "ws_CO_12345", mpesa_receipt: null, status: "pending",
     },
     customer: { status: "expired", plan_id: 7, expires_at: "2026-08-01T00:00:00.000Z", wallet_balance: 0 },
     routerEnabled: false,
@@ -156,6 +156,11 @@ function callbackFixture(overrides = {}) {
   };
   const deps = {
     selectPending: async () => state.tx?.status === "pending" ? [state.tx] : [],
+    saveReceipt: async (transactionId, checkoutId, receipt) => {
+      if (state.tx?.id !== transactionId || state.tx.reference !== checkoutId || state.tx.status !== "pending") return false;
+      state.tx.mpesa_receipt = receipt;
+      return true;
+    },
     getSettings: async () => ({
       consumerKey: "staging-key", consumerSecret: "staging-secret",
       shortcode: "174379", passkey: "staging-passkey",
@@ -199,7 +204,7 @@ function callbackFixture(overrides = {}) {
   return { state, deps };
 }
 
-function callbackBody(resultCode = 0, checkoutId = "ws_CO_12345") {
+function callbackBody(resultCode = 0, checkoutId = "ws_CO_12345", receipt = "UJ5QQ8VB9M") {
   return {
     Body: {
       stkCallback: {
@@ -207,6 +212,7 @@ function callbackBody(resultCode = 0, checkoutId = "ws_CO_12345") {
         CheckoutRequestID: checkoutId,
         ResultCode: resultCode,
         ResultDesc: resultCode === 0 ? "Success" : "The request was cancelled by the user",
+        ...(receipt ? { CallbackMetadata: { Item: [{ Name: "MpesaReceiptNumber", Value: receipt }] } } : {}),
       },
     },
   };
@@ -292,6 +298,30 @@ test("a verified successful callback renews PPPoE access without hotspot wallet 
   assert.equal(state.routerEnabled, true);
   assert.equal(state.accessCalls, 1);
   assert.equal(state.settleCalls, 1);
+  assert.equal(state.tx.mpesa_receipt, "UJ5QQ8VB9M");
+});
+
+test("a successful callback without a valid M-Pesa receipt remains pending", async () => {
+  const { state, deps } = callbackFixture();
+  const settled = await processMpesaCallback(callbackBody(0, "ws_CO_12345", "ws_CO_12345"), deps);
+
+  assert.equal(settled, false);
+  assert.equal(state.tx.status, "pending");
+  assert.equal(state.tx.mpesa_receipt, null);
+  assert.equal(state.accessCalls, 0);
+  assert.equal(state.settleCalls, 0);
+});
+
+test("a successful callback remains pending if its verified receipt cannot be stored", async () => {
+  const { state, deps } = callbackFixture();
+  deps.saveReceipt = async () => false;
+  const settled = await processMpesaCallback(callbackBody(), deps);
+
+  assert.equal(settled, false);
+  assert.equal(state.tx.status, "pending");
+  assert.equal(state.tx.mpesa_receipt, null);
+  assert.equal(state.accessCalls, 0);
+  assert.equal(state.settleCalls, 0);
 });
 
 test("failed provider callbacks settle as failed without changing customer or router state", async () => {
@@ -325,7 +355,7 @@ test("a delayed callback can be retried after local checkout reconciliation", as
   state.tx = {
     id: 31, admin_id: 4, customer_id: 22, plan_id: 9, amount: 1200,
     payment_method: "mpesa", payment_phone: "0723456789", mac_address: null,
-    status: "pending",
+    reference: "ws_CO_12345", mpesa_receipt: null, status: "pending",
   };
   assert.equal(await processMpesaCallback(callbackBody(), deps), true);
   assert.equal(state.tx.status, "completed");

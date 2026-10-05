@@ -484,6 +484,7 @@ var COLORS=[
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="";
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
+  var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalPaidLoginHandoff=false;
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var ROUTER_NAS_IDENTIFIER="$(identity)";
 var ROUTER_HOTSPOT_SERVER_NAME="$(server-name)";
@@ -709,6 +710,68 @@ function checkPortalExpiryOnLanding(){
     notice.hidden=false;
   }).catch(function(){});
 }
+function schedulePortalAutoReconnect(delay){
+  if(portalAutoReconnectDone||portalAutoReconnectAttempts>=5)return;
+  if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
+  portalAutoReconnectTimer=setTimeout(function(){
+    portalAutoReconnectTimer=0;
+    attemptPortalAutoReconnect();
+  },delay);
+}
+function attemptPortalAutoReconnect(){
+  if(PORTAL_PREVIEW_ONLY||portalPaidLoginHandoff||portalAutoReconnectDone||portalAutoReconnectBusy
+    ||PORTAL_ADMIN_ID<1||!DEVICE_MAC||PORTAL_QUERY.get("page")==="troubleshoot")return;
+  portalAutoReconnectBusy=true;
+  portalAutoReconnectAttempts+=1;
+  fetch(apiUrl("/api/customers/hotspot-troubleshoot"),{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      adminId:PORTAL_ADMIN_ID,
+      action:"login",
+      mac_address:DEVICE_MAC,
+      ...(DEVICE_IP?{client_ip:DEVICE_IP}:{}),
+      ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+      ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})
+    })
+  }).then(function(response){
+    return response.json().then(function(data){return{statusCode:response.status,data:data||{}};});
+  }).then(function(result){
+    portalAutoReconnectBusy=false;
+    var data=result.data||{};
+    if(data.connected===true){
+      portalAutoReconnectDone=true;
+      if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
+      portalAutoReconnectTimer=0;
+      return;
+    }
+    if(data.status==="expired"||data.status==="depleted")return;
+    if(portalAutoReconnectAttempts<5){
+      var retryable=data.retryable===true||result.statusCode===409||result.statusCode>=500
+        ||data.status==="active"||data.status==="unavailable"||data.status==="not_found";
+      if(retryable)schedulePortalAutoReconnect([700,1800,4000,8000][portalAutoReconnectAttempts-1]||8000);
+    }
+  }).catch(function(){
+    portalAutoReconnectBusy=false;
+    if(portalAutoReconnectAttempts<5){
+      schedulePortalAutoReconnect([700,1800,4000,8000][portalAutoReconnectAttempts-1]||8000);
+    }
+  });
+}
+function retryPortalAutoReconnectOnReturn(){
+  if(portalAutoReconnectDone||portalPaidLoginHandoff||portalAutoReconnectBusy)return;
+  var now=Date.now();
+  if(now-portalAutoReconnectEventAt<5000)return;
+  portalAutoReconnectEventAt=now;
+  portalAutoReconnectAttempts=0;
+  if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
+  portalAutoReconnectTimer=0;
+  attemptPortalAutoReconnect();
+}
+window.addEventListener("online",retryPortalAutoReconnectOnReturn);
+document.addEventListener("visibilitychange",function(){
+  if(document.visibilityState==="visible")retryPortalAutoReconnectOnReturn();
+});
 function safePublicApiBase(value){
   try{
     var url=new URL(String(value||""));
@@ -740,14 +803,52 @@ function applyPortalBackground(value){
 function normalisePlanList(value){
   if(!Array.isArray(value))return [];
   return value.map(function(p){
+    var dataLimitMb=Number(p&&p.data_limit_mb);
+    var rawPolicy=String(p&&(p.data_cap_mode||p.fup_policy||p.fup_mode||"")||"").trim().toLowerCase();
+    var dataCapMode=["throttle","reduced_speed","reduced-speed","safaricom","fair_use","fair-use"].indexOf(rawPolicy)>=0?"throttle":"disconnect";
+    var rawSpeedDown=Number(p&&(p.fup_speed_down||p.throttle_speed_down||p.speed_after_limit_down||p.reduced_speed_down));
+    var rawSpeedUp=Number(p&&(p.fup_speed_up||p.throttle_speed_up||p.speed_after_limit_up||p.reduced_speed_up));
+    var rawSharedUsers=Number(p&&(p.shared_users!=null?p.shared_users:p.sharedUsers));
     return {
       id:Number(p&&p.id)||0,
       name:typeof(p&&p.name)==="string"?p.name:"",
       price:Number(p&&p.price)||0,
       validity:Number(p&&p.validity)||0,
-      unit:typeof(p&&p.validity_unit)==="string"?p.validity_unit:"Days"
+      unit:typeof(p&&p.validity_unit)==="string"?p.validity_unit:"Days",
+      data_limit_mb:Number.isFinite(dataLimitMb)&&dataLimitMb>0?dataLimitMb:null,
+      data_cap_mode:dataCapMode,
+      fup_speed_down:Number.isFinite(rawSpeedDown)&&rawSpeedDown>0?rawSpeedDown:null,
+      fup_speed_up:Number.isFinite(rawSpeedUp)&&rawSpeedUp>0?rawSpeedUp:null,
+      shared_users:Number.isFinite(rawSharedUsers)&&rawSharedUsers>=1?Math.floor(rawSharedUsers):1
     };
   }).filter(function(p){return p.id>0&&p.name;});
+}
+function formatPortalSpeed(value){
+  var speed=Number(value);
+  if(!Number.isFinite(speed)||speed<=0)return "";
+  var amount=speed>=1000?speed/1000:speed;
+  var rounded=Math.round(amount*100)/100;
+  return String(rounded)+(speed>=1000?" Gbps":" Mbps");
+}
+function formatPortalDataAllowance(plan){
+  var limitMb=Number(plan&&plan.data_limit_mb);
+  if(!Number.isFinite(limitMb)||limitMb<=0)return "Unlimited data";
+  var amountValue=limitMb>=1000000?limitMb/1000000:limitMb>=1000?limitMb/1000:limitMb;
+  var amount=Math.round(amountValue*100)/100;
+  var unit=limitMb>=1000000?" TB":limitMb>=1000?" GB":" MB";
+  var policy=String(plan.data_cap_mode||plan.fup_policy||"").trim().toLowerCase();
+  var throttleDown=Number(plan.fup_speed_down);
+  if(policy==="throttle"&&Number.isFinite(throttleDown)&&throttleDown>0){
+    var throttleUp=Number(plan.fup_speed_up);
+    var upload=Number.isFinite(throttleUp)&&throttleUp>0?" / "+formatPortalSpeed(throttleUp):"";
+    return "Limited · "+amount+unit+" cap · then "+formatPortalSpeed(throttleDown)+upload;
+  }
+  return "Limited · "+amount+unit+" cap · disconnects at the cap";
+}
+function formatPortalSharedDevices(value){
+  var parsed=Number(value);
+  var devices=Number.isFinite(parsed)&&parsed>=1?Math.floor(parsed):1;
+  return devices===1?"1 device":"Up to "+devices+" devices";
 }
 /* Payment availability gates checkout, not whether customers can view packages. */
 function shouldHidePackageSection(maintenanceMode,allowPackagesDuringMaintenance){
@@ -981,7 +1082,10 @@ function loadPaymentStatus(){
  /* ── Load and keep hotspot plans fresh ── */
  function planSignature(plans){
    return plans.map(function(plan){
-     return [plan.id,plan.name,plan.price,plan.validity,plan.unit].join("~");
+     return [
+       plan.id,plan.name,plan.price,plan.validity,plan.unit,plan.data_limit_mb,
+       plan.data_cap_mode,plan.fup_speed_down,plan.fup_speed_up,plan.shared_users
+     ].join("~");
    }).join("|");
  }
  function hasDefaultPlanFallback(){
@@ -1091,6 +1195,8 @@ function renderPlans(preserveLoadingMarkup){
   }
   grid.innerHTML=PLANS.map(function(p,i){
     var c=COLORS[i%COLORS.length];
+    var dataAllowance=formatPortalDataAllowance(p);
+    var sharedDevices=formatPortalSharedDevices(p.shared_users);
     var checkoutAvailable=canStartPaymentCheckout();
     var checkoutLabel=checkoutAvailable
       ?PAYMENT_METHOD_READY?"Connect Now":"Try checkout"
@@ -1102,7 +1208,9 @@ function renderPlans(preserveLoadingMarkup){
       '<span style="display:inline-block;padding:.25rem .75rem;border-radius:9999px;font-size:.625rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:white;margin-bottom:1rem;background:'+c.badge+'">'+p.name+'</span>'+
       '<div style="font-size:2.375rem;font-weight:900;color:white;line-height:1;letter-spacing:-.03em">'+
       '<span style="font-size:.8125rem;font-weight:600;color:'+c.from+'">Ksh</span>&nbsp;'+p.price+'</div>'+
-      '<p style="font-size:.75rem;color:rgba(255,255,255,.5);margin-top:.625rem;font-weight:400">'+p.validity+' '+p.unit+' Unlimited</p>'+
+      '<p style="font-size:.75rem;color:rgba(255,255,255,.5);margin:.625rem 0 0;font-weight:400;line-height:1.4">'+p.validity+' '+p.unit+'</p>'+
+      '<p style="font-size:.75rem;color:rgba(255,255,255,.72);margin:.375rem 0 0;font-weight:600;line-height:1.4">'+dataAllowance+'</p>'+
+      '<p style="font-size:.75rem;color:rgba(255,255,255,.72);margin:.375rem 0 0;font-weight:600;line-height:1.4">'+sharedDevices+'</p>'+
       '</div>'+
         '<button type="button" class="plan-connect-button" data-plan-index="'+i+'" '+(checkoutAvailable?'':'disabled aria-disabled="true"')+' style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:'+(checkoutAvailable?'pointer':'not-allowed')+';opacity:'+(checkoutAvailable?'1':'.55')+';font-family:inherit;transition:opacity .15s" onmouseover="if(!this.disabled)this.style.opacity=\'.88\'" onmouseout="if(!this.disabled)this.style.opacity=\'1\'">'+
        checkoutLabel+'</button></div>';
@@ -1116,7 +1224,7 @@ function openModal(i){
   tvPurchase=false; tvDeviceName=""; tvDeviceRouterId=0; tvRememberDevice=false; tvDeviceSaveNotice="";
   selectedPlan=PLANS[i]; stkState="idle"; stkPhone="";
   document.getElementById("modalPlanName").textContent=selectedPlan.name;
-  document.getElementById("modalPlanDetails").textContent="Ksh "+selectedPlan.price+" · "+selectedPlan.validity+" "+selectedPlan.unit+" Unlimited";
+  document.getElementById("modalPlanDetails").textContent="Ksh "+selectedPlan.price+" · "+selectedPlan.validity+" "+selectedPlan.unit+" · "+formatPortalDataAllowance(selectedPlan)+" · "+formatPortalSharedDevices(selectedPlan.shared_users);
   renderModal();
   document.getElementById("stkModal").style.display="flex";
 }
@@ -1141,7 +1249,7 @@ function renderModal(){
        '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.</p>'+
       '</div>'+
       '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
-      '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX or 2547XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+stkPhone+'" />'+
+      '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+stkPhone+'" />'+
       '<div id="stkErrBox" style="display:none;margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>'+
       '<button onclick="sendStk()" '+((DEVICE_MAC||DEVICE_IP)&&PORTAL_ADMIN_ID>0?'':'disabled')+' class="btn btn-purple btn-full" style="font-size:.875rem;padding:.875rem;opacity:'+((DEVICE_MAC||DEVICE_IP)&&PORTAL_ADMIN_ID>0?'1':'.5')+'">'+
       'Send STK Push &mdash; Ksh '+(selectedPlan?selectedPlan.price:"")+
@@ -1530,7 +1638,7 @@ function sendStk(){
      '<label class="lbl" style="color:#6ee7b7">Package to purchase</label>'+
      '<select id="tvPlanId" class="inp" style="margin-bottom:1rem">'+planOptions+'</select>'+
      '<label class="lbl" style="color:#6ee7b7">Phone number</label>'+
-     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="07XXXXXXXX or 2547XXXXXXXX" />'+
+     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" />'+
      '<div id="tvError" style="display:'+(tvError?"block":"none")+';margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem">'+tvEsc(tvError)+'</div>'+
      '<div style="display:flex;gap:.625rem">'+
        '<button type="button" onclick="closeTvModal()" class="btn btn-full" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);box-shadow:none">Cancel</button>'+
@@ -1771,7 +1879,9 @@ function troubleshootConnection(){
        adminId:PORTAL_ADMIN_ID,
        action:action,
        mac_address:DEVICE_MAC,
-       ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+        ...(DEVICE_IP?{client_ip:DEVICE_IP}:{}),
+        ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+        ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})
      })
    }).then(function(response){
      return response.json().then(function(data){return{ok:response.ok,data:data||{}};});
@@ -1815,7 +1925,7 @@ function troubleshootConnection(){
 }
 function applyCredentialsFromHash(){
   var hash=(window.location.hash||"").replace(/^#/,"");
-  if(!hash)return;
+  if(!hash)return false;
   try{
     var params=new URLSearchParams(hash);
     if(applyPaidHotspotCredentials({
@@ -1823,8 +1933,11 @@ function applyCredentialsFromHash(){
       password:params.get("hotspot_password")||""
     })){
       if(window.history&&window.history.replaceState)window.history.replaceState(null,"",window.location.pathname+window.location.search);
+      portalPaidLoginHandoff=true;
+      return true;
     }
   }catch(e){}
+  return false;
 }
 
 /* ── MikroTik login ──
@@ -1906,11 +2019,18 @@ try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
 }
 loadPlans();
 bindPlanButtons();
-loadPortalTypography(loadPlans);
 renderPortalDeviceMac();
-applyCredentialsFromHash();
+var portalPaidHandoffStarted=applyCredentialsFromHash();
+loadPortalTypography(function(){
+  loadPlans();
+  checkPortalExpiryOnLanding();
+  if(!portalPaidHandoffStarted)attemptPortalAutoReconnect();
+});
 if(PORTAL_QUERY.get("page")==="troubleshoot")openTroubleshootModule();
-else checkPortalExpiryOnLanding();
+else{
+  checkPortalExpiryOnLanding();
+  if(!portalPaidHandoffStarted)attemptPortalAutoReconnect();
+}
 </script>
 </body>
 </html>
