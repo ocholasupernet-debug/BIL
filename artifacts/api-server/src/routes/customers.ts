@@ -59,6 +59,7 @@ import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.
 import {
   authorizedRoamingRouterIds,
   canPlanRoamToService,
+  hotspotRoamingUserServer,
   isDifferentHotspotService,
   sharedHotspotUsageAllowance,
   type HotspotRoamingRule,
@@ -2072,7 +2073,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
           name: username,
           password,
           profile: profileName,
-          server: hotspotServer ?? "all",
+          server: hotspotRoamingUserServer(plan.router_id, routerId, hotspotServer),
           ...(isCrossRouter ? { comment: roamingTag } : {}),
           expiresAt: customer.expires_at,
           enabled: customer.status === "active",

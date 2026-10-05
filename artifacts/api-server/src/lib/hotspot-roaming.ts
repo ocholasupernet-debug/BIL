@@ -31,6 +31,20 @@ export function isDifferentHotspotService(
   return Number(plan.router_id) !== target.routerId || !sameNullableId(plan.port_id, target.portId);
 }
 
+/**
+ * RouterOS stores one Hotspot server on each local user. A same-MikroTik roam
+ * must leave that user available to all servers; the login command still
+ * selects the specifically authorized destination server.
+ */
+export function hotspotRoamingUserServer(
+  sourceRouterId: number | null,
+  targetRouterId: number,
+  destinationServer: string | null | undefined,
+): string {
+  if (sourceRouterId !== null && Number(sourceRouterId) === Number(targetRouterId)) return "all";
+  return destinationServer?.trim() || "all";
+}
+
 /** A permission may be router-wide at either end, but never crosses tenants. */
 export function canPlanRoamToService(
   plan: HotspotRoamingPlan,

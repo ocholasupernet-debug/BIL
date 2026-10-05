@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   authorizedRoamingRouterIds,
   canPlanRoamToService,
+  hotspotRoamingUserServer,
   isDifferentHotspotService,
   sharedHotspotUsageAllowance,
   type HotspotRoamingRule,
@@ -66,6 +67,13 @@ test("same-router port changes still require destination provisioning", () => {
     { type: "hotspot", router_id: 1, port_id: 10 },
     { routerId: 2, portId: 10 },
   ), true);
+});
+
+test("same-MikroTik roaming users are server-neutral while cross-router users target the destination server", () => {
+  assert.equal(hotspotRoamingUserServer(1, 1, "hs-ssid-2"), "all");
+  assert.equal(hotspotRoamingUserServer(1, 2, "hs-ssid-2"), "hs-ssid-2");
+  assert.equal(hotspotRoamingUserServer(1, 2, undefined), "all");
+  assert.equal(hotspotRoamingUserServer(null, 2, "hs-ssid-2"), "hs-ssid-2");
 });
 
 test("usage scan includes the source and all enabled destination routers", () => {
