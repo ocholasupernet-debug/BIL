@@ -249,6 +249,7 @@ export interface DbTransaction {
   amount: number;
   payment_method: string;
   reference: string;
+  mpesa_receipt?: string | null;
   status: string;
   notes: string | null;
   created_at: string;

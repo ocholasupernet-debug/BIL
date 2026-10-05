@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { getCurrencySymbol } from "@/lib/utils";
+import { webhookEventDisplayId } from "@/lib/transaction-reference";
 import {
   Webhook, Copy, Check, RefreshCw, Loader2, CheckCircle2,
   XCircle, AlertTriangle, Clock, Globe, CreditCard, Zap,
@@ -19,6 +20,7 @@ interface WebhookEvent {
   phone?: string;
   error?: string;
   result?: Record<string, unknown>;
+  payload?: unknown;
   created_at: string;
 }
 
@@ -488,7 +490,7 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_phone      ON isp_webhook_events(p
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
-                      {["Time", "Gateway", "Status", "Reference", "Phone", "Amount", "Details"].map(h => (
+                      {["Time", "Gateway", "Status", "Receipt / reference", "Phone", "Amount", "Details"].map(h => (
                         <th key={h} style={{ padding: "10px 14px", fontSize: 11, fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.06em", background: "rgba(255,255,255,0.025)", borderBottom: "1px solid var(--isp-border)", textAlign: "left" }}>{h}</th>
                       ))}
                     </tr>
@@ -515,7 +517,7 @@ CREATE INDEX IF NOT EXISTS idx_webhook_events_phone      ON isp_webhook_events(p
                             </span>
                           </td>
                           <td style={{ padding: "10px 14px", fontSize: 11, fontFamily: "monospace", color: "var(--isp-text-muted)" }}>
-                            {ev.reference ? ev.reference.slice(0, 16) + (ev.reference.length > 16 ? "…" : "") : "—"}
+                            {webhookEventDisplayId(ev)}
                           </td>
                           <td style={{ padding: "10px 14px", fontSize: 11, fontFamily: "monospace", color: "var(--isp-text)" }}>
                             {ev.phone || "—"}

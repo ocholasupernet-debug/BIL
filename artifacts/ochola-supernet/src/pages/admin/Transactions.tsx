@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { ADMIN_ID, getAdminApiToken, type DbTransaction } from "@/lib/supabase";
 import { Search, Download, Loader2 } from "lucide-react";
 import { fmtMoney } from "@/lib/utils";
+import { transactionDisplayId } from "@/lib/transaction-reference";
 
 type ImmutableRevenueSummary = {
   incomeToday: number;
@@ -74,6 +75,8 @@ export default function Transactions() {
   const filtered = useMemo(() => {
     return transactions.filter(t => {
       const matchSearch = !searchTerm ||
+        transactionDisplayId(t).toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (t.mpesa_receipt ?? "").toLowerCase().includes(searchTerm.toLowerCase()) ||
         (t.reference ?? "").toLowerCase().includes(searchTerm.toLowerCase()) ||
         (t.notes ?? "").toLowerCase().includes(searchTerm.toLowerCase()) ||
         String(t.id).includes(searchTerm);
@@ -166,8 +169,8 @@ export default function Transactions() {
                   </tr>
                 ) : filtered.map((tx) => (
                   <tr key={tx.id} className="hover:bg-white/5 transition-colors">
-                    <td className="px-6 py-4 font-mono text-xs text-muted-foreground" title={tx.reference?.trim() || `#${tx.id}`}>
-                      {tx.reference?.trim() || `#${tx.id}`}
+                    <td className="px-6 py-4 font-mono text-xs text-muted-foreground" title={transactionDisplayId(tx)}>
+                      {transactionDisplayId(tx)}
                     </td>
                     <td className="px-6 py-4 font-bold text-emerald-400">{fmtKsh(tx.amount)}</td>
                     <td className="px-6 py-4">

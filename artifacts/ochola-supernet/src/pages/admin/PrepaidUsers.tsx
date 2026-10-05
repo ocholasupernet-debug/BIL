@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 import { fetchAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
+import { transactionDisplayId } from "@/lib/transaction-reference";
 
 const PAGE_SIZE = 20;
 
@@ -175,7 +176,7 @@ function purchaseUsername(user: Customer) {
 function paymentLabel(payment?: Payment) {
   if (!payment) return "—";
   const method = payment.payment_method.toLowerCase();
-  const transactionId = payment.mpesa_receipt || payment.reference || String(payment.id);
+  const transactionId = transactionDisplayId(payment);
   const notes = (payment.notes ?? "").toLowerCase();
   if (method.includes("till") || notes.includes("till")) return `MpesatillStk-${transactionId}`;
   if (method.includes("paybill") || notes.includes("paybill")) return `MpesapaybillStk-${transactionId}`;

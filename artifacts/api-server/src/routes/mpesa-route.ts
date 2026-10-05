@@ -970,7 +970,12 @@ function extractMpesaReceipt(message: unknown): string {
   const text = message.trim();
   const match = text.match(/\b([A-Z][A-Z0-9]{8,11})\s+Confirmed\b/i)
     ?? text.match(/\b(?:transaction|receipt|code)\s*(?:number|id|no\.?)?\s*[:#-]?\s*([A-Z][A-Z0-9]{8,11})\b/i);
-  return match?.[1]?.toUpperCase() ?? "";
+  return normalizeMpesaReceipt(match?.[1]) ?? "";
+}
+
+function normalizeMpesaReceipt(value: unknown): string | null {
+  const receipt = String(value ?? "").trim().toUpperCase();
+  return /^[A-Z][A-Z0-9]{8,11}$/.test(receipt) ? receipt : null;
 }
 
 function allowStkRequest(req: Request, adminId: number, phone: string): boolean {
@@ -1111,6 +1116,7 @@ async function reconcileInitiatedStkRequest(
 
 export interface MpesaCallbackDependencies {
   selectPending: (filter: string) => Promise<PendingMpesaTransaction[]>;
+  saveReceipt: (transactionId: number, checkoutId: string, receipt: string) => Promise<boolean>;
   getSettings: (transaction?: PendingMpesaTransaction) => Promise<MpesaSettings>;
   verifyStk: (settings: MpesaSettings, checkoutId: string) => Promise<DarajaStkQuery>;
   reactivatePppoeAccess: (opts: {
@@ -1146,6 +1152,14 @@ export async function processMpesaCallback(
 ): Promise<boolean> {
   const dependencies: MpesaCallbackDependencies = {
     selectPending: filter => sbSelect<PendingMpesaTransaction>("isp_transactions", filter),
+    saveReceipt: async (transactionId, checkoutId, receipt) => {
+      const saved = await sbUpdateStrict<{ mpesa_receipt: string }>(
+        "isp_transactions",
+        `id=eq.${transactionId}&reference=eq.${encodeURIComponent(checkoutId)}&status=eq.pending`,
+        { mpesa_receipt: receipt },
+      );
+      return saved.length === 1 && saved[0].mpesa_receipt === receipt;
+    },
     getSettings: async transaction => {
       const metadata = transaction?.payment_metadata;
       const fields = metadata && typeof metadata === "object" && !Array.isArray(metadata)
@@ -1188,9 +1202,9 @@ export async function processMpesaCallback(
     | { Item?: Array<{ Name?: string; Value?: unknown }> }
     | undefined;
   const callbackItems = callbackMetadata?.Item ?? [];
-  const mpesaReceipt = String(
-    callbackItems.find(item => item.Name === "MpesaReceiptNumber")?.Value ?? "",
-  ).trim().toUpperCase();
+  const mpesaReceipt = normalizeMpesaReceipt(
+    callbackItems.find(item => item.Name === "MpesaReceiptNumber")?.Value,
+  );
 
   const pendingRows = await dependencies.selectPending(
     `reference=eq.${encodeURIComponent(checkoutId)}&status=eq.pending&select=id,admin_id,customer_id,plan_id,reseller_id,reseller_port_id,amount,payment_method,payment_phone,mac_address,payment_metadata&limit=1`,
@@ -1210,15 +1224,19 @@ export async function processMpesaCallback(
   }
 
   const isSuccessful = verification.resultCode === 0;
+  if (isSuccessful && !mpesaReceipt) {
+    logger.warn({ checkoutId }, "[mpesa/callback] Verified success is missing a valid M-Pesa receipt; leaving transaction pending");
+    return false;
+  }
   if (isSuccessful && mpesaReceipt) {
     try {
-      await sbUpdate(
-        "isp_transactions",
-        `id=eq.${transaction.id}&status=eq.pending`,
-        { mpesa_receipt: mpesaReceipt },
-      );
+      if (!await dependencies.saveReceipt(transaction.id, checkoutId, mpesaReceipt)) {
+        logger.warn({ checkoutId, transactionId: transaction.id }, "[mpesa/callback] Could not persist the verified M-Pesa receipt; leaving transaction pending");
+        return false;
+      }
     } catch (error) {
-      logger.warn({ err: error, checkoutId }, "[mpesa/callback] Could not save the verified M-Pesa receipt");
+      logger.warn({ err: error, checkoutId, transactionId: transaction.id }, "[mpesa/callback] Could not save the verified M-Pesa receipt; leaving transaction pending");
+      return false;
     }
   }
   let rollbackPppoeAccess: (() => Promise<void>) | undefined;

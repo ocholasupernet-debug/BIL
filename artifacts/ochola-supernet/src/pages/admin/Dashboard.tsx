@@ -41,6 +41,7 @@ import {
 } from "@/lib/supabase";
 import { fmtMoney, getCurrencySymbol } from "@/lib/utils";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
+import { transactionDisplayId } from "@/lib/transaction-reference";
 
 type LiveCounts = { hotspot: number; pppoe: number; vlan: number | null };
 type RevenueSummary = {
@@ -969,8 +970,8 @@ export default function Dashboard() {
                   <tr><td colSpan={5}><div className="dashboard-empty dashboard-empty--center"><ReceiptText size={19} /><span>No transactions yet.</span></div></td></tr>
                 ) : recentTxs.map((transaction) => (
                   <tr key={transaction.id}>
-                    <td className="table-mono" title={transaction.reference?.trim() || `#${transaction.id}`}>
-                      {transaction.reference?.trim() || `#${transaction.id}`}
+                    <td className="table-mono" title={transactionDisplayId(transaction)}>
+                      {transactionDisplayId(transaction)}
                     </td>
                     <td className="table-amount">{getCurrencySymbol()} {transaction.amount.toLocaleString()}</td>
                     <td><span className={`isp-badge ${transaction.payment_method === "mpesa" ? "isp-badge-blue" : "isp-badge-amber"}`}>{transaction.payment_method.toUpperCase()}</span></td>
