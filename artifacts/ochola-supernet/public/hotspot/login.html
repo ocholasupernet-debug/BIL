@@ -1204,7 +1204,7 @@ function renderModal(){
        '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.</p>'+
       '</div>'+
       '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
-      '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX or 2547XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+stkPhone+'" />'+
+      '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+stkPhone+'" />'+
       '<div id="stkErrBox" style="display:none;margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>'+
       '<button onclick="sendStk()" '+((DEVICE_MAC||DEVICE_IP)&&PORTAL_ADMIN_ID>0?'':'disabled')+' class="btn btn-purple btn-full" style="font-size:.875rem;padding:.875rem;opacity:'+((DEVICE_MAC||DEVICE_IP)&&PORTAL_ADMIN_ID>0?'1':'.5')+'">'+
       'Send STK Push &mdash; Ksh '+(selectedPlan?selectedPlan.price:"")+
@@ -1593,7 +1593,7 @@ function sendStk(){
      '<label class="lbl" style="color:#6ee7b7">Package to purchase</label>'+
      '<select id="tvPlanId" class="inp" style="margin-bottom:1rem">'+planOptions+'</select>'+
      '<label class="lbl" style="color:#6ee7b7">Phone number</label>'+
-     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="07XXXXXXXX or 2547XXXXXXXX" />'+
+     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" />'+
      '<div id="tvError" style="display:'+(tvError?"block":"none")+';margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem">'+tvEsc(tvError)+'</div>'+
      '<div style="display:flex;gap:.625rem">'+
        '<button type="button" onclick="closeTvModal()" class="btn btn-full" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);box-shadow:none">Cancel</button>'+
