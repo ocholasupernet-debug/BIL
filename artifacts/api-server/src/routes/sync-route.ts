@@ -21,6 +21,7 @@ import {
   guardRouterOSConnection,
   RouterOSConnectionLostError,
 } from "../lib/routeros-connection";
+import { planBridgePortAddition } from "../lib/bridge-port-assignment.js";
 import { compareBridgePortMembership } from "../lib/bridge-port-membership.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 
@@ -1822,12 +1823,46 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
    Body: { host, username, password, bridge, addPorts[], removePorts[], desiredPorts[] }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
-  const { host, username, password, bridge, addPorts = [], removePorts = [], desiredPorts, bridgeIp, routerId } = req.body as {
+  const { host, username, password, bridge, addPorts = [], removePorts = [], desiredPorts, bridgeIp, routerId, movePorts: requestedMoves } = req.body as {
     host: string; username: string; password: string;
     bridge: string; addPorts: string[]; removePorts: string[];
     desiredPorts?: string[];
+    movePorts?: unknown;
     bridgeIp?: string; routerId?: number;
   };
+  const validPortList = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.every(port =>
+      typeof port === "string" && port.trim().length > 0 && port.length <= 64 &&
+      !/[\u0000-\u001f\u007f]/u.test(port),
+    );
+  if (!validPortList(addPorts) || !validPortList(removePorts) ||
+      (desiredPorts !== undefined && !validPortList(desiredPorts))) {
+    res.status(400).json({ ok: false, logs: [], error: "Bridge port lists must contain valid interface names." });
+    return;
+  }
+  const confirmedMoves = new Map<string, string>();
+  if (requestedMoves !== undefined) {
+    if (!Array.isArray(requestedMoves)) {
+      res.status(400).json({ ok: false, logs: [], error: "Move confirmations must be a list of interface/source-bridge pairs." });
+      return;
+    }
+    for (const item of requestedMoves) {
+      if (!item || typeof item !== "object" ||
+          typeof (item as { interface?: unknown }).interface !== "string" ||
+          typeof (item as { fromBridge?: unknown }).fromBridge !== "string") {
+        res.status(400).json({ ok: false, logs: [], error: "Each move confirmation must include an interface and source bridge." });
+        return;
+      }
+      const iface = (item as { interface: string }).interface;
+      const fromBridge = (item as { fromBridge: string }).fromBridge;
+      if (!validPortList([iface]) || !validPortList([fromBridge]) ||
+          !addPorts.includes(iface) || fromBridge === bridge || confirmedMoves.has(iface)) {
+        res.status(400).json({ ok: false, logs: [], error: "A move confirmation does not match a requested bridge addition." });
+        return;
+      }
+      confirmedMoves.set(iface, fromBridge);
+    }
+  }
 
   /* Keep the request field for compatibility, but never use the router's
      192.168.88.x LAN gateway as a tunnel endpoint. */
@@ -1903,15 +1938,33 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
     /* Add ports */
     for (const iface of mutationFailure ? [] : addPorts) {
       try {
-        /* Check not already a member */
-        const existing = await conn.write([
+        /* Read all current membership before changing an interface. A move
+           is accepted only when the UI confirmed this exact source bridge. */
+        const membershipRows = await conn.write([
           "/interface/bridge/port/print",
-          `?bridge=${bridge}`,
           `?interface=${iface}`,
         ]);
-        if (Array.isArray(existing) && existing.length > 0) {
+        if (!Array.isArray(membershipRows)) {
+          throw new Error(`Could not verify current bridge membership for ${iface}.`);
+        }
+        const memberships = membershipRows.map(row => ({
+          interface: String((row as Record<string, unknown>).interface ?? ""),
+          bridge: String((row as Record<string, unknown>).bridge ?? ""),
+          id: String((row as Record<string, unknown>)[".id"] ?? ""),
+        }));
+        const additionPlan = planBridgePortAddition(
+          iface,
+          bridge,
+          memberships,
+          confirmedMoves.get(iface),
+        );
+        if (additionPlan.action === "skip") {
           log(`  ℹ ${iface} already in ${bridge} — skipped`);
           continue;
+        }
+        if (additionPlan.action === "move") {
+          await conn.write(["/interface/bridge/port/remove", `=.id=${additionPlan.portId}`]);
+          log(`✓ Removed ${iface} from ${additionPlan.fromBridge} after explicit move confirmation`);
         }
         await conn.write([
           "/interface/bridge/port/add",

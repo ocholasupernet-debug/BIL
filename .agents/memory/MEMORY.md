@@ -107,3 +107,5 @@
 - [Tenant-facing role copy](tenant-facing-role-copy.md) — Keep platform-role disclosures out of ISP/reseller-facing copy while preserving internal authorization and privileged-only surfaces.
 - [Password minimum policy](password-minimum-policy.md) — Require six characters when setting passwords; preserve stronger minima and legacy login/sync compatibility.
 - [Guest portal brand separation](guest-portal-brand-separation.md) — Keep customer hotspot access visually independent from the ISP billing product while retaining explicit tenant branding.
+- [Open WLAN security](wireless-open-security.md) — “Passwordless” means an explicitly open Wi-Fi network per SSID; it does not remove app/admin authentication.
+- [Admin-confirmed bridge moves](admin-confirmed-bridge-moves.md) — Show and recheck the live source bridge; move an interface only after admin confirmation.

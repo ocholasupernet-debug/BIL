@@ -3845,6 +3845,7 @@ export interface WirelessSecurityProfile {
   name: string;
   wpa2PreSharedKey: string;
   authentication: string;
+  mode: string;
 }
 
 export async function fetchWireless(
@@ -3889,8 +3890,9 @@ export async function fetchWireless(
     const profiles: WirelessSecurityProfile[] = (Array.isArray(profileRows) ? profileRows : []).map(r => ({
       id:               r[".id"]                  ?? "",
       name:             r.name                    ?? "",
-      wpa2PreSharedKey: r["wpa2-pre-shared-key"]  ?? "",
-      authentication:   r["authentication-types"]  ?? "",
+      wpa2PreSharedKey: r["wpa2-pre-shared-key"]   ?? "",
+      authentication:   r["authentication-types"] ?? "",
+      mode:             r.mode                    ?? "",
     }));
 
     return { interfaces, profiles };
@@ -3902,7 +3904,8 @@ export interface WirelessCreateParams {
   name: string;
   ssid: string;
   masterInterfaceId: string;
-  password: string;
+  password?: string;
+  securityMode?: "open" | "wpa2";
   disabled?: boolean;
 }
 
@@ -3923,6 +3926,16 @@ export async function createWirelessVirtualAp(
   params: WirelessCreateParams,
 ): Promise<void> {
   if (!Number.isSafeInteger(params.routerId) || params.routerId <= 0) throw new Error("Invalid router id.");
+  const securityMode = params.securityMode ?? "wpa2";
+  if (securityMode === "open" && params.password !== undefined) {
+    throw new Error("Do not supply a Wi-Fi password for an open network.");
+  }
+  if (securityMode === "wpa2" &&
+      (params.password === undefined ||
+       Buffer.byteLength(params.password, "utf8") < 8 ||
+       Buffer.byteLength(params.password, "utf8") > 63)) {
+    throw new Error("WPA2 passwords must be 8 to 63 bytes.");
+  }
   try {
     await withConn(creds, async (conn) => {
       const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
@@ -3938,11 +3951,16 @@ export async function createWirelessVirtualAp(
         throw new Error("A wireless interface with that name already exists.");
       }
       const comment = wirelessAppComment(params.routerId);
-      await withTimeout(conn.write([
+      const profileCommand = [
         "/interface/wireless/security-profiles/add",
-        `=name=${profileName}`, "=mode=dynamic-keys", "=authentication-types=wpa2-psk",
-        `=wpa2-pre-shared-key=${params.password}`, `=comment=${comment}`,
-      ]), ms);
+        `=name=${profileName}`,
+        `=mode=${securityMode === "open" ? "none" : "dynamic-keys"}`,
+        `=comment=${comment}`,
+      ];
+      if (securityMode === "wpa2") {
+        profileCommand.push("=authentication-types=wpa2-psk", `=wpa2-pre-shared-key=${params.password}`);
+      }
+      await withTimeout(conn.write(profileCommand), ms);
       try {
         await withTimeout(conn.write([
           "/interface/wireless/add", `=name=${params.name}`, `=master-interface=${masterName}`,
@@ -3956,9 +3974,28 @@ export async function createWirelessVirtualAp(
             row["security-profile"] === profileName)) {
           throw new Error("Post-write verification failed: virtual wireless interface was not created.");
         }
+        const createdProfiles = await withTimeout(
+          conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]),
+          ms,
+        ) as Record<string, string>[];
+        const createdProfile = createdProfiles.find(row => row.name === profileName);
+        if (!createdProfile ||
+            createdProfile.mode !== (securityMode === "open" ? "none" : "dynamic-keys") ||
+            (securityMode === "wpa2" && createdProfile["wpa2-pre-shared-key"] !== params.password)) {
+          throw new Error("Post-write verification failed: wireless security profile did not persist.");
+        }
       } catch (error) {
-        const profiles = await withTimeout(conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]), ms) as Record<string, string>[];
-        if (profiles[0]?.[".id"]) await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${profiles[0][".id"]}`]), ms);
+        /* A write error may mean RouterOS applied the interface before the
+           connection failed. Re-read before attempting cleanup. */
+        const [profiles, currentInterfaces] = await Promise.all([
+          withTimeout(conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]), ms) as Promise<Record<string, string>[]>,
+          withTimeout(conn.write(["/interface/wireless/print"]), ms) as Promise<Record<string, string>[]>,
+        ]);
+        const created = profiles.find(row => row.name === profileName);
+        const inUse = currentInterfaces.some(row => row["security-profile"] === profileName);
+        if (created?.[".id"] && !inUse) {
+          await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${created[".id"]}`]), ms);
+        }
         throw error;
       }
     });
@@ -3968,9 +4005,16 @@ export async function createWirelessVirtualAp(
 export async function patchWirelessInterface(
   creds: RouterCredentials,
   routerId: number,
-  params: { interfaceId: string; ssid?: string; password?: string; disabled?: boolean },
+  params: { interfaceId: string; ssid?: string; password?: string; securityMode?: "open" | "wpa2"; disabled?: boolean },
 ): Promise<void> {
   if (!Number.isSafeInteger(routerId) || routerId <= 0) throw new Error("Invalid router id.");
+  if (params.password !== undefined &&
+      (Buffer.byteLength(params.password, "utf8") < 8 || Buffer.byteLength(params.password, "utf8") > 63)) {
+    throw new Error("WPA2 passwords must be 8 to 63 bytes.");
+  }
+  if (params.securityMode === "open" && params.password !== undefined) {
+    throw new Error("Do not supply a Wi-Fi password when switching to an open network.");
+  }
   try {
     await withConn(creds, async (conn) => {
       const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
@@ -3978,45 +4022,82 @@ export async function patchWirelessInterface(
       const current = rows.find(row => row[".id"] === params.interfaceId);
       if (!current) throw new Error("Wireless interface was not found.");
       const oldProfile = String(current["security-profile"] ?? "");
+      const requestedSecurityMode = params.securityMode ?? (params.password !== undefined ? "wpa2" : undefined);
+      let selectedProfile: string | undefined;
+      let newProfile: string | undefined;
+
+      if (requestedSecurityMode) {
+        const profileRows = await withTimeout(
+          conn.write(["/interface/wireless/security-profiles/print"]),
+          ms,
+        ) as Record<string, string>[];
+        const currentProfile = profileRows.find(profile => profile.name === oldProfile);
+        const currentIsOpen = currentProfile?.mode === "none";
+        const needsNewProfile =
+          (requestedSecurityMode === "open" && !currentIsOpen) ||
+          (requestedSecurityMode === "wpa2" &&
+            (currentIsOpen || params.password !== undefined));
+
+        if (requestedSecurityMode === "wpa2" && currentIsOpen && params.password === undefined) {
+          throw new Error("Provide a WPA2 password before enabling Wi-Fi security.");
+        }
+        if (requestedSecurityMode === "wpa2" && !currentIsOpen &&
+            params.password === undefined && !currentProfile) {
+          throw new Error("The current Wi-Fi security profile could not be verified; provide a WPA2 password.");
+        }
+
+        if (needsNewProfile) {
+          if (requestedSecurityMode === "wpa2" && params.password === undefined) {
+            throw new Error("Provide a WPA2 password before enabling Wi-Fi security.");
+          }
+          const profileName = `ochola-wlan-${routerId}-${randomBytes(4).toString("hex")}`;
+          const comment = wirelessAppComment(routerId);
+          const profileCommand = [
+            "/interface/wireless/security-profiles/add",
+            `=name=${profileName}`,
+            `=mode=${requestedSecurityMode === "open" ? "none" : "dynamic-keys"}`,
+            `=comment=${comment}`,
+          ];
+          if (requestedSecurityMode === "wpa2") {
+            profileCommand.push("=authentication-types=wpa2-psk", `=wpa2-pre-shared-key=${params.password}`);
+          }
+          await withTimeout(conn.write(profileCommand), ms);
+          selectedProfile = profileName;
+          newProfile = profileName;
+        } else {
+          selectedProfile = oldProfile;
+        }
+      }
+
       const command = ["/interface/wireless/set", `=.id=${params.interfaceId}`];
       if (params.ssid !== undefined) command.push(`=ssid=${params.ssid}`);
       if (params.disabled !== undefined) command.push(`=disabled=${params.disabled ? "yes" : "no"}`);
-      if (command.length > 2) await withTimeout(conn.write(command), ms);
-      if (params.password !== undefined) {
-        const profileName = `ochola-wlan-${routerId}-${randomBytes(4).toString("hex")}`;
-        const comment = wirelessAppComment(routerId);
-        await withTimeout(conn.write([
-          "/interface/wireless/security-profiles/add", `=name=${profileName}`,
-          "=mode=dynamic-keys", "=authentication-types=wpa2-psk",
-          `=wpa2-pre-shared-key=${params.password}`, `=comment=${comment}`,
-        ]), ms);
-        try {
-          await withTimeout(conn.write(["/interface/wireless/set", `=.id=${params.interfaceId}`, `=security-profile=${profileName}`]), ms);
-        } catch (error) {
-          const created = await withTimeout(conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]), ms) as Record<string, string>[];
-          if (created[0]?.[".id"]) {
-            await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${created[0][".id"]}`]), ms);
-          }
-          throw error;
-        }
+      if (selectedProfile !== undefined && selectedProfile !== oldProfile) {
+        command.push(`=security-profile=${selectedProfile}`);
       }
+      if (command.length > 2) await withTimeout(conn.write(command), ms);
       const verify = await withTimeout(conn.write(["/interface/wireless/print", `?.id=${params.interfaceId}`]), ms) as Record<string, string>[];
       const updated = verify.find(row => row[".id"] === params.interfaceId);
       if (!updated ||
           (params.ssid !== undefined && updated.ssid !== params.ssid) ||
           (params.disabled !== undefined && parseBool(updated.disabled) !== params.disabled) ||
-          (params.password !== undefined && !String(updated["security-profile"] ?? "").startsWith(`ochola-wlan-${routerId}-`))) {
+          (selectedProfile !== undefined && updated["security-profile"] !== selectedProfile) ||
+          (newProfile !== undefined && !String(updated["security-profile"] ?? "").startsWith(`ochola-wlan-${routerId}-`))) {
         throw new Error("Post-write verification failed: wireless settings did not persist.");
       }
-      if (params.password !== undefined) {
+      if (requestedSecurityMode !== undefined) {
         const profileRows = await withTimeout(conn.write([
           "/interface/wireless/security-profiles/print", `?name=${updated["security-profile"]}`,
         ]), ms) as Record<string, string>[];
-        if (profileRows[0]?.["wpa2-pre-shared-key"] !== params.password) {
-          throw new Error("Post-write verification failed: WPA2 profile did not persist.");
+        const verifiedProfile = profileRows.find(profile => profile.name === updated["security-profile"]);
+        if (!verifiedProfile ||
+            (requestedSecurityMode === "open" && verifiedProfile.mode !== "none") ||
+            (requestedSecurityMode === "wpa2" && verifiedProfile.mode === "none") ||
+            (params.password !== undefined && verifiedProfile["wpa2-pre-shared-key"] !== params.password)) {
+          throw new Error("Post-write verification failed: wireless security profile did not persist.");
         }
       }
-      if (params.password !== undefined && oldProfile) {
+      if (selectedProfile !== undefined && selectedProfile !== oldProfile && oldProfile) {
         const profiles = await withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Record<string, string>[];
         const interfaces = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
         const old = profiles.find(profile => profile.name === oldProfile);
