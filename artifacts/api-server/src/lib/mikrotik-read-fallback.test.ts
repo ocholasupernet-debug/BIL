@@ -320,9 +320,81 @@ test("wireless inventory maps RouterOS master IDs to names and scopes ownership"
     return [];
   }, async ({ port }) => {
     const result = await fetchWireless(routerCredentials(port), 7);
+    assert.equal(result.apiMode, "legacy");
     assert.equal(result.interfaces[0]?.masterInterface, "");
     assert.equal(result.interfaces[1]?.masterInterface, "wlan1");
     assert.equal(result.interfaces[1]?.managedByApp, true);
+  });
+});
+
+test("wireless inventory falls back to RouterOS WiFi and maps its read-only fields", async () => {
+  const commands: string[][] = [];
+  await withMockRouterApi((_username, command) => {
+    commands.push(command);
+    if (command[0] === "/interface/wireless/print") {
+      throw new Error("no such command or directory (wireless)");
+    }
+    if (command[0] === "/interface/wifi/print") return [
+      {
+        ".id": "*1",
+        name: "wifi1",
+        "master-interface": "",
+        "configuration.ssid": "Main WiFi",
+        "configuration.mode": "ap",
+        "channel.band": "2ghz-ax",
+        "channel.frequency": "2412",
+        "mac-address": "AA:BB:CC:DD:EE:01",
+        "security.authentication-types": "wpa2-psk,wpa3-psk",
+        disabled: "false",
+        comment: "",
+      },
+      {
+        ".id": "*2",
+        name: "wifi1-guest",
+        "master-interface": "*1",
+        "configuration.ssid": "Guest WiFi",
+        "configuration.mode": "ap",
+        "channel.band": "2ghz-ax",
+        "channel.frequency": "2412",
+        "mac-address": "",
+        "security.authentication-types": "",
+        disabled: "true",
+        comment: "ochola-wireless-app:7:abc123",
+      },
+    ];
+    return [];
+  }, async ({ port }) => {
+    const result = await fetchWireless(routerCredentials(port), 7);
+
+    assert.equal(result.apiMode, "wifi");
+    assert.deepEqual(result.profiles, []);
+    assert.equal(result.interfaces.length, 2);
+    assert.equal(result.interfaces[0]?.ssid, "Main WiFi");
+    assert.equal(result.interfaces[0]?.securitySummary, "Secured (wpa2-psk,wpa3-psk)");
+    assert.equal(result.interfaces[0]?.channel, "2412");
+    assert.equal(result.interfaces[0]?.channelLabel, "freq");
+    assert.equal(result.interfaces[1]?.masterInterface, "wifi1");
+    assert.equal(result.interfaces[1]?.securitySummary, "Open Wi-Fi");
+    assert.equal(result.interfaces[1]?.disabled, true);
+    assert.equal(result.interfaces[1]?.managedByApp, true);
+    assert.deepEqual(commands.map(command => command[0]), [
+      "/interface/wireless/print",
+      "/interface/wifi/print",
+    ]);
+  });
+});
+
+test("wireless inventory does not hide legacy permission errors with WiFi fallback", async () => {
+  const commands: string[][] = [];
+  await withMockRouterApi((_username, command) => {
+    commands.push(command);
+    throw new Error("not enough permissions");
+  }, async ({ port }) => {
+    await assert.rejects(
+      fetchWireless(routerCredentials(port), 7),
+      /not enough permissions/,
+    );
+    assert.deepEqual(commands.map(command => command[0]), ["/interface/wireless/print"]);
   });
 });
 

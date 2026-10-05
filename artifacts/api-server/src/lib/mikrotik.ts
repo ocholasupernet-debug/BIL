@@ -3838,6 +3838,8 @@ export interface WirelessInterface {
   mode: string;
   masterInterface: string;
   managedByApp: boolean;
+  securitySummary?: string;
+  channelLabel?: string;
 }
 
 export interface WirelessSecurityProfile {
@@ -3851,24 +3853,68 @@ export interface WirelessSecurityProfile {
 export async function fetchWireless(
   creds: RouterCredentials,
   routerId?: number,
-): Promise<{ interfaces: WirelessInterface[]; profiles: WirelessSecurityProfile[] }> {
+): Promise<{
+  apiMode: "legacy" | "wifi";
+  interfaces: WirelessInterface[];
+  profiles: WirelessSecurityProfile[];
+}> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
 
-    let ifaceRows: Record<string, string>[], profileRows: Record<string, string>[];
+    let ifaceRows: Record<string, string>[];
     try {
-      [ifaceRows, profileRows] = await Promise.all([
-        withTimeout(conn.write(["/interface/wireless/print"]), ms) as Promise<Record<string, string>[]>,
-        withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Promise<Record<string, string>[]>,
-      ]);
+      ifaceRows = await withTimeout(
+        conn.write(["/interface/wireless/print"]),
+        ms,
+      ) as Record<string, string>[];
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (/no such command|unknown command|bad command|not found|invalid item/i.test(message)) {
-        throw new Error(`RouterOS wireless package is unsupported: ${message}`);
+      if (!/no such command|unknown command|bad command|not found|invalid item/i.test(message)) {
+        throw error;
       }
-      throw error;
+
+      const wifiRows = await withTimeout(
+        conn.write(["/interface/wifi/print"]),
+        ms,
+      ) as Record<string, string>[];
+      const rawWifiInterfaces = Array.isArray(wifiRows) ? wifiRows : [];
+      const namesById = new Map(
+        rawWifiInterfaces.map(row => [String(row[".id"] ?? ""), String(row.name ?? "")]),
+      );
+      const interfaces: WirelessInterface[] = rawWifiInterfaces.map(row => {
+        const authenticationTypes = String(row["security.authentication-types"] ?? "").trim();
+        const hasAuthenticationTypes = Object.prototype.hasOwnProperty.call(row, "security.authentication-types");
+        const frequency = String(row["channel.frequency"] ?? "").trim();
+        const masterId = String(row["master-interface"] ?? "");
+        return {
+          id: row[".id"] ?? "",
+          name: row.name ?? "",
+          ssid: row["configuration.ssid"] ?? row.ssid ?? "",
+          disabled: parseBool(row.disabled),
+          band: row["channel.band"] ?? row.band ?? "",
+          channel: frequency || row["channel.number"] || row.channel || "",
+          channelLabel: frequency ? "freq" : "ch",
+          macAddress: row["mac-address"] ?? "",
+          securityProfile: row.security ?? row["configuration.security"] ?? "",
+          mode: row["configuration.mode"] ?? row.mode ?? "",
+          masterInterface: namesById.get(masterId) ?? masterId,
+          managedByApp: routerId !== undefined
+            ? new RegExp(`^ochola-wireless-app:${routerId}:`, "i").test(String(row.comment ?? "").trim())
+            : false,
+          securitySummary: authenticationTypes
+            ? `Secured (${authenticationTypes})`
+            : hasAuthenticationTypes
+              ? "Open Wi-Fi"
+              : "Security not reported",
+        };
+      });
+      return { apiMode: "wifi", interfaces, profiles: [] };
     }
 
+    const profileRows = await withTimeout(
+      conn.write(["/interface/wireless/security-profiles/print"]),
+      ms,
+    ) as Record<string, string>[];
     const rawInterfaces = Array.isArray(ifaceRows) ? ifaceRows : [];
     const namesById = new Map(rawInterfaces.map(row => [String(row[".id"] ?? ""), String(row.name ?? "")]));
     const interfaces: WirelessInterface[] = rawInterfaces.map(r => ({
@@ -3895,7 +3941,7 @@ export async function fetchWireless(
       mode:             r.mode                    ?? "",
     }));
 
-    return { interfaces, profiles };
+    return { apiMode: "legacy", interfaces, profiles };
   });
 }
 

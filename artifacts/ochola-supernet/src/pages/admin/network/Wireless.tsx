@@ -34,8 +34,11 @@ interface WirelessIface {
   mode?: string;
   managedByApp?: boolean;
   masterInterface?: string | null;
+  securitySummary?: string;
+  channelLabel?: string;
 }
 interface WirelessData {
+  apiMode?: "legacy" | "wifi";
   interfaces: WirelessIface[];
   profiles: Array<{ id: string; name: string; wpa2PreSharedKey: string; mode?: string }>;
 }
@@ -111,11 +114,13 @@ function WirelessCard({
   profiles,
   routerId,
   onChanged,
+  readOnly,
 }: {
   iface: WirelessIface;
   profiles: WirelessData["profiles"];
   routerId: number;
   onChanged: () => void;
+  readOnly: boolean;
 }) {
   const profile =
     profiles.find((p) => p.name === iface.securityProfile) ?? null;
@@ -268,8 +273,8 @@ function WirelessCard({
               }}
             >
               {iface.ssid || "SSID not set"} · {iface.band || "Band unknown"} ·
-              {" "}ch {iface.channel || "auto"} · {iface.macAddress || "MAC unavailable"} ·
-              {" "}{iface.mode || "ap-bridge"} · {existingSecurityMode === "open" ? "Open Wi-Fi" : "WPA2"}
+              {" "}{iface.channelLabel || "ch"} {iface.channel || "auto"} · {iface.macAddress || "MAC unavailable"} ·
+              {" "}{iface.mode || "ap-bridge"} · {readOnly ? (iface.securitySummary || "Security unknown") : existingSecurityMode === "open" ? "Open Wi-Fi" : "WPA2"}
             </div>
           </div>
           <span
@@ -282,7 +287,7 @@ function WirelessCard({
             <Signal size={12} /> {disabled ? "Off" : "Broadcasting"}
           </span>
         </div>
-        {iface.managedByApp && (
+        {iface.managedByApp && !readOnly && (
           <button
             onClick={remove}
             disabled={busy}
@@ -311,10 +316,11 @@ function WirelessCard({
           <input
             value={ssid}
             onChange={(e) => setSsid(e.target.value)}
+            readOnly={readOnly}
             style={{ ...inp, marginTop: ".4rem" }}
           />
         </label>
-        <label
+        {!readOnly && <label
           style={{
             color: "var(--isp-text-muted)",
             fontSize: ".72rem",
@@ -330,8 +336,8 @@ function WirelessCard({
             <option value="wpa2">WPA2 password</option>
             <option value="open">Open network (no Wi-Fi password)</option>
           </select>
-        </label>
-        {securityMode === "wpa2" ? <label
+        </label>}
+        {!readOnly && (securityMode === "wpa2" ? <label
           style={{
             color: "var(--isp-text-muted)",
             fontSize: ".72rem",
@@ -357,6 +363,11 @@ function WirelessCard({
           <p style={{ margin: 0, color: "#fbbf24", fontSize: ".78rem", lineHeight: 1.5 }}>
             This network will have no Wi-Fi encryption or password. Anyone nearby can connect.
           </p>
+        ))}
+        {readOnly && (
+          <p style={{ margin: 0, color: "var(--isp-text-muted)", fontSize: ".78rem", lineHeight: 1.5 }}>
+            This router uses the newer WiFi menu. WLANs are shown read-only; changes are not supported here yet.
+          </p>
         )}
         <div
           style={{
@@ -369,7 +380,7 @@ function WirelessCard({
           <button
             type="button"
             onClick={toggleDisabled}
-            disabled={busy}
+            disabled={busy || readOnly}
             style={{
               ...button,
               background: disabled
@@ -382,7 +393,7 @@ function WirelessCard({
           </button>
           <button
             onClick={save}
-            disabled={!dirty || busy}
+            disabled={readOnly || !dirty || busy}
             style={{
               ...button,
               background: dirty ? "var(--isp-accent)" : "rgba(255,255,255,.06)",
@@ -576,7 +587,7 @@ export default function Wireless() {
           >
             <button
               onClick={() => setAdding((v) => !v)}
-              disabled={physical.length === 0}
+              disabled={physical.length === 0 || data.apiMode === "wifi"}
               style={{
                 ...button,
                 alignSelf: "flex-start",
@@ -593,8 +604,9 @@ export default function Wireless() {
                 fontSize: ".76rem",
               }}
             >
-              Delete is available only for app-managed virtual WLANs. Physical
-              radios and WLANs managed outside the app cannot be deleted here.
+              {data.apiMode === "wifi"
+                ? "This router uses the newer WiFi menu. WLAN inventory is available here, but changes are read-only."
+                : "Delete is available only for app-managed virtual WLANs. Physical radios and WLANs managed outside the app cannot be deleted here."}
             </p>
             {data.interfaces.length === 0 && (
               <div
@@ -627,7 +639,7 @@ export default function Wireless() {
                 No physical radios are available for creating a WLAN.
               </div>
             )}
-            {adding && (
+            {adding && data.apiMode !== "wifi" && (
               <form
                 onSubmit={add}
                 style={{
@@ -726,6 +738,7 @@ export default function Wireless() {
                 profiles={data.profiles}
                 routerId={selectedRouterId!}
                 onChanged={() => query.refetch()}
+                readOnly={data.apiMode === "wifi"}
               />
             ))}
           </div>
