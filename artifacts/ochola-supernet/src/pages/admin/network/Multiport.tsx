@@ -536,6 +536,19 @@ export default function Multiport() {
                 </div>
                 {selectedAssignment ? <span style={{ color: statusColor(selectedAssignment.status), fontSize: 12, fontWeight: 850 }}>{selectedAssignment.status}</span> : null}
               </div>
+              {selectedAssignment?.provisioning_error ? (
+                <div role="alert" style={{ display: "flex", gap: 9, alignItems: "flex-start", border: "1px solid rgba(220,38,38,.3)", borderRadius: 9, padding: "10px 12px", color: "#b91c1c", background: "rgba(220,38,38,.06)", fontSize: 12 }}>
+                  <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <div>
+                    <strong>Last deployment error:</strong> {selectedAssignment.provisioning_error}
+                    {selectedAssignment.provisioning_error.toLowerCase().includes("foreign bridge") ? (
+                      <div style={{ marginTop: 5 }}>
+                        RouterOS will not move an interface out of another bridge automatically. Confirm what uses that bridge before changing its membership; moving the port may interrupt existing service.
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 14 }}>
                 <Field label="Service / bridge name" hint="Hotspot and PPPoE share this same per-port bridge.">
                   <input style={input} value={draft.bridgeName} onChange={(event) => setDraftValue("bridgeName", event.target.value)} placeholder="router-bridge-ether2" />
@@ -593,6 +606,22 @@ export default function Multiport() {
                 <button type="button" onClick={() => void deploy()} disabled={deploying || saving || unassigning || !selectedAssignment} style={{ border: "1px solid var(--isp-border)", borderRadius: 9, minHeight: 41, padding: "0 16px", color: "var(--isp-text)", background: "transparent", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
                   {deploying ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />} {deploying ? "Deploying…" : "Deploy to router"}
                 </button>
+                {selectedAssignment?.hotspot_enabled ? (
+                  <a
+                    href={`/admin/plans?type=hotspot&routerId=${selectedAssignment.router_id}&portId=${selectedAssignment.id}`}
+                    style={{ border: "1px solid var(--isp-border)", borderRadius: 9, minHeight: 41, padding: "0 13px", color: "var(--isp-text)", background: "transparent", fontWeight: 800, fontSize: 12, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+                  >
+                    Manage {selectedAssignment.interface_name} Hotspot packages
+                  </a>
+                ) : null}
+                {selectedAssignment?.pppoe_enabled ? (
+                  <a
+                    href={`/admin/plans?type=pppoe&routerId=${selectedAssignment.router_id}&portId=${selectedAssignment.id}`}
+                    style={{ border: "1px solid var(--isp-border)", borderRadius: 9, minHeight: 41, padding: "0 13px", color: "var(--isp-text)", background: "transparent", fontWeight: 800, fontSize: 12, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+                  >
+                    Manage {selectedAssignment.interface_name} PPPoE packages
+                  </a>
+                ) : null}
                 {selectedAssignment ? (
                   <button type="button" onClick={() => void unassign()} disabled={saving || deploying || unassigning} style={{ border: "1px solid rgba(220,38,38,.35)", borderRadius: 9, minHeight: 41, padding: "0 16px", color: "#b91c1c", background: "rgba(220,38,38,.06)", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
                     {unassigning ? <Loader2 size={16} className="animate-spin" /> : <Unlink2 size={16} />} {unassigning ? "Unassigning…" : "Unassign port"}

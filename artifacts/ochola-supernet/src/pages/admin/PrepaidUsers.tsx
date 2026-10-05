@@ -31,6 +31,9 @@ interface Customer extends DbCustomer {
   service_online?: boolean | null;
   fup_limit_mb?: number | null;
 }
+interface DisplayCustomer extends Customer {
+  mergedCustomerIds: number[];
+}
 interface Payment {
   id: number;
   customer_id: number | null;
@@ -92,6 +95,72 @@ function fromDateTimeLocal(value: string) {
 function normalizePhone(phone?: string | null) {
   return (phone ?? "").replace(/\D/g, "");
 }
+function customerIdentityKey(user: Customer, planMap: Record<number, Plan>) {
+  const type = prepaidServiceType(user.type);
+  const plan = user.plan_id ? planMap[user.plan_id] : null;
+  const routerId = user.router_id ?? plan?.router_id ?? null;
+  const portId = user.port_id ?? plan?.port_id ?? null;
+  const scope = `${routerId ?? "unknown-router"}:${portId ?? "unknown-port"}`;
+
+  if (type === "hotspot") {
+    const mac = String(user.mac_address ?? "").toLowerCase().replace(/[^a-f0-9]/g, "");
+    const phone = normalizePhone(user.phone);
+    // A MAC by itself can be shared or reused, so only group Hotspot rows
+    // when both the device and its contact number match.
+    if (mac.length === 12 && phone) return `hotspot:${scope}:${mac}:${phone}`;
+  } else if (type === "pppoe") {
+    const username = normalizeLiveIdentity(user.pppoe_username || user.username);
+    if (username) return `pppoe:${scope}:${username}`;
+  } else if (type === "vlan" || type === "static") {
+    const address = normalizeLiveIdentity(user.ip_address);
+    if (address) return `${type}:${scope}:${address}`;
+  }
+
+  return `record:${user.id}`;
+}
+function customerRecordTime(user: Customer) {
+  const created = Date.parse(user.created_at ?? "");
+  const updated = Date.parse(user.updated_at ?? "");
+  return Number.isFinite(created) ? created : Number.isFinite(updated) ? updated : 0;
+}
+function isMissingCustomerValue(value: unknown) {
+  return value === null || value === undefined || (typeof value === "string" && value.trim() === "");
+}
+function mergeDuplicateCustomers(
+  customers: Customer[],
+  planMap: Record<number, Plan>,
+): DisplayCustomer[] {
+  const groups = new Map<string, Customer[]>();
+  for (const customer of customers) {
+    const key = customerIdentityKey(customer, planMap);
+    const group = groups.get(key) ?? [];
+    group.push(customer);
+    groups.set(key, group);
+  }
+
+  const primaryStateFields = new Set([
+    "id", "status", "created_at", "updated_at", "expires_at",
+    "last_seen", "service_online", "data_used_bytes", "data_used_mb",
+    "depletion_reason", "password", "username", "pppoe_username",
+  ]);
+
+  return Array.from(groups.values(), group => {
+    group.sort((a, b) => customerRecordTime(b) - customerRecordTime(a) || b.id - a.id);
+    const [primary, ...related] = group;
+    const merged = { ...primary } as DisplayCustomer;
+    const mergedFields = merged as unknown as Record<string, unknown>;
+
+    for (const relatedCustomer of related) {
+      for (const [field, value] of Object.entries(relatedCustomer)) {
+        if (primaryStateFields.has(field) || !isMissingCustomerValue(mergedFields[field])) continue;
+        if (!isMissingCustomerValue(value)) mergedFields[field] = value;
+      }
+    }
+
+    merged.mergedCustomerIds = group.map(customer => customer.id);
+    return merged;
+  });
+}
 function prepaidServiceType(value?: string | null) {
   const type = String(value ?? "").toLowerCase();
   return type === "trial" || type === "trials" ? "hotspot" : type;
@@ -114,6 +183,9 @@ function paymentLabel(payment?: Payment) {
   if (method.includes("mpesa")) return `MpesaStk-${transactionId}`;
   if (method.includes("cash") || method.includes("manual")) return `Cash-${transactionId}`;
   return `${payment.payment_method}-${transactionId}`;
+}
+function customerPackageId(user: Customer, paymentMap: Record<number, Payment>) {
+  return paymentMap[user.id]?.plan_id ?? user.plan_id ?? null;
 }
 function normalizeLiveIdentity(value?: string | null) {
   return String(value ?? "").trim().toLowerCase();
@@ -784,13 +856,49 @@ export default function PrepaidUsers() {
 
   const planMap   = useMemo(() => Object.fromEntries(plans.map(p   => [p.id,   p  ])), [plans]);
   const routerMap = useMemo(() => Object.fromEntries(routers.map(r => [r.id,   r  ])), [routers]);
+  const displayCustomers = useMemo(
+    () => mergeDuplicateCustomers(customers, planMap),
+    [customers, planMap],
+  );
   const paymentMap = useMemo(() => {
-    const map: Record<number, Payment> = {};
-    payments.forEach(payment => {
-      if (payment.customer_id !== null && !map[payment.customer_id]) map[payment.customer_id] = payment;
+    const latestByCustomerId = new Map<number, Payment>();
+    const latestFirst = [...payments].sort((a, b) => {
+      const dateDifference = Date.parse(b.created_at) - Date.parse(a.created_at);
+      return (Number.isFinite(dateDifference) ? dateDifference : 0) || b.id - a.id;
     });
-    return map;
-  }, [payments]);
+    latestFirst.forEach(payment => {
+      if (payment.customer_id !== null && !latestByCustomerId.has(payment.customer_id)) {
+        latestByCustomerId.set(payment.customer_id, payment);
+      }
+    });
+
+    const grouped: Record<number, Payment> = {};
+    displayCustomers.forEach(customer => {
+      const payment = customer.mergedCustomerIds
+        .map(customerId => latestByCustomerId.get(customerId))
+        .filter((value): value is Payment => Boolean(value))
+        .sort((a, b) => {
+          const dateDifference = Date.parse(b.created_at) - Date.parse(a.created_at);
+          return (Number.isFinite(dateDifference) ? dateDifference : 0) || b.id - a.id;
+        })[0];
+      if (payment) grouped[customer.id] = payment;
+    });
+    return grouped;
+  }, [payments, displayCustomers]);
+  const packageOptions = useMemo(() => {
+    const ids = new Set<number>(plans.map(plan => plan.id));
+    displayCustomers.forEach(customer => {
+      const planId = customerPackageId(customer, paymentMap);
+      if (planId !== null) ids.add(planId);
+    });
+    return [...ids]
+      .map(id => ({ id, name: planMap[id]?.name ?? `Plan #${id}` }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
+  }, [plans, displayCustomers, paymentMap, planMap]);
+  const hasUnassignedPackage = useMemo(
+    () => displayCustomers.some(customer => customerPackageId(customer, paymentMap) === null),
+    [displayCustomers, paymentMap],
+  );
   const onlineUsers = useMemo(() => {
     const keys = new Set<string>();
     liveQueries.forEach(query => {
@@ -818,6 +926,7 @@ export default function PrepaidUsers() {
   const [search,      setSearch]      = useState("");
   const [statusTab,   setStatusTab]   = useState<StatusFilter>("all");
   const [typeFilter,  setTypeFilter]  = useState("");
+  const [packageFilter, setPackageFilter] = useState("");
   const [routerFilter, setRouterFilter] = useState("");
   const [entries,     setEntries]     = useState(PAGE_SIZE);
   const [page,        setPage]        = useState(1);
@@ -865,8 +974,11 @@ export default function PrepaidUsers() {
     }
   }
 
-  async function handleDelete(user: Customer) {
-    if (!window.confirm(`Delete ${purchaseUsername(user)}? This cannot be undone.`)) return;
+  async function handleDelete(user: DisplayCustomer) {
+    const groupedRecordNote = user.mergedCustomerIds.length > 1
+      ? ` This row groups ${user.mergedCustomerIds.length} matching records; only the newest will be deleted, and the remaining records may appear afterward.`
+      : "";
+    if (!window.confirm(`Delete ${purchaseUsername(user)}?${groupedRecordNote} This cannot be undone.`)) return;
     try {
       setActionBusy(user.id);
       const response = await fetch(apiUrl(`/api/customers/${user.id}?adminId=${ADMIN_ID}`), {
@@ -909,22 +1021,30 @@ export default function PrepaidUsers() {
 
   /* ── Stats ── */
   const stats = useMemo(() => ({
-    total:     customers.length,
-    active:    customers.filter(c => c.status === "active" && !isExpired(c.expires_at)).length,
-    expired:   customers.filter(c => c.status === "expired" || isExpired(c.expires_at)).length,
-    suspended: customers.filter(c => c.status === "suspended").length,
-  }), [customers]);
+    total:     displayCustomers.length,
+    active:    displayCustomers.filter(c => c.status === "active" && !isExpired(c.expires_at)).length,
+    expired:   displayCustomers.filter(c => c.status === "expired" || isExpired(c.expires_at)).length,
+    suspended: displayCustomers.filter(c => c.status === "suspended").length,
+  }), [displayCustomers]);
 
   /* ── Filter ── */
   const filtered = useMemo(() => {
-    let list = customers;
+    let list = displayCustomers;
     if (statusTab === "online") list = list.filter(c => customerIsOnline(c, onlineUsers));
     else if (statusTab === "active") list = list.filter(c => c.status === "active" && !isExpired(c.expires_at));
     else if (statusTab === "expired") list = list.filter(c => c.status === "expired" || isExpired(c.expires_at));
     else if (statusTab !== "all") list = list.filter(c => c.status === statusTab);
-    if (typeFilter)          list = list.filter(c => c.type  === typeFilter);
+    if (typeFilter) list = list.filter(c => prepaidServiceType(c.type) === typeFilter);
+    if (packageFilter === "none") {
+      list = list.filter(c => customerPackageId(c, paymentMap) === null);
+    } else if (packageFilter) {
+      list = list.filter(c => String(customerPackageId(c, paymentMap)) === packageFilter);
+    }
     if (routerFilter) {
-      list = list.filter(c => String(c.router_id ?? (c.plan_id ? planMap[c.plan_id]?.router_id : "") ?? "") === routerFilter);
+      list = list.filter(c => {
+        const planId = customerPackageId(c, paymentMap);
+        return String(c.router_id ?? (planId ? planMap[planId]?.router_id : "") ?? "") === routerFilter;
+      });
     }
     if (search) {
       const q = search.toLowerCase();
@@ -934,11 +1054,12 @@ export default function PrepaidUsers() {
         (c.pppoe_username ?? "").toLowerCase().includes(q) ||
         (c.phone  ?? "").includes(q) ||
         (c.email  ?? "").toLowerCase().includes(q) ||
-        (c.ip_address ?? "").toLowerCase().includes(q)
+        (c.ip_address ?? "").toLowerCase().includes(q) ||
+        (c.mac_address ?? "").toLowerCase().includes(q)
       );
     }
     return list;
-  }, [customers, statusTab, typeFilter, routerFilter, search, onlineUsers, planMap]);
+  }, [displayCustomers, statusTab, typeFilter, packageFilter, paymentMap, routerFilter, search, onlineUsers, planMap]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / entries));
   const pageRows   = filtered.slice((page - 1) * entries, page * entries);
@@ -971,7 +1092,9 @@ export default function PrepaidUsers() {
     const header = "Name,Username / IP,Phone,Type,Plan,Status,Expires";
     const rows   = filtered.map(c => [
       c.name ?? "", c.username ?? c.pppoe_username ?? c.ip_address ?? "", c.phone ?? "",
-      c.type ?? "", c.plan_id ? (planMap[c.plan_id]?.name ?? "") : "",
+      c.type ?? "", customerPackageId(c, paymentMap)
+        ? (planMap[customerPackageId(c, paymentMap)!]?.name ?? `Plan #${customerPackageId(c, paymentMap)}`)
+        : "",
       c.status, c.expires_at ? fmtDate(c.expires_at) : "",
     ].map(v => `"${v}"`).join(","));
     const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv" });
@@ -1012,7 +1135,7 @@ export default function PrepaidUsers() {
     { key: "active",    label: "Active",    count: stats.active,    color: "#4ade80" },
     { key: "expired",   label: "Expired",   count: stats.expired,   color: "#f87171" },
     { key: "suspended", label: "Suspended", count: stats.suspended, color: "#fbbf24" },
-    { key: "online",    label: "Online",    count: customers.filter(c => customerIsOnline(c, onlineUsers)).length, color: "#22c55e" },
+    { key: "online",    label: "Online",    count: displayCustomers.filter(c => customerIsOnline(c, onlineUsers)).length, color: "#22c55e" },
   ];
 
   return (
@@ -1282,7 +1405,7 @@ export default function PrepaidUsers() {
                 {filtered.map(user => <option key={user.id} value={user.id}>{purchaseUsername(user)} — {user.name || "Unnamed"}</option>)}
               </select>
               <button type="button" disabled={!rechargeTargetId} onClick={() => {
-                const target = customers.find(user => user.id === Number(rechargeTargetId));
+                const target = displayCustomers.find(user => user.id === Number(rechargeTargetId));
                 if (target) {
                   setExtendingUser(target);
                   setRechargePickerOpen(false);
@@ -1325,6 +1448,19 @@ export default function PrepaidUsers() {
               </select>
               <Filter size={11} style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", color: "#64748b", pointerEvents: "none" }} />
             </div>
+            <select
+              aria-label="Filter by package"
+              title="Filter by package"
+              value={packageFilter}
+              onChange={event => { setPackageFilter(event.target.value); setPage(1); }}
+              style={{ ...INPUT, minWidth: 170, maxWidth: 280, cursor: "pointer" }}
+            >
+              <option value="">All packages</option>
+              {hasUnassignedPackage && <option value="none">No package</option>}
+              {packageOptions.map(option => (
+                <option key={option.id} value={option.id}>{option.name}</option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -1360,21 +1496,19 @@ export default function PrepaidUsers() {
               ) : filtered.length === 0 ? (
                 <tr>
                    <td colSpan={13} style={{ ...TD, textAlign: "center", padding: "3rem", color: "var(--isp-text-muted)" }}>
-                    {search || typeFilter || statusTab !== "all"
+                    {search || typeFilter || packageFilter || statusTab !== "all"
                       ? "No users match this filter."
                       : "No prepaid users yet. Add a VLAN user here, or add Hotspot, PPPoE, and Static customers from the Customers section."}
                   </td>
                 </tr>
               ) : (
                 pageRows.map(user => {
-                  const plan   = user.plan_id ? planMap[user.plan_id] : null;
+                  const packageId = customerPackageId(user, paymentMap);
+                  const plan   = packageId ? planMap[packageId] : null;
                   const routerId = user.router_id ?? plan?.router_id ?? null;
                   const router = routerId ? routerMap[routerId] : null;
                   const payment = paymentMap[user.id];
-                  const purchasedPlan = payment?.plan_id
-                    ? planMap[payment.plan_id] ?? null
-                    : null;
-                  const displayedPlan = purchasedPlan ?? plan;
+                  const displayedPlan = plan;
                   const username = purchaseUsername(user);
                   const online = customerIsOnline(user, onlineUsers);
                   const fup = user.fup_limit_mb ?? plan?.data_limit_mb ?? null;
@@ -1391,11 +1525,19 @@ export default function PrepaidUsers() {
                         <button type="button" className="prepaid-username-link" onClick={() => setDetailUser(user)} title={`View ${username}`}>
                           {username}
                         </button>
+                        {user.mergedCustomerIds.length > 1 && (
+                          <div
+                            title="Actions apply to the most recent record in this group."
+                            style={{ marginTop: 2, color: "var(--isp-text-muted)", fontSize: "0.62rem" }}
+                          >
+                            {user.mergedCustomerIds.length} matching records · newest shown
+                          </div>
+                        )}
                       </td>
                       <td style={TD}><span className="prepaid-plain-value">{TYPE_META[user.type ?? ""]?.label ?? user.type ?? "—"}</span></td>
                       <td style={TD}>
                         <div className="prepaid-plain-value">
-                          {displayedPlan?.name || (payment?.plan_id ? `Plan #${payment.plan_id}` : "No plan")}
+                          {displayedPlan?.name || (packageId ? `Plan #${packageId}` : "No plan")}
                         </div>
                       </td>
                       <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem" }} title={fmtDate(user.created_at)}>

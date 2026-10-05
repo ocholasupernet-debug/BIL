@@ -78,6 +78,7 @@
 - [Self Install script scope](self-install-script-scope.md) — Use a one-time bootstrap to fetch/import mainhotspot.rsc; keep the management .ovpn recovery download separate.
 - [Prepaid session enforcement](prepaid-session-enforcement.md) — Keep expiry disconnects, lightweight portal notices, and full quota checks aligned.
 - [Prepaid user time adjustment](prepaid-user-time-adjustment.md) — Adjust existing expiry per user and reconcile live access; do not bulk-change unverified affected accounts.
+- [Prepaid user display identity](prepaid-user-display-identity.md) — Show one scoped row per verified prepaid identity without deleting linked customer records.
 - [Hotspot FUP enforcement](hotspot-fup-enforcement.md) — Throttle policies must suppress hard byte caps and RADIUS Max-Data, while keeping router-local FUP enforcement and expiry separate.
 - [Multi-port service isolation](multi-port-service-isolation.md) — Separate Hotspot pages per physical port require one bridge, subnet, and uniquely named server/profile per port.
 - [ISP-owned port services](isp-owned-port-services.md) — Legacy port rows require reseller_id; ISP-owned multiport rows use the tenant owner while assigned_reseller_id stays empty.

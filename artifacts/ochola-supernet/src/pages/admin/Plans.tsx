@@ -111,6 +111,8 @@ function Radio({ name, value, checked, onChange, label }: { name: string; value:
 interface ServicePlanFormProps {
   planType: string;
   initialData?: DbPlan | null;
+  defaultRouterId?: string;
+  defaultPortId?: string;
   bandwidths: DbBandwidth[];
   routers: DbRouter[];
   ports: DbPort[];
@@ -119,7 +121,18 @@ interface ServicePlanFormProps {
   onSaved: () => void;
 }
 
-function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports, pools, onCancel, onSaved }: ServicePlanFormProps) {
+function AddServicePlanForm({
+  planType,
+  initialData,
+  defaultRouterId = "",
+  defaultPortId = "",
+  bandwidths,
+  routers,
+  ports,
+  pools,
+  onCancel,
+  onSaved,
+}: ServicePlanFormProps) {
   const isEdit   = !!initialData;
   const typeLabel= planType === "hotspot" ? "Hotspot" : planType === "pppoe" ? "PPPoE" : planType === "vlan" ? "VLAN" : planType === "trials" ? "Trial" : "Static IP";
   const isPppoe  = planType === "pppoe";
@@ -144,8 +157,8 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
   const [valUnit,       setValUnit]       = useState<PlanValidityUnit>(
     normalizePlanValidityUnit(initialData?.validity_unit),
   );
-  const [routerId,      setRouterId]      = useState(initialData?.router_id?.toString() ?? "");
-  const [portId,        setPortId]        = useState(initialData?.port_id?.toString() ?? "");
+  const [routerId,      setRouterId]      = useState(initialData?.router_id?.toString() ?? defaultRouterId);
+  const [portId,        setPortId]        = useState(initialData?.port_id?.toString() ?? defaultPortId);
   const [saving,        setSaving]        = useState(false);
   const [error,         setError]         = useState<string | null>(null);
   const vlanPorts = ports.filter(port =>
@@ -922,7 +935,12 @@ const TAB_LABELS: Record<string, string> = {
 
 export default function Plans() {
   const search = useSearch();
-  const requestedType = new URLSearchParams(search).get("type");
+  const searchParams = new URLSearchParams(search);
+  const requestedType = searchParams.get("type");
+  const requestedRouterIdValue = searchParams.get("routerId") ?? "";
+  const requestedPortIdValue = searchParams.get("portId") ?? "";
+  const requestedRouterId = /^\d+$/.test(requestedRouterIdValue) ? requestedRouterIdValue : "";
+  const requestedPortId = /^\d+$/.test(requestedPortIdValue) ? requestedPortIdValue : "";
   const activeTab = requestedType && Object.prototype.hasOwnProperty.call(TAB_LABELS, requestedType)
     ? requestedType
     : "hotspot";
@@ -933,8 +951,8 @@ export default function Plans() {
   const [showAddForm,  setShowAddForm]  = useState(false);
   const [planSearch, setPlanSearch] = useState("");
   const [serviceFilter, setServiceFilter] = useState<"all" | "pppoe" | "hotspot" | "vlan">("all");
-  const [routerFilter, setRouterFilter] = useState("all");
-  const [portFilter, setPortFilter] = useState("all");
+  const [routerFilter, setRouterFilter] = useState(requestedRouterId || "all");
+  const [portFilter, setPortFilter] = useState(requestedPortId || "all");
   const [sortBy, setSortBy] = useState<"name" | "price" | "speed">("name");
   const [sortAscending, setSortAscending] = useState(true);
 
@@ -1165,6 +1183,8 @@ export default function Plans() {
           <AddServicePlanForm
             planType={activeTab}
             initialData={editingPlan}
+            defaultRouterId={requestedRouterId}
+            defaultPortId={requestedPortId}
             bandwidths={bandwidths}
             routers={routers}
             ports={ports}
