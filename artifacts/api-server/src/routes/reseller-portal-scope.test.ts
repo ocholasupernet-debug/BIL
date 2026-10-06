@@ -354,6 +354,12 @@ test("signed reseller portal requests stay within their assigned service", async
     } else if (table === "platform_secure_settings" || table === "reseller_payment_gateway_routes") {
       rows = [];
     }
+    if (method === "POST" && body && table === "isp_customers") {
+      const nextId = Math.max(0, ...customers.map(row => Number(row.id) || 0)) + 1;
+      const created = { ...body, id: nextId };
+      customers.push(created);
+      rows = [created];
+    }
     if (method === "PATCH" && body) {
       for (const row of rows) Object.assign(row, body);
     }
@@ -787,7 +793,7 @@ test("signed reseller portal requests stay within their assigned service", async
     }
   });
 
-  await t.test("manual receipt reconnect targets only the assigned VLAN Hotspot service", async () => {
+  await t.test("typed M-Pesa receipt reconnects only its purchased device on the assigned VLAN Hotspot service", async () => {
     transactions = [{ ...assignedTransaction }];
     customers = [{ ...assignedCustomer }];
     routerOperations.length = 0;
@@ -797,7 +803,7 @@ test("signed reseller portal requests stay within their assigned service", async
       const reconnect = await request("/api/mpesa/verify", {
         method: "POST",
         body: {
-          message: `${assignedTransaction.mpesa_receipt} Confirmed`,
+          message: assignedTransaction.mpesa_receipt,
           mac_address: assignedCustomer.mac_address,
           client_ip: assignedCustomer.ip_address,
         },
@@ -813,6 +819,78 @@ test("signed reseller portal requests stay within their assigned service", async
       assert.equal(body.connected, true);
       assertAssignedRouterOperations();
     } finally {
+      includeRouterFixture = false;
+    }
+  });
+
+  await t.test("typed receipt completes an unlinked paid account only after the router confirms its MAC", async () => {
+    transactions = [{ ...assignedTransaction, customer_id: null }];
+    customers = [];
+    routerOperations.length = 0;
+    clearRequests();
+    includeRouterFixture = true;
+    try {
+      resolvedPortalClientMac = "11:22:33:44:55:66";
+      const wrongLiveDevice = await request("/api/mpesa/verify", {
+        method: "POST",
+        body: {
+          message: assignedTransaction.mpesa_receipt,
+          mac_address: assignedCustomer.mac_address,
+          client_ip: assignedCustomer.ip_address,
+        },
+      });
+      assert.equal(wrongLiveDevice.status, 403);
+      assert.ok(routerOperations.some(row => row.name === "resolveClientMac"));
+      assert.equal(routerOperations.some(row => row.name === "upsertUser"), false);
+
+      resolvedPortalClientMac = "AA:BB:CC:DD:EE:FF";
+      routerOperations.length = 0;
+      clearRequests();
+      const verified = await request("/api/mpesa/verify", {
+        method: "POST",
+        body: {
+          message: assignedTransaction.mpesa_receipt,
+          mac_address: assignedCustomer.mac_address,
+          client_ip: assignedCustomer.ip_address,
+        },
+      });
+      assert.equal(verified.status, 200, await verified.clone().text());
+      const verification = await verified.json() as {
+        ok: boolean;
+        account_setup_required?: boolean;
+        checkout_id?: string;
+      };
+      assert.equal(verification.ok, true);
+      assert.equal(verification.account_setup_required, true);
+      assert.equal(verification.checkout_id, assignedTransaction.reference);
+      assert.deepEqual(routerOperations.map(row => row.name), ["resolveClientMac"]);
+
+      const activation = await request("/api/mpesa/hotspot-mac-access", {
+        method: "POST",
+        body: {
+          checkout_id: verification.checkout_id,
+          mac_address: assignedCustomer.mac_address,
+          client_ip: assignedCustomer.ip_address,
+          portal_login_handoff: true,
+        },
+      });
+      assert.equal(activation.status, 200, await activation.clone().text());
+      const activated = await activation.json() as {
+        ok: boolean;
+        connected?: boolean;
+        portal_login_handoff?: boolean;
+        credentials?: { username: string };
+      };
+      assert.equal(activated.ok, true);
+      assert.equal(activated.connected, false);
+      assert.equal(activated.portal_login_handoff, true);
+      assert.ok(activated.credentials?.username);
+      assert.equal(customers.length, 1);
+      assert.equal(transactions[0].customer_id, customers[0].id);
+      assert.ok(routerOperations.some(row => row.name === "upsertUser"));
+      assert.equal(routerOperations.some(row => row.name === "connectUser"), false);
+    } finally {
+      resolvedPortalClientMac = "AA:BB:CC:DD:EE:FF";
       includeRouterFixture = false;
     }
   });

@@ -967,6 +967,8 @@ async function validatePppoePaymentCustomer(
 function extractMpesaReceipt(message: unknown): string {
   if (typeof message !== "string") return "";
   const text = message.trim();
+  const directReceipt = normalizeMpesaReceipt(text);
+  if (directReceipt) return directReceipt;
   const match = text.match(/\b([A-Z][A-Z0-9]{8,11})\s+Confirmed\b/i)
     ?? text.match(/\b(?:transaction|receipt|code)\s*(?:number|id|no\.?)?\s*[:#-]?\s*([A-Z][A-Z0-9]{8,11})\b/i);
   return normalizeMpesaReceipt(match?.[1]) ?? "";
@@ -3206,7 +3208,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   const clientIp = readClientIp(req.body?.client_ip);
 
   if (adminId === null || !Number.isSafeInteger(adminId) || adminId < 1 || !receipt || requestedMac.invalid) {
-    res.status(400).json({ ok: false, error: "Paste a valid M-Pesa confirmation message and open this page from the ISP network." });
+    res.status(400).json({ ok: false, error: "Enter a valid M-Pesa transaction code or paste the confirmation SMS, then open this page from the ISP Wi-Fi network." });
     return;
   }
   if (!await isActiveIspAdmin(adminId)) {
@@ -3219,6 +3221,8 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
     admin_id: number;
     customer_id: number | null;
     plan_id: number | null;
+    reference: string | null;
+    payment_method: string | null;
     payment_phone: string | null;
     mac_address: string | null;
     mpesa_receipt: string | null;
@@ -3226,22 +3230,141 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
   };
   let transactions = await sbSelect<VerifiedTransaction>(
     "isp_transactions",
-    `admin_id=eq.${adminId}&payment_method=like.mpesa*&status=in.(completed,paid,success)&mpesa_receipt=eq.${encodeURIComponent(receipt)}&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,mpesa_receipt,status&limit=1`,
+    `admin_id=eq.${adminId}&payment_method=like.mpesa*&status=in.(completed,paid,success)&mpesa_receipt=eq.${encodeURIComponent(receipt)}&select=id,admin_id,customer_id,plan_id,reference,payment_method,payment_phone,mac_address,mpesa_receipt,status&limit=1`,
   );
   if (!transactions[0]) {
     /* Legacy webhook provisioning stored the receipt in reference. */
     transactions = await sbSelect<VerifiedTransaction>(
       "isp_transactions",
-      `admin_id=eq.${adminId}&payment_method=like.mpesa*&status=in.(completed,paid,success)&reference=eq.${encodeURIComponent(receipt)}&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,mpesa_receipt,status&limit=1`,
+      `admin_id=eq.${adminId}&payment_method=like.mpesa*&status=in.(completed,paid,success)&reference=eq.${encodeURIComponent(receipt)}&select=id,admin_id,customer_id,plan_id,reference,payment_method,payment_phone,mac_address,mpesa_receipt,status&limit=1`,
     );
   }
   const transaction = transactions[0];
-  if (!transaction?.customer_id || !transaction.plan_id) {
+  if (!transaction?.plan_id) {
     res.status(404).json({ ok: false, error: "That M-Pesa payment has not been assigned to a hotspot account yet." });
     return;
   }
 
   const portalScope = req.hotspotPortalContext;
+  if (!transaction.customer_id) {
+    const checkoutId = String(transaction.reference ?? "").trim();
+    const transactionMac = normaliseMacAddress(transaction.mac_address);
+    if (
+      transaction.payment_method !== "mpesa"
+      || !/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId)
+      || !transactionMac
+    ) {
+      res.status(409).json({
+        ok: false,
+        error: "This paid transaction is missing the saved device or hotspot checkout needed to finish setup.",
+      });
+      return;
+    }
+    if (!requestedMac.value || !clientIp) {
+      res.status(400).json({
+        ok: false,
+        error: "Open the hotspot sign-in page on the device that purchased this package, then enter the M-Pesa receipt.",
+      });
+      return;
+    }
+    if (requestedMac.value !== transactionMac) {
+      res.status(400).json({ ok: false, error: "This M-Pesa payment belongs to a different device." });
+      return;
+    }
+
+    let recoveryPlans: Array<{
+      id: number;
+      type: string;
+      router_id: number | null;
+      port_id: number | null;
+      owner_reseller_id: number | null;
+    }>;
+    try {
+      recoveryPlans = await sbSelectStrict(
+        "isp_plans",
+        `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}` : ""}&select=id,type,router_id,port_id,owner_reseller_id&limit=1`,
+      );
+    } catch (error) {
+      logger.error({ err: error, receipt, planId: transaction.plan_id }, "[mpesa/verify] unlinked payment plan lookup failed");
+      res.status(503).json({ ok: false, error: "The hotspot plan details are temporarily unavailable. Try again shortly." });
+      return;
+    }
+    const recoveryPlan = recoveryPlans[0];
+    if (
+      !recoveryPlan
+      || normalizePlanServiceType(recoveryPlan.type) !== "hotspot"
+      || !recoveryPlan.router_id
+    ) {
+      res.status(409).json({ ok: false, error: "The verified payment is not attached to an available hotspot package." });
+      return;
+    }
+
+    const recoveryRouters = await sbSelect<{
+      id: number;
+      name: string;
+      host: string;
+      bridge_ip: string | null;
+      vpn_ip: string | null;
+      router_username: string | null;
+      router_secret: string | null;
+    }>(
+      "isp_routers",
+      `id=eq.${recoveryPlan.router_id}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    );
+    const recoveryRouter = recoveryRouters[0];
+    if (!recoveryRouter || (!recoveryRouter.host && !recoveryRouter.bridge_ip && !recoveryRouter.vpn_ip)) {
+      res.status(503).json({ ok: false, error: "The hotspot router is not reachable from the ISP server." });
+      return;
+    }
+
+    let recoveryCredentials: RouterCredentials;
+    try {
+      recoveryCredentials = hotspotRouterCredentials(recoveryRouter, { forceManagementVpn: true });
+    } catch (error) {
+      const diagnosis = logRouterConnectionFailure(
+        error,
+        { receipt, routerId: recoveryRouter.id, router: recoveryRouter.name, retry: true },
+        "[mpesa/verify] unlinked payment reconnect preflight failed",
+      );
+      res.status(503).json({
+        ok: false,
+        error: `Payment is confirmed, but the router cannot verify this device right now. ${diagnosis.userMessage}`,
+      });
+      return;
+    }
+    let liveDeviceMac: string | null;
+    try {
+      liveDeviceMac = await hotspotPaymentOperations.resolveHotspotClientMac(recoveryCredentials, clientIp);
+    } catch (error) {
+      logger.warn({ err: error, receipt, routerId: recoveryRouter.id, clientIp }, "[mpesa/verify] unlinked payment live device lookup failed");
+      res.status(503).json({
+        ok: false,
+        error: "The hotspot router could not verify this device right now. Please try again shortly.",
+      });
+      return;
+    }
+    if (normaliseMacAddress(liveDeviceMac) !== transactionMac) {
+      res.status(403).json({
+        ok: false,
+        error: "This M-Pesa payment can only finish setup on the device linked to that purchase.",
+      });
+      return;
+    }
+
+    /*
+     * The existing paid-checkout activator creates and links the prepaid
+     * account idempotently. Return its checkout capability only after the
+     * stored MAC and RouterOS's live client identity have both matched.
+     */
+    res.json({
+      ok: true,
+      account_setup_required: true,
+      checkout_id: checkoutId,
+      message: "Payment verified. Completing hotspot setup for this device.",
+    });
+    return;
+  }
+
   const customerOwnerFilter = portalScope
     ? `admin_id=in.(${adminId},${portalScope.resellerId})`
     : `admin_id=eq.${adminId}`;
