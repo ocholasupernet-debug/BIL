@@ -1111,6 +1111,67 @@ test("signed reseller portal requests stay within their assigned service", async
     assert.equal(dbRequests.some(row => row.table === "isp_routers"), false);
   });
 
+  await t.test("TV package status stays purchase-scoped and read-only", async () => {
+    const previousTransactions = transactions;
+    const previousCustomers = customers;
+    const previousRouterFixture = includeRouterFixture;
+    try {
+      transactions = [{ ...assignedTransaction }];
+      customers = [{ ...assignedCustomer }];
+      includeRouterFixture = false;
+      routerOperations.length = 0;
+      clearRequests();
+
+      const tvStatus = await request("/api/customers/hotspot-tv-status", {
+        method: "POST",
+        body: {
+          checkout_id: "assigned-checkout",
+          mac_address: assignedCustomer.mac_address,
+        },
+      });
+      assert.equal(tvStatus.status, 200, await tvStatus.clone().text());
+      const status = await tvStatus.json() as {
+        status: string;
+        paymentStatus: string;
+        packageStatus: string;
+        connected: boolean;
+        retryAvailable: boolean;
+        username?: string;
+        credentials?: unknown;
+      };
+      assert.equal(status.status, "router_unavailable");
+      assert.equal(status.paymentStatus, "paid");
+      assert.equal(status.packageStatus, "active");
+      assert.equal(status.connected, false);
+      assert.equal(status.retryAvailable, false);
+      assert.equal(status.username, undefined);
+      assert.equal(status.credentials, undefined);
+      assert.ok(dbRequests.some(row => row.table === "isp_plans"
+        && row.rawQuery.includes("id=eq.501")
+        && row.rawQuery.includes("router_id=eq.31")
+        && row.rawQuery.includes("port_id=eq.43")
+        && row.rawQuery.includes("owner_reseller_id=eq.19")));
+      assert.equal(dbRequests.some(row => row.method !== "GET"), false);
+      assert.equal(routerOperations.length, 0);
+
+      clearRequests();
+      const wrongMac = await request("/api/customers/hotspot-tv-status", {
+        method: "POST",
+        body: {
+          checkout_id: "assigned-checkout",
+          mac_address: "AA:BB:CC:DD:EE:00",
+        },
+      });
+      assert.equal(wrongMac.status, 409);
+      assert.equal(dbRequests.some(row => row.table === "isp_routers"), false);
+      assert.equal(dbRequests.some(row => row.method !== "GET"), false);
+    } finally {
+      transactions = previousTransactions;
+      customers = previousCustomers;
+      includeRouterFixture = previousRouterFixture;
+    }
+  });
+
   await t.test("portal expiry checks skip router quota reads", async () => {
     const originalDataCapMode = assignedPlan.data_cap_mode;
     assignedPlan.data_cap_mode = "disconnect";

@@ -1780,6 +1780,327 @@ async function lookupLatestHotspotPurchase(
 }
 
 /*
+ * POST /api/customers/hotspot-tv-status
+ * Diagnose one paid TV checkout without creating an account or changing RouterOS.
+ * The checkout reference and stored target MAC keep the check tied to the TV
+ * purchase rather than the phone/browser that opened the portal.
+ */
+router.post("/customers/hotspot-tv-status", async (req, res): Promise<void> => {
+  const portalScope = req.hotspotPortalContext;
+  const adminId = portalScope?.adminId ?? Number(req.body?.adminId);
+  const checkoutId = String(req.body?.checkout_id ?? "").trim();
+  const requestedMac = normalisePortalMac(req.body?.mac_address);
+
+  if (
+    !Number.isSafeInteger(adminId)
+    || adminId < 1
+    || !/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId)
+    || !requestedMac
+  ) {
+    res.status(400).json({ ok: false, error: "A valid TV purchase and device MAC are required." });
+    return;
+  }
+
+  try {
+    const transaction = (await sbSelectStrict<{
+      id: number;
+      status: string;
+      payment_method: string;
+      customer_id: number | null;
+      plan_id: number | null;
+      mac_address: string | null;
+    }>(
+      "isp_transactions",
+      `reference=eq.${encodeURIComponent(checkoutId)}&admin_id=eq.${adminId}&payment_method=eq.mpesa&select=id,status,payment_method,customer_id,plan_id,mac_address&limit=1`,
+    ))[0];
+
+    if (!transaction) {
+      res.status(404).json({ ok: false, error: "We could not find that TV purchase on this hotspot." });
+      return;
+    }
+
+    const transactionMac = normalisePortalMac(transaction.mac_address);
+    if (transactionMac && transactionMac !== requestedMac) {
+      res.status(409).json({ ok: false, error: "The device MAC does not match the TV linked to this payment." });
+      return;
+    }
+
+    const paid = ["completed", "paid", "success"].includes(String(transaction.status).toLowerCase());
+    if (!paid) {
+      const failed = ["failed", "cancelled", "canceled"].includes(String(transaction.status).toLowerCase());
+      res.json({
+        ok: true,
+        status: failed ? "payment_failed" : "payment_pending",
+        paymentStatus: failed ? "failed" : "pending",
+        packageStatus: "unavailable",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        retryAvailable: false,
+        message: failed
+          ? "This payment was not completed. Check your M-Pesa message before trying again."
+          : "The payment is not confirmed yet. Keep this page open and check again shortly.",
+      });
+      return;
+    }
+
+    if (!transactionMac) {
+      res.status(409).json({ ok: false, error: "The device MAC does not match the TV linked to this payment." });
+      return;
+    }
+
+    if (!transaction.plan_id) {
+      res.json({
+        ok: true,
+        status: "package_unavailable",
+        paymentStatus: "paid",
+        packageStatus: "unavailable",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        retryAvailable: false,
+        message: "Payment is confirmed, but package details are not available yet. Please contact your ISP.",
+      });
+      return;
+    }
+
+    const plan = (await sbSelectStrict<PlanRow>(
+      "isp_plans",
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}${portalScope
+        ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}`
+        : ""}&select=id,name,type,router_id,port_id,owner_reseller_id&limit=1`,
+    ))[0];
+
+    if (!plan || normalizePlanServiceType(plan.type) !== "hotspot") {
+      res.status(404).json({ ok: false, error: "This TV purchase is not available on the current hotspot service." });
+      return;
+    }
+
+    if (!transaction.customer_id) {
+      res.json({
+        ok: true,
+        status: "account_pending",
+        paymentStatus: "paid",
+        packageStatus: "pending",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        retryAvailable: true,
+        message: "Payment is confirmed. The TV package account is still being prepared; retry activation to finish setup.",
+      });
+      return;
+    }
+
+    const customer = (await sbSelectStrict<Pick<
+      CustomerRow,
+      "id" | "admin_id" | "mac_address" | "username" | "type" | "router_id" | "port_id"
+        | "status" | "expires_at" | "depletion_reason"
+    >>(
+      "isp_customers",
+      `id=eq.${transaction.customer_id}&select=id,admin_id,mac_address,username,type,router_id,port_id,status,expires_at,depletion_reason&limit=1`,
+    ))[0];
+
+    const customerBelongsToScope = customer && (
+      portalScope
+        ? customer.admin_id === portalScope.resellerId
+          && customer.type === "hotspot"
+          && customer.router_id === portalScope.routerId
+          && customer.port_id === portalScope.portId
+        : customer.admin_id === adminId && customer.type === "hotspot"
+    );
+    if (!customer) {
+      res.json({
+        ok: true,
+        status: "account_pending",
+        paymentStatus: "paid",
+        packageStatus: "pending",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        retryAvailable: true,
+        message: "Payment is confirmed, but the TV account is not ready yet. Retry activation to finish setup.",
+      });
+      return;
+    }
+    if (!customerBelongsToScope || normalisePortalMac(customer.mac_address) !== requestedMac) {
+      res.status(404).json({ ok: false, error: "This TV purchase is not available on the current hotspot service." });
+      return;
+    }
+    if (!String(customer.username ?? "").trim()) {
+      res.json({
+        ok: true,
+        status: "account_pending",
+        paymentStatus: "paid",
+        packageStatus: "pending",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        retryAvailable: true,
+        message: "Payment is confirmed, but the TV account is not ready yet. Retry activation to finish setup.",
+      });
+      return;
+    }
+
+    const expiresAt = customer.expires_at;
+    const entitlementNow = Date.now();
+    if (customer.depletion_reason === "data_limit") {
+      res.json({
+        ok: true,
+        status: "package_depleted",
+        paymentStatus: "paid",
+        packageStatus: "depleted",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "The package data allowance has been used. Purchase a new package to reconnect this TV.",
+      });
+      return;
+    }
+    if (isPrepaidCustomerExpired(customer.status, expiresAt, customer.depletion_reason, entitlementNow)) {
+      res.json({
+        ok: true,
+        status: "package_expired",
+        paymentStatus: "paid",
+        packageStatus: "expired",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "This TV package has expired. Purchase a new package to reconnect.",
+      });
+      return;
+    }
+    if (!isPrepaidCustomerEntitled(customer.status, expiresAt, customer.depletion_reason, entitlementNow)) {
+      res.json({
+        ok: true,
+        status: "package_inactive",
+        paymentStatus: "paid",
+        packageStatus: "inactive",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "The TV account is not active. Contact your ISP for help.",
+      });
+      return;
+    }
+
+    const routerId = customer.router_id ?? plan.router_id;
+    if (!routerId || (portalScope && routerId !== portalScope.routerId)) {
+      res.json({
+        ok: true,
+        status: "router_unavailable",
+        paymentStatus: "paid",
+        packageStatus: "active",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: false,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "The package is active, but its hotspot router is not available for a connection check.",
+      });
+      return;
+    }
+
+    const routerRow = (await sbSelectStrict<RouterRow>(
+      "isp_routers",
+      `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    ))[0];
+    if (!routerRow) {
+      res.json({
+        ok: true,
+        status: "router_unavailable",
+        paymentStatus: "paid",
+        packageStatus: "active",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: false,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "The package is active, but the hotspot router is offline or unavailable. Check again shortly.",
+      });
+      return;
+    }
+
+    try {
+      const creds = routerCredentials(routerRow);
+      const activeUsers = await fetchHotspotUsers(creds);
+      const username = String(customer.username).trim();
+      const connected = activeUsers.some(user =>
+        user.user === username && normalisePortalMac(user.macAddress) === requestedMac,
+      );
+      let deviceVisible: boolean | null = connected;
+      if (!connected) {
+        try {
+          deviceVisible = Boolean(await resolveHotspotClientIpByMac(creds, requestedMac));
+        } catch {
+          deviceVisible = null;
+        }
+      }
+
+      const status = connected
+        ? "connected"
+        : deviceVisible === true
+          ? "login_needed"
+          : deviceVisible === false
+            ? "device_not_seen"
+            : "router_check_partial";
+      const message = connected
+        ? "RouterOS confirms this TV is connected. If streaming still fails, reconnect the TV to Wi-Fi and reopen the streaming app."
+        : deviceVisible === true
+          ? "The package is active and the router sees this TV, but its hotspot session is not active. Retry TV sign-in."
+          : deviceVisible === false
+            ? "The router cannot see this TV MAC. Connect the TV to the hotspot Wi-Fi and check its MAC; a router or extender between the TV and hotspot may hide the TV’s MAC."
+            : "The router responded, but could not confirm whether this TV is on the hotspot. Check again shortly.";
+
+      res.json({
+        ok: true,
+        status,
+        paymentStatus: "paid",
+        packageStatus: "active",
+        connected,
+        deviceVisible,
+        routerReachable: true,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: !connected && deviceVisible === true,
+        message,
+      });
+    } catch (error) {
+      logger.warn({ err: error, adminId, routerId }, "[customers/hotspot-tv-status] RouterOS read failed");
+      res.json({
+        ok: true,
+        status: "router_unavailable",
+        paymentStatus: "paid",
+        packageStatus: "active",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: false,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "The package is active, but the router could not be reached for a connection check. Try again shortly.",
+      });
+    }
+  } catch (error) {
+    logger.warn({ err: error, adminId }, "[customers/hotspot-tv-status] status lookup failed");
+    res.status(503).json({ ok: false, error: "TV package status is temporarily unavailable. Please try again." });
+  }
+});
+
+/*
  * POST /api/customers/hotspot-troubleshoot
  * The check action reads only the latest confirmed purchase tied to this
  * device MAC. Login re-runs that same entitlement check before using the
