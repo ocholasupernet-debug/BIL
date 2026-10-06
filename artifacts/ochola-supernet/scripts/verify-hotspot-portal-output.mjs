@@ -39,8 +39,23 @@ assert.match(output, /data-portal-layout="classic"/);
 assert.match(output, /\/api\/public\/hotspot-branding/);
 assert.match(
   output,
-  /window\.location\.hostname === "ocholasupernet\.isplatty\.org"&&config&&config\.tawkEnabled===true/,
-  "Tawk.to must be opt-in and restricted to the OcholaSupernet portal hostname",
+  /var targetHostname="ocholasupernet\.isplatty\.org"/,
+  "Tawk.to must remain restricted to the exact OcholaSupernet hostname",
+);
+assert.match(
+  output,
+  /configuredApiBase\.protocol==="https:"/,
+  "router-served pages must verify the tenant API origin over HTTPS",
+);
+assert.match(
+  output,
+  /pageHostname===targetHostname\|\|configuredTenantHostname===targetHostname/,
+  "Tawk.to must recognize the exact tenant origin when RouterOS serves the page",
+);
+assert.match(
+  output,
+  /config&&config\.tawkEnabled===true/,
+  "Tawk.to must remain opt-in through Hotspot Settings",
 );
 assert.doesNotMatch(
   output,

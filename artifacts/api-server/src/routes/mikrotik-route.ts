@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomBytes } from "crypto";
-import { prepareIspHotspotAsset } from "../lib/isp-hotspot-asset.js";
+import { isIspHotspotTawkEnabled, prepareIspHotspotAsset } from "../lib/isp-hotspot-asset.js";
 import { preserveCumulativeUsage } from "../lib/prepaid-usage.js";
 import {
   fetchHotspotUsers,
@@ -1879,10 +1879,12 @@ router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), as
       res.status(500).json({ error: "The approved Hotspot refresh handoff is unavailable." });
       return;
     }
+    const tawkEnabled = await isIspHotspotTawkEnabled(adminId);
     const config = JSON.stringify({
       apiBase: origin,
       adminId,
       routerId: id,
+      tawkEnabled,
       // The router named come3 keeps its package list available during
       // maintenance; the shared template's payment readiness gates still apply.
       ...(found.row.name === "come3" ? { allowPackagesDuringMaintenance: true } : {}),
