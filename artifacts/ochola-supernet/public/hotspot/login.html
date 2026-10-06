@@ -214,7 +214,7 @@
         Connection Support
       </div>
       <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Having trouble connecting?</h3>
-      <p style="color:rgba(216,180,254,.55);font-size:.875rem;margin-top:.375rem">Check your package and router session, then retry sign-in if needed.</p>
+      <p style="color:rgba(216,180,254,.55);font-size:.875rem;margin-top:.375rem">We’ll check your package and attempt sign-in. If the router does not confirm it, you can retry.</p>
     </div>
     <div class="sec-body" style="padding-top:1.25rem;padding-bottom:1.25rem">
       <button type="button" class="btn btn-full" onclick="openTroubleshootModule()" style="background:linear-gradient(135deg,#7c3aed,#4f46e5);border:1px solid rgba(216,180,254,.35);color:#fff">
@@ -292,7 +292,7 @@
     <button type="button" id="troubleshootClose" onclick="closeTroubleshootModule()" aria-label="Close troubleshooting" style="position:absolute;top:.875rem;right:.875rem;width:36px;height:36px;border-radius:.65rem;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:rgba(255,255,255,.82);font:700 1.25rem/1 inherit;cursor:pointer">×</button>
     <p style="font-size:.7rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:rgba(216,180,254,.7);margin:0 2.5rem .5rem 0">Connection assistant</p>
     <h2 id="troubleshootTitle" style="font-size:1.4rem;font-weight:850;color:#fff;margin:0 2.5rem .5rem 0">Troubleshoot connection</h2>
-    <p style="font-size:.9rem;line-height:1.55;color:rgba(255,255,255,.55);margin:0 0 1.25rem">Check the latest package linked to this device and see whether the router confirmed access.</p>
+    <p style="font-size:.9rem;line-height:1.55;color:rgba(255,255,255,.55);margin:0 0 1.25rem">We’ll check your package and attempt sign-in automatically. If the router does not confirm it, you can retry.</p>
     <div style="padding:1.15rem;border-radius:1rem;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.12);box-shadow:0 18px 50px rgba(0,0,0,.25)">
       <div style="font-size:.65rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.42);margin-bottom:.4rem">This device</div>
       <div id="troubleshootDevice" style="font:700 .8rem monospace;color:rgba(255,255,255,.82);word-break:break-all"></div>
@@ -1775,11 +1775,11 @@ function openTroubleshootModule(){
   module.setAttribute("aria-hidden","false");
   document.body.style.overflow="hidden";
   if(device)device.textContent=DEVICE_MAC||"Device MAC unavailable";
-  if(result&&!portalTroubleshootBusy)result.textContent="Checking your package and router session…";
+  if(result&&!portalTroubleshootBusy)result.textContent="Checking your package and trying to sign in…";
   document.addEventListener("keydown",handleTroubleshootModuleKeydown);
   var closeButton=document.getElementById("troubleshootClose");
   if(closeButton)closeButton.focus();
-  troubleshootConnection();
+  troubleshootConnection(true);
 }
 function closeTroubleshootModuleFromBackdrop(event){
   if(event&&event.target===event.currentTarget)closeTroubleshootModule();
@@ -1832,16 +1832,18 @@ function formatPortalExpiry(value){
   try{return new Intl.DateTimeFormat(undefined,{dateStyle:"medium",timeStyle:"short"}).format(timestamp);}
   catch(e){return new Date(timestamp).toLocaleString();}
 }
- function setPortalSessionStatus(status,expiresAt,message,planName,username,found){
+ function setPortalSessionStatus(status,expiresAt,message,planName,username,found,sessionConnected){
    var element=document.getElementById("troubleshootResult");
   if(!element)return;
-    var active=status==="active", expired=status==="expired", depleted=status==="depleted";
-    var title=active?"Plan active":expired?"Plan expired":depleted?"Data allowance used":status==="not_found"?"No purchased plan found":"Purchase needs help";
+     var active=status==="active", connected=active&&sessionConnected===true, pending=active&&!connected, expired=status==="expired", depleted=status==="depleted";
+     var title=connected?"Connected":pending?"Package active · sign-in pending":expired?"Plan expired":depleted?"Data allowance used":status==="not_found"?"No purchased plan found":"Purchase needs help";
    var details="";
    if(found&&planName)details+='<div style="margin-top:.35rem;color:rgba(255,255,255,.78)">Plan: <strong>'+escapePortalText(planName)+'</strong></div>';
    if(found&&username)details+='<div style="margin-top:.2rem;color:rgba(255,255,255,.68)">Username: <strong>'+escapePortalText(username)+'</strong></div>';
-   var explanation=active
-     ? (expiresAt?"Your plan is active and expires "+formatPortalExpiry(expiresAt)+".":"Your plan is active. No expiry time is recorded.")
+    var explanation=connected
+      ? "The router confirmed an active Hotspot session for this device."
+      : pending
+        ? "Your package is active, but the router has not confirmed sign-in for this device. Keep it connected to Wi-Fi and retry sign-in."
      : expired
        ? ("Your plan expired"+(expiresAt?" on "+formatPortalExpiry(expiresAt):"")+"." )
         : depleted
@@ -1850,9 +1852,9 @@ function formatPortalExpiry(value){
          ? "No successfully purchased hotspot package matches this device MAC address."
          : "A purchase was found, but its hotspot account could not be confirmed.";
   element.style.display="block";
-    element.style.background=active?"rgba(34,197,94,.08)":(expired||depleted)?"rgba(245,158,11,.08)":"rgba(239,68,68,.08)";
-    element.style.border="1px solid "+(active?"rgba(34,197,94,.22)":(expired||depleted)?"rgba(245,158,11,.22)":"rgba(239,68,68,.22)");
-    element.style.color=active?"#86efac":(expired||depleted)?"#fbbf24":"#fca5a5";
+     element.style.background=connected?"rgba(34,197,94,.08)":(pending||expired||depleted)?"rgba(245,158,11,.08)":"rgba(239,68,68,.08)";
+     element.style.border="1px solid "+(connected?"rgba(34,197,94,.22)":(pending||expired||depleted)?"rgba(245,158,11,.22)":"rgba(239,68,68,.22)");
+     element.style.color=connected?"#86efac":(pending||expired||depleted)?"#fbbf24":"#fca5a5";
    element.innerHTML="<strong>"+title+"</strong>"+details+
      '<div style="margin-top:.3rem;color:rgba(255,255,255,.62)">'+escapePortalText(explanation)+
      ((message||"")?" "+escapePortalText(message):"")+"</div>";
@@ -1867,9 +1869,9 @@ function setPortalTroubleshootButton(label,disabled,green){
   button.style.color="#fff";
   button.style.opacity=disabled?".7":"1";
 }
-function troubleshootConnection(){
+function troubleshootConnection(preferLogin){
   if(portalTroubleshootBusy)return;
-   var action=portalTroubleshootStatus==="active"?"login":"check";
+   var action=preferLogin||portalTroubleshootStatus==="active"?"login":"check";
   if(!DEVICE_MAC){
      setPortalSessionStatus("unavailable",null,"This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.",null,null,false);
     return;
@@ -1905,12 +1907,13 @@ function troubleshootConnection(){
      };
      var message=(status==="active"||status==="unavailable")?(data.error||""):"";
      if(action==="login"&&data.connected)message="Connected successfully. You can close this sign-in page and browse.";
+      else if(action==="login"&&status==="active"&&!message)message="Your package is active, but the router has not confirmed sign-in. Keep this device connected to Wi-Fi and retry.";
      else if(!result.ok&&!message)message="Could not verify or connect this package. Try again shortly.";
-     setPortalSessionStatus(status,data.expiresAt,message,data.planName,data.username,data.found===true);
+      setPortalSessionStatus(status,data.expiresAt,message,data.planName,data.username,data.found===true,data.connected===true);
      portalTroubleshootBusy=false;
      if(status==="active"){
        if(action==="login"&&data.connected)setPortalTroubleshootButton("Connected",true,true);
-       else setPortalTroubleshootButton("Login now",false,true);
+        else setPortalTroubleshootButton(action==="login"?"Retry sign-in":"Sign in now",false,false);
      }else{
        setPortalTroubleshootButton("Troubleshoot connection",false,false);
      }
@@ -1920,14 +1923,15 @@ function troubleshootConnection(){
        portalTroubleshootStatus="idle";
        portalTroubleshootDetails={};
      }
-     setPortalTroubleshootButton(portalTroubleshootStatus==="active"?"Login now":"Troubleshoot connection",false,portalTroubleshootStatus==="active");
+      setPortalTroubleshootButton(portalTroubleshootStatus==="active"?(action==="login"?"Retry sign-in":"Sign in now"):"Troubleshoot connection",false,false);
      setPortalSessionStatus(
        portalTroubleshootStatus==="active"?"active":"unavailable",
        portalTroubleshootDetails.expiresAt,
        "Could not reach the connection service. Try again shortly.",
        portalTroubleshootDetails.planName,
        portalTroubleshootDetails.username,
-       portalTroubleshootDetails.found
+        portalTroubleshootDetails.found,
+        false
      );
    });
 }

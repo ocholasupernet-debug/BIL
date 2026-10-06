@@ -6,13 +6,15 @@ import { resolve } from "node:path";
 const appRoot = resolve(import.meta.dirname, "..");
 const sourcePath = resolve(appRoot, "public/hotspot/login.html");
 const outputPath = resolve(appRoot, "dist/public/hotspot/login.html");
+const reactSourcePath = resolve(appRoot, "src/pages/portal/HotspotLogin.tsx");
 const refreshSourcePath = resolve(appRoot, "public/hotspot/rlogin.html");
 const refreshOutputPath = resolve(appRoot, "dist/public/hotspot/rlogin.html");
 const removedFallbackPath = resolve(appRoot, "dist/public/hotspot/error.html");
 
-const [source, output, refreshSource, refreshOutput] = await Promise.all([
+const [source, output, reactSource, refreshSource, refreshOutput] = await Promise.all([
   readFile(sourcePath, "utf8"),
   readFile(outputPath, "utf8"),
+  readFile(reactSourcePath, "utf8"),
   readFile(refreshSourcePath, "utf8"),
   readFile(refreshOutputPath, "utf8"),
 ]);
@@ -69,6 +71,31 @@ assert.equal(
 );
 assert.match(refreshOutput, /http-equiv="refresh"\s+content="0;url=\$\(link-login-only\)"/i);
 assert.match(refreshOutput, /<body[^>]*\bhidden\b/i);
+assert.match(
+  output,
+  /troubleshootConnection\(true\)/,
+  "the connection-help page must attempt sign-in as soon as it opens",
+);
+assert.match(
+  output,
+  /Package active · sign-in pending/,
+  "an active package must not be presented as a confirmed router session",
+);
+assert.match(
+  output,
+  /Retry sign-in/,
+  "users must have a clear retry action when RouterOS does not confirm login",
+);
+assert.match(
+  reactSource,
+  /setTroubleshootAction\("login"\);\s*void requestHotspotTroubleshoot\("login"\)/,
+  "opening the React connection-help dialog must attempt sign-in rather than only checking entitlement",
+);
+assert.match(
+  reactSource,
+  /void requestHotspotTroubleshoot\("login"\)\.finally/,
+  "the normal React hotspot sign-in page must automatically attempt login for this device",
+);
 
 try {
   await access(removedFallbackPath, constants.F_OK);

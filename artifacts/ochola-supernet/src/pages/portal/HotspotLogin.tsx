@@ -1143,9 +1143,9 @@ function HotspotLoginView({
     setLoginSession(null);
     setTroubleshootMessage("");
     setTroubleshootError("");
-    setTroubleshootAction("check");
+    setTroubleshootAction("login");
     try {
-      await requestHotspotTroubleshoot("check");
+      await requestHotspotTroubleshoot("login");
     } finally {
       troubleshootInFlight.current = false;
       setTroubleshootLoading(false);
@@ -1161,9 +1161,9 @@ function HotspotLoginView({
     troubleshootInFlight.current = true;
     if (troubleshootingOnly) {
       setTroubleshootLoading(true);
-      setTroubleshootAction("check");
+      setTroubleshootAction("login");
     }
-    void requestHotspotTroubleshoot("check", !troubleshootingOnly).finally(() => {
+    void requestHotspotTroubleshoot("login").finally(() => {
       troubleshootInFlight.current = false;
       if (troubleshootingOnly) {
         setTroubleshootLoading(false);
@@ -1175,7 +1175,7 @@ function HotspotLoginView({
   useEffect(() => {
     if (!troubleshootDialogOpen) return;
     let retryTimer = 0;
-    const runCheck = () => {
+    const runReconnect = () => {
       if (HOTSPOT_RUNTIME_CONFIG.previewOnly) {
         setTroubleshootError("Connection checks are available when this page is opened from an active hotspot device.");
         return;
@@ -1185,7 +1185,7 @@ function HotspotLoginView({
         return;
       }
       if (troubleshootInFlight.current) {
-        retryTimer = window.setTimeout(runCheck, 150);
+        retryTimer = window.setTimeout(runReconnect, 150);
         return;
       }
       troubleshootInFlight.current = true;
@@ -1193,14 +1193,14 @@ function HotspotLoginView({
       setTroubleshootLoading(true);
       setTroubleshootError("");
       setTroubleshootMessage("");
-      setTroubleshootAction("check");
-      void requestHotspotTroubleshoot("check").finally(() => {
+      setTroubleshootAction("login");
+      void requestHotspotTroubleshoot("login").finally(() => {
         troubleshootInFlight.current = false;
         setTroubleshootLoading(false);
         setTroubleshootAction(null);
       });
     };
-    runCheck();
+    runReconnect();
     return () => {
       if (retryTimer) window.clearTimeout(retryTimer);
     };
@@ -1215,7 +1215,7 @@ function HotspotLoginView({
     try {
       const result = await requestHotspotTroubleshoot("login");
       if (result && result.status === "active" && !result.connected && !result.error) {
-        setTroubleshootMessage("The router did not confirm the login. Tap Login now to retry.");
+        setTroubleshootMessage("Your package is active, but the router has not confirmed sign-in. Keep this device connected to Wi-Fi and tap Retry sign-in.");
       }
     } finally {
       troubleshootInFlight.current = false;
@@ -1338,10 +1338,12 @@ function HotspotLoginView({
   const troubleshootStatus = loginSession
     ? {
         active: {
-          label: "Plan active",
-          detail: loginSession.expiresAt
-            ? `Your plan is active and expires ${formatSessionExpiry(loginSession.expiresAt)}.`
-            : "Your plan is active. No expiry time is recorded.",
+          label: loginSession.connected ? "Connected" : "Package active · sign-in pending",
+          detail: loginSession.connected
+            ? loginSession.expiresAt
+              ? `Your plan is active and expires ${formatSessionExpiry(loginSession.expiresAt)}.`
+              : "Your plan is active. No expiry time is recorded."
+            : "Your package is active, but the router has not confirmed sign-in for this device. Keep it connected to Wi-Fi and retry sign-in.",
         },
         expired: {
           label: "Plan expired",
@@ -1361,9 +1363,9 @@ function HotspotLoginView({
         },
       }[loginSession.status]
     : null;
-  const troubleshootStatusTone = loginSession?.status === "active"
+  const troubleshootStatusTone = loginSession?.status === "active" && loginSession.connected
     ? "active"
-    : loginSession?.status === "expired" || loginSession?.status === "depleted"
+    : loginSession?.status === "active" || loginSession?.status === "expired" || loginSession?.status === "depleted"
       ? "warning"
       : "help";
 
@@ -2140,7 +2142,7 @@ function HotspotLoginView({
               </div>
               <h1 className="hp-title">{troubleshootingOnly ? "Connection help" : "Your world, connected."}</h1>
               <p className="hp-subtitle">{troubleshootingOnly
-                ? "Check your package and router session, then retry the connection if needed."
+                 ? "We’ll check your package and try to reconnect this device automatically."
                 : portalBranding.tagline || "Fast, reliable Wi-Fi for the things you love."}</p>
               <div className="hp-badges">
                 <span className="hp-badge"><Shield size={12} /> Secure</span>
@@ -2270,7 +2272,7 @@ function HotspotLoginView({
                       >
                         {troubleshootLoading
                           ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Logging in…</>
-                          : <><Wifi size={15} /> Login now</>}
+                          : <><Wifi size={15} /> {troubleshootMessage ? "Retry sign-in" : "Sign in now"}</>}
                       </button>
                     )}
                     {(loginSession?.status === "expired" || loginSession?.status === "depleted" || loginSession?.status === "not_found") && (
@@ -2708,7 +2710,9 @@ function HotspotLoginView({
               <div>
                 <div className="hp-troubleshoot-eyebrow">Connection support</div>
                 <h3>Having trouble connecting?</h3>
-                <p>Check your package and router session, then retry sign-in if needed.</p>
+                <p>{loginSession?.status === "active" && !loginSession.connected
+                  ? "Your package is active, but the router has not confirmed sign-in. Tap below to retry."
+                  : "We’ll check your package and attempt sign-in automatically. If the router does not confirm it, you can retry."}</p>
               </div>
             </div>
             <button
@@ -2719,7 +2723,7 @@ function HotspotLoginView({
               aria-expanded={troubleshootDialogOpen}
               onClick={() => setTroubleshootDialogOpen(true)}
             >
-              <Wifi size={15} /> Troubleshoot connection <ArrowRight size={15} />
+              <Wifi size={15} /> {loginSession?.status === "active" && !loginSession.connected ? "Retry sign-in" : "Troubleshoot connection"} <ArrowRight size={15} />
             </button>
           </div>
           )}
@@ -2764,7 +2768,7 @@ function HotspotLoginView({
                       <div className="hp-troubleshoot-dialog-kicker">Connection assistant</div>
                       <h2 id="hp-troubleshoot-dialog-title" className="hp-troubleshoot-dialog-title">Troubleshoot connection</h2>
                       <p id="hp-troubleshoot-dialog-description" className="hp-troubleshoot-dialog-description">
-                        Check this device’s latest package and see whether the router confirmed access.
+                        We’ll check your package and attempt sign-in automatically. If the router does not confirm it, you can retry.
                       </p>
                     </div>
                   </div>
@@ -2830,7 +2834,7 @@ function HotspotLoginView({
                       >
                         {troubleshootLoading
                           ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Logging in…</>
-                          : <><Wifi size={15} /> Login now</>}
+                          : <><Wifi size={15} /> {troubleshootMessage ? "Retry sign-in" : "Sign in now"}</>}
                       </button>
                     )}
                     {(loginSession?.status === "expired" || loginSession?.status === "depleted" || loginSession?.status === "not_found") && (
