@@ -294,6 +294,7 @@ test("signed reseller portal requests stay within their assigned service", async
   };
   hotspotPaymentOperations.disconnectHotspotActiveUser = async (_credentials, username) => {
     recordRouterOperation("disconnectUser", { username });
+    return false;
   };
 
   globalThis.fetch = async (input, init) => {

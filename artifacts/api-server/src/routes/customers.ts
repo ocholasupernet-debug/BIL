@@ -1972,6 +1972,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
         // Load all source/destination routers before moving the session. The
         // second read after disconnect captures RouterOS's final counters.
         usageSnapshot = await loadSharedRoamingUsage(adminId, plan, username, routerId);
+        let sessionDisconnected = false;
         const scopedRouterRows = await sbSelectStrict<RouterRow>(
           "isp_routers",
           `admin_id=eq.${adminId}&id=in.(${usageSnapshot.routerIds.join(",")})&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=100`,
@@ -1982,7 +1983,9 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
         for (const otherRouter of scopedRouterRows) {
           if (otherRouter.id === routerId) continue;
           await assertLock();
-          await disconnectHotspotActiveUser(routerCredentials(otherRouter), username);
+          if (await disconnectHotspotActiveUser(routerCredentials(otherRouter), username)) {
+            sessionDisconnected = true;
+          }
         }
         const desiredHotspotServer = targetScope.portId === null ? "all" : hotspotServer;
         if (desiredHotspotServer && desiredHotspotServer !== "all") {
@@ -1993,11 +1996,15 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
           );
           if (sessionOnAnotherService) {
             await assertLock();
-            await disconnectHotspotActiveUser(creds, username);
+            if (await disconnectHotspotActiveUser(creds, username)) {
+              sessionDisconnected = true;
+            }
           }
         }
-        await assertLock();
-        usageSnapshot = await loadSharedRoamingUsage(adminId, plan, username, routerId);
+        if (sessionDisconnected) {
+          await assertLock();
+          usageSnapshot = await loadSharedRoamingUsage(adminId, plan, username, routerId);
+        }
       }
 
       if (
