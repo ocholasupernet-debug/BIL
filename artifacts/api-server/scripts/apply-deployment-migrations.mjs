@@ -119,6 +119,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_admin_page_passwords.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_reseller_port_nas_mapping.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_hotspot_roaming_rules.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_prepaid_transaction_account_claim.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
 

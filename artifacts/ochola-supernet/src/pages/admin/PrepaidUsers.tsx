@@ -1584,10 +1584,10 @@ export default function PrepaidUsers() {
                         </button>
                         {user.mergedCustomerIds.length > 1 && (
                           <div
-                            title="Actions apply to the most recent record in this group."
+                            title="Grouped by shared device, contact, or service identity—not by M-Pesa transaction. The payment shown is the newest linked purchase."
                             style={{ marginTop: 2, color: "var(--isp-text-muted)", fontSize: "0.62rem" }}
                           >
-                            {user.mergedCustomerIds.length} matching records · newest shown
+                            {user.mergedCustomerIds.length} matching accounts · newest shown
                           </div>
                         )}
                       </td>

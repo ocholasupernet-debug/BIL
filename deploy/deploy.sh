@@ -206,15 +206,15 @@ apply_supabase_migration() {
       ;;
   esac
 
-  # This deployment cannot start an API whose customer edit lock RPCs are
-  # missing: without a direct DB URL, verify the installed PostgREST schema.
+  # This deployment cannot start an API whose required RPCs are missing:
+  # without a direct DB URL, verify the installed PostgREST schema.
   local openapi
   openapi=$(curl --fail --silent --show-error --max-time 20 \
     -H "apikey: $service_key" \
     -H "Authorization: Bearer $service_key" \
     -H "Accept: application/openapi+json" \
     "$supabase_url/rest/v1/") || {
-      echo "      ✗ Cannot verify Supabase customer edit locks. Configure SUPABASE_DB_URL to apply migrations."
+      echo "      ✗ Cannot verify required Supabase RPCs. Configure SUPABASE_DB_URL to apply migrations."
       exit 1
     }
   if ! printf '%s' "$openapi" | node -e '
@@ -223,16 +223,21 @@ apply_supabase_migration() {
     process.stdin.on("end", () => {
       try {
         const paths = JSON.parse(body).paths || {};
-        const names = ["acquire_isp_customer_edit_lock", "renew_isp_customer_edit_lock", "release_isp_customer_edit_lock"];
+        const names = [
+          "acquire_isp_customer_edit_lock",
+          "renew_isp_customer_edit_lock",
+          "release_isp_customer_edit_lock",
+          "claim_prepaid_hotspot_transaction_account",
+        ];
         if (names.some(name => !paths[`/rpc/${name}`])) process.exitCode = 1;
       } catch { process.exitCode = 1; }
     });
   '; then
-    echo "      ✗ Customer edit lock RPCs are missing or cannot be verified."
+    echo "      ✗ Required Supabase RPCs are missing or cannot be verified."
     echo "        Configure SUPABASE_DB_URL so deployment can apply the pending migration."
     exit 1
   fi
-  echo "      ✓ Customer edit lock RPCs verified"
+  echo "      ✓ Required Supabase RPCs verified"
 }
 
 load_deploy_env

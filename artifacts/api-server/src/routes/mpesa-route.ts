@@ -2922,6 +2922,13 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
      : [];
   const now = Date.now();
   const linkedCustomer = linkedCustomers[0];
+  if (transaction.customer_id && !linkedCustomer) {
+    res.status(409).json({
+      ok: false,
+      error: "This payment is already linked to a Hotspot account that cannot be loaded in this service. No new username was created.",
+    });
+    return;
+  }
   if (linkedCustomer && linkedCustomer.depletion_reason === "data_limit") {
     res.status(409).json({
       ok: false,
@@ -2949,12 +2956,11 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       customer.depletion_reason,
       now,
       true,
-    ) &&
-      typeof customer.username === "string";
+    );
   };
-  const reusableCustomer = linkedCustomers[0] && isReusable(linkedCustomers[0])
-     ? linkedCustomers[0]
-     : undefined;
+  const reusableCustomer = linkedCustomer && isReusable(linkedCustomer)
+    ? linkedCustomer
+    : undefined;
 
    let hotspotUsername = reusableCustomer?.username?.trim() || "";
    if (!hotspotUsername) {
@@ -2982,14 +2988,14 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     res.status(409).json({ ok: false, error: "This device identifier is already assigned to another hotspot account." });
     return;
   }
-  const hotspotPassword = "12345";
-  const isSameCheckoutRetry = !!reusableCustomer && transaction.customer_id === reusableCustomer.id;
+  let hotspotPassword = "12345";
+  let isSameCheckoutRetry = !!reusableCustomer && transaction.customer_id === reusableCustomer.id;
   const routerAddress = (await routerAddressPromise) ?? "";
   const existingExpiry = reusableCustomer?.expires_at ? Date.parse(reusableCustomer.expires_at) : 0;
-  const expiresAt = isSameCheckoutRetry
+  let expiresAt = isSameCheckoutRetry
     ? new Date(existingExpiry)
     : new Date(now + Math.ceil(expiresInSeconds) * 1000);
-  const remainingExpirySeconds = Math.max(1, Math.ceil((expiresAt.getTime() - Date.now()) / 1000));
+  let remainingExpirySeconds = Math.max(1, Math.ceil((expiresAt.getTime() - Date.now()) / 1000));
 
   const customerFields = {
     admin_id: customerAdminId,
@@ -3013,17 +3019,82 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     /*
      * Persist the paid account before touching RouterOS. The router/API can be
      * temporarily unavailable after payment; keeping the customer and linking
-     * the transaction makes the same checkout or receipt retryable.
+     * the transaction makes the same checkout or receipt retryable. New
+     * accounts are claimed under a database row lock so concurrent retries
+     * cannot create multiple usernames for one payment.
      */
-    const customerRows = reusableCustomer
-      ? await sbUpdateStrict("isp_customers", `id=eq.${reusableCustomer.id}&admin_id=eq.${customerAdminId}`, customerFields)
-      : await sbInsertStrict("isp_customers", { ...customerFields, created_at: new Date().toISOString() });
-    customer = customerRows[0] as { id: number } | undefined;
+    if (reusableCustomer) {
+      const customerRows = await sbUpdateStrict(
+        "isp_customers",
+        `id=eq.${reusableCustomer.id}&admin_id=eq.${customerAdminId}`,
+        customerFields,
+      );
+      customer = customerRows[0] as { id: number } | undefined;
+    } else {
+      const accountClaims = await sbRpc<{ customer_id: number; created_new: boolean }>(
+        "claim_prepaid_hotspot_transaction_account",
+        {
+          p_transaction_id: transaction.id,
+          p_admin_id: adminId,
+          p_plan_id: plan.id,
+          p_router_id: plan.router_id,
+          p_port_id: plan.port_id,
+          p_customer_fields: {
+            ...customerFields,
+            created_at: new Date().toISOString(),
+          },
+        },
+      );
+      const accountClaim = accountClaims[0];
+      if (!accountClaim?.customer_id) {
+        throw new Error("The paid Hotspot account could not be linked to its transaction.");
+      }
+      if (accountClaim.created_new) {
+        customer = { id: accountClaim.customer_id };
+      } else {
+        const claimedCustomers = await sbSelectStrict<(typeof linkedCustomers)[number]>(
+          "isp_customers",
+          `id=eq.${accountClaim.customer_id}&admin_id=eq.${customerAdminId}&type=eq.hotspot${portalScope ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}` : ""}&select=id,username,password,mac_address,ip_address,status,depletion_reason,expires_at&limit=1`,
+        );
+        const claimedCustomer = claimedCustomers[0];
+        if (!claimedCustomer) {
+          throw new Error("The checkout is linked to an account outside the selected Hotspot service.");
+        }
+        if (claimedCustomer.depletion_reason === "data_limit") {
+          res.status(409).json({
+            ok: false,
+            error: "The data allowance on this paid package has been used. Purchase a new package to reconnect.",
+          });
+          return;
+        }
+        if (
+          !claimedCustomer.username
+          || !claimedCustomer.password
+          || !isPrepaidCustomerEntitled(
+            claimedCustomer.status,
+            claimedCustomer.expires_at,
+            claimedCustomer.depletion_reason,
+            Date.now(),
+            true,
+          )
+        ) {
+          res.status(409).json({
+            ok: false,
+            error: "The paid Hotspot account linked to this transaction is unavailable. No replacement username was created.",
+          });
+          return;
+        }
+        hotspotUsername = claimedCustomer.username;
+        hotspotPassword = claimedCustomer.password;
+        expiresAt = new Date(claimedCustomer.expires_at!);
+        remainingExpirySeconds = Math.max(1, Math.ceil((expiresAt.getTime() - Date.now()) / 1000));
+        isSameCheckoutRetry = true;
+        customer = { id: claimedCustomer.id };
+      }
+    }
     if (!customer?.id) throw new Error("The paid hotspot customer account could not be saved.");
 
     await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
-      customer_id: customer.id,
-      plan_id: plan.id,
       notes: `M-Pesa payment verified; prepaid hotspot account saved and awaiting router access on ${routerRow.name}.`,
     });
   } catch (error) {
@@ -3129,9 +3200,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       });
     }
 
-     await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
-      customer_id: customer.id,
-      plan_id: plan.id,
+    await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
       notes: `M-Pesa payment verified; hotspot credentials assigned on ${routerRow.name}${routerConnected ? " and the device session is active." : paidBindingApplied ? "; MAC access is set up and session activation is pending." : "; device binding is pending."}`,
     });
     res.json({

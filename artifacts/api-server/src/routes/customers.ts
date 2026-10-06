@@ -1780,6 +1780,327 @@ async function lookupLatestHotspotPurchase(
 }
 
 /*
+ * POST /api/customers/hotspot-tv-status
+ * Diagnose one paid TV checkout without creating an account or changing RouterOS.
+ * The checkout reference and stored target MAC keep the check tied to the TV
+ * purchase rather than the phone/browser that opened the portal.
+ */
+router.post("/customers/hotspot-tv-status", async (req, res): Promise<void> => {
+  const portalScope = req.hotspotPortalContext;
+  const adminId = portalScope?.adminId ?? Number(req.body?.adminId);
+  const checkoutId = String(req.body?.checkout_id ?? "").trim();
+  const requestedMac = normalisePortalMac(req.body?.mac_address);
+
+  if (
+    !Number.isSafeInteger(adminId)
+    || adminId < 1
+    || !/^[A-Za-z0-9_-]{8,128}$/.test(checkoutId)
+    || !requestedMac
+  ) {
+    res.status(400).json({ ok: false, error: "A valid TV purchase and device MAC are required." });
+    return;
+  }
+
+  try {
+    const transaction = (await sbSelectStrict<{
+      id: number;
+      status: string;
+      payment_method: string;
+      customer_id: number | null;
+      plan_id: number | null;
+      mac_address: string | null;
+    }>(
+      "isp_transactions",
+      `reference=eq.${encodeURIComponent(checkoutId)}&admin_id=eq.${adminId}&payment_method=eq.mpesa&select=id,status,payment_method,customer_id,plan_id,mac_address&limit=1`,
+    ))[0];
+
+    if (!transaction) {
+      res.status(404).json({ ok: false, error: "We could not find that TV purchase on this hotspot." });
+      return;
+    }
+
+    const transactionMac = normalisePortalMac(transaction.mac_address);
+    if (transactionMac && transactionMac !== requestedMac) {
+      res.status(409).json({ ok: false, error: "The device MAC does not match the TV linked to this payment." });
+      return;
+    }
+
+    const paid = ["completed", "paid", "success"].includes(String(transaction.status).toLowerCase());
+    if (!paid) {
+      const failed = ["failed", "cancelled", "canceled"].includes(String(transaction.status).toLowerCase());
+      res.json({
+        ok: true,
+        status: failed ? "payment_failed" : "payment_pending",
+        paymentStatus: failed ? "failed" : "pending",
+        packageStatus: "unavailable",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        retryAvailable: false,
+        message: failed
+          ? "This payment was not completed. Check your M-Pesa message before trying again."
+          : "The payment is not confirmed yet. Keep this page open and check again shortly.",
+      });
+      return;
+    }
+
+    if (!transactionMac) {
+      res.status(409).json({ ok: false, error: "The device MAC does not match the TV linked to this payment." });
+      return;
+    }
+
+    if (!transaction.plan_id) {
+      res.json({
+        ok: true,
+        status: "package_unavailable",
+        paymentStatus: "paid",
+        packageStatus: "unavailable",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        retryAvailable: false,
+        message: "Payment is confirmed, but package details are not available yet. Please contact your ISP.",
+      });
+      return;
+    }
+
+    const plan = (await sbSelectStrict<PlanRow>(
+      "isp_plans",
+      `id=eq.${transaction.plan_id}&admin_id=eq.${adminId}${portalScope
+        ? `&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&owner_reseller_id=eq.${portalScope.resellerId}`
+        : ""}&select=id,name,type,router_id,port_id,owner_reseller_id&limit=1`,
+    ))[0];
+
+    if (!plan || normalizePlanServiceType(plan.type) !== "hotspot") {
+      res.status(404).json({ ok: false, error: "This TV purchase is not available on the current hotspot service." });
+      return;
+    }
+
+    if (!transaction.customer_id) {
+      res.json({
+        ok: true,
+        status: "account_pending",
+        paymentStatus: "paid",
+        packageStatus: "pending",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        retryAvailable: true,
+        message: "Payment is confirmed. The TV package account is still being prepared; retry activation to finish setup.",
+      });
+      return;
+    }
+
+    const customer = (await sbSelectStrict<Pick<
+      CustomerRow,
+      "id" | "admin_id" | "mac_address" | "username" | "type" | "router_id" | "port_id"
+        | "status" | "expires_at" | "depletion_reason"
+    >>(
+      "isp_customers",
+      `id=eq.${transaction.customer_id}&select=id,admin_id,mac_address,username,type,router_id,port_id,status,expires_at,depletion_reason&limit=1`,
+    ))[0];
+
+    const customerBelongsToScope = customer && (
+      portalScope
+        ? customer.admin_id === portalScope.resellerId
+          && customer.type === "hotspot"
+          && customer.router_id === portalScope.routerId
+          && customer.port_id === portalScope.portId
+        : customer.admin_id === adminId && customer.type === "hotspot"
+    );
+    if (!customer) {
+      res.json({
+        ok: true,
+        status: "account_pending",
+        paymentStatus: "paid",
+        packageStatus: "pending",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        retryAvailable: true,
+        message: "Payment is confirmed, but the TV account is not ready yet. Retry activation to finish setup.",
+      });
+      return;
+    }
+    if (!customerBelongsToScope || normalisePortalMac(customer.mac_address) !== requestedMac) {
+      res.status(404).json({ ok: false, error: "This TV purchase is not available on the current hotspot service." });
+      return;
+    }
+    if (!String(customer.username ?? "").trim()) {
+      res.json({
+        ok: true,
+        status: "account_pending",
+        paymentStatus: "paid",
+        packageStatus: "pending",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        retryAvailable: true,
+        message: "Payment is confirmed, but the TV account is not ready yet. Retry activation to finish setup.",
+      });
+      return;
+    }
+
+    const expiresAt = customer.expires_at;
+    const entitlementNow = Date.now();
+    if (customer.depletion_reason === "data_limit") {
+      res.json({
+        ok: true,
+        status: "package_depleted",
+        paymentStatus: "paid",
+        packageStatus: "depleted",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "The package data allowance has been used. Purchase a new package to reconnect this TV.",
+      });
+      return;
+    }
+    if (isPrepaidCustomerExpired(customer.status, expiresAt, customer.depletion_reason, entitlementNow)) {
+      res.json({
+        ok: true,
+        status: "package_expired",
+        paymentStatus: "paid",
+        packageStatus: "expired",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "This TV package has expired. Purchase a new package to reconnect.",
+      });
+      return;
+    }
+    if (!isPrepaidCustomerEntitled(customer.status, expiresAt, customer.depletion_reason, entitlementNow)) {
+      res.json({
+        ok: true,
+        status: "package_inactive",
+        paymentStatus: "paid",
+        packageStatus: "inactive",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "The TV account is not active. Contact your ISP for help.",
+      });
+      return;
+    }
+
+    const routerId = customer.router_id ?? plan.router_id;
+    if (!routerId || (portalScope && routerId !== portalScope.routerId)) {
+      res.json({
+        ok: true,
+        status: "router_unavailable",
+        paymentStatus: "paid",
+        packageStatus: "active",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: false,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "The package is active, but its hotspot router is not available for a connection check.",
+      });
+      return;
+    }
+
+    const routerRow = (await sbSelectStrict<RouterRow>(
+      "isp_routers",
+      `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    ))[0];
+    if (!routerRow) {
+      res.json({
+        ok: true,
+        status: "router_unavailable",
+        paymentStatus: "paid",
+        packageStatus: "active",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: false,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "The package is active, but the hotspot router is offline or unavailable. Check again shortly.",
+      });
+      return;
+    }
+
+    try {
+      const creds = routerCredentials(routerRow);
+      const activeUsers = await fetchHotspotUsers(creds);
+      const username = String(customer.username).trim();
+      const connected = activeUsers.some(user =>
+        user.user === username && normalisePortalMac(user.macAddress) === requestedMac,
+      );
+      let deviceVisible: boolean | null = connected;
+      if (!connected) {
+        try {
+          deviceVisible = Boolean(await resolveHotspotClientIpByMac(creds, requestedMac));
+        } catch {
+          deviceVisible = null;
+        }
+      }
+
+      const status = connected
+        ? "connected"
+        : deviceVisible === true
+          ? "login_needed"
+          : deviceVisible === false
+            ? "device_not_seen"
+            : "router_check_partial";
+      const message = connected
+        ? "RouterOS confirms this TV is connected. If streaming still fails, reconnect the TV to Wi-Fi and reopen the streaming app."
+        : deviceVisible === true
+          ? "The package is active and the router sees this TV, but its hotspot session is not active. Retry TV sign-in."
+          : deviceVisible === false
+            ? "The router cannot see this TV MAC. Connect the TV to the hotspot Wi-Fi and check its MAC; a router or extender between the TV and hotspot may hide the TV’s MAC."
+            : "The router responded, but could not confirm whether this TV is on the hotspot. Check again shortly.";
+
+      res.json({
+        ok: true,
+        status,
+        paymentStatus: "paid",
+        packageStatus: "active",
+        connected,
+        deviceVisible,
+        routerReachable: true,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: !connected && deviceVisible === true,
+        message,
+      });
+    } catch (error) {
+      logger.warn({ err: error, adminId, routerId }, "[customers/hotspot-tv-status] RouterOS read failed");
+      res.json({
+        ok: true,
+        status: "router_unavailable",
+        paymentStatus: "paid",
+        packageStatus: "active",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: false,
+        planName: plan.name,
+        expiresAt,
+        retryAvailable: false,
+        message: "The package is active, but the router could not be reached for a connection check. Try again shortly.",
+      });
+    }
+  } catch (error) {
+    logger.warn({ err: error, adminId }, "[customers/hotspot-tv-status] status lookup failed");
+    res.status(503).json({ ok: false, error: "TV package status is temporarily unavailable. Please try again." });
+  }
+});
+
+/*
  * POST /api/customers/hotspot-troubleshoot
  * The check action reads only the latest confirmed purchase tied to this
  * device MAC. Login re-runs that same entitlement check before using the
@@ -1792,6 +2113,36 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
   const action = req.body?.action === "login" ? "login" : "check";
   // Landing-page expiry checks only need database status; login requests must still verify hard-cap usage.
   const expiryOnlyCheck = action === "check" && req.body?.expiry_only === true;
+  const reconnectTimingStartedAt = process.hrtime.bigint();
+  const reconnectStageDurationsMs: Record<string, number> = {};
+  let reconnectTimingOutcome = "early_exit";
+  let sessionDisconnectCalls = 0;
+  let successfulSessionDisconnectCalls = 0;
+  const measureReconnectStage = async <T>(
+    stage: string,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    const startedAt = process.hrtime.bigint();
+    try {
+      return await operation();
+    } finally {
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+      reconnectStageDurationsMs[stage] = Math.round(durationMs * 10) / 10;
+    }
+  };
+  res.once("finish", () => {
+    if (action !== "login" || Object.keys(reconnectStageDurationsMs).length === 0) return;
+    const totalMs = Number(process.hrtime.bigint() - reconnectTimingStartedAt) / 1_000_000;
+    logger.info({
+      event: "hotspot.reconnect.timing",
+      outcome: reconnectTimingOutcome,
+      statusCode: res.statusCode,
+      totalMs: Math.round(totalMs * 10) / 10,
+      stageDurationsMs: reconnectStageDurationsMs,
+      sessionDisconnectCalls,
+      successfulSessionDisconnectCalls,
+    }, "[customers/hotspot-troubleshoot] reconnect timing");
+  });
 
   if (!Number.isSafeInteger(adminId) || adminId < 1 || !requestedMac) {
     res.status(400).json({ ok: false, error: "ISP context and the hotspot device MAC address are required." });
@@ -1803,18 +2154,23 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
     : undefined;
   if (!portalScope && !expiryOnlyCheck) {
     try {
-      const resolvedTarget = await resolveHotspotTargetScope(
-        adminId,
-        undefined,
-        req.body?.router_id,
-        req.body?.port_id,
+      const resolvedTarget = await measureReconnectStage(
+        "target_scope_resolution",
+        () => resolveHotspotTargetScope(
+          adminId,
+          undefined,
+          req.body?.router_id,
+          req.body?.port_id,
+        ),
       );
       if (resolvedTarget.error) {
+        reconnectTimingOutcome = "target_scope_invalid";
         res.status(400).json({ ok: false, error: resolvedTarget.error });
         return;
       }
       targetScope = resolvedTarget.scope;
     } catch (error) {
+      reconnectTimingOutcome = "target_scope_error";
       logger.warn({ err: error, adminId }, "[customers/hotspot-troubleshoot] target service validation failed");
       res.status(503).json({ ok: false, error: "Could not verify the selected Hotspot service. Please try again." });
       return;
@@ -1823,8 +2179,12 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
 
   let lookup: HotspotPurchaseLookup;
   try {
-    lookup = await lookupLatestHotspotPurchase(adminId, requestedMac, portalScope, targetScope);
+    lookup = await measureReconnectStage(
+      "purchase_lookup",
+      () => lookupLatestHotspotPurchase(adminId, requestedMac, portalScope, targetScope),
+    );
   } catch (error) {
+    reconnectTimingOutcome = "purchase_lookup_error";
     logger.error({ err: error, adminId, macAddress: requestedMac }, "[customers/hotspot-troubleshoot] purchase lookup failed");
     res.status(503).json({ ok: false, error: "Could not verify the latest hotspot purchase. Please try again." });
     return;
@@ -1853,11 +2213,14 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
     try {
       let totalBytesUsed: number | null = null;
       if (needsSharedUsageRead && targetScope) {
-        sharedUsageSnapshot = await loadSharedRoamingUsage(
-          adminId,
-          plan,
-          String(customer.username ?? ""),
-          targetScope.routerId,
+        sharedUsageSnapshot = await measureReconnectStage(
+          "quota_shared_usage_read",
+          () => loadSharedRoamingUsage(
+            adminId,
+            plan,
+            String(customer.username ?? ""),
+            targetScope.routerId,
+          ),
         );
         totalBytesUsed = sharedUsageSnapshot.totalBytes;
       } else if ((!targetScope || planServiceType === "vlan") && capBytes !== null && plan.data_cap_mode !== "throttle") {
@@ -1868,7 +2231,10 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
           `id=eq.${sourceRouterId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
         ))[0];
         if (!routerRow) throw new Error("The assigned hotspot router could not be found.");
-        const usage = await fetchHotspotUserUsage(routerCredentials(routerRow), String(customer.username ?? ""));
+        const usage = await measureReconnectStage(
+          "quota_router_usage_read",
+          () => fetchHotspotUserUsage(routerCredentials(routerRow), String(customer.username ?? "")),
+        );
         totalBytesUsed = (usage?.bytesIn ?? 0) + (usage?.bytesOut ?? 0);
       }
       if (
@@ -1895,6 +2261,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       lookup.error = "The router could not verify this package's remaining data. Please try again shortly.";
     }
   }
+  reconnectTimingOutcome = lookup.status;
   const response = {
     ok: true,
     found: lookup.found,
@@ -1945,12 +2312,16 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
     const portalOwnerFilter = portalScope
       ? `&assigned_reseller_id=eq.${portalScope.resellerId}&handoff_mode=eq.vlan_services`
       : "&assigned_reseller_id=is.null";
-    const servicePorts = await sbSelectStrict<VlanPortRow>(
-      "isp_reseller_ports",
-      `id=eq.${targetScope.portId}&admin_id=eq.${adminId}&router_id=eq.${targetScope.routerId}${portalOwnerFilter}&status=eq.active&hotspot_enabled=is.true&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status,hotspot_enabled,link_status&limit=1`,
+    const servicePorts = await measureReconnectStage(
+      "target_port_lookup",
+      () => sbSelectStrict<VlanPortRow>(
+        "isp_reseller_ports",
+        `id=eq.${targetScope.portId}&admin_id=eq.${adminId}&router_id=eq.${targetScope.routerId}${portalOwnerFilter}&status=eq.active&hotspot_enabled=is.true&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status,hotspot_enabled,link_status&limit=1`,
+      ),
     );
     const servicePort = servicePorts[0];
     if (!servicePort) {
+      reconnectTimingOutcome = "service_inactive";
       res.status(409).json({ ...response, ok: false, error: "The selected Hotspot service is not active." });
       return;
     }
@@ -1959,45 +2330,73 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       customer.type === "vlan"
       && (!isValidIpv4(customer.ip_address) || !ipv4InSubnet(customer.ip_address, servicePort.subnet_range))
     ) {
+      reconnectTimingOutcome = "vlan_ip_mismatch";
       res.status(409).json({ ...response, ok: false, error: "This VLAN account does not have a valid IP on the assigned service." });
       return;
     }
   }
 
   try {
-    const loginResult = await withCustomerEditLock(customer.admin_id, customer.id, async assertLock => {
+    const loginResult = await measureReconnectStage(
+      "customer_lock_and_reconnect",
+      () => withCustomerEditLock(customer.admin_id, customer.id, async assertLock => {
       await assertLock();
       let usageSnapshot = sharedUsageSnapshot;
       if (targetScope && planServiceType !== "vlan") {
-        // Load all source/destination routers before moving the session. The
-        // second read after disconnect captures RouterOS's final counters.
-        usageSnapshot = await loadSharedRoamingUsage(adminId, plan, username, routerId);
-        const scopedRouterRows = await sbSelectStrict<RouterRow>(
-          "isp_routers",
-          `admin_id=eq.${adminId}&id=in.(${usageSnapshot.routerIds.join(",")})&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=100`,
+        // Re-read usage after a disconnect to capture RouterOS's final counters.
+        const preLoginUsageSnapshot = await measureReconnectStage(
+          "pre_login_shared_usage_read",
+          () => loadSharedRoamingUsage(adminId, plan, username, routerId),
         );
-        if (scopedRouterRows.length !== usageSnapshot.routerIds.length) {
+        usageSnapshot = preLoginUsageSnapshot;
+        let sessionDisconnected = false;
+        const scopedRouterRows = await measureReconnectStage(
+          "router_scope_lookup",
+          () => sbSelectStrict<RouterRow>(
+            "isp_routers",
+            `admin_id=eq.${adminId}&id=in.(${preLoginUsageSnapshot.routerIds.join(",")})&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=100`,
+          ),
+        );
+        if (scopedRouterRows.length !== preLoginUsageSnapshot.routerIds.length) {
           throw new Error("A MikroTik needed to verify the shared package could not be found.");
         }
-        for (const otherRouter of scopedRouterRows) {
-          if (otherRouter.id === routerId) continue;
-          await assertLock();
-          await disconnectHotspotActiveUser(routerCredentials(otherRouter), username);
-        }
-        const desiredHotspotServer = targetScope.portId === null ? "all" : hotspotServer;
-        if (desiredHotspotServer && desiredHotspotServer !== "all") {
-          const localSessions = await fetchHotspotUsers(creds);
-          const sessionOnAnotherService = localSessions.some(user =>
-            user.user === username
-            && user.server !== desiredHotspotServer,
-          );
-          if (sessionOnAnotherService) {
+        await measureReconnectStage("router_session_cleanup", async () => {
+          for (const otherRouter of scopedRouterRows) {
+            if (otherRouter.id === routerId) continue;
             await assertLock();
-            await disconnectHotspotActiveUser(creds, username);
+            sessionDisconnectCalls += 1;
+            if (await disconnectHotspotActiveUser(routerCredentials(otherRouter), username)) {
+              sessionDisconnected = true;
+              successfulSessionDisconnectCalls += 1;
+            }
           }
+          const desiredHotspotServer = targetScope.portId === null ? "all" : hotspotServer;
+          if (desiredHotspotServer && desiredHotspotServer !== "all") {
+            const localSessions = await measureReconnectStage(
+              "local_active_session_read",
+              () => fetchHotspotUsers(creds),
+            );
+            const sessionOnAnotherService = localSessions.some(user =>
+              user.user === username
+              && user.server !== desiredHotspotServer,
+            );
+            if (sessionOnAnotherService) {
+              await assertLock();
+              sessionDisconnectCalls += 1;
+              if (await disconnectHotspotActiveUser(creds, username)) {
+                sessionDisconnected = true;
+                successfulSessionDisconnectCalls += 1;
+              }
+            }
+          }
+        });
+        if (sessionDisconnected) {
+          await assertLock();
+          usageSnapshot = await measureReconnectStage(
+            "usage_refresh_after_disconnect",
+            () => loadSharedRoamingUsage(adminId, plan, username, routerId),
+          );
         }
-        await assertLock();
-        usageSnapshot = await loadSharedRoamingUsage(adminId, plan, username, routerId);
       }
 
       if (
@@ -2076,56 +2475,69 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
         }
 
         await assertLock();
-        await reconcileHotspotUserAccess(creds, {
-          name: username,
-          password,
-          profile: profileName,
-          server: hotspotRoamingUserServer(plan.router_id, routerId, hotspotServer),
-          ...(isCrossRouter ? { comment: roamingTag } : {}),
-          expiresAt: customer.expires_at,
-          enabled: customer.status === "active",
-          limitBytesTotal: plan.data_cap_mode === "throttle" ? "0" : localLimitBytes,
-          macAddress: requestedMac,
-          rateLimit: fupSpeedLimit ?? routerRateLimit(
-            plan.speed_down,
-            plan.speed_up,
-            plan.speed_down_unit ?? "Mbps",
-            plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
-          ),
-          dataCapMode: plan.data_cap_mode === "throttle" ? "throttle" : "disconnect",
-          ...(fupThresholdBytes !== undefined && fupSpeedLimit ? {
-            fupLimitBytes: fupThresholdBytes,
-            fupSpeedDownMbps: plan.fup_speed_down ?? undefined,
-            fupSpeedUpMbps: plan.fup_speed_up ?? undefined,
-          } : {}),
-          sharedUsers: plan.shared_users ?? 1,
-          preserveActiveSession: true,
-          resetCounters: false,
-        });
+        await measureReconnectStage("router_user_reconciliation", () =>
+          reconcileHotspotUserAccess(creds, {
+            name: username,
+            password,
+            profile: profileName,
+            server: hotspotRoamingUserServer(plan.router_id, routerId, hotspotServer),
+            ...(isCrossRouter ? { comment: roamingTag } : {}),
+            expiresAt: customer.expires_at,
+            enabled: customer.status === "active",
+            limitBytesTotal: plan.data_cap_mode === "throttle" ? "0" : localLimitBytes,
+            macAddress: requestedMac,
+            rateLimit: fupSpeedLimit ?? routerRateLimit(
+              plan.speed_down,
+              plan.speed_up,
+              plan.speed_down_unit ?? "Mbps",
+              plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
+            ),
+            dataCapMode: plan.data_cap_mode === "throttle" ? "throttle" : "disconnect",
+            ...(fupThresholdBytes !== undefined && fupSpeedLimit ? {
+              fupLimitBytes: fupThresholdBytes,
+              fupSpeedDownMbps: plan.fup_speed_down ?? undefined,
+              fupSpeedUpMbps: plan.fup_speed_up ?? undefined,
+            } : {}),
+            sharedUsers: plan.shared_users ?? 1,
+            preserveActiveSession: true,
+            resetCounters: false,
+          }),
+        );
       }
 
-      const activeUsers = await fetchHotspotUsers(creds);
+      const activeUsers = await measureReconnectStage(
+        "router_active_session_read",
+        () => fetchHotspotUsers(creds),
+      );
       const connected = activeUsers.some(user =>
         user.user === username && normalisePortalMac(user.macAddress) === requestedMac,
       );
       if (connected) return { kind: "connected" as const };
 
-      const discoveredIp = await resolveHotspotClientIpByMac(creds, requestedMac);
+      const discoveredIp = await measureReconnectStage(
+        "router_ip_discovery",
+        () => resolveHotspotClientIpByMac(creds, requestedMac),
+      );
       if (!discoveredIp) return { kind: "device-not-found" as const };
       if (portalScope && customer.type === "vlan" && discoveredIp !== customer.ip_address) {
         return { kind: "vlan-ip-mismatch" as const };
       }
 
       await assertLock();
-      const loginAccepted = await connectHotspotUser(creds, {
-        user: username,
-        password,
-        ip: customer.type === "vlan" ? String(customer.ip_address) : discoveredIp,
-        macAddress: requestedMac,
-        ...(targetScope ? { server: hotspotServer ?? "all" } : {}),
-      });
+      const loginAccepted = await measureReconnectStage(
+        "routeros_login_and_confirmation",
+        () => connectHotspotUser(creds, {
+          user: username,
+          password,
+          ip: customer.type === "vlan" ? String(customer.ip_address) : discoveredIp,
+          macAddress: requestedMac,
+          ...(targetScope ? { server: hotspotServer ?? "all" } : {}),
+        }),
+      );
       return loginAccepted ? { kind: "connected" as const } : { kind: "login-pending" as const };
-    });
+    }),
+    );
+    reconnectTimingOutcome = loginResult.kind;
     if (loginResult.kind === "depleted") {
       res.json({ ...response, status: "depleted", error: lookup.error });
       return;
@@ -2139,6 +2551,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       return;
     }
     if (loginResult.kind === "vlan-ip-mismatch") {
+      reconnectTimingOutcome = "vlan_ip_mismatch";
       res.status(409).json({
         ...response,
         ok: false,
@@ -2147,6 +2560,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       return;
     }
     if (loginResult.kind === "login-pending") {
+      reconnectTimingOutcome = "login_pending";
       res.status(503).json({
         ...response,
         ok: false,
@@ -2157,6 +2571,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
     }
     res.json({ ...response, connected: true });
   } catch (error) {
+    reconnectTimingOutcome = "router_error";
     logger.warn({ err: error, adminId, routerId, macAddress: requestedMac }, "[customers/hotspot-troubleshoot] router connection attempt failed");
     res.status(503).json({
       ...response,

@@ -73,7 +73,51 @@ interface ConnectedDevice {
   routerId: number;
   routerName: string;
 }
+type TvPackageDiagnosticStatus =
+  | "payment_pending"
+  | "payment_failed"
+  | "package_unavailable"
+  | "account_pending"
+  | "package_depleted"
+  | "package_expired"
+  | "package_inactive"
+  | "router_unavailable"
+  | "connected"
+  | "login_needed"
+  | "device_not_seen"
+  | "router_check_partial"
+  | "check_unavailable";
+interface TvPackageDiagnostic {
+  status: TvPackageDiagnosticStatus;
+  paymentStatus: "paid" | "pending" | "failed" | "unknown";
+  packageStatus: "active" | "pending" | "depleted" | "expired" | "inactive" | "unavailable" | "unknown";
+  connected: boolean;
+  deviceVisible: boolean | null;
+  routerReachable: boolean | null;
+  planName?: string | null;
+  expiresAt?: string | null;
+  retryAvailable: boolean;
+  message: string;
+}
 type Tab = "plans" | "tv" | "voucher";
+
+function tvPackageDiagnosticTitle(status: TvPackageDiagnosticStatus): string {
+  switch (status) {
+    case "payment_pending": return "Payment still pending";
+    case "payment_failed": return "Payment not completed";
+    case "package_unavailable": return "Package details unavailable";
+    case "account_pending": return "TV setup is still in progress";
+    case "package_depleted": return "Package data used";
+    case "package_expired": return "Package expired";
+    case "package_inactive": return "Package inactive";
+    case "router_unavailable": return "Router check unavailable";
+    case "connected": return "TV connected";
+    case "login_needed": return "TV needs hotspot sign-in";
+    case "device_not_seen": return "TV not visible to hotspot";
+    case "router_check_partial": return "TV check incomplete";
+    case "check_unavailable": return "Could not check TV status";
+  }
+}
 
 function positivePortalId(value: unknown): number | null {
   const parsed = Number(value);
@@ -480,6 +524,8 @@ function HotspotLoginView({
   const [accessReady, setAccessReady] = useState(false);
   const [portalHandoffReady, setPortalHandoffReady] = useState(false);
   const [accessRetrying, setAccessRetrying] = useState(false);
+  const [tvDiagnostic, setTvDiagnostic] = useState<TvPackageDiagnostic | null>(null);
+  const [tvDiagnosticLoading, setTvDiagnosticLoading] = useState(false);
   const [paymentFailed, setPaymentFailed] = useState(false);
   const [hotspotCredentials, setHotspotCredentials] = useState<HotspotCredentials | null>(null);
   const bindingInFlight = useRef(false);
@@ -724,6 +770,81 @@ function HotspotLoginView({
     savedTvDevicesStorageKey,
   ]);
 
+  const checkTvPackageStatus = useCallback(async (): Promise<TvPackageDiagnostic> => {
+    if (!checkoutId || !deviceMacAddress) {
+      const unavailable: TvPackageDiagnostic = {
+        status: "check_unavailable",
+        paymentStatus: "unknown",
+        packageStatus: "unknown",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        retryAvailable: false,
+        message: "This page no longer has the TV purchase details. Reopen the original purchase page to check its status.",
+      };
+      setTvDiagnostic(unavailable);
+      return unavailable;
+    }
+
+    setTvDiagnosticLoading(true);
+    try {
+      const response = await hotspotPortalFetch(hotspotApiUrl("/api/customers/hotspot-tv-status"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          checkout_id: checkoutId,
+          mac_address: normalizeMacAddress(deviceMacAddress),
+          ...(adminId ? { adminId } : {}),
+          ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
+          ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+        }),
+      });
+      const data = await response.json() as Partial<TvPackageDiagnostic> & {
+        ok?: boolean;
+        error?: string;
+      };
+      if (!response.ok || data.ok !== true || typeof data.status !== "string") {
+        throw new Error(data.error || "TV package status could not be checked.");
+      }
+
+      const result: TvPackageDiagnostic = {
+        status: data.status as TvPackageDiagnosticStatus,
+        paymentStatus: data.paymentStatus === "paid" || data.paymentStatus === "pending" || data.paymentStatus === "failed"
+          ? data.paymentStatus
+          : "unknown",
+        packageStatus: data.packageStatus === "active" || data.packageStatus === "pending"
+          || data.packageStatus === "depleted" || data.packageStatus === "expired"
+          || data.packageStatus === "inactive" || data.packageStatus === "unavailable"
+          ? data.packageStatus
+          : "unknown",
+        connected: data.connected === true,
+        deviceVisible: typeof data.deviceVisible === "boolean" ? data.deviceVisible : null,
+        routerReachable: typeof data.routerReachable === "boolean" ? data.routerReachable : null,
+        planName: typeof data.planName === "string" ? data.planName : null,
+        expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
+        retryAvailable: data.retryAvailable === true,
+        message: typeof data.message === "string" ? data.message : "TV package status checked.",
+      };
+      setTvDiagnostic(result);
+      return result;
+    } catch (error) {
+      const unavailable: TvPackageDiagnostic = {
+        status: "check_unavailable",
+        paymentStatus: "unknown",
+        packageStatus: "unknown",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        retryAvailable: false,
+        message: error instanceof Error ? error.message : "TV package status could not be checked. Please try again.",
+      };
+      setTvDiagnostic(unavailable);
+      return unavailable;
+    } finally {
+      setTvDiagnosticLoading(false);
+    }
+  }, [adminId, checkoutId, deviceMacAddress, portalScope.portId, portalScope.routerId]);
+
   useEffect(() => {
     if (!checkoutId || paymentConfirmed || paymentFailed) return;
     setPollTimedOut(false);
@@ -810,7 +931,7 @@ function HotspotLoginView({
     setPhone(phoneValue);
     setDeviceMacAddress(macAddress);
     setDeviceName(normalizedDeviceName);
-    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setAccessReady(false); setPortalHandoffReady(false); setShowTvSuccess(false); setPaidAccessExpiresAt(null); setHotspotCredentials(null); setPollTimedOut(false);
+    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setAccessReady(false); setPortalHandoffReady(false); setShowTvSuccess(false); setPaidAccessExpiresAt(null); setHotspotCredentials(null); setPollTimedOut(false); setTvDiagnostic(null);
     bindingInFlight.current = false;
     try {
       const intentResponse = await hotspotPortalFetch(hotspotApiUrl("/api/mpesa/intent"), {
@@ -2105,6 +2226,16 @@ function HotspotLoginView({
                 <p className="hp-tv-expiry">Access expires {formatSessionExpiry(paidAccessExpiresAt)}.</p>
               )}
               {tvDeviceSaveNotice && <p className="hp-tv-saved-notice">{tvDeviceSaveNotice}</p>}
+              <button
+                className="hp-tv-dismiss"
+                style={{ marginBottom: 8 }}
+                onClick={() => {
+                  setShowTvSuccess(false);
+                  void checkTvPackageStatus();
+                }}
+              >
+                Check TV package
+              </button>
               <button className="hp-tv-dismiss" onClick={() => setShowTvSuccess(false)}>Done</button>
             </div>
           </div>
@@ -2353,8 +2484,63 @@ function HotspotLoginView({
                             Daraja shortcode: {mpesaStatus.shortcode} {mpesaStatus.env === "sandbox" ? "(Sandbox)" : ""}
                           </p>
                         )}
-                        <button className="hp-btn hp-btn-ghost" disabled={accessRetrying || portalHandoffReady} style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
+                        {isTvMode && tvDiagnostic && (
+                          <div
+                            className="hp-troubleshoot-status"
+                            data-tone={tvDiagnostic.connected ? "active" : tvDiagnostic.status === "package_expired" || tvDiagnostic.status === "package_depleted" || tvDiagnostic.status === "package_inactive" ? "help" : "warning"}
+                            role="status"
+                            aria-live="polite"
+                            style={{ margin: "0 auto 16px", maxWidth: 420, textAlign: "left" }}
+                          >
+                            <div className="hp-troubleshoot-status-heading">
+                              <span className="hp-troubleshoot-status-mark" aria-hidden="true">
+                                {tvDiagnostic.connected ? <CheckCircle2 size={17} /> : <AlertCircle size={17} />}
+                              </span>
+                              <strong>{tvPackageDiagnosticTitle(tvDiagnostic.status)}</strong>
+                            </div>
+                            {tvDiagnostic.planName && (
+                              <p className="hp-troubleshoot-status-copy" style={{ marginBottom: 4 }}>
+                                Package: <strong>{tvDiagnostic.planName}</strong>
+                              </p>
+                            )}
+                            <p className="hp-troubleshoot-status-copy">{tvDiagnostic.message}</p>
+                            {tvDiagnostic.paymentStatus === "paid" && (
+                              <div className="hp-troubleshoot-session-meta">
+                                <div><span>TV MAC</span><strong>{normalizeMacAddress(deviceMacAddress) || "Unavailable"}</strong></div>
+                                <div><span>Router</span><strong>{tvDiagnostic.routerReachable === true ? "Reachable" : tvDiagnostic.routerReachable === false ? "Unavailable" : "Not checked"}</strong></div>
+                                <div><span>TV on hotspot</span><strong>{tvDiagnostic.deviceVisible === true ? "Detected" : tvDiagnostic.deviceVisible === false ? "Not detected" : "Not checked"}</strong></div>
+                                <div><span>Hotspot session</span><strong>{tvDiagnostic.connected ? "Confirmed" : "Not confirmed"}</strong></div>
+                                {tvDiagnostic.expiresAt && (
+                                  <div><span>Package expiry</span><strong>{formatSessionExpiry(tvDiagnostic.expiresAt)}</strong></div>
+                                )}
+                              </div>
+                            )}
+                            {tvDiagnostic.retryAvailable && (
+                              <div className="hp-troubleshoot-note">
+                                Retrying uses this same payment and TV account; it will not create another username.
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {isTvMode && (
+                          <button
+                            type="button"
+                            className="hp-btn hp-btn-ghost"
+                            disabled={tvDiagnosticLoading || accessRetrying}
+                            style={{ width: "auto", display: "inline-flex", padding: "10px 24px", margin: "0 6px 10px" }}
+                            onClick={() => void checkTvPackageStatus()}
+                          >
+                            {tvDiagnosticLoading
+                              ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Checking TV…</>
+                              : <><Tv size={15} /> Check TV package</>}
+                          </button>
+                        )}
+                        <button className="hp-btn hp-btn-ghost" disabled={accessRetrying || portalHandoffReady || (isTvMode && tvDiagnosticLoading)} style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
                           onClick={() => {
+                            if (isTvMode && (tvDiagnostic?.status === "device_not_seen" || tvDiagnostic?.status === "router_unavailable" || tvDiagnostic?.status === "router_check_partial")) {
+                              void checkTvPackageStatus();
+                              return;
+                            }
                             const destination = portalContext.linkOrig || portalContext.linkLogin;
                             if (accessReady && isTvMode) {
                               setShowTvSuccess(true);
@@ -2363,7 +2549,12 @@ function HotspotLoginView({
                             if (accessReady && /^https?:\/\//i.test(destination)) window.location.assign(destination);
                             else if (checkoutId && !accessRetrying) { bindingInFlight.current = true; void bindPaidHotspotAccess(checkoutId, true); }
                           }}>
-                          {accessReady ? (isTvMode ? "Show login confirmation" : "Continue online") : portalHandoffReady ? "Connecting…" : accessRetrying ? "Retrying connection…" : "Retry connection"}
+                          {accessReady ? (isTvMode ? "Show login confirmation" : "Continue online")
+                            : portalHandoffReady ? "Connecting…"
+                              : accessRetrying ? "Retrying connection…"
+                                : isTvMode && tvDiagnostic?.status === "device_not_seen" ? "Check TV again"
+                                  : isTvMode && (tvDiagnostic?.status === "router_unavailable" || tvDiagnostic?.status === "router_check_partial") ? "Check connection again"
+                                    : isTvMode ? "Retry TV sign-in" : "Retry connection"}
                         </button>
                       </>
                     ) : paymentFailed ? (

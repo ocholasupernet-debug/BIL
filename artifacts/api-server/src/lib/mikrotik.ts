@@ -3320,15 +3320,20 @@ export async function changeHotspotUsername(
 export async function disconnectHotspotActiveUser(
   creds: RouterCredentials,
   username: string,
-): Promise<void> {
+): Promise<boolean> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const rows = (await withTimeout(conn.write(["/ip/hotspot/active/print", `?user=${username}`]), ms)) as Record<string, string>[];
     if (!Array.isArray(rows)) throw new Error("MikroTik did not return its active Hotspot sessions.");
+    let disconnected = false;
     for (const row of rows) {
       const id = row[".id"];
-      if (id) await withTimeout(conn.write(["/ip/hotspot/active/remove", `=.id=${id}`]), ms);
+      if (id) {
+        await withTimeout(conn.write(["/ip/hotspot/active/remove", `=.id=${id}`]), ms);
+        disconnected = true;
+      }
     }
+    return disconnected;
   });
 }
 

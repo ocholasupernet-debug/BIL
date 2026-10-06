@@ -5,7 +5,7 @@ import express from "express";
 process.env.SESSION_SECRET = "reseller-portal-route-test-secret";
 process.env.VITE_SUPABASE_URL = "https://reseller-portal-route-test.supabase.co";
 process.env.VITE_SUPABASE_KEY = "reseller-portal-route-test-anon";
-delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+process.env.SUPABASE_SERVICE_ROLE_KEY = "reseller-portal-route-test-service-role";
 delete process.env.SUPABASE_SERVICE_KEY;
 
 const scope = { adminId: 7, resellerId: 19, routerId: 31, portId: 43 };
@@ -232,6 +232,12 @@ test("signed reseller portal requests stay within their assigned service", async
   let customers: Record<string, unknown>[] = [];
   let legacyCheckout = false;
   let includeRouterFixture = false;
+  let requireConcurrentAccountClaims = false;
+  let concurrentAccountClaimCalls = 0;
+  let accountClaimCreations = 0;
+  let releaseAccountClaimBarrier: (() => void) | null = null;
+  let accountClaimBarrier: Promise<void> = Promise.resolve();
+  let accountClaimQueue: Promise<void> = Promise.resolve();
   let resolvedPortalClientMac = "AA:BB:CC:DD:EE:FF";
   const routerOperations: Array<{ name: string; [key: string]: unknown }> = [];
   const recordRouterOperation = (name: string, details: Record<string, unknown> = {}) => {
@@ -294,6 +300,7 @@ test("signed reseller portal requests stay within their assigned service", async
   };
   hotspotPaymentOperations.disconnectHotspotActiveUser = async (_credentials, username) => {
     recordRouterOperation("disconnectUser", { username });
+    return false;
   };
 
   globalThis.fetch = async (input, init) => {
@@ -310,7 +317,37 @@ test("signed reseller portal requests stay within their assigned service", async
     dbRequests.push(request);
 
     let rows: Record<string, unknown>[] = [];
-    if (table === "isp_reseller_ports") {
+    if (table === "claim_prepaid_hotspot_transaction_account" && method === "POST" && body) {
+      if (requireConcurrentAccountClaims) {
+        concurrentAccountClaimCalls += 1;
+        if (concurrentAccountClaimCalls === 2) releaseAccountClaimBarrier?.();
+        await accountClaimBarrier;
+      }
+
+      const previousClaim = accountClaimQueue;
+      let releaseClaim: () => void = () => {};
+      accountClaimQueue = new Promise<void>(resolve => { releaseClaim = resolve; });
+      await previousClaim;
+      try {
+        const transaction = transactions.find(row => Number(row.id) === Number(body.p_transaction_id));
+        const fields = body.p_customer_fields;
+        if (!transaction || !fields || typeof fields !== "object" || Array.isArray(fields)) {
+          rows = [];
+        } else if (transaction.customer_id != null) {
+          const existing = customers.find(row => Number(row.id) === Number(transaction.customer_id));
+          rows = existing ? [{ customer_id: existing.id, created_new: false }] : [];
+        } else {
+          const nextId = Math.max(0, ...customers.map(row => Number(row.id) || 0)) + 1;
+          const created = { ...(fields as Record<string, unknown>), id: nextId };
+          customers.push(created);
+          transaction.customer_id = nextId;
+          accountClaimCreations += 1;
+          rows = [{ customer_id: nextId, created_new: true }];
+        }
+      } finally {
+        releaseClaim();
+      }
+    } else if (table === "isp_reseller_ports") {
       rows = [servicePort, siblingServicePort, ispOwnedServicePort].filter(row => matches(row, query));
     } else if (table === "isp_admins") {
       const admins = [
@@ -728,6 +765,76 @@ test("signed reseller portal requests stay within their assigned service", async
     }
   });
 
+  await t.test("parallel retries for one paid checkout reuse a single Hotspot username", async () => {
+    const concurrentTransaction = {
+      ...assignedTransaction,
+      id: 704,
+      customer_id: null,
+      reference: "parallel-hotspot-checkout",
+    };
+    transactions = [concurrentTransaction];
+    customers = [];
+    routerOperations.length = 0;
+    clearRequests();
+    includeRouterFixture = true;
+    requireConcurrentAccountClaims = true;
+    concurrentAccountClaimCalls = 0;
+    accountClaimCreations = 0;
+    accountClaimBarrier = new Promise<void>(resolve => {
+      releaseAccountClaimBarrier = resolve;
+    });
+
+    try {
+      const responses = await Promise.all([
+        request("/api/mpesa/hotspot-mac-access", {
+          method: "POST",
+          body: {
+            checkout_id: concurrentTransaction.reference,
+            mac_address: assignedCustomer.mac_address,
+            portal_login_handoff: true,
+          },
+        }),
+        request("/api/mpesa/hotspot-mac-access", {
+          method: "POST",
+          body: {
+            checkout_id: concurrentTransaction.reference,
+            mac_address: assignedCustomer.mac_address,
+            portal_login_handoff: true,
+          },
+        }),
+      ]);
+
+      for (const response of responses) {
+        assert.equal(response.status, 200, await response.clone().text());
+      }
+      const payloads = await Promise.all(
+        responses.map(async response => await response.json() as { credentials?: { username?: string } }),
+      );
+      const usernames = payloads.map(payload => payload.credentials?.username);
+
+      assert.equal(concurrentAccountClaimCalls, 2, "both simultaneous requests must contend for the transaction claim");
+      assert.equal(accountClaimCreations, 1, "the transaction may create only one customer account");
+      assert.equal(customers.length, 1);
+      assert.equal(concurrentTransaction.customer_id, customers[0]?.id);
+      assert.ok(usernames[0]);
+      assert.equal(usernames[0], usernames[1], "both retries must return the same username");
+      assert.equal(
+        dbRequests.filter(row => row.table === "isp_customers" && row.method === "POST").length,
+        0,
+        "new accounts must be created only through the atomic transaction claim",
+      );
+      assert.equal(
+        routerOperations.filter(row => row.name === "resetCounters").length,
+        1,
+        "the retry must not reset the paid account's usage counters a second time",
+      );
+    } finally {
+      requireConcurrentAccountClaims = false;
+      releaseAccountClaimBarrier?.();
+      includeRouterFixture = false;
+    }
+  });
+
   await t.test("portal login handoff provisions access without starting an API-side router session", async () => {
     transactions = [{ ...assignedTransaction }];
     customers = [{ ...assignedCustomer }];
@@ -1002,6 +1109,67 @@ test("signed reseller portal requests stay within their assigned service", async
     assert.equal(troubleshooting.status, "active");
     assert.equal(troubleshooting.planName, assignedPlan.name);
     assert.equal(dbRequests.some(row => row.table === "isp_routers"), false);
+  });
+
+  await t.test("TV package status stays purchase-scoped and read-only", async () => {
+    const previousTransactions = transactions;
+    const previousCustomers = customers;
+    const previousRouterFixture = includeRouterFixture;
+    try {
+      transactions = [{ ...assignedTransaction }];
+      customers = [{ ...assignedCustomer }];
+      includeRouterFixture = false;
+      routerOperations.length = 0;
+      clearRequests();
+
+      const tvStatus = await request("/api/customers/hotspot-tv-status", {
+        method: "POST",
+        body: {
+          checkout_id: "assigned-checkout",
+          mac_address: assignedCustomer.mac_address,
+        },
+      });
+      assert.equal(tvStatus.status, 200, await tvStatus.clone().text());
+      const status = await tvStatus.json() as {
+        status: string;
+        paymentStatus: string;
+        packageStatus: string;
+        connected: boolean;
+        retryAvailable: boolean;
+        username?: string;
+        credentials?: unknown;
+      };
+      assert.equal(status.status, "router_unavailable");
+      assert.equal(status.paymentStatus, "paid");
+      assert.equal(status.packageStatus, "active");
+      assert.equal(status.connected, false);
+      assert.equal(status.retryAvailable, false);
+      assert.equal(status.username, undefined);
+      assert.equal(status.credentials, undefined);
+      assert.ok(dbRequests.some(row => row.table === "isp_plans"
+        && row.rawQuery.includes("id=eq.501")
+        && row.rawQuery.includes("router_id=eq.31")
+        && row.rawQuery.includes("port_id=eq.43")
+        && row.rawQuery.includes("owner_reseller_id=eq.19")));
+      assert.equal(dbRequests.some(row => row.method !== "GET"), false);
+      assert.equal(routerOperations.length, 0);
+
+      clearRequests();
+      const wrongMac = await request("/api/customers/hotspot-tv-status", {
+        method: "POST",
+        body: {
+          checkout_id: "assigned-checkout",
+          mac_address: "AA:BB:CC:DD:EE:00",
+        },
+      });
+      assert.equal(wrongMac.status, 409);
+      assert.equal(dbRequests.some(row => row.table === "isp_routers"), false);
+      assert.equal(dbRequests.some(row => row.method !== "GET"), false);
+    } finally {
+      transactions = previousTransactions;
+      customers = previousCustomers;
+      includeRouterFixture = previousRouterFixture;
+    }
   });
 
   await t.test("portal expiry checks skip router quota reads", async () => {
