@@ -106,6 +106,7 @@ const siblingTransaction = {
   mac_address: "AA:BB:CC:DD:EE:FF",
   mpesa_receipt: "AB12345678",
   reference: "sibling-checkout",
+  amount: 200,
   status: "paid",
   payment_method: "mpesa",
   created_at: "2026-09-28T12:00:00.000Z",
@@ -154,6 +155,7 @@ const assignedTransaction = {
   mac_address: "AA:BB:CC:DD:EE:FF",
   mpesa_receipt: "CD12345678",
   reference: "assigned-checkout",
+  amount: 100,
   status: "paid",
   payment_method: "mpesa",
   created_at: "2026-09-29T12:00:00.000Z",
@@ -388,6 +390,12 @@ test("signed reseller portal requests stay within their assigned service", async
         { admin_id: 7, accent_color: "#123456", portal_background: "midnight", portal_package_shape: "rounded" },
         { admin_id: 19, accent_color: "#e14b2f", portal_background: "ocean", portal_package_shape: "pill" },
       ].filter(row => matches(row, query));
+    } else if (table === "platform_role_permissions") {
+      rows = [{
+        role_name: query.get("role_name"),
+        permission_key: query.get("permission_key"),
+        enabled: true,
+      }];
     } else if (table === "platform_secure_settings" || table === "reseller_payment_gateway_routes") {
       rows = [];
     }
@@ -732,6 +740,148 @@ test("signed reseller portal requests stay within their assigned service", async
       assertNoRouterOrWrites();
     } finally {
       servicePort.assigned_reseller_id = 19;
+    }
+  });
+
+  await t.test("paid Hotspot recovery report is read-only, tenant-scoped, and omits purchase phone data", async () => {
+    transactions = [
+      {
+        ...assignedTransaction,
+        id: 706,
+        customer_id: null,
+        reference: "recovery-checkout-706",
+      },
+      {
+        ...siblingTransaction,
+        id: 707,
+        customer_id: null,
+        reference: "sibling-recovery-707",
+      },
+    ];
+    customers = [];
+    clearRequests();
+    const response = await request("/api/admin/mpesa/hotspot-recovery", {
+      token: null,
+      adminToken: generateAdminSessionToken("19", 1),
+    });
+    assert.equal(response.status, 200, await response.clone().text());
+    const body = await response.json() as {
+      ok: boolean;
+      transactions: Array<{
+        transactionId: number;
+        scope: { routerId: number | null; portId: number | null; resellerId: number | null };
+        recoveryReady: boolean;
+      }>;
+    };
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.transactions, [{
+      transactionId: 706,
+      amount: 100,
+      paidAt: assignedTransaction.created_at,
+      plan: { id: assignedPlan.id, name: assignedPlan.name },
+      scope: { routerId: 31, portId: 43, resellerId: 19 },
+      recoveryReady: true,
+    }]);
+    assert.equal(JSON.stringify(body).includes("254700000000"), false);
+    assert.ok(dbRequests.every(row => row.method === "GET"),
+      `the discovery report must not write: ${JSON.stringify(dbRequests.map(row => [row.table, row.method]))}`);
+    assert.ok(dbRequests.some(row => row.table === "isp_transactions"
+      && row.rawQuery.includes("admin_id=eq.7")
+      && row.rawQuery.includes("customer_id=is.null")
+      && row.rawQuery.includes("order=created_at.desc")
+      && row.rawQuery.includes("limit=20")));
+    assert.ok(dbRequests.some(row => row.table === "isp_transactions"
+      && row.rawQuery.includes("plan_id=in.(501)")),
+    "the newest-20 limit must be applied after restricting transactions to Hotspot plans");
+    assert.ok(dbRequests.some(row => row.table === "isp_plans"
+      && row.rawQuery.includes("owner_reseller_id=eq.19")));
+    assert.ok(dbRequests.some(row => row.table === "isp_reseller_ports"
+      && row.rawQuery.includes("id=in.(43)")));
+  });
+
+  await t.test("recovery requires explicit approval before writing or touching RouterOS", async () => {
+    transactions = [{
+      ...assignedTransaction,
+      id: 708,
+      customer_id: null,
+      reference: "approval-checkout-708",
+    }];
+    customers = [];
+    routerOperations.length = 0;
+    clearRequests();
+    const response = await request("/api/admin/mpesa/hotspot-recovery", {
+      method: "POST",
+      token: null,
+      adminToken: generateAdminSessionToken("19", 1),
+      body: { transactionIds: [708] },
+    });
+    assert.equal(response.status, 400);
+    assertNoRouterOrWrites();
+    assert.deepEqual(routerOperations, []);
+    assert.equal(customers.length, 0);
+  });
+
+  await t.test("approved recovery links one account and retries RouterOS without another payment", async () => {
+    const recoverableTransaction = {
+      ...assignedTransaction,
+      id: 709,
+      customer_id: null,
+      reference: "approved-recovery-checkout-709",
+    };
+    transactions = [recoverableTransaction];
+    customers = [];
+    routerOperations.length = 0;
+    clearRequests();
+    includeRouterFixture = true;
+    const claimsBeforeRecovery = accountClaimCreations;
+    try {
+      const response = await request("/api/admin/mpesa/hotspot-recovery", {
+        method: "POST",
+        token: null,
+        adminToken: generateAdminSessionToken("19", 1),
+        body: {
+          confirmation: "RECOVER_PAID_HOTSPOT_ACCESS",
+          transactionIds: [709],
+        },
+      });
+      assert.equal(response.status, 200, await response.clone().text());
+      const body = await response.json() as {
+        ok: boolean;
+        results: Array<{ transactionId: number; status: string }>;
+      };
+      assert.equal(body.ok, true);
+      assert.deepEqual(body.results, [{
+        transactionId: 709,
+        status: "provisioned",
+        message: "The existing payment was linked to its prepaid account and RouterOS provisioning was retried.",
+      }]);
+      assert.equal(JSON.stringify(body).includes("254700000000"), false);
+      assert.equal(recoverableTransaction.customer_id, customers[0]?.id);
+      assert.equal(customers.length, 1);
+      assert.equal(accountClaimCreations, claimsBeforeRecovery + 1);
+      assert.ok(routerOperations.some(row => row.name === "upsertUser"));
+      assert.ok(dbRequests.some(row => row.table === "claim_prepaid_hotspot_transaction_account"
+        && row.method === "POST"));
+      assert.equal(dbRequests.some(row => row.table === "isp_transactions" && row.method === "POST"), false,
+        "recovery must not create a new charge or transaction");
+
+      clearRequests();
+      const retry = await request("/api/admin/mpesa/hotspot-recovery", {
+        method: "POST",
+        token: null,
+        adminToken: generateAdminSessionToken("19", 1),
+        body: {
+          confirmation: "RECOVER_PAID_HOTSPOT_ACCESS",
+          transactionIds: [709],
+        },
+      });
+      assert.equal(retry.status, 200, await retry.clone().text());
+      assert.equal(customers.length, 1, "a RouterOS retry must reuse the account already linked to this payment");
+      assert.equal(accountClaimCreations, claimsBeforeRecovery + 1);
+      assert.equal(dbRequests.some(row => row.table === "claim_prepaid_hotspot_transaction_account"), false,
+        "an already-linked retry must reuse the existing account without claiming a second one");
+    } finally {
+      includeRouterFixture = false;
     }
   });
 

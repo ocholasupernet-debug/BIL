@@ -189,6 +189,7 @@ const navSections: NavSection[] = [
         children: [
           { name: "All",             href: "/admin/transactions" },
           { name: "M-Pesa",          href: "/admin/transactions?method=mpesa" },
+          { name: "Paid Hotspot Recovery", href: "/admin/transactions/hotspot-recovery" },
           { name: "Voucher Sales",   href: "/admin/transactions?method=voucher" },
           { name: "Graphs",          href: "/admin/transactions/graphs" },
           { name: "Invoices",        href: "/admin/invoices" },

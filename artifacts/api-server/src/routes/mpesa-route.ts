@@ -2659,7 +2659,7 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
  * capability: the browser cannot choose a different plan, ISP, or MAC after
  * the signed intent has been recorded.
  */
-router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Promise<void> => {
+async function handleHotspotMacAccess(req: Request, res: Response): Promise<void> {
   const checkoutId = String(req.body?.checkout_id ?? "").trim();
   const forceRouterRetry = req.body?.retry === true;
   const portalLoginHandoff = req.body?.portal_login_handoff === true
@@ -2685,7 +2685,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     status: string;
   }>(
     "isp_transactions",
-    `reference=eq.${encodeURIComponent(checkoutId)}&admin_id=eq.${adminId}&status=in.(completed,paid,success)&payment_method=eq.mpesa&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,status&limit=1`,
+    `${Number.isSafeInteger(Number(req.body?.recovery_transaction_id)) && Number(req.body?.recovery_transaction_id) > 0 ? `id=eq.${Number(req.body.recovery_transaction_id)}&` : ""}reference=eq.${encodeURIComponent(checkoutId)}&admin_id=eq.${adminId}&status=in.(completed,paid,success)&payment_method=eq.mpesa&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,status&limit=1`,
   );
   const transaction = transactions[0];
 
@@ -3290,7 +3290,353 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
       error: `Payment is confirmed and the prepaid account is saved, but RouterOS activation is pending. ${diagnosis.userMessage} Retry Account Setup to try again.`,
     });
   }
-});
+}
+
+router.post("/mpesa/hotspot-mac-access", handleHotspotMacAccess);
+
+interface HotspotRecoveryAdminScope {
+  tenantAdminId: number;
+  resellerId: number | null;
+}
+
+interface PaidHotspotRecoveryTransaction {
+  id: number;
+  admin_id: number;
+  customer_id: number | null;
+  plan_id: number | null;
+  reference: string | null;
+  status: string;
+  payment_method: string;
+  payment_phone: string | null;
+  mac_address: string | null;
+  amount: number | string;
+  created_at: string;
+}
+
+interface PaidHotspotRecoveryPlan {
+  id: number;
+  name: string;
+  type: string;
+  router_id: number | null;
+  port_id: number | null;
+  owner_reseller_id: number | null;
+}
+
+interface PaidHotspotRecoveryPort {
+  id: number;
+  admin_id: number;
+  router_id: number;
+  assigned_reseller_id: number | null;
+  handoff_mode: string;
+  status: string;
+  link_status: string | null;
+  hotspot_enabled: boolean;
+}
+
+interface PaidHotspotRecoveryRow {
+  transaction: PaidHotspotRecoveryTransaction;
+  plan: PaidHotspotRecoveryPlan;
+  issue: string | null;
+}
+
+async function hotspotRecoveryAdminScope(req: Request): Promise<HotspotRecoveryAdminScope | null> {
+  const accountId = authenticatedAdminId(req);
+  if (!accountId) return null;
+  const accounts = await sbSelectStrict<{
+    id: number;
+    parent_id: number | null;
+    role: string | null;
+  }>(
+    "isp_admins",
+    `id=eq.${accountId}&select=id,parent_id,role&limit=1`,
+  );
+  const account = accounts[0];
+  if (!account) return null;
+  if (account.role === "reseller" && account.parent_id) {
+    return { tenantAdminId: account.parent_id, resellerId: account.id };
+  }
+  if ((account.role === "isp_admin" || account.role === "admin") && !account.parent_id) {
+    return { tenantAdminId: account.id, resellerId: null };
+  }
+  return null;
+}
+
+async function loadPaidHotspotRecoveryRows(
+  scope: HotspotRecoveryAdminScope,
+  transactionIds?: number[],
+  unlinkedOnly = true,
+): Promise<PaidHotspotRecoveryRow[]> {
+  const planRows: PaidHotspotRecoveryPlan[] = [];
+  const planPageSize = 500;
+  for (let offset = 0; ; offset += planPageSize) {
+    const page = await sbSelectStrict<PaidHotspotRecoveryPlan>(
+      "isp_plans",
+      `admin_id=eq.${scope.tenantAdminId}${scope.resellerId ? `&owner_reseller_id=eq.${scope.resellerId}` : ""}&select=id,name,type,router_id,port_id,owner_reseller_id&order=id.asc&limit=${planPageSize}&offset=${offset}`,
+    );
+    planRows.push(...page);
+    if (page.length < planPageSize) break;
+  }
+  const plans = planRows.filter(plan => (
+    normalizePlanServiceType(plan.type) === "hotspot"
+    && (scope.resellerId === null || plan.owner_reseller_id === scope.resellerId)
+  ));
+  const planById = new Map(plans.map(plan => [Number(plan.id), plan]));
+  const planIds = [...planById.keys()];
+  if (!planIds.length) return [];
+
+  const customerFilter = unlinkedOnly ? "&customer_id=is.null" : "";
+  const transactionSelect = "select=id,admin_id,customer_id,plan_id,reference,status,payment_method,payment_phone,mac_address,amount,created_at";
+  const transactionScope = `admin_id=eq.${scope.tenantAdminId}&status=in.(completed,paid,success)&payment_method=eq.mpesa${customerFilter}&${transactionSelect}&order=created_at.desc,id.desc`;
+  let transactions: PaidHotspotRecoveryTransaction[];
+  if (transactionIds?.length) {
+    transactions = await sbSelectStrict<PaidHotspotRecoveryTransaction>(
+      "isp_transactions",
+      `${transactionScope}&id=in.(${transactionIds.join(",")})&limit=${transactionIds.length}`,
+    );
+  } else {
+    const planIdChunkSize = 200;
+    const planIdChunks: number[][] = [];
+    for (let index = 0; index < planIds.length; index += planIdChunkSize) {
+      planIdChunks.push(planIds.slice(index, index + planIdChunkSize));
+    }
+    const pages = await Promise.all(planIdChunks.map(chunk => sbSelectStrict<PaidHotspotRecoveryTransaction>(
+      "isp_transactions",
+      `${transactionScope}&plan_id=in.(${chunk.join(",")})&limit=20`,
+    )));
+    transactions = pages.flat()
+      .sort((left, right) => (
+        Date.parse(right.created_at) - Date.parse(left.created_at)
+        || Number(right.id) - Number(left.id)
+      ))
+      .slice(0, 20);
+  }
+
+  const relevantPlanIds = new Set(transactions
+    .map(transaction => Number(transaction.plan_id))
+    .filter(planId => planById.has(planId)));
+  const relevantPlans = [...relevantPlanIds]
+    .map(planId => planById.get(planId))
+    .filter((plan): plan is PaidHotspotRecoveryPlan => Boolean(plan));
+  const portIds = [...new Set(relevantPlans
+    .map(plan => Number(plan.port_id))
+    .filter(portId => Number.isSafeInteger(portId) && portId > 0))];
+  const ports = portIds.length
+    ? await sbSelectStrict<PaidHotspotRecoveryPort>(
+        "isp_reseller_ports",
+        `admin_id=eq.${scope.tenantAdminId}&id=in.(${portIds.join(",")})&select=id,admin_id,router_id,assigned_reseller_id,handoff_mode,status,link_status,hotspot_enabled&limit=${portIds.length}`,
+      )
+    : [];
+  const portById = new Map(ports.map(port => [Number(port.id), port]));
+
+  return transactions.flatMap(transaction => {
+    const plan = transaction.plan_id === null ? undefined : planById.get(Number(transaction.plan_id));
+    if (!plan || normalizePlanServiceType(plan.type) !== "hotspot") return [];
+    if (scope.resellerId !== null && plan.owner_reseller_id !== scope.resellerId) return [];
+
+    let issue: string | null = null;
+    if (!plan.router_id || (plan.owner_reseller_id !== null && !plan.port_id)) {
+      issue = "missing_router_or_service_assignment";
+    } else if (
+      !/^[A-Za-z0-9_-]{8,128}$/.test(String(transaction.reference ?? "").trim())
+      || !normaliseMacAddress(transaction.mac_address)
+    ) {
+      issue = "saved_checkout_or_device_details_unavailable";
+    } else if (!isKenyanMobileNumber(normaliseKenyanPhone(String(transaction.payment_phone ?? "")))) {
+      issue = "saved_purchase_contact_unavailable";
+    } else if (plan.port_id !== null) {
+      const port = portById.get(Number(plan.port_id));
+      const assignedResellerId = port?.assigned_reseller_id ?? null;
+      const ownershipMatches = planBelongsToOwner(plan, assignedResellerId);
+      const resellerPortReady = plan.owner_reseller_id === null || (
+        port?.handoff_mode === "vlan_services"
+        && port.status === "active"
+        && port.link_status === "active"
+      );
+      if (
+        !port
+        || port.admin_id !== scope.tenantAdminId
+        || port.router_id !== plan.router_id
+        || port.status === "disabled"
+        || port.hotspot_enabled !== true
+        || !ownershipMatches
+        || !resellerPortReady
+      ) {
+        issue = "service_scope_unavailable";
+      }
+    }
+
+    return [{ transaction, plan, issue }];
+  });
+}
+
+function recoveryReportRow(row: PaidHotspotRecoveryRow) {
+  return {
+    transactionId: row.transaction.id,
+    amount: Number(row.transaction.amount),
+    paidAt: row.transaction.created_at,
+    plan: { id: row.plan.id, name: row.plan.name },
+    scope: {
+      routerId: row.plan.router_id,
+      portId: row.plan.port_id,
+      resellerId: row.plan.owner_reseller_id,
+    },
+    recoveryReady: row.issue === null,
+    ...(row.issue ? { issue: row.issue } : {}),
+  };
+}
+
+router.get(
+  "/admin/mpesa/hotspot-recovery",
+  requireAdmin(),
+  requireTenantPermission("View Transactions"),
+  async (req: Request, res: Response): Promise<void> => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const scope = await hotspotRecoveryAdminScope(req);
+      if (!scope) {
+        res.status(403).json({ ok: false, error: "A signed-in ISP or reseller administrator is required." });
+        return;
+      }
+      const rows = await loadPaidHotspotRecoveryRows(scope);
+      res.json({ ok: true, transactions: rows.map(recoveryReportRow) });
+    } catch (error) {
+      logger.warn({ err: error }, "[mpesa/hotspot-recovery] read-only report failed");
+      res.status(503).json({ ok: false, error: "Paid Hotspot recovery records are temporarily unavailable." });
+    }
+  },
+);
+
+router.post(
+  "/admin/mpesa/hotspot-recovery",
+  requireAdmin(),
+  requireTenantPermission("View Transactions"),
+  requireTenantPermission("Edit Customers"),
+  async (req: Request, res: Response): Promise<void> => {
+    res.set("Cache-Control", "no-store");
+    if (req.body?.confirmation !== "RECOVER_PAID_HOTSPOT_ACCESS") {
+      res.status(400).json({
+        ok: false,
+        error: "Explicit confirmation is required before paid Hotspot access can be recovered.",
+      });
+      return;
+    }
+    const rawIds = req.body?.transactionIds;
+    if (
+      !Array.isArray(rawIds)
+      || rawIds.length < 1
+      || rawIds.length > 20
+      || rawIds.some(id => !Number.isSafeInteger(Number(id)) || Number(id) < 1)
+    ) {
+      res.status(400).json({ ok: false, error: "Select between 1 and 20 valid transaction IDs." });
+      return;
+    }
+    const transactionIds = [...new Set(rawIds.map(Number))];
+    if (transactionIds.length !== rawIds.length) {
+      res.status(400).json({ ok: false, error: "Each transaction may be selected only once." });
+      return;
+    }
+
+    try {
+      const scope = await hotspotRecoveryAdminScope(req);
+      if (!scope) {
+        res.status(403).json({ ok: false, error: "A signed-in ISP or reseller administrator is required." });
+        return;
+      }
+      const rows = await loadPaidHotspotRecoveryRows(scope, transactionIds, false);
+      if (rows.length !== transactionIds.length) {
+        res.status(409).json({
+          ok: false,
+          error: "One or more selected transactions are not confirmed Hotspot payments in your current service scope.",
+        });
+        return;
+      }
+      if (rows.some(row => row.issue !== null)) {
+        res.status(409).json({
+          ok: false,
+          error: "One or more selected transactions cannot be safely recovered in their current service state.",
+          transactions: rows.map(recoveryReportRow),
+        });
+        return;
+      }
+
+      const results: Array<{
+        transactionId: number;
+        status: "provisioned" | "retry_needed";
+        message: string;
+      }> = [];
+      for (const row of rows) {
+        let statusCode = 200;
+        let responseBody: unknown;
+        const internalRequest = Object.create(req) as Request;
+        Object.defineProperties(internalRequest, {
+          body: {
+            value: {
+              adminId: scope.tenantAdminId,
+              checkout_id: row.transaction.reference,
+              mac_address: row.transaction.mac_address,
+              recovery_transaction_id: row.transaction.id,
+            },
+            enumerable: true,
+            configurable: true,
+          },
+          hotspotPortalContext: {
+            value: undefined,
+            enumerable: true,
+            configurable: true,
+          },
+        });
+        const internalResponse = {
+          status(code: number) {
+            statusCode = code;
+            return this;
+          },
+          json(body: unknown) {
+            responseBody = body;
+            return this;
+          },
+        } as unknown as Response;
+
+        try {
+          await handleHotspotMacAccess(internalRequest, internalResponse);
+        } catch (error) {
+          logger.warn(
+            { err: error, adminId: scope.tenantAdminId, transactionId: row.transaction.id },
+            "[mpesa/hotspot-recovery] provisioning retry failed",
+          );
+        }
+        const succeeded = statusCode >= 200
+          && statusCode < 300
+          && !!responseBody
+          && typeof responseBody === "object"
+          && (responseBody as { ok?: unknown }).ok === true;
+        if (!succeeded) {
+          const errorMessage = responseBody && typeof responseBody === "object"
+            ? (responseBody as { error?: unknown }).error
+            : undefined;
+          logger.warn({
+            adminId: scope.tenantAdminId,
+            transactionId: row.transaction.id,
+            statusCode,
+            ...(typeof errorMessage === "string" ? { error: errorMessage } : {}),
+          }, "[mpesa/hotspot-recovery] approved transaction needs another retry");
+        }
+        results.push({
+          transactionId: row.transaction.id,
+          status: succeeded ? "provisioned" : "retry_needed",
+          message: succeeded
+            ? "The existing payment was linked to its prepaid account and RouterOS provisioning was retried."
+            : "Recovery did not finish. Check the account and service status, then retry this transaction.",
+        });
+      }
+
+      const allSucceeded = results.every(result => result.status === "provisioned");
+      res.status(allSucceeded ? 200 : 207).json({ ok: allSucceeded, results });
+    } catch (error) {
+      logger.warn({ err: error }, "[mpesa/hotspot-recovery] approved recovery failed");
+      res.status(503).json({ ok: false, error: "Approved Hotspot recovery is temporarily unavailable." });
+    }
+  },
+);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * POST /api/mpesa/verify

@@ -32,6 +32,7 @@ import ActivityLogs from "./pages/admin/ActivityLogs";
 import AdminPlans from "./pages/admin/Plans";
 import AdminHotspotRoaming from "./pages/admin/HotspotRoaming";
 import AdminTransactions from "./pages/admin/Transactions";
+import PaidHotspotRecovery from "./pages/admin/PaidHotspotRecovery";
 import TransactionGraphs from "./pages/admin/TransactionGraphs";
 import HotspotSettings from "./pages/admin/HotspotSettings";
 import PPPoESettings from "./pages/admin/PPPoESettings";
@@ -171,6 +172,7 @@ function Router() {
       <Route path="/admin/plans" component={AdminPlans} />
       <Route path="/admin/plans/roaming" component={AdminHotspotRoaming} />
       <Route path="/admin/transactions/graphs" component={TransactionGraphs} />
+      <Route path="/admin/transactions/hotspot-recovery" component={PaidHotspotRecovery} />
       <Route path="/admin/transactions" component={AdminTransactions} />
       <Route path="/admin/vouchers"         component={AdminVouchers}    />
       <Route path="/admin/hotspot-binding"  component={HotspotBinding}   />
