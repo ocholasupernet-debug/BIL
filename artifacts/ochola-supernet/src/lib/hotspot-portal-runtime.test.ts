@@ -21,6 +21,16 @@ test("the standalone portal applies saved layouts using the shared stylesheet as
   assert.match(portalTemplate, /if\(document\.getElementById\("hotspot-portal-layout"\)\)return/);
 });
 
+test("the standalone portal applies the saved ISP or reseller name as soon as branding loads", () => {
+  const brandingHandler = portalTemplate.match(/function applyPublicHotspotBranding\(brandingData\)\{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const loader = portalTemplate.match(/function loadPortalTypography\(done\)\{([\s\S]*?)\n\}/)?.[1] ?? "";
+  assert.match(brandingHandler, /brandingData&&brandingData\.branding&&brandingData\.branding\.settings/);
+  assert.match(brandingHandler, /applyPortalConfig\(merged\)/);
+  assert.match(loader, /var brandingRequest=brandingUrl\?fetch/);
+  assert.match(loader, /applyPublicHotspotBranding\(data\);return data;/);
+  assert.match(portalTemplate, /if\(token\)headers\.set\("X-Hotspot-Portal-Context",token\)/);
+});
+
 test("the captive portal reconnects a valid device session and keeps payment handoff separate", () => {
   assert.match(portalTemplate, /function attemptPortalAutoReconnect\(\)/);
   assert.match(portalTemplate, /action:"login"/);

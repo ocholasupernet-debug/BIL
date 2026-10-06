@@ -990,6 +990,29 @@ function applyPortalTypography(data){
    if(publicBase)PORTAL_API_BASE=publicBase;
 }
 
+function applyPublicHotspotBranding(brandingData){
+  var brandingSettings=brandingData&&brandingData.branding&&brandingData.branding.settings;
+  if(!brandingSettings||typeof brandingSettings!=="object"||Array.isArray(brandingSettings))return;
+  var merged=Object.assign({},EMBEDDED_CONFIG||{},brandingSettings);
+  if(EMBEDDED_CONFIG){
+    merged.adminId=EMBEDDED_CONFIG.adminId;
+    merged.resellerId=EMBEDDED_CONFIG.resellerId;
+    merged.routerId=EMBEDDED_CONFIG.routerId;
+    merged.portId=EMBEDDED_CONFIG.portId;
+    merged.portalContextToken=EMBEDDED_CONFIG.portalContextToken;
+    merged.apiBase=EMBEDDED_CONFIG.apiBase||PORTAL_API_BASE;
+    merged.plans=EMBEDDED_CONFIG.plans||EMBEDDED_PLANS;
+  }
+  applyPortalConfig(merged);
+}
+
+function applyPublicHotspotTypography(typographyData){
+  if(!EMBEDDED_CONFIG&&typographyData&&Number.isSafeInteger(Number(typographyData.adminId))){
+    PORTAL_ADMIN_ID=Number(typographyData.adminId);
+  }
+  applyPortalTypography(typographyData);
+}
+
 function loadPortalTypography(done){
    /* Apply the service scope before a local typography request. A captive
       browser can keep that request pending while the walled garden is being
@@ -1002,30 +1025,14 @@ function loadPortalTypography(done){
    var brandingUrl=PORTAL_API_BASE?apiUrl("/api/public/hotspot-branding"+adminQuery):"";
    var typographyUrl=PORTAL_API_BASE?apiUrl("/api/public/typography"+adminQuery):"";
    var brandingRequest=brandingUrl?fetch(brandingUrl,{cache:"no-store"})
-     .then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):Promise.resolve(null);
+     .then(function(r){return r.ok?r.json():null;})
+     .then(function(data){applyPublicHotspotBranding(data);return data;})
+     .catch(function(){return null;}):Promise.resolve(null);
    var typographyRequest=typographyUrl?fetch(typographyUrl,{cache:"no-store"})
-     .then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):Promise.resolve(null);
-   var request=Promise.all([brandingRequest,typographyRequest]).then(function(results){
-     var brandingData=results[0], typographyData=results[1];
-     var brandingSettings=brandingData&&brandingData.branding&&brandingData.branding.settings;
-     if(brandingSettings&&typeof brandingSettings==="object"&&!Array.isArray(brandingSettings)){
-       var merged=Object.assign({},EMBEDDED_CONFIG||{},brandingSettings);
-       if(EMBEDDED_CONFIG){
-         merged.adminId=EMBEDDED_CONFIG.adminId;
-         merged.resellerId=EMBEDDED_CONFIG.resellerId;
-         merged.routerId=EMBEDDED_CONFIG.routerId;
-         merged.portId=EMBEDDED_CONFIG.portId;
-         merged.portalContextToken=EMBEDDED_CONFIG.portalContextToken;
-         merged.apiBase=EMBEDDED_CONFIG.apiBase||PORTAL_API_BASE;
-         merged.plans=EMBEDDED_CONFIG.plans||EMBEDDED_PLANS;
-       }
-       applyPortalConfig(merged);
-     }
-     if(!EMBEDDED_CONFIG&&typographyData&&Number.isSafeInteger(Number(typographyData.adminId))){
-       PORTAL_ADMIN_ID=Number(typographyData.adminId);
-     }
-     applyPortalTypography(typographyData);
-   });
+     .then(function(r){return r.ok?r.json():null;})
+     .then(function(data){applyPublicHotspotTypography(data);return data;})
+     .catch(function(){return null;}):Promise.resolve(null);
+   var request=Promise.all([brandingRequest,typographyRequest]);
   var timeout=new Promise(function(resolve){setTimeout(function(){resolve(null);},5000);});
   Promise.race([request,timeout]).then(function(){if(typeof done==="function")done();});
 }
