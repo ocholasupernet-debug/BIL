@@ -735,6 +735,42 @@ test("signed reseller portal requests stay within their assigned service", async
     }
   });
 
+  await t.test("paid account is saved before an unavailable router can block activation", async () => {
+    const routerUnavailableTransaction = {
+      ...assignedTransaction,
+      id: 705,
+      customer_id: null,
+      reference: "router-unavailable-hotspot-checkout",
+    };
+    transactions = [routerUnavailableTransaction];
+    customers = [];
+    routerOperations.length = 0;
+    clearRequests();
+    includeRouterFixture = false;
+    try {
+      const activation = await request("/api/mpesa/hotspot-mac-access", {
+        method: "POST",
+        body: {
+          checkout_id: routerUnavailableTransaction.reference,
+          mac_address: assignedCustomer.mac_address,
+        },
+      });
+      assert.equal(activation.status, 503, await activation.clone().text());
+      const body = await activation.json() as { error?: string };
+      assert.match(body.error ?? "", /prepaid account is saved/i);
+      assert.equal(customers.length, 1, "a confirmed payment must create its prepaid account despite router downtime");
+      assert.equal(routerUnavailableTransaction.customer_id, customers[0]?.id);
+
+      const accountClaimIndex = dbRequests.findIndex(row => row.table === "claim_prepaid_hotspot_transaction_account");
+      const routerLookupIndex = dbRequests.findIndex(row => row.table === "isp_routers");
+      assert.ok(accountClaimIndex >= 0);
+      assert.ok(routerLookupIndex > accountClaimIndex, "claim the paid account before looking up RouterOS");
+      assert.deepEqual(routerOperations, [], "router work must not run before the account claim");
+    } finally {
+      includeRouterFixture = false;
+    }
+  });
+
   await t.test("signed paid portal activation targets only the assigned VLAN Hotspot service", async () => {
     transactions = [{ ...assignedTransaction }];
     customers = [{ ...assignedCustomer }];
