@@ -24,8 +24,24 @@ assert.equal(
 );
 assert.match(output, /function applyPortalConfig\(/);
 assert.match(output, /function renderPlans\(/);
+assert.match(output, /function formatPortalDataAllowance\(/);
+assert.match(output, /function formatPortalSharedDevices\(/);
+assert.match(output, /data_limit_mb/);
+assert.match(output, /shared_users/);
+assert.match(output, /Unlimited data/);
+assert.match(output, /Limited ·/);
+assert.doesNotMatch(
+  output,
+  /p\.validity\+'\s+'\+p\.unit\+' Unlimited/,
+  "package cards must not label every plan as unlimited",
+);
 assert.match(output, /data-portal-layout="classic"/);
 assert.match(output, /\/api\/public\/hotspot-branding/);
+assert.match(
+  output,
+  /window\.location\.hostname === "ocholasupernet\.isplatty\.org"&&config&&config\.tawkEnabled===true/,
+  "Tawk.to must be opt-in and restricted to the OcholaSupernet portal hostname",
+);
 assert.doesNotMatch(
   output,
   /function applyPortalLayout\s*\(|applyPortalLayout\s*\(|data\.portalLayout|hotspot-portal-layout-runtime|\/hotspot\/portal-layouts\.css/,

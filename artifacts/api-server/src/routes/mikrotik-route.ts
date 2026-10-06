@@ -32,6 +32,7 @@ import {
   fetchRouterFiles,
   ensureRouterFileDirectory,
   runRouterCommand,
+  runRouterCommands,
   fetchRouterSecurityState,
   deployRouterFile,
   syncHotspotPortalHostname,
@@ -67,7 +68,7 @@ import {
   routerManagementBackupIp,
   routerManagementVpnPortForRouter,
 } from "../lib/router-management-vpn.js";
-import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
+import { findEmbeddedHotspotConfig, validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { selectUniqueActiveHotspotServer } from "../lib/hotspot-portal-target.js";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
@@ -82,6 +83,7 @@ import {
 import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authorization.js";
 import { validateRouterTakeoverMainhotspot } from "../lib/router-takeover-template.js";
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
+import { planHotspotChatWalledGardenAdds } from "../lib/hotspot-chat-walled-garden.js";
 
 const router: IRouter = Router();
 
@@ -1600,6 +1602,10 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
     .replaceAll("\\", "/")
     .replace(/^\/+|\/+$/g, "");
   const portal = validateGeneratedHotspotPortal(req.body?.html);
+  const portalConfig = typeof req.body?.html === "string"
+    ? findEmbeddedHotspotConfig(req.body.html)?.config
+    : null;
+  const enableTawk = portalConfig?.tawkEnabled === true && Number(portalConfig.portId ?? 0) <= 0;
 
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
   if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
@@ -1620,6 +1626,34 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
   if (!found) {
     res.status(404).json({ error: "Router not found or not assigned to this administrator" });
     return;
+  }
+
+  let walledGarden = {
+    rulesAdded: 0,
+    rulesAlreadyAllowed: 0,
+    conflicts: [] as string[],
+  };
+  if (enableTawk) {
+    try {
+      const existingEntries = await runRouterCommand(found.creds, [
+        "/ip/hotspot/walled-garden/print",
+        "=.proplist=server,dst-host,action,disabled,comment",
+      ]);
+      const plan = planHotspotChatWalledGardenAdds(existingEntries);
+      if (plan.commands.length) await runRouterCommands(found.creds, plan.commands);
+      walledGarden = {
+        rulesAdded: plan.commands.length,
+        rulesAlreadyAllowed: plan.alreadyAllowed.length,
+        conflicts: plan.conflicts,
+      };
+      if (plan.conflicts.length) {
+        logger.warn({ routerId: id, adminId, conflicts: plan.conflicts }, "Existing Hotspot deny rules prevent some Tawk destinations");
+      }
+    } catch (err) {
+      logger.warn({ err, routerId: id, adminId }, "Unable to add Tawk Hotspot walled-garden rules");
+      routerErrorResponse(res, err);
+      return;
+    }
   }
 
   cleanPendingRouterFileSources();
@@ -1678,6 +1712,10 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
         { destinationPath: result.destinationPath, size: result.size, replaced: result.replaced },
         { destinationPath: roamingResult.destinationPath, size: roamingResult.size, replaced: roamingResult.replaced },
       ],
+      walledGarden,
+      warnings: walledGarden.conflicts.length
+        ? [`Existing Hotspot deny rules are still blocking: ${walledGarden.conflicts.join(", ")}. Those rules were left unchanged.`]
+        : [],
       source: { name: "generated login.html and rlogin.html", type: "hotspot", generated: true },
     });
   } catch (err) {
@@ -1823,9 +1861,13 @@ router.post("/admin/router/:id/hotspot-portal/bridge-deploy", requireAdmin(), as
       speed_down: number | string | null;
       speed_up: number | string | null;
       data_limit_mb: number | string | null;
+      data_cap_mode: string | null;
+      fup_speed_down: number | string | null;
+      fup_speed_up: number | string | null;
+      shared_users: number | string | null;
     }>(
       "isp_plans",
-      `admin_id=eq.${adminId}&router_id=eq.${id}&port_id=is.null&owner_reseller_id=is.null&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit,speed_down,speed_up,data_limit_mb&order=price.asc,name.asc`,
+      `admin_id=eq.${adminId}&router_id=eq.${id}&port_id=is.null&owner_reseller_id=is.null&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit,speed_down,speed_up,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users&order=price.asc,name.asc`,
     );
     const source = getDeployableSource("hotspot", "login.html");
     if (!source) {
@@ -3036,6 +3078,7 @@ const validInterfaceId = (value: unknown): boolean => /^\*[0-9A-Fa-f]+$/.test(St
 const validInterfaceName = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
 const validSsid = (value: unknown): value is string => typeof value === "string" && Buffer.byteLength(value, "utf8") >= 1 && Buffer.byteLength(value, "utf8") <= 32 && !/[\u0000-\u001f\u007f]/u.test(value);
 const validWpaPassword = (value: unknown): value is string => typeof value === "string" && Buffer.byteLength(value, "utf8") >= 8 && Buffer.byteLength(value, "utf8") <= 63;
+const validWirelessSecurityMode = (value: unknown): value is "open" | "wpa2" => value === "open" || value === "wpa2";
 
 async function wirelessTenant(req: import("express").Request, res: import("express").Response): Promise<{ id: number; tenantId: number; account: Awaited<ReturnType<typeof authenticatedAccount>> } | null> {
   const id = validRouterId(req.params.id);
@@ -3062,48 +3105,63 @@ router.get("/router/:id/wireless", requireAdmin(), async (req, res): Promise<voi
   }
 });
 
-/* POST body: { name, ssid, masterInterfaceId (RouterOS .id), password, disabled? } */
+/* POST body: { name, ssid, masterInterfaceId, securityMode?: "open"|"wpa2", password?, disabled? } */
 router.post("/router/:id/wireless", requireAdmin(), async (req, res): Promise<void> => {
   const scope = await wirelessTenant(req, res);
   if (!scope) return;
-  const { name, ssid, masterInterfaceId, password, disabled } = req.body as {
-    name?: string; ssid?: string; masterInterfaceId?: string; password?: string; disabled?: boolean;
+  const { name, ssid, masterInterfaceId, password, securityMode, disabled } = req.body as {
+    name?: string; ssid?: string; masterInterfaceId?: string; password?: string;
+    securityMode?: "open" | "wpa2"; disabled?: boolean;
   };
   if (!validInterfaceName(name) || !validSsid(ssid) || !validInterfaceId(masterInterfaceId) ||
-      !validWpaPassword(password) || (disabled !== undefined && typeof disabled !== "boolean")) {
-    res.status(400).json({ error: "name, SSID, masterInterfaceId and an 8-63 character WPA2 password are required and must be valid." }); return;
+      (securityMode !== undefined && !validWirelessSecurityMode(securityMode)) ||
+      (securityMode === "open" ? password !== undefined : !validWpaPassword(password)) ||
+      (disabled !== undefined && typeof disabled !== "boolean")) {
+    res.status(400).json({ error: "Provide a valid name, SSID, physical radio, and either open security or a WPA2 password of 8-63 bytes." }); return;
   }
   const found = await getRouterCreds(scope.id, scope.tenantId);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {
-    await createWirelessVirtualAp(found.creds, { routerId: scope.id, name: name as string, ssid: ssid as string, masterInterfaceId: masterInterfaceId as string, password: password as string, disabled });
+    await createWirelessVirtualAp(found.creds, {
+      routerId: scope.id,
+      name: name as string,
+      ssid: ssid as string,
+      masterInterfaceId: masterInterfaceId as string,
+      password,
+      securityMode,
+      disabled,
+    });
     res.status(201).json({ ok: true });
   } catch (err) { routerErrorResponse(res, err); }
 });
 
 /* ─── PATCH /api/router/:id/wireless ───────────────────────────────────── */
-/* Body: { interfaceId, ssid?, password?, disabled? }; at least one update required. */
+/* Body: { interfaceId, ssid?, password?, securityMode?, disabled? }; at least one update required. */
 router.patch("/router/:id/wireless", requireAdmin(), async (req, res): Promise<void> => {
   const scope = await wirelessTenant(req, res);
   if (!scope) return;
-  const { interfaceId, ssid, password, disabled } = req.body as {
+  const { interfaceId, ssid, password, securityMode, disabled } = req.body as {
     interfaceId?: string;
     ssid?: string;
     password?: string;
+    securityMode?: "open" | "wpa2";
     disabled?: boolean;
   };
   if (!validInterfaceId(interfaceId) || (ssid !== undefined && !validSsid(ssid)) ||
-      (password !== undefined && !validWpaPassword(password)) || (disabled !== undefined && typeof disabled !== "boolean")) {
+      (password !== undefined && !validWpaPassword(password)) ||
+      (securityMode !== undefined && !validWirelessSecurityMode(securityMode)) ||
+      (securityMode === "open" && password !== undefined) ||
+      (disabled !== undefined && typeof disabled !== "boolean")) {
     res.status(400).json({ error: "Invalid interfaceId, SSID, password, or disabled value." }); return;
   }
-  if (ssid === undefined && password === undefined && disabled === undefined) {
+  if (ssid === undefined && password === undefined && securityMode === undefined && disabled === undefined) {
     res.status(400).json({ error: "At least one wireless setting must be supplied." }); return;
   }
   const found = await getRouterCreds(scope.id, scope.tenantId);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
 
   try {
-    await patchWirelessInterface(found.creds, scope.id, { interfaceId: interfaceId as string, ssid, password, disabled });
+    await patchWirelessInterface(found.creds, scope.id, { interfaceId: interfaceId as string, ssid, password, securityMode, disabled });
     res.json({ ok: true, message: "Wireless settings updated" });
   } catch (err) {
     routerErrorResponse(res, err);

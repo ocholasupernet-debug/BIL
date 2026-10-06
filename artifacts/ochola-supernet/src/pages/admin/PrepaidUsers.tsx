@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 import { fetchAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
+import { SyncUserStatusList, type SyncUserStatus } from "@/components/ui/SyncUserStatusList";
+import { transactionDisplayId } from "@/lib/transaction-reference";
 
 const PAGE_SIZE = 20;
 
@@ -30,6 +32,10 @@ interface Customer extends DbCustomer {
   data_used_bytes?: number | string | null;
   service_online?: boolean | null;
   fup_limit_mb?: number | null;
+  depletion_reason?: string | null;
+}
+interface DisplayCustomer extends Customer {
+  mergedCustomerIds: number[];
 }
 interface Payment {
   id: number;
@@ -92,6 +98,72 @@ function fromDateTimeLocal(value: string) {
 function normalizePhone(phone?: string | null) {
   return (phone ?? "").replace(/\D/g, "");
 }
+function customerIdentityKey(user: Customer, planMap: Record<number, Plan>) {
+  const type = prepaidServiceType(user.type);
+  const plan = user.plan_id ? planMap[user.plan_id] : null;
+  const routerId = user.router_id ?? plan?.router_id ?? null;
+  const portId = user.port_id ?? plan?.port_id ?? null;
+  const scope = `${routerId ?? "unknown-router"}:${portId ?? "unknown-port"}`;
+
+  if (type === "hotspot") {
+    const mac = String(user.mac_address ?? "").toLowerCase().replace(/[^a-f0-9]/g, "");
+    const phone = normalizePhone(user.phone);
+    // A MAC by itself can be shared or reused, so only group Hotspot rows
+    // when both the device and its contact number match.
+    if (mac.length === 12 && phone) return `hotspot:${scope}:${mac}:${phone}`;
+  } else if (type === "pppoe") {
+    const username = normalizeLiveIdentity(user.pppoe_username || user.username);
+    if (username) return `pppoe:${scope}:${username}`;
+  } else if (type === "vlan" || type === "static") {
+    const address = normalizeLiveIdentity(user.ip_address);
+    if (address) return `${type}:${scope}:${address}`;
+  }
+
+  return `record:${user.id}`;
+}
+function customerRecordTime(user: Customer) {
+  const created = Date.parse(user.created_at ?? "");
+  const updated = Date.parse(user.updated_at ?? "");
+  return Number.isFinite(created) ? created : Number.isFinite(updated) ? updated : 0;
+}
+function isMissingCustomerValue(value: unknown) {
+  return value === null || value === undefined || (typeof value === "string" && value.trim() === "");
+}
+function mergeDuplicateCustomers(
+  customers: Customer[],
+  planMap: Record<number, Plan>,
+): DisplayCustomer[] {
+  const groups = new Map<string, Customer[]>();
+  for (const customer of customers) {
+    const key = customerIdentityKey(customer, planMap);
+    const group = groups.get(key) ?? [];
+    group.push(customer);
+    groups.set(key, group);
+  }
+
+  const primaryStateFields = new Set([
+    "id", "status", "created_at", "updated_at", "expires_at",
+    "last_seen", "service_online", "data_used_bytes", "data_used_mb",
+    "depletion_reason", "password", "username", "pppoe_username",
+  ]);
+
+  return Array.from(groups.values(), group => {
+    group.sort((a, b) => customerRecordTime(b) - customerRecordTime(a) || b.id - a.id);
+    const [primary, ...related] = group;
+    const merged = { ...primary } as DisplayCustomer;
+    const mergedFields = merged as unknown as Record<string, unknown>;
+
+    for (const relatedCustomer of related) {
+      for (const [field, value] of Object.entries(relatedCustomer)) {
+        if (primaryStateFields.has(field) || !isMissingCustomerValue(mergedFields[field])) continue;
+        if (!isMissingCustomerValue(value)) mergedFields[field] = value;
+      }
+    }
+
+    merged.mergedCustomerIds = group.map(customer => customer.id);
+    return merged;
+  });
+}
 function prepaidServiceType(value?: string | null) {
   const type = String(value ?? "").toLowerCase();
   return type === "trial" || type === "trials" ? "hotspot" : type;
@@ -106,7 +178,7 @@ function purchaseUsername(user: Customer) {
 function paymentLabel(payment?: Payment) {
   if (!payment) return "—";
   const method = payment.payment_method.toLowerCase();
-  const transactionId = payment.mpesa_receipt || payment.reference || String(payment.id);
+  const transactionId = transactionDisplayId(payment);
   const notes = (payment.notes ?? "").toLowerCase();
   if (method.includes("till") || notes.includes("till")) return `MpesatillStk-${transactionId}`;
   if (method.includes("paybill") || notes.includes("paybill")) return `MpesapaybillStk-${transactionId}`;
@@ -114,6 +186,9 @@ function paymentLabel(payment?: Payment) {
   if (method.includes("mpesa")) return `MpesaStk-${transactionId}`;
   if (method.includes("cash") || method.includes("manual")) return `Cash-${transactionId}`;
   return `${payment.payment_method}-${transactionId}`;
+}
+function customerPackageId(user: Customer, paymentMap: Record<number, Payment>) {
+  return paymentMap[user.id]?.plan_id ?? user.plan_id ?? null;
 }
 function normalizeLiveIdentity(value?: string | null) {
   return String(value ?? "").trim().toLowerCase();
@@ -149,7 +224,7 @@ function customerUsageBytes(user: Customer, liveUsage: Map<string, number>) {
   return live ?? null;
 }
 function customerIsOnline(user: Customer, onlineUsers: Set<string>) {
-  if (isExpired(user.expires_at)) return false;
+  if (!hasUnexpiredPaidAccess(user)) return false;
   if (String(user.type ?? "").toLowerCase() === "vlan") return user.status === "active" && user.service_online === true;
   return [user.username, user.pppoe_username, purchaseUsername(user)]
     .filter(Boolean)
@@ -162,7 +237,24 @@ function isExpiringSoon(d?: string | null) {
 }
 function isExpired(d?: string | null) {
   if (!d) return false;
-  return new Date(d).getTime() < Date.now();
+  const expiry = Date.parse(d);
+  return Number.isFinite(expiry) && expiry <= Date.now();
+}
+function hasUnexpiredPaidAccess(user: Customer) {
+  const status = String(user.status ?? "").trim().toLowerCase();
+  if (status === "suspended" || user.depletion_reason === "data_limit") return false;
+  const allowedStatus = ["active", "payment_cleared_router_pending", "expired"].includes(status);
+  if (!allowedStatus) return false;
+  if (!user.expires_at) return status === "active";
+  const expiry = Date.parse(user.expires_at);
+  return Number.isFinite(expiry) && expiry > Date.now();
+}
+function isCustomerExpired(user: Customer) {
+  if (user.status === "suspended") return false;
+  if (user.depletion_reason === "data_limit") return true;
+  if (!user.expires_at) return user.status === "expired";
+  const expiry = Date.parse(user.expires_at);
+  return Number.isFinite(expiry) ? expiry <= Date.now() : user.status === "expired";
 }
 
 const TYPE_META: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
@@ -275,57 +367,89 @@ async function fetchPayments(customerIds: number[]): Promise<Payment[]> {
 }
 
 /* ══════════════════════════════ Sync ══════════════════════════════ */
+const SYNC_USERS_BATCH_SIZE = 5;
+
 async function syncUsersToRouter(
   router: Router,
   users:  Customer[],
   plans:  Plan[],
   log:    (m: string) => void,
-): Promise<boolean> {
-  if (!router.host && !router.bridge_ip) { log(`  ⚠ ${router.name}: no IP address — skipped`); return false; }
+): Promise<{ ok: boolean; syncUsers: SyncUserStatus[] | null }> {
+  if (!router.host && !router.bridge_ip) {
+    log(`  ⚠ ${router.name}: no IP address — skipped`);
+    return { ok: false, syncUsers: null };
+  }
   log(`\n▶ ${router.name}`);
   const planMap = Object.fromEntries(plans.map(p => [p.id, p]));
-  const payload = {
-    adminId: ADMIN_ID,
-    routerId: router.id,
-    users: users.map(u => ({
-      customer_id:  u.id,
-      router_id:    u.router_id ?? (u.plan_id ? planMap[u.plan_id]?.router_id : undefined),
-      username:     u.type === "hotspot" ? purchaseUsername(u) : (u.pppoe_username || u.username || ""),
-      password:     u.password || "",
-      type:         u.type || "hotspot",
-      status:       u.status,
-      plan_id:      u.plan_id || undefined,
-      mac_address:  u.mac_address || undefined,
-      plan_name:    u.plan_id ? planMap[u.plan_id]?.name : "",
-      ip_address:   u.ip_address || undefined,
-      speed_down:   u.plan_id ? planMap[u.plan_id]?.speed_down : undefined,
-      speed_up:     u.plan_id ? planMap[u.plan_id]?.speed_up : undefined,
-      speed_down_unit: u.plan_id ? planMap[u.plan_id]?.speed_down_unit || "Mbps" : "Mbps",
-      speed_up_unit: u.plan_id ? planMap[u.plan_id]?.speed_up_unit || "Mbps" : "Mbps",
-      data_limit_mb: u.fup_limit_mb ?? (u.plan_id ? planMap[u.plan_id]?.data_limit_mb : undefined),
-      shared_users: 1,
-      expires_at:   u.expires_at || undefined,
-    })),
-  };
-  try {
-    const res  = await fetch(apiUrl("/api/admin/sync/users"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(getAdminApiToken() ? { Authorization: `Bearer ${getAdminApiToken()}` } : {}),
-      },
-      body: JSON.stringify(payload),
-    });
-    const data = await parseJsonResponse<{ ok: boolean; error?: string; logs?: string[] }>(res);
-    (data.logs ?? []).forEach((l: string) => log(l));
-    if (!res.ok) {
-      throw new Error(data.error || `User sync failed (HTTP ${res.status}).`);
-    }
-    return data.ok;
-  } catch (e) {
-    log(`  ✗ ${e instanceof Error ? e.message : e}`);
-    return false;
+  const payloadUsers = users.map(u => ({
+    customer_id:  u.id,
+    router_id:    u.router_id ?? (u.plan_id ? planMap[u.plan_id]?.router_id : undefined),
+    username:     u.type === "hotspot" ? purchaseUsername(u) : (u.pppoe_username || u.username || ""),
+    password:     u.password || "",
+    type:         u.type || "hotspot",
+    status:       u.status,
+    plan_id:      u.plan_id || undefined,
+    mac_address:  u.mac_address || undefined,
+    plan_name:    u.plan_id ? planMap[u.plan_id]?.name : "",
+    ip_address:   u.ip_address || undefined,
+    speed_down:   u.plan_id ? planMap[u.plan_id]?.speed_down : undefined,
+    speed_up:     u.plan_id ? planMap[u.plan_id]?.speed_up : undefined,
+    speed_down_unit: u.plan_id ? planMap[u.plan_id]?.speed_down_unit || "Mbps" : "Mbps",
+    speed_up_unit: u.plan_id ? planMap[u.plan_id]?.speed_up_unit || "Mbps" : "Mbps",
+    data_limit_mb: u.fup_limit_mb ?? (u.plan_id ? planMap[u.plan_id]?.data_limit_mb : undefined),
+    shared_users: 1,
+    expires_at:   u.expires_at || undefined,
+  }));
+  if (!payloadUsers.length) {
+    log("  ⚠ No users are assigned to this router.");
+    return { ok: false, syncUsers: null };
   }
+
+  const batchCount = Math.ceil(payloadUsers.length / SYNC_USERS_BATCH_SIZE);
+  const syncedUsers: SyncUserStatus[] = [];
+  let allBatchesSucceeded = true;
+
+  for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
+    const userBatch = payloadUsers.slice(
+      batchIndex * SYNC_USERS_BATCH_SIZE,
+      (batchIndex + 1) * SYNC_USERS_BATCH_SIZE,
+    );
+    log(`  Sending batch ${batchIndex + 1}/${batchCount} (${userBatch.length} users)…`);
+    const payload = {
+      adminId: ADMIN_ID,
+      routerId: router.id,
+      users: userBatch,
+    };
+
+    try {
+      const res  = await fetch(apiUrl("/api/admin/sync/users"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(getAdminApiToken() ? { Authorization: `Bearer ${getAdminApiToken()}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await parseJsonResponse<{
+        ok: boolean;
+        error?: string;
+        logs?: string[];
+        syncUsers?: SyncUserStatus[];
+      }>(res);
+      (data.logs ?? []).forEach((l: string) => log(l));
+      if (!res.ok) {
+        throw new Error(data.error || `User sync failed (HTTP ${res.status}).`);
+      }
+      if (Array.isArray(data.syncUsers)) syncedUsers.push(...data.syncUsers);
+      if (data.ok !== true) allBatchesSucceeded = false;
+    } catch (e) {
+      log(`  ✗ Batch ${batchIndex + 1}/${batchCount}: ${e instanceof Error ? e.message : e}`);
+      log("  ⚠ Sync stopped because this batch's final result is unknown; some router changes may already have applied.");
+      return { ok: false, syncUsers: syncedUsers.length ? syncedUsers : null };
+    }
+  }
+
+  return { ok: allBatchesSucceeded, syncUsers: syncedUsers };
 }
 
 function iconButton(color: string): React.CSSProperties {
@@ -614,6 +738,100 @@ function EditUserDialog({
   );
 }
 
+function AdjustExpiryDialog({
+  user, onClose, onSave,
+}: { user: Customer; onClose: () => void; onSave: (expiresAt: string) => Promise<void> }) {
+  const currentExpiryLocal = toDateTimeLocal(user.expires_at);
+  const [expiresAt, setExpiresAt] = useState(currentExpiryLocal);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const nextExpiry = fromDateTimeLocal(expiresAt);
+  const nextExpiryMs = nextExpiry ? Date.parse(nextExpiry) : Number.NaN;
+  const unchanged = expiresAt === currentExpiryLocal;
+  const willExpireImmediately = Number.isFinite(nextExpiryMs)
+    && nextExpiryMs <= Date.now()
+    && user.status !== "expired"
+    && !isExpired(user.expires_at);
+  const submit = async () => {
+    const normalizedExpiry = fromDateTimeLocal(expiresAt);
+    if (!normalizedExpiry) {
+      setError("Choose a valid expiry date and time.");
+      return;
+    }
+    if (willExpireImmediately && !window.confirm(
+      `This will expire ${purchaseUsername(user)} immediately and disconnect their service. Continue?`,
+    )) return;
+    setError("");
+    setSaving(true);
+    try {
+      await onSave(normalizedExpiry);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not adjust this user's expiry.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  const currentExpiryMs = user.expires_at ? Date.parse(user.expires_at) : Number.NaN;
+  const direction = !Number.isFinite(nextExpiryMs)
+    ? ""
+    : !Number.isFinite(currentExpiryMs) || nextExpiryMs > currentExpiryMs
+      ? "This moves expiry later and extends access."
+      : nextExpiryMs < currentExpiryMs
+        ? "This moves expiry earlier and shortens access."
+        : "The expiry is unchanged.";
+  const inputStyle: React.CSSProperties = {
+    width: "100%", boxSizing: "border-box", padding: "0.6rem 0.7rem", borderRadius: 7,
+    background: "var(--isp-input-bg)", border: "1px solid var(--isp-border)", color: "var(--isp-text)",
+    font: "inherit", fontSize: "0.8rem",
+  };
+  return (
+    <div className="prepaid-modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !saving) onClose(); }}>
+      <div className="prepaid-modal prepaid-small-modal" role="dialog" aria-modal="true" aria-labelledby="adjust-prepaid-user-title">
+        <div className="prepaid-modal-heading">
+          <div><h2 id="adjust-prepaid-user-title">Adjust access time</h2><p>{purchaseUsername(user)}</p></div>
+          <button type="button" onClick={onClose} disabled={saving} style={iconButton("#94a3b8")} aria-label="Close expiry adjustment"><X size={15} /></button>
+        </div>
+        <div style={{ display: "grid", gap: 10, marginBottom: 12 }}>
+          <div>
+            <div className="prepaid-help" style={{ marginBottom: 3 }}>Current expiry</div>
+            <div style={{ color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 650 }}>
+              {user.expires_at ? fmtDate(user.expires_at) : "No expiry set"}
+            </div>
+          </div>
+          <label>
+            New expiry date and time
+            <input
+              autoFocus
+              required
+              style={inputStyle}
+              type="datetime-local"
+              step={60}
+              value={expiresAt}
+              onChange={event => setExpiresAt(event.target.value)}
+            />
+          </label>
+          {direction && <p className="prepaid-help" style={{ margin: 0 }}>{direction}</p>}
+          {willExpireImmediately && (
+            <p role="alert" style={{ margin: 0, color: "#f87171", fontSize: "0.74rem" }}>
+              This date is in the past. Saving will expire the service and disconnect the user.
+            </p>
+          )}
+          <p className="prepaid-help" style={{ margin: 0 }}>
+            Use the local time shown on this admin panel. Changing expiry keeps a suspended account suspended.
+          </p>
+        </div>
+        {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.75rem", marginTop: 12 }}>{error}</div>}
+        <div className="prepaid-modal-actions">
+          <button type="button" onClick={onClose} disabled={saving} className="prepaid-secondary-button">Cancel</button>
+          <button type="button" onClick={() => void submit()} disabled={saving || !nextExpiry || unchanged} className="prepaid-primary-button">
+            {saving ? <Loader2 size={13} className="prepaid-spin" /> : <Save size={13} />} Save expiry
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ExtendUserDialog({
   user, onClose, onExtend,
 }: { user: Customer; onClose: () => void; onExtend: (days: number) => Promise<void> }) {
@@ -690,13 +908,49 @@ export default function PrepaidUsers() {
 
   const planMap   = useMemo(() => Object.fromEntries(plans.map(p   => [p.id,   p  ])), [plans]);
   const routerMap = useMemo(() => Object.fromEntries(routers.map(r => [r.id,   r  ])), [routers]);
+  const displayCustomers = useMemo(
+    () => mergeDuplicateCustomers(customers, planMap),
+    [customers, planMap],
+  );
   const paymentMap = useMemo(() => {
-    const map: Record<number, Payment> = {};
-    payments.forEach(payment => {
-      if (payment.customer_id !== null && !map[payment.customer_id]) map[payment.customer_id] = payment;
+    const latestByCustomerId = new Map<number, Payment>();
+    const latestFirst = [...payments].sort((a, b) => {
+      const dateDifference = Date.parse(b.created_at) - Date.parse(a.created_at);
+      return (Number.isFinite(dateDifference) ? dateDifference : 0) || b.id - a.id;
     });
-    return map;
-  }, [payments]);
+    latestFirst.forEach(payment => {
+      if (payment.customer_id !== null && !latestByCustomerId.has(payment.customer_id)) {
+        latestByCustomerId.set(payment.customer_id, payment);
+      }
+    });
+
+    const grouped: Record<number, Payment> = {};
+    displayCustomers.forEach(customer => {
+      const payment = customer.mergedCustomerIds
+        .map(customerId => latestByCustomerId.get(customerId))
+        .filter((value): value is Payment => Boolean(value))
+        .sort((a, b) => {
+          const dateDifference = Date.parse(b.created_at) - Date.parse(a.created_at);
+          return (Number.isFinite(dateDifference) ? dateDifference : 0) || b.id - a.id;
+        })[0];
+      if (payment) grouped[customer.id] = payment;
+    });
+    return grouped;
+  }, [payments, displayCustomers]);
+  const packageOptions = useMemo(() => {
+    const ids = new Set<number>(plans.map(plan => plan.id));
+    displayCustomers.forEach(customer => {
+      const planId = customerPackageId(customer, paymentMap);
+      if (planId !== null) ids.add(planId);
+    });
+    return [...ids]
+      .map(id => ({ id, name: planMap[id]?.name ?? `Plan #${id}` }))
+      .sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
+  }, [plans, displayCustomers, paymentMap, planMap]);
+  const hasUnassignedPackage = useMemo(
+    () => displayCustomers.some(customer => customerPackageId(customer, paymentMap) === null),
+    [displayCustomers, paymentMap],
+  );
   const onlineUsers = useMemo(() => {
     const keys = new Set<string>();
     liveQueries.forEach(query => {
@@ -724,12 +978,14 @@ export default function PrepaidUsers() {
   const [search,      setSearch]      = useState("");
   const [statusTab,   setStatusTab]   = useState<StatusFilter>("all");
   const [typeFilter,  setTypeFilter]  = useState("");
+  const [packageFilter, setPackageFilter] = useState("");
   const [routerFilter, setRouterFilter] = useState("");
   const [entries,     setEntries]     = useState(PAGE_SIZE);
   const [page,        setPage]        = useState(1);
   const [detailUser,  setDetailUser]  = useState<Customer | null>(null);
   const [editingUser, setEditingUser] = useState<Customer | null>(null);
   const [extendingUser, setExtendingUser] = useState<Customer | null>(null);
+  const [adjustingExpiryUser, setAdjustingExpiryUser] = useState<Customer | null>(null);
   const [rechargePickerOpen, setRechargePickerOpen] = useState(false);
   const [addingVlanUser, setAddingVlanUser] = useState(false);
   const [rechargeTargetId, setRechargeTargetId] = useState("");
@@ -743,6 +999,7 @@ export default function PrepaidUsers() {
   const [syncing,         setSyncing]         = useState(false);
   const [syncLogs,        setSyncLogs]        = useState<string[] | null>(null);
   const [syncOk,          setSyncOk]          = useState<boolean | null>(null);
+  const [syncUserStatuses, setSyncUserStatuses] = useState<SyncUserStatus[] | null>(null);
 
   async function updateUser(user: Customer, updates: Record<string, unknown>) {
     setActionError("");
@@ -770,8 +1027,11 @@ export default function PrepaidUsers() {
     }
   }
 
-  async function handleDelete(user: Customer) {
-    if (!window.confirm(`Delete ${purchaseUsername(user)}? This cannot be undone.`)) return;
+  async function handleDelete(user: DisplayCustomer) {
+    const groupedRecordNote = user.mergedCustomerIds.length > 1
+      ? ` This row groups ${user.mergedCustomerIds.length} matching records; only the newest will be deleted, and the remaining records may appear afterward.`
+      : "";
+    if (!window.confirm(`Delete ${purchaseUsername(user)}?${groupedRecordNote} This cannot be undone.`)) return;
     try {
       setActionBusy(user.id);
       const response = await fetch(apiUrl(`/api/customers/${user.id}?adminId=${ADMIN_ID}`), {
@@ -788,11 +1048,16 @@ export default function PrepaidUsers() {
     }
   }
 
+  async function handleAdjustExpiry(user: Customer, expiresAt: string) {
+    await updateUser(user, { expires_at: expiresAt });
+    setAdjustingExpiryUser(null);
+  }
+
   async function handleExtend(user: Customer, days: number) {
     const current = user.expires_at && !isExpired(user.expires_at) ? new Date(user.expires_at) : new Date();
     current.setDate(current.getDate() + days);
     try {
-      await updateUser(user, { expires_at: current.toISOString(), status: "active" });
+      await updateUser(user, { expires_at: current.toISOString() });
       setExtendingUser(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Could not extend this user.");
@@ -809,22 +1074,30 @@ export default function PrepaidUsers() {
 
   /* ── Stats ── */
   const stats = useMemo(() => ({
-    total:     customers.length,
-    active:    customers.filter(c => c.status === "active" && !isExpired(c.expires_at)).length,
-    expired:   customers.filter(c => c.status === "expired" || isExpired(c.expires_at)).length,
-    suspended: customers.filter(c => c.status === "suspended").length,
-  }), [customers]);
+    total:     displayCustomers.length,
+    active:    displayCustomers.filter(hasUnexpiredPaidAccess).length,
+    expired:   displayCustomers.filter(isCustomerExpired).length,
+    suspended: displayCustomers.filter(c => c.status === "suspended").length,
+  }), [displayCustomers]);
 
   /* ── Filter ── */
   const filtered = useMemo(() => {
-    let list = customers;
+    let list = displayCustomers;
     if (statusTab === "online") list = list.filter(c => customerIsOnline(c, onlineUsers));
-    else if (statusTab === "active") list = list.filter(c => c.status === "active" && !isExpired(c.expires_at));
-    else if (statusTab === "expired") list = list.filter(c => c.status === "expired" || isExpired(c.expires_at));
+    else if (statusTab === "active") list = list.filter(hasUnexpiredPaidAccess);
+    else if (statusTab === "expired") list = list.filter(isCustomerExpired);
     else if (statusTab !== "all") list = list.filter(c => c.status === statusTab);
-    if (typeFilter)          list = list.filter(c => c.type  === typeFilter);
+    if (typeFilter) list = list.filter(c => prepaidServiceType(c.type) === typeFilter);
+    if (packageFilter === "none") {
+      list = list.filter(c => customerPackageId(c, paymentMap) === null);
+    } else if (packageFilter) {
+      list = list.filter(c => String(customerPackageId(c, paymentMap)) === packageFilter);
+    }
     if (routerFilter) {
-      list = list.filter(c => String(c.router_id ?? (c.plan_id ? planMap[c.plan_id]?.router_id : "") ?? "") === routerFilter);
+      list = list.filter(c => {
+        const planId = customerPackageId(c, paymentMap);
+        return String(c.router_id ?? (planId ? planMap[planId]?.router_id : "") ?? "") === routerFilter;
+      });
     }
     if (search) {
       const q = search.toLowerCase();
@@ -834,11 +1107,12 @@ export default function PrepaidUsers() {
         (c.pppoe_username ?? "").toLowerCase().includes(q) ||
         (c.phone  ?? "").includes(q) ||
         (c.email  ?? "").toLowerCase().includes(q) ||
-        (c.ip_address ?? "").toLowerCase().includes(q)
+        (c.ip_address ?? "").toLowerCase().includes(q) ||
+        (c.mac_address ?? "").toLowerCase().includes(q)
       );
     }
     return list;
-  }, [customers, statusTab, typeFilter, routerFilter, search, onlineUsers, planMap]);
+  }, [displayCustomers, statusTab, typeFilter, packageFilter, paymentMap, routerFilter, search, onlineUsers, planMap]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / entries));
   const pageRows   = filtered.slice((page - 1) * entries, page * entries);
@@ -848,11 +1122,11 @@ export default function PrepaidUsers() {
     if (!pickedRouter) return;
     const router = routers.find(r => String(r.id) === pickedRouter);
     if (!router) return;
-    setSyncing(true); setSyncLogs([]); setSyncOk(null);
+    setSyncing(true); setSyncLogs([]); setSyncOk(null); setSyncUserStatuses(null);
     const logs: string[] = [];
     const log = (m: string) => { logs.push(m); setSyncLogs([...logs]); };
     log("Starting user sync…");
-    const ok = await syncUsersToRouter(
+    const result = await syncUsersToRouter(
       router,
       customers.filter(c => c.type !== "vlan" && Number(
         c.router_id ?? (c.plan_id ? planMap[c.plan_id]?.router_id : null),
@@ -860,8 +1134,9 @@ export default function PrepaidUsers() {
       plans,
       log,
     );
-    log(ok ? "\n✅ Sync complete." : "\n⚠ Sync finished with errors.");
-    setSyncOk(ok);
+    log(result.ok ? "\n✅ Sync complete." : "\n⚠ Sync finished with errors.");
+    setSyncOk(result.ok);
+    setSyncUserStatuses(result.syncUsers);
     setSyncing(false);
     setShowSyncPicker(false);
   }
@@ -871,7 +1146,9 @@ export default function PrepaidUsers() {
     const header = "Name,Username / IP,Phone,Type,Plan,Status,Expires";
     const rows   = filtered.map(c => [
       c.name ?? "", c.username ?? c.pppoe_username ?? c.ip_address ?? "", c.phone ?? "",
-      c.type ?? "", c.plan_id ? (planMap[c.plan_id]?.name ?? "") : "",
+      c.type ?? "", customerPackageId(c, paymentMap)
+        ? (planMap[customerPackageId(c, paymentMap)!]?.name ?? `Plan #${customerPackageId(c, paymentMap)}`)
+        : "",
       c.status, c.expires_at ? fmtDate(c.expires_at) : "",
     ].map(v => `"${v}"`).join(","));
     const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv" });
@@ -912,7 +1189,7 @@ export default function PrepaidUsers() {
     { key: "active",    label: "Active",    count: stats.active,    color: "#4ade80" },
     { key: "expired",   label: "Expired",   count: stats.expired,   color: "#f87171" },
     { key: "suspended", label: "Suspended", count: stats.suspended, color: "#fbbf24" },
-    { key: "online",    label: "Online",    count: customers.filter(c => customerIsOnline(c, onlineUsers)).length, color: "#22c55e" },
+    { key: "online",    label: "Online",    count: displayCustomers.filter(c => customerIsOnline(c, onlineUsers)).length, color: "#22c55e" },
   ];
 
   return (
@@ -1009,6 +1286,13 @@ export default function PrepaidUsers() {
           }}
         />
       )}
+      {adjustingExpiryUser && (
+        <AdjustExpiryDialog
+          user={adjustingExpiryUser}
+          onClose={() => setAdjustingExpiryUser(null)}
+          onSave={expiresAt => handleAdjustExpiry(adjustingExpiryUser, expiresAt)}
+        />
+      )}
       {extendingUser && (
         <ExtendUserDialog
           user={extendingUser}
@@ -1026,7 +1310,7 @@ export default function PrepaidUsers() {
               Prepaid Users
             </h1>
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: 0 }}>
-              Manage prepaid accounts, renewals, expiry, service status, and measured usage.
+              Manage prepaid access and sync router issues without interrupting valid online sessions. Sync results list only accounts confirmed active on MikroTik.
             </p>
           </div>
 
@@ -1130,6 +1414,9 @@ export default function PrepaidUsers() {
             </div>
           </div>
         )}
+        {syncUserStatuses !== null && (
+          <SyncUserStatusList users={syncUserStatuses} />
+        )}
 
         {/* ── Compact filter toolbar ── */}
         <div className="prepaid-toolbar-card">
@@ -1175,7 +1462,7 @@ export default function PrepaidUsers() {
                 {filtered.map(user => <option key={user.id} value={user.id}>{purchaseUsername(user)} — {user.name || "Unnamed"}</option>)}
               </select>
               <button type="button" disabled={!rechargeTargetId} onClick={() => {
-                const target = customers.find(user => user.id === Number(rechargeTargetId));
+                const target = displayCustomers.find(user => user.id === Number(rechargeTargetId));
                 if (target) {
                   setExtendingUser(target);
                   setRechargePickerOpen(false);
@@ -1218,6 +1505,19 @@ export default function PrepaidUsers() {
               </select>
               <Filter size={11} style={{ position: "absolute", right: "0.5rem", top: "50%", transform: "translateY(-50%)", color: "#64748b", pointerEvents: "none" }} />
             </div>
+            <select
+              aria-label="Filter by package"
+              title="Filter by package"
+              value={packageFilter}
+              onChange={event => { setPackageFilter(event.target.value); setPage(1); }}
+              style={{ ...INPUT, minWidth: 170, maxWidth: 280, cursor: "pointer" }}
+            >
+              <option value="">All packages</option>
+              {hasUnassignedPackage && <option value="none">No package</option>}
+              {packageOptions.map(option => (
+                <option key={option.id} value={option.id}>{option.name}</option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -1253,42 +1553,48 @@ export default function PrepaidUsers() {
               ) : filtered.length === 0 ? (
                 <tr>
                    <td colSpan={13} style={{ ...TD, textAlign: "center", padding: "3rem", color: "var(--isp-text-muted)" }}>
-                    {search || typeFilter || statusTab !== "all"
+                    {search || typeFilter || packageFilter || statusTab !== "all"
                       ? "No users match this filter."
                       : "No prepaid users yet. Add a VLAN user here, or add Hotspot, PPPoE, and Static customers from the Customers section."}
                   </td>
                 </tr>
               ) : (
                 pageRows.map(user => {
-                  const plan   = user.plan_id ? planMap[user.plan_id] : null;
+                  const packageId = customerPackageId(user, paymentMap);
+                  const plan   = packageId ? planMap[packageId] : null;
                   const routerId = user.router_id ?? plan?.router_id ?? null;
                   const router = routerId ? routerMap[routerId] : null;
                   const payment = paymentMap[user.id];
-                  const purchasedPlan = payment?.plan_id
-                    ? planMap[payment.plan_id] ?? null
-                    : null;
-                  const displayedPlan = purchasedPlan ?? plan;
+                  const displayedPlan = plan;
                   const username = purchaseUsername(user);
                   const online = customerIsOnline(user, onlineUsers);
                   const fup = user.fup_limit_mb ?? plan?.data_limit_mb ?? null;
                   const expiring = isExpiringSoon(user.expires_at);
-                  const expired  = isExpired(user.expires_at);
-                  const serviceStatus = expired || user.status === "expired" ? "offline" : online ? "online" : user.status;
+                   const expired  = isCustomerExpired(user);
+                   const serviceStatus = expired ? "expired" : online ? "online" : hasUnexpiredPaidAccess(user) ? "active" : user.status;
                   const usageBytes = customerUsageBytes(user, liveUsage);
                   return (
                     <tr key={user.id}
-                      className={expired || user.status === "expired" ? "prepaid-row-expired" : undefined}
+                       className={expired ? "prepaid-row-expired" : undefined}
                       style={{ transition: "background 0.1s" }}
                     >
                       <td style={TD}>
                         <button type="button" className="prepaid-username-link" onClick={() => setDetailUser(user)} title={`View ${username}`}>
                           {username}
                         </button>
+                        {user.mergedCustomerIds.length > 1 && (
+                          <div
+                            title="Actions apply to the most recent record in this group."
+                            style={{ marginTop: 2, color: "var(--isp-text-muted)", fontSize: "0.62rem" }}
+                          >
+                            {user.mergedCustomerIds.length} matching records · newest shown
+                          </div>
+                        )}
                       </td>
                       <td style={TD}><span className="prepaid-plain-value">{TYPE_META[user.type ?? ""]?.label ?? user.type ?? "—"}</span></td>
                       <td style={TD}>
                         <div className="prepaid-plain-value">
-                          {displayedPlan?.name || (payment?.plan_id ? `Plan #${payment.plan_id}` : "No plan")}
+                          {displayedPlan?.name || (packageId ? `Plan #${packageId}` : "No plan")}
                         </div>
                       </td>
                       <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem" }} title={fmtDate(user.created_at)}>
@@ -1330,7 +1636,9 @@ export default function PrepaidUsers() {
                           <button title="Edit user" aria-label={`Edit ${username}`} onClick={() => setEditingUser(user)} disabled={actionBusy === user.id}
                             style={{ ...iconButton("#60a5fa"), opacity: actionBusy === user.id ? 0.5 : 1 }}><Edit3 size={13} /></button>
                           <button title="Extend access" aria-label={`Extend ${username}`} onClick={() => setExtendingUser(user)} disabled={actionBusy === user.id}
-                            style={iconButton("#a78bfa")}><PlusCircle size={13} /></button>
+                            style={iconButton("#c084fc")}><PlusCircle size={13} /></button>
+                          <button title="Adjust access time" aria-label={`Adjust access time for ${username}`} onClick={() => setAdjustingExpiryUser(user)} disabled={actionBusy === user.id}
+                            style={iconButton("#a78bfa")}><CalendarDays size={13} /></button>
                           <button title={user.status === "active" ? "Disable user" : "Enable user"} aria-label={`${user.status === "active" ? "Disable" : "Enable"} ${username}`} onClick={() => void handleStatus(user, user.status === "active" ? "suspended" : "active")} disabled={actionBusy === user.id}
                             style={iconButton(user.status === "active" ? "#f59e0b" : "#22c55e")}>{user.status === "active" ? <Power size={13} /> : <CheckCircle2 size={13} />}</button>
                           <button title="Delete user" aria-label={`Delete ${username}`} onClick={() => void handleDelete(user)} disabled={actionBusy === user.id}

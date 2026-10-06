@@ -450,7 +450,6 @@ export default function BridgePorts() {
 
   async function applyChanges() {
     if (!activeRouter || !selectedBridge || !payload) return;
-    setApplying(true);
     setApplyLogs(null);
     setApplyOk(null);
 
@@ -461,6 +460,17 @@ export default function BridgePorts() {
     );
     const addPorts    = [...selectedPorts].filter(p => !wasMember.has(p));
     const removePorts = [...wasMember].filter(p => !selectedPorts.has(p));
+    const movePorts = addPorts.flatMap(iface => {
+      const fromBridge = portCurrentBridge(iface, payload.bridgePorts);
+      return fromBridge && fromBridge !== selectedBridge
+        ? [{ interface: iface, fromBridge }]
+        : [];
+    });
+    if (movePorts.length > 0 && !window.confirm(
+      `Move these ports into ${selectedBridge}?\n\n${movePorts.map(move => `${move.interface}: ${move.fromBridge} → ${selectedBridge}`).join("\n")}\n\nThe current bridge membership will be removed first. Continue?`,
+    )) return;
+
+    setApplying(true);
 
     try {
       const res = await fetch("/api/admin/router/bridge-assign", {
@@ -472,6 +482,7 @@ export default function BridgePorts() {
           password: activeRouter.router_secret   || "",
           bridge:   selectedBridge,
           addPorts, removePorts,
+          movePorts,
           desiredPorts: [...selectedPorts],
           bridgeIp: activeRouter.vpn_ip || undefined,
           routerId: activeRouter.id,

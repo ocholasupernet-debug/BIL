@@ -38,6 +38,17 @@ type PortAssignment = {
   provisioning_error?: string | null;
 };
 
+class ApiResponseError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: Record<string, unknown>,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiResponseError";
+  }
+}
+
 type Draft = {
   hotspotEnabled: boolean;
   hotspotFolderPath: string;
@@ -94,7 +105,18 @@ async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
       : "The server returned a non-JSON response.";
     throw new Error(`API request failed (HTTP ${response.status}). ${responseKind}`);
   }
-  if (!response.ok) throw new Error(body.error || "Request failed.");
+  if (!response.ok) {
+    const details = body && typeof body === "object"
+      ? body as Record<string, unknown>
+      : {};
+    throw new ApiResponseError(
+      response.status,
+      details,
+      typeof details.error === "string" && details.error
+        ? details.error
+        : "Request failed.",
+    );
+  }
   return body;
 }
 
@@ -318,6 +340,48 @@ export default function Multiport() {
     setDraft((current) => ({ ...current, [key]: value }));
   };
 
+  const deployPortWithMoveConfirmation = async (
+    portId: number,
+    portalFileReplacementConsent: boolean,
+  ) => {
+    let confirmedSourceBridgeReference: string | undefined;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await apiJson(`/api/admin/port-services/${portId}/deploy`, {
+          method: "POST",
+          body: JSON.stringify({
+            portalFileReplacementConsent,
+            ...(confirmedSourceBridgeReference
+              ? { confirmMoveFromBridge: confirmedSourceBridgeReference }
+              : {}),
+          }),
+        });
+      } catch (cause) {
+        if (
+          !(cause instanceof ApiResponseError)
+          || cause.body.code !== "BRIDGE_MOVE_CONFIRMATION_REQUIRED"
+        ) {
+          throw cause;
+        }
+        const interfaceName = String(cause.body.interfaceName ?? "interface");
+        const sourceBridgeName = String(cause.body.sourceBridgeName ?? "");
+        const sourceBridgeReference = String(cause.body.sourceBridgeReference ?? "");
+        const targetBridgeName = String(cause.body.targetBridgeName ?? "");
+        if (!sourceBridgeName || !sourceBridgeReference || !targetBridgeName) {
+          throw new Error("RouterOS returned incomplete bridge details. Refresh the port list and retry.");
+        }
+        if (!window.confirm(
+          `Move ${interfaceName} from bridge "${sourceBridgeName}" to "${targetBridgeName}"? ` +
+          "This removes the port from its current bridge and may interrupt traffic or services using that bridge.",
+        )) {
+          throw new Error("Deployment cancelled. No bridge membership was changed.");
+        }
+        confirmedSourceBridgeReference = sourceBridgeReference;
+      }
+    }
+    throw new Error("The bridge membership kept changing. Refresh the port list and retry deployment.");
+  };
+
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
     setError("");
@@ -357,10 +421,7 @@ export default function Multiport() {
       let deploymentError = "";
       if (savedPortId && (draft.hotspotEnabled || draft.pppoeEnabled)) {
         try {
-          await apiJson(`/api/admin/port-services/${savedPortId}/deploy`, {
-            method: "POST",
-            body: JSON.stringify({ portalFileReplacementConsent: allowHotspotReplace }),
-          });
+          await deployPortWithMoveConfirmation(savedPortId, allowHotspotReplace);
         } catch (cause) {
           deploymentError = cause instanceof Error ? cause.message : "Router deployment failed.";
         }
@@ -402,10 +463,7 @@ export default function Multiport() {
       );
     setDeploying(true);
     try {
-      await apiJson(`/api/admin/port-services/${selectedAssignment.id}/deploy`, {
-        method: "POST",
-        body: JSON.stringify({ portalFileReplacementConsent: allowHotspotReplace }),
-      });
+      await deployPortWithMoveConfirmation(selectedAssignment.id, allowHotspotReplace);
       setSuccess(
         `${selectedAssignment.interface_name} was deployed to the router.${
           selectedAssignment.hotspot_enabled
@@ -536,6 +594,19 @@ export default function Multiport() {
                 </div>
                 {selectedAssignment ? <span style={{ color: statusColor(selectedAssignment.status), fontSize: 12, fontWeight: 850 }}>{selectedAssignment.status}</span> : null}
               </div>
+              {selectedAssignment?.provisioning_error ? (
+                <div role="alert" style={{ display: "flex", gap: 9, alignItems: "flex-start", border: "1px solid rgba(220,38,38,.3)", borderRadius: 9, padding: "10px 12px", color: "#b91c1c", background: "rgba(220,38,38,.06)", fontSize: 12 }}>
+                  <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <div>
+                    <strong>Last deployment error:</strong> {selectedAssignment.provisioning_error}
+                    {selectedAssignment.provisioning_error.toLowerCase().includes("foreign bridge") ? (
+                      <div style={{ marginTop: 5 }}>
+                        The app can move the port after an ISP admin confirms the source bridge. The move may interrupt traffic or services using that bridge.
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 14 }}>
                 <Field label="Service / bridge name" hint="Hotspot and PPPoE share this same per-port bridge.">
                   <input style={input} value={draft.bridgeName} onChange={(event) => setDraftValue("bridgeName", event.target.value)} placeholder="router-bridge-ether2" />
@@ -587,12 +658,28 @@ export default function Multiport() {
                 </Field>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button type="submit" disabled={saving || unassigning || portsLoading || !selectedPortKey} style={{ border: 0, borderRadius: 9, minHeight: 41, padding: "0 16px", color: "#fff", background: "var(--isp-accent)", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <button type="submit" disabled={saving || deploying || unassigning || portsLoading || !selectedPortKey} style={{ border: 0, borderRadius: 9, minHeight: 41, padding: "0 16px", color: "#fff", background: "var(--isp-accent)", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} {saving ? "Saving…" : selectedAssignment ? "Save configuration" : "Assign & save port"}
                 </button>
                 <button type="button" onClick={() => void deploy()} disabled={deploying || saving || unassigning || !selectedAssignment} style={{ border: "1px solid var(--isp-border)", borderRadius: 9, minHeight: 41, padding: "0 16px", color: "var(--isp-text)", background: "transparent", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
                   {deploying ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} />} {deploying ? "Deploying…" : "Deploy to router"}
                 </button>
+                {selectedAssignment?.hotspot_enabled ? (
+                  <a
+                    href={`/admin/plans?type=hotspot&routerId=${selectedAssignment.router_id}&portId=${selectedAssignment.id}`}
+                    style={{ border: "1px solid var(--isp-border)", borderRadius: 9, minHeight: 41, padding: "0 13px", color: "var(--isp-text)", background: "transparent", fontWeight: 800, fontSize: 12, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+                  >
+                    Manage {selectedAssignment.interface_name} Hotspot packages
+                  </a>
+                ) : null}
+                {selectedAssignment?.pppoe_enabled ? (
+                  <a
+                    href={`/admin/plans?type=pppoe&routerId=${selectedAssignment.router_id}&portId=${selectedAssignment.id}`}
+                    style={{ border: "1px solid var(--isp-border)", borderRadius: 9, minHeight: 41, padding: "0 13px", color: "var(--isp-text)", background: "transparent", fontWeight: 800, fontSize: 12, textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+                  >
+                    Manage {selectedAssignment.interface_name} PPPoE packages
+                  </a>
+                ) : null}
                 {selectedAssignment ? (
                   <button type="button" onClick={() => void unassign()} disabled={saving || deploying || unassigning} style={{ border: "1px solid rgba(220,38,38,.35)", borderRadius: 9, minHeight: 41, padding: "0 16px", color: "#b91c1c", background: "rgba(220,38,38,.06)", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
                     {unassigning ? <Loader2 size={16} className="animate-spin" /> : <Unlink2 size={16} />} {unassigning ? "Unassigning…" : "Unassign port"}

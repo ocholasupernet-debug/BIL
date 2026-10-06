@@ -12,6 +12,7 @@ import {
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 import { getCurrencySymbol } from "@/lib/utils";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
+import { getCustomerServiceStatus } from "@/lib/customer-service-status";
 
 /* ══════════════════════════ Types ══════════════════════════ */
 interface PlanLite {
@@ -776,8 +777,8 @@ export default function Customers() {
 
   /* ─── Stats ─── */
   const total    = customers.length;
-  const active   = customers.filter(c => c.status === "active").length;
-  const expired  = customers.filter(c => c.status === "expired").length;
+  const active   = customers.filter(c => getCustomerServiceStatus(c) === "active").length;
+  const expired  = customers.filter(c => getCustomerServiceStatus(c) === "expired").length;
   const hotspots = customers.filter(c => c.type === "hotspot").length;
   const pppoes   = customers.filter(c => c.type === "pppoe").length;
   const statics  = customers.filter(c => c.type === "static").length;
@@ -800,7 +801,7 @@ export default function Customers() {
         (c.phone ?? "").includes(searchTerm) ||
         (c.ip_address ?? "").includes(searchTerm) ||
         (c.email ?? "").toLowerCase().includes(term);
-      const matchStatus = filterStatus === "all" || c.status === filterStatus;
+      const matchStatus = filterStatus === "all" || getCustomerServiceStatus(c) === filterStatus;
       const matchType   = filterType   === "all" || c.type   === filterType;
       return matchSearch && matchStatus && matchType;
     });
@@ -886,11 +887,14 @@ export default function Customers() {
             </div>
           </div>
         </div>
+        <p style={{ marginTop: "-0.5rem", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
+          Total is saved account records, not online users or necessarily unique people. Active means valid service access; expired means access ended or data was depleted. Suspended or unverified accounts remain separate.
+        </p>
 
         {/* ─── Sync to Router ─── */}
         <RouterSyncBar
           label="Sync Customers to Router"
-          description="Push Hotspot and PPPoE customer accounts to MikroTik. VLAN customer access is provisioned with its plan through the customer creation flow."
+          description="Repair offline Hotspot and PPPoE accounts without changing eligible live sessions. Suspended, expired, and exhausted Hotspot accounts are disabled and disconnected."
           icon={<UploadCloud size={18} />}
           endpoint="/api/admin/sync/users"
           color="var(--isp-accent)"
@@ -911,6 +915,8 @@ export default function Customers() {
                   type:          c.type ?? "hotspot",
                   plan_id:       c.plan_id ?? undefined,
                   plan_name:     c.plan_id ? (planMap[c.plan_id] ?? "default") : "default",
+                  status:        c.status,
+                  expires_at:    c.expires_at ?? undefined,
                   pppoe_username: c.pppoe_username ?? undefined,
                   mac_address:   c.mac_address ?? undefined,
                   ip_address:    c.ip_address ?? undefined,
@@ -992,7 +998,7 @@ export default function Customers() {
                   const color = avatarColor(c.id);
                   const name  = c.name ?? c.username ?? c.pppoe_username ?? c.ip_address ?? `#${c.id}`;
                   const typeM = TYPE_META[(c.type ?? "hotspot") as CustomerType] ?? TYPE_META.hotspot;
-                  const statusVal = c.status ?? "active";
+                  const statusVal = getCustomerServiceStatus(c);
                   const loginId   = c.type === "vlan" ? c.ip_address : c.type === "pppoe" ? (c.pppoe_username ?? c.username) : c.username;
                   return (
                     <tr key={c.id} className="crow" style={{ borderBottom: "1px solid var(--isp-border-subtle)" }}>

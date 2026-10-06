@@ -15,6 +15,12 @@ Before writing a GitHub branch, read its live ref and compare both trees from th
 
 **How to apply:** For production pushes, confirm the live branch head, merge remote-only changes, resolve overlaps, validate the combined tree, then write blobs, tree, commit, and non-forced ref update. If shell Git push is unauthenticated, use the GitHub connector's Git Data API instead: upload complete file contents, verify each returned blob SHA, create the tree from the verified live base, compare the resulting tree, then create one commit and update the ref once with `force: false`. Normalize `getClient().request()` as `response.data ?? response` before checking refs, trees, or runs. If `main` advances during validation, rebase on the latest successfully deployed head and rerun affected checks before writing. Use ordinary temporary files for all three `git merge-file` inputs and verify markers from both sides before writing. GitHub REST reads a ref at `/git/ref/{ref}` but updates it at `/git/refs/{ref}`; use the plural path for `PATCH`.
 
+Normalize newline-delimited paths from CodeExecution `shellExec` output by removing a trailing carriage return before passing them to `readFile` or another shell command.
+
+**Why:** Shell output can arrive with CRLF line endings even when the command emits LF; the invisible `\r` makes valid workspace paths look missing.
+
+**How to apply:** Trim `\r` from each parsed path row before reading changed files for GitHub blob uploads.
+
 A GitHub Data API release can create a commit with a new SHA while preserving the exact local tree. CodeExecution's impure sandbox may not expose global `crypto.subtle`.
 
 **Why:** A full tree match does not mean the remote commit history matches the local branch, and assuming otherwise can cause a later push to diverge. A missing Web Crypto global can also break a tree-check after successful read-only API calls.

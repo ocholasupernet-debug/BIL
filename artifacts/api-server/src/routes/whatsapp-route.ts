@@ -12,6 +12,7 @@ import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { hashIspAdminPassword, verifyIspAdminPassword } from "../lib/passwords.js";
 import { logger } from "../lib/logger.js";
 import { checkRegistrationContactCapacity } from "../lib/registration-contact-capacity.js";
+import { resolvePrepaidPackagePlanId } from "../lib/prepaid-package-lookup.js";
 import {
   sbRpc,
   sbSelect,
@@ -845,10 +846,24 @@ async function handleInboundMessage(sender: string, text: string): Promise<void>
     return;
   }
   if (choice === "2") {
-    const plans = customer.plan_id
-      ? await sbSelect<Record<string, unknown>>(
+    const adminId = Number(customer.admin_id);
+    const customerId = Number(customer.id);
+    if (!Number.isSafeInteger(adminId) || adminId <= 0 || !Number.isSafeInteger(customerId) || customerId <= 0) {
+      await sendWhatsAppText(
+        phone,
+        "Your prepaid account is recorded, but we could not verify its package details. Please contact your ISP for help.",
+      );
+      return;
+    }
+    const successfulPayments = await sbSelectStrict<{ plan_id?: number | string | null }>(
+      "isp_transactions",
+      `admin_id=eq.${adminId}&customer_id=eq.${customerId}&status=in.(completed,paid,success)&payment_method=not.in.(mpesa_registration,manual_registration,mpesa_platform_billing)&select=plan_id&order=created_at.desc.nullslast,id.desc&limit=1`,
+    );
+    const planId = resolvePrepaidPackagePlanId(customer.plan_id, successfulPayments[0]?.plan_id);
+    const plans = planId !== null
+      ? await sbSelectStrict<Record<string, unknown>>(
           "isp_plans",
-          `id=eq.${encodeURIComponent(String(customer.plan_id))}&select=*&limit=1`,
+          `id=eq.${planId}&admin_id=eq.${adminId}&select=*&limit=1`,
         )
       : [];
     const plan = plans[0];

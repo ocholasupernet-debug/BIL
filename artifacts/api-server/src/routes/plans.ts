@@ -956,11 +956,31 @@ router.delete("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
       return;
     }
   }
-  await sbDelete(
-    "isp_plans",
-    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}`,
-  );
-  if (row) void logActivity({ adminId: row.admin_id, type: "plan", action: "deleted", subject: row.name });
+  const planFilter = `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}`;
+  const [customerReferences, transactionReferences] = row
+    ? await Promise.all([
+        sbSelectStrict<{ id: number }>("isp_customers", `plan_id=eq.${id}&select=id&limit=1`),
+        sbSelectStrict<{ id: number }>("isp_transactions", `plan_id=eq.${id}&select=id&limit=1`),
+      ])
+    : [[], []];
+  const preservePurchases = customerReferences.length > 0 || transactionReferences.length > 0;
+  if (preservePurchases) {
+    await sbUpdateStrict(
+      "isp_plans",
+      planFilter,
+      { is_active: false, client_can_purchase: false },
+    );
+  } else {
+    await sbDelete("isp_plans", planFilter);
+  }
+  if (row) {
+    void logActivity({
+      adminId: row.admin_id,
+      type: "plan",
+      action: preservePurchases ? "archived" : "deleted",
+      subject: row.name,
+    });
+  }
   res.sendStatus(204);
 });
 

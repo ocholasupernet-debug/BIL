@@ -38,6 +38,49 @@ function adminApiHeaders(): Record<string, string> {
   return { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) };
 }
 
+interface PlanSyncNotice {
+  tone: "success" | "warning";
+  message: string;
+  retry?: { planId: number; routerId: number; syncExistingUsers: boolean };
+}
+
+function isHotspotPlanType(type: unknown): boolean {
+  return ["hotspot", "trial", "trials"].includes(String(type ?? "").trim().toLowerCase());
+}
+
+async function syncHotspotPlanProfile(
+  planId: number,
+  routerId: number,
+  syncExistingUsers: boolean,
+): Promise<string | null> {
+  try {
+    const response = await fetch("/api/admin/sync/plans", {
+      method: "POST",
+      headers: adminApiHeaders(),
+      body: JSON.stringify({
+        routerId,
+        plans: [{ id: planId }],
+        syncExistingUsers,
+        skipLegacyCleanup: true,
+      }),
+    });
+    const body = await response.json().catch(() => null) as {
+      ok?: boolean;
+      error?: string;
+      logs?: string[];
+    } | null;
+    const syncErrors = (body?.logs ?? [])
+      .filter(line => line.trimStart().startsWith("❌"))
+      .map(line => line.replace(/^\s*❌\s*/, ""));
+    if (!response.ok || body?.ok !== true || syncErrors.length > 0) {
+      return body?.error || syncErrors.join(" ") || `Router profile sync failed (${response.status}).`;
+    }
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : "Router profile sync failed.";
+  }
+}
+
 async function fetchPlanContext(): Promise<PlanContextResponse> {
   const response = await fetch("/api/plans/admin-context", { headers: adminApiHeaders(), cache: "no-store" });
   const body = await response.json().catch(() => null) as PlanContextResponse & { error?: string } | null;
@@ -111,15 +154,28 @@ function Radio({ name, value, checked, onChange, label }: { name: string; value:
 interface ServicePlanFormProps {
   planType: string;
   initialData?: DbPlan | null;
+  defaultRouterId?: string;
+  defaultPortId?: string;
   bandwidths: DbBandwidth[];
   routers: DbRouter[];
   ports: DbPort[];
   pools: DbPool[];
   onCancel: () => void;
-  onSaved: () => void;
+  onSaved: (notice?: PlanSyncNotice) => void;
 }
 
-function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports, pools, onCancel, onSaved }: ServicePlanFormProps) {
+function AddServicePlanForm({
+  planType,
+  initialData,
+  defaultRouterId = "",
+  defaultPortId = "",
+  bandwidths,
+  routers,
+  ports,
+  pools,
+  onCancel,
+  onSaved,
+}: ServicePlanFormProps) {
   const isEdit   = !!initialData;
   const typeLabel= planType === "hotspot" ? "Hotspot" : planType === "pppoe" ? "PPPoE" : planType === "vlan" ? "VLAN" : planType === "trials" ? "Trial" : "Static IP";
   const isPppoe  = planType === "pppoe";
@@ -142,10 +198,10 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
   );
   const [validity,      setValidity]      = useState(initialData?.validity?.toString() ?? "");
   const [valUnit,       setValUnit]       = useState<PlanValidityUnit>(
-    normalizePlanValidityUnit(initialData?.validity_unit),
+    initialData ? normalizePlanValidityUnit(initialData.validity_unit) : "mins",
   );
-  const [routerId,      setRouterId]      = useState(initialData?.router_id?.toString() ?? "");
-  const [portId,        setPortId]        = useState(initialData?.port_id?.toString() ?? "");
+  const [routerId,      setRouterId]      = useState(initialData?.router_id?.toString() ?? defaultRouterId);
+  const [portId,        setPortId]        = useState(initialData?.port_id?.toString() ?? defaultPortId);
   const [saving,        setSaving]        = useState(false);
   const [error,         setError]         = useState<string | null>(null);
   const vlanPorts = ports.filter(port =>
@@ -185,7 +241,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
   const [fupSpeedUp, setFupSpeedUp] = useState(initialData?.fup_speed_up?.toString() ?? "");
 
   const units: { value: PlanValidityUnit; label: string }[] = [
-    { value: "mins", label: "Mins" },
+    { value: "mins", label: "Minutes" },
     { value: "hours", label: "Hrs" },
     { value: "days", label: "Days" },
     { value: "weeks", label: "Weeks" },
@@ -240,6 +296,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
       )) {
         throw new Error("FUP download and upload speeds must each be below the plan's normal speed.");
       }
+      let savedPlan: { id?: unknown; router_id?: unknown; type?: unknown } | null = null;
       if (isEdit && initialData) {
         const response = await fetch(`/api/plans/${initialData.id}`, {
           method: "PATCH",
@@ -266,10 +323,16 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
             clientCanPurchase: canBuy === "yes",
           }),
         });
+        const body = await response.json().catch(() => null) as {
+          id?: unknown;
+          router_id?: unknown;
+          type?: unknown;
+          error?: string;
+        } | null;
         if (!response.ok) {
-          const body = await response.json().catch(() => null) as { error?: string } | null;
           throw new Error(body?.error ?? `Plan update failed (${response.status}).`);
         }
+        savedPlan = body;
       } else {
         /*
          * Create through the API proxy instead of inserting the full UI
@@ -302,18 +365,45 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
             isActive: status === "enable",
           }),
         });
+        const body = await response.json().catch(() => null) as {
+          id?: unknown;
+          router_id?: unknown;
+          type?: unknown;
+          error?: string;
+        } | null;
         if (!response.ok) {
-          let detail = `Plan creation failed (${response.status}).`;
-          try {
-            const body = await response.json() as { error?: unknown };
-            if (typeof body.error === "string" && body.error.trim()) detail = body.error;
-          } catch {
-            /* Keep the useful HTTP status when the server did not return JSON. */
-          }
+          const detail = body?.error?.trim() || `Plan creation failed (${response.status}).`;
           throw new Error(detail);
         }
+        savedPlan = body;
       }
-      onSaved();
+
+      let notice: PlanSyncNotice | undefined;
+      if (isHotspotPlanType(savedPlan?.type ?? planType)) {
+        const planId = Number(savedPlan?.id ?? initialData?.id);
+        const savedRouterId = Number(savedPlan?.router_id ?? routerId);
+        const syncExistingUsers = Boolean(isEdit && initialData);
+        if (Number.isSafeInteger(planId) && planId > 0 && Number.isSafeInteger(savedRouterId) && savedRouterId > 0) {
+          const retry = { planId, routerId: savedRouterId, syncExistingUsers };
+          const syncError = await syncHotspotPlanProfile(planId, savedRouterId, syncExistingUsers);
+          notice = syncError
+            ? {
+                tone: "warning",
+                message: `Plan saved, but its MikroTik Hotspot profile or existing sharing limits could not be fully synced. Retry before customers use this plan. ${syncError}`,
+                retry,
+              }
+            : {
+                tone: "success",
+                message: "Plan saved and its MikroTik Hotspot profile and sharing limit are synced.",
+              };
+        } else {
+          notice = {
+            tone: "warning",
+            message: "Plan saved, but its router profile could not be synced because the saved plan or router ID was missing.",
+          };
+        }
+      }
+      onSaved(notice);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Save failed — please try again.");
     } finally {
@@ -563,7 +653,7 @@ function AddServicePlanForm({ planType, initialData, bandwidths, routers, ports,
 /* ═══════════════════════════════════════════════════════════
    DELETE CONFIRM MODAL
 ═══════════════════════════════════════════════════════════ */
-function DeleteModal({ name, onConfirm, onCancel, deleting }: { name: string; onConfirm: () => void; onCancel: () => void; deleting?: boolean }) {
+function DeleteModal({ name, onConfirm, onCancel, deleting, isPlan = false }: { name: string; onConfirm: () => void; onCancel: () => void; deleting?: boolean; isPlan?: boolean }) {
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
       <div style={{ background: "var(--isp-card, #1a2440)", border: "1px solid var(--isp-border)", borderRadius: 14, padding: "2rem", maxWidth: 400, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
@@ -573,15 +663,25 @@ function DeleteModal({ name, onConfirm, onCancel, deleting }: { name: string; on
           </div>
           <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)" }}><X size={18} /></button>
         </div>
-        <h3 style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: "1rem", margin: "0 0 8px" }}>Delete Plan?</h3>
+        <h3 style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: "1rem", margin: "0 0 8px" }}>
+          {isPlan ? "Remove Plan?" : "Delete Bandwidth Profile?"}
+        </h3>
         <p style={{ color: "var(--isp-text-muted)", fontSize: "0.83rem", lineHeight: 1.6, margin: "0 0 20px" }}>
-          You are about to permanently delete <strong style={{ color: "var(--isp-text)" }}>{name}</strong>. This cannot be undone.
+          {isPlan ? (
+            <>
+              Removing <strong style={{ color: "var(--isp-text)" }}>{name}</strong> archives it if customers or payment records exist, retaining package details and any valid access through its original expiry. Plans with no purchase records are deleted. Archived plans are not offered for new purchases.
+            </>
+          ) : (
+            <>
+              You are about to permanently delete <strong style={{ color: "var(--isp-text)" }}>{name}</strong>. This cannot be undone.
+            </>
+          )}
         </p>
         <div style={{ display: "flex", gap: 10 }}>
           <button onClick={onConfirm} disabled={deleting}
             style={{ flex: 1, padding: "0.55rem", borderRadius: 8, background: "#ef4444", color: "white", border: "none", fontWeight: 700, fontSize: "0.85rem", cursor: deleting ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
             {deleting && <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />}
-            {deleting ? "Deleting…" : "Yes, Delete"}
+            {deleting ? (isPlan ? "Removing…" : "Deleting…") : (isPlan ? "Yes, Remove" : "Yes, Delete")}
           </button>
           <button onClick={onCancel} style={{ flex: 1, padding: "0.55rem", borderRadius: 8, background: "transparent", color: "var(--isp-text-muted)", border: "1px solid var(--isp-border)", fontWeight: 600, fontSize: "0.85rem", cursor: "pointer", fontFamily: "inherit" }}>
             Cancel
@@ -602,7 +702,7 @@ function CopyPlanModal({
   plan: DbPlan;
   routers: DbRouter[];
   ports: DbPort[];
-  onCopied: () => void;
+  onCopied: (notice?: PlanSyncNotice) => void;
   onCancel: () => void;
 }) {
   const [routerId, setRouterId] = useState("");
@@ -636,9 +736,38 @@ function CopyPlanModal({
           targetPortId: portId ? Number(portId) : null,
         }),
       });
-      const body = await response.json().catch(() => null) as { error?: string } | null;
+       const body = await response.json().catch(() => null) as {
+         error?: string;
+         id?: unknown;
+         router_id?: unknown;
+         type?: unknown;
+       } | null;
       if (!response.ok) throw new Error(body?.error ?? `Copy failed (${response.status}).`);
-      onCopied();
+       let notice: PlanSyncNotice | undefined;
+       if (isHotspotPlanType(body?.type ?? plan.type)) {
+         const planId = Number(body?.id);
+         const targetRouterId = Number(body?.router_id ?? routerId);
+         if (Number.isSafeInteger(planId) && planId > 0 && Number.isSafeInteger(targetRouterId) && targetRouterId > 0) {
+           const retry = { planId, routerId: targetRouterId, syncExistingUsers: false };
+           const syncError = await syncHotspotPlanProfile(planId, targetRouterId, false);
+           notice = syncError
+             ? {
+                 tone: "warning",
+                 message: `Plan copied, but its MikroTik Hotspot profile could not be synced. Retry before customers use it. ${syncError}`,
+                 retry,
+               }
+             : {
+                 tone: "success",
+                 message: "Plan copied and its MikroTik Hotspot profile and sharing limit are synced.",
+               };
+         } else {
+           notice = {
+             tone: "warning",
+             message: "Plan copied, but its router profile could not be synced because the saved plan or router ID was missing.",
+           };
+         }
+       }
+       onCopied(notice);
     } catch (copyError: unknown) {
       setError(copyError instanceof Error ? copyError.message : "Copy failed. Please try again.");
     } finally {
@@ -922,7 +1051,12 @@ const TAB_LABELS: Record<string, string> = {
 
 export default function Plans() {
   const search = useSearch();
-  const requestedType = new URLSearchParams(search).get("type");
+  const searchParams = new URLSearchParams(search);
+  const requestedType = searchParams.get("type");
+  const requestedRouterIdValue = searchParams.get("routerId") ?? "";
+  const requestedPortIdValue = searchParams.get("portId") ?? "";
+  const requestedRouterId = /^\d+$/.test(requestedRouterIdValue) ? requestedRouterIdValue : "";
+  const requestedPortId = /^\d+$/.test(requestedPortIdValue) ? requestedPortIdValue : "";
   const activeTab = requestedType && Object.prototype.hasOwnProperty.call(TAB_LABELS, requestedType)
     ? requestedType
     : "hotspot";
@@ -931,10 +1065,12 @@ export default function Plans() {
   const [deletingPlan, setDeletingPlan] = useState<DbPlan | null>(null);
   const [copyingPlan,  setCopyingPlan] = useState<DbPlan | null>(null);
   const [showAddForm,  setShowAddForm]  = useState(false);
+  const [planSyncNotice, setPlanSyncNotice] = useState<PlanSyncNotice | null>(null);
+  const [retryingPlanSync, setRetryingPlanSync] = useState(false);
   const [planSearch, setPlanSearch] = useState("");
   const [serviceFilter, setServiceFilter] = useState<"all" | "pppoe" | "hotspot" | "vlan">("all");
-  const [routerFilter, setRouterFilter] = useState("all");
-  const [portFilter, setPortFilter] = useState("all");
+  const [routerFilter, setRouterFilter] = useState(requestedRouterId || "all");
+  const [portFilter, setPortFilter] = useState(requestedPortId || "all");
   const [sortBy, setSortBy] = useState<"name" | "price" | "speed">("name");
   const [sortAscending, setSortAscending] = useState(true);
 
@@ -943,6 +1079,7 @@ export default function Plans() {
     setEditingPlan(null);
     setDeletingPlan(null);
     setCopyingPlan(null);
+    setPlanSyncNotice(null);
   }, [activeTab]);
 
   const isBandwidth   = activeTab === "bandwidth";
@@ -1020,8 +1157,39 @@ export default function Plans() {
   });
 
   function closeForm() { setShowAddForm(false); setEditingPlan(null); }
-  function onSaved()   { qc.invalidateQueries({ queryKey: ["isp_plans"] }); closeForm(); }
-  function onCopied()  { qc.invalidateQueries({ queryKey: ["isp_plans"] }); setCopyingPlan(null); }
+  function onSaved(notice?: PlanSyncNotice) {
+    qc.invalidateQueries({ queryKey: ["isp_plans"] });
+    closeForm();
+    setPlanSyncNotice(notice ?? null);
+  }
+  function onCopied(notice?: PlanSyncNotice) {
+    qc.invalidateQueries({ queryKey: ["isp_plans"] });
+    setCopyingPlan(null);
+    setPlanSyncNotice(notice ?? null);
+  }
+  async function retryPlanSync() {
+    const retry = planSyncNotice?.retry;
+    if (!retry || retryingPlanSync) return;
+    setRetryingPlanSync(true);
+    try {
+      const syncError = await syncHotspotPlanProfile(
+        retry.planId,
+        retry.routerId,
+        retry.syncExistingUsers,
+      );
+      setPlanSyncNotice(current => {
+        if (!current) return null;
+        return syncError
+          ? { ...current, message: `Sync did not finish. ${syncError}` }
+          : {
+              tone: "success",
+              message: "The MikroTik Hotspot profile and sharing limits are now synced.",
+            };
+      });
+    } finally {
+      setRetryingPlanSync(false);
+    }
+  }
 
   return (
     <AdminLayout>
@@ -1029,7 +1197,7 @@ export default function Plans() {
       <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
 
       {deletingPlan && (
-        <DeleteModal name={deletingPlan.name} deleting={deleteMut.isPending}
+        <DeleteModal name={deletingPlan.name} deleting={deleteMut.isPending} isPlan
           onConfirm={() => deleteMut.mutate(deletingPlan.id)}
           onCancel={() => setDeletingPlan(null)} />
       )}
@@ -1051,12 +1219,52 @@ export default function Plans() {
             <p>{activeTab === "all" ? "Browse and manage all service plans." : `Manage ${TAB_LABELS[activeTab]?.toLowerCase() ?? "plans"} independently.`}</p>
           </div>
           {isServicePlan && !showingForm && (
-            <button onClick={() => { setEditingPlan(null); setShowAddForm(true); }}
+            <button onClick={() => { setPlanSyncNotice(null); setEditingPlan(null); setShowAddForm(true); }}
               className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-bold shadow-lg shadow-primary/20 hover:-translate-y-0.5 transition flex items-center gap-2">
               <Plus className="w-4 h-4" /> Add Plan
             </button>
           )}
         </div>
+
+        {planSyncNotice && !showingForm && (
+          <div
+            role={planSyncNotice.tone === "warning" ? "alert" : "status"}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+              padding: "0.75rem 1rem",
+              borderRadius: 10,
+              background: planSyncNotice.tone === "warning" ? "rgba(245,158,11,0.08)" : "rgba(34,197,94,0.08)",
+              border: `1px solid ${planSyncNotice.tone === "warning" ? "rgba(245,158,11,0.28)" : "rgba(34,197,94,0.25)"}`,
+              color: planSyncNotice.tone === "warning" ? "#fbbf24" : "#4ade80",
+              fontSize: "0.82rem",
+            }}
+          >
+            <span>{planSyncNotice.message}</span>
+            {planSyncNotice.retry && (
+              <button
+                type="button"
+                onClick={retryPlanSync}
+                disabled={retryingPlanSync}
+                style={{
+                  padding: "0.4rem 0.75rem",
+                  borderRadius: 7,
+                  border: "1px solid currentColor",
+                  background: "transparent",
+                  color: "inherit",
+                  font: "inherit",
+                  fontWeight: 700,
+                  cursor: retryingPlanSync ? "wait" : "pointer",
+                }}
+              >
+                {retryingPlanSync ? "Retrying…" : "Retry sync"}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* ── Sync to Router bar (service plans only, not bandwidth) ── */}
         {isServicePlan && !showingForm && (
@@ -1165,6 +1373,8 @@ export default function Plans() {
           <AddServicePlanForm
             planType={activeTab}
             initialData={editingPlan}
+            defaultRouterId={requestedRouterId}
+            defaultPortId={requestedPortId}
             bandwidths={bandwidths}
             routers={routers}
             ports={ports}
@@ -1210,8 +1420,8 @@ export default function Plans() {
                       <span className="plans-row-validity">{planValidity(p)}</span>
                       <span><Badge variant={p.is_active ? "success" : "default"}>{p.is_active ? "Active" : "Inactive"}</Badge></span>
                       <span className="plans-row-actions">
-                        <button type="button" onClick={() => setCopyingPlan(p)} aria-label={`Copy ${p.name}`} title={`Copy ${p.name}`}><Copy size={13} /></button>
-                        <button type="button" onClick={() => { setEditingPlan(p); setShowAddForm(false); }} aria-label={`Edit ${p.name}`} title={`Edit ${p.name}`}><Edit size={13} /></button>
+                        <button type="button" onClick={() => { setPlanSyncNotice(null); setCopyingPlan(p); }} aria-label={`Copy ${p.name}`} title={`Copy ${p.name}`}><Copy size={13} /></button>
+                        <button type="button" onClick={() => { setPlanSyncNotice(null); setEditingPlan(p); setShowAddForm(false); }} aria-label={`Edit ${p.name}`} title={`Edit ${p.name}`}><Edit size={13} /></button>
                         <button type="button" onClick={() => setDeletingPlan(p)} aria-label={`Delete ${p.name}`} title={`Delete ${p.name}`}><Trash size={13} /></button>
                       </span>
                     </div>

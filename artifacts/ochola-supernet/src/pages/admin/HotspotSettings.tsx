@@ -66,6 +66,7 @@ type ColorSettings = typeof DEFAULT_COLORS;
 interface HSettings {
   ispName: string;
   portalHostname: string;
+  tawkEnabled: boolean;
   freeTrial: string;
   vouchers: string;
   tagline: string;
@@ -174,6 +175,7 @@ function draftFromAssignedHotspotPort(port: AssignedHotspotPort): AssignedHotspo
 const DEFAULT_SETTINGS: HSettings = {
   ispName: "OCHOLASUPERNET",
   portalHostname: "",
+  tawkEnabled: false,
   freeTrial: "Disable",
   vouchers: "Yes",
   tagline: "Fast, reliable Wi-Fi for the things you love.",
@@ -355,6 +357,7 @@ type ExportConfig = {
   colors: ColorSettings;
   portalBackground: string;
   portalPackageShape: string;
+  tawkEnabled: boolean;
 };
 
 type PortalPlan = {
@@ -421,6 +424,7 @@ function makeExportConfig(
     colors: { ...DEFAULT_COLORS, ...settings.colors },
     portalBackground: safePortalBackground(appearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearance.portalPackageShape),
+    tawkEnabled: settings.tawkEnabled === true,
     portalLayout: normalizeHotspotPortalLayout(appearance.portalLayout ?? settings.portalLayout),
   };
 }
@@ -1299,7 +1303,7 @@ export default function HotspotSettings() {
             destinationDirectory: "flash/hotspot",
           }),
         });
-        let data: { error?: string; detail?: string; destinationPath?: string } = {};
+        let data: { error?: string; detail?: string; destinationPath?: string; warnings?: string[] } = {};
         try {
           data = await response.json();
         } catch {
@@ -1312,6 +1316,9 @@ export default function HotspotSettings() {
           throw new Error(serverMessage || `Portal refresh failed (HTTP ${response.status})`);
         }
         noticeText = `Hotspot settings saved and the sign-in pages were pushed to ${selectedRouter?.name || "the selected MikroTik"}.`;
+        if (Array.isArray(data.warnings) && data.warnings.length) {
+          noticeText += ` ${data.warnings.join(" ")}`;
+        }
       } else {
        noticeText = "Settings saved. Select a linked router to push the updated sign-in page to its MikroTik.";
       }
@@ -1505,6 +1512,16 @@ export default function HotspotSettings() {
                <Field label="Customer portal hostname" help="Saved for this tenant and embedded in the portal. A custom host is used only when its API health check passes; otherwise the tenant API address is used. Saving syncs the selected router’s sign-in files after confirmation but does not change DNS or RouterOS service configuration.">
                  <input className="hs-input" value={settings.portalHostname} maxLength={253} onChange={event => update("portalHostname", event.target.value)} placeholder="wifi.example.com" inputMode="url" />
                </Field>
+                <Field label="Tawk.to live chat and calling" help="When enabled, the widget loads only on ocholasupernet.isplatty.org. Save & sync updates the selected router’s portal and adds missing allow rules. Turning it off leaves those rules in place.">
+                  <label style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--isp-text)", fontSize: ".78rem", fontWeight: 700 }}>
+                    <input
+                      type="checkbox"
+                      checked={settings.tawkEnabled}
+                      onChange={event => update("tawkEnabled", event.target.checked)}
+                    />
+                    Enable Tawk.to on the OcholaSupernet portal
+                  </label>
+                </Field>
               <Field label="Tagline" help="A short promise shown below the portal title.">
                 <input className="hs-input" value={settings.tagline} maxLength={120} onChange={event => update("tagline", event.target.value)} placeholder="Fast and reliable internet" />
               </Field>

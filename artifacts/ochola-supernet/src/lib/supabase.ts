@@ -249,6 +249,7 @@ export interface DbTransaction {
   amount: number;
   payment_method: string;
   reference: string;
+  mpesa_receipt?: string | null;
   status: string;
   notes: string | null;
   created_at: string;
@@ -274,6 +275,7 @@ export interface DbCustomer {
   service_online?: boolean | null;
   last_seen?: string | null;
   expires_at: string | null;
+  depletion_reason?: string | null;
   created_at: string;
   updated_at: string;
 }

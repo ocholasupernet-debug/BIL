@@ -12,18 +12,21 @@
 - [Tenant-scoped admin APIs](tenant-scoped-admin-apis.md) — Most APIs remain tenant-scoped; migration is an intentional authenticated-global exception.
 - [FreeRADIUS tenant ownership](radius-tenant-ownership.md) — Shared RADIUS rows need server-side ownership mapping; leave ambiguous legacy records unassigned.
 - [Migration UI safety flow](migration-ui-safety-flow.md) — Keep tenant scope, two-script order, distinct export review, and the explicit write boundary visible.
+- [Prepaid edits and service moves](prepaid-edit-migration-boundary.md) — Allow full same-service edits for paid Hotspot users; retain migration handling for router or port moves.
 - [RouterOS migration boundary](routeros-migration-boundary.md) — Copy only approved RouterOS configuration; never clone billing data or promote a source during inspection.
 - [Router management VPN pool](router-management-vpn-pool.md) — Keep persistent MikroTik management clients on the isolated 10.8.5.x OpenVPN instance; preserve legacy end-user 10.8.0.x clients.
 - [Router management VPN failover](router-management-vpn-failover.md) — Self Install must prefer the 10.8.5.x client and activate the isolated 10.8.6.x client only after primary failure.
-- [Hotspot MAC payment access](hotspot-mac-payment-access.md) — Paid MAC bypasses must be paired with a persistent RouterOS expiry scheduler and must not expose router credentials to the portal.
 - [Hotspot forwarding auth gate](hotspot-forwarding-auth-gate.md) — Never put a blanket bridge-to-WAN accept before Hotspot processing; unauthenticated clients must stay behind the portal.
 - [Hotspot file confirmation](hotspot-file-confirmation.md) — Any authorized tenant/router admin can confirm Hotspot file overwrites or removals; no separate Super Admin approval.
 - [Hotspot M-Pesa reconnect](hotspot-mpesa-reconnect.md) — Require a stored active payment and live router confirmation of its linked device; SMS is only a receipt lookup key.
 - [Hotspot payment router selection](hotspot-payment-router-selection.md) — Payment flows must use the management VPN address, never the customer-facing hotspot gateway.
+- [Kenyan purchase phone ranges](kenyan-purchase-phone-ranges.md) — Hotspot purchases support both 07/2547 and 01/2541 numbers, normalized to Daraja’s country-code format.
 - [Hotspot credential login](hotspot-credential-login.md) — Credential login must use the submitted account and server-side RouterOS activation; MAC troubleshooting is a separate recovery path.
 - [Hotspot purchase login handoff](hotspot-purchase-login-handoff.md) — Provision verified purchases server-side, then let the RouterOS portal sign in normal devices; TV purchases and explicit retries stay direct.
 - [Hotspot private portal DNS](hotspot-private-dns.md) — Advertise only the MikroTik gateway DNS when the portal hostname is internal; public fallback causes NXDOMAIN before login.
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
+- [Hotspot chat setting](hotspot-chat-setting.md) — Control Tawk visibility from saved Hotspot Settings and sync through the normal portal flow, not a Multiport bulk action.
+- [Hotspot roaming allowance](hotspot-roaming-allowance.md) — Share one package data allowance across explicitly permitted routers and retain revoked destinations for historical accounting.
 - [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
 - [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.
 - [RouterOS empty file queries](routeros-empty-file-queries.md) — Avoid filtered `/file/print` no-match queries; RouterOS may return `!empty` and node-routeros can crash.
@@ -71,18 +74,21 @@
 - [Router VPN firewall verification](router-vpn-firewall-verification.md) — Avoid pipefail false negatives on repeated iptables rules and handle UFW IPv6 errors on IPv4-only VPS hosts.
 - [Router management credential policy](router-management-credential-policy.md) — Dedicated management OpenVPN intentionally uses the router name for both username and password.
 - [Router management API account](router-management-api-account.md) — Self Install can leave a stable API account alongside the legacy stored username; try both on management VPN paths.
-- [Plan write boundary](plan-write-boundary.md) — Route admin plan creation through API normalization because the deployed schema is narrower than the evolving form.
+- [RouterOS 6 file deployment](router-file-deployment-ros6.md) — RouterOS 6 accepts nested direct fetches but not reliable API file moves; verify final destinations after upload.
 - [Portal upload host](portal-upload-host.md) — One-time RouterOS portal uploads must fetch from the same API process that created the token.
 - [Portal package scope](portal-package-scope.md) — Carry router/port scope through package listing and checkout validation; listing isolation alone does not protect payment.
 - [Onboarding deployment modes](onboarding-deployment-modes.md) — Greenfield, Brownfield, and Zero-Touch need separate safety boundaries with legacy aliases normalized centrally.
 - [Unified script compiler migration](unified-script-compiler-migration.md) — Introduce a new RouterOS compiler behind existing installer boundaries; retire old families only after hardware validation.
 - [Self Install script scope](self-install-script-scope.md) — Use a one-time bootstrap to fetch/import mainhotspot.rsc; keep the management .ovpn recovery download separate.
-- [Prepaid session enforcement](prepaid-session-enforcement.md) — Keep expiry disconnects, lightweight portal notices, and full quota checks aligned.
+- [Prepaid session enforcement](prepaid-session-enforcement.md) — Preserve entitled live sessions during renewal and routine sync; disconnect only for expiry, depleted quota, or suspension.
+- [Prepaid user time adjustment](prepaid-user-time-adjustment.md) — Adjust existing expiry per user and reconcile live access; do not bulk-change unverified affected accounts.
+- [Prepaid user display identity](prepaid-user-display-identity.md) — Show one scoped row per verified prepaid identity without deleting linked customer records.
 - [Hotspot FUP enforcement](hotspot-fup-enforcement.md) — Throttle policies must suppress hard byte caps and RADIUS Max-Data, while keeping router-local FUP enforcement and expiry separate.
 - [Multi-port service isolation](multi-port-service-isolation.md) — Separate Hotspot pages per physical port require one bridge, subnet, and uniquely named server/profile per port.
 - [ISP-owned port services](isp-owned-port-services.md) — Legacy port rows require reseller_id; ISP-owned multiport rows use the tenant owner while assigned_reseller_id stays empty.
 - [Reseller direct payment routing](reseller-direct-payment-routing.md) — Resolve the merchant from the active tenant-scoped assigned port; never fall back silently or trust browser reseller IDs.
 - [Captive portal recovery and appearance](captive-portal-recovery-appearance.md) — Keep hotspot recovery server-side and carry tenant appearance through generated router-served portal exports.
+- [Portal branding load order](portal-branding-load-order.md) — Apply each tenant’s saved company name as soon as branding loads, without waiting for typography.
 - [Hotspot preview plan source](hotspot-preview-plan-source.md) — Local previews must keep embedded plans and skip empty live API refreshes; deployed portals retain live scoped refresh.
 - [Hotspot template macro contract](hotspot-template-macro-contract.md) — Keep required RouterOS tokens in exported templates, even when local fallbacks make the preview readable.
 - [Reseller Daraja bridge](reseller-daraja-bridge.md) — Use global encrypted Daraja credentials; reseller rows hold only destinations and callback settlement credits earnings atomically.
@@ -93,6 +99,7 @@
 - [Reseller consumption reporting](reseller-consumption-reporting.md) — Cumulative customer usage is not a historical monthly series; label cohort charts honestly until snapshots exist.
 - [VLAN service resource identity](vlan-service-resource-identity.md) — Initial handoff and later hotspot deployment must update the same RouterOS resource family.
 - [Plan service pool binding](plan-service-pool-binding.md) — Plans reference the existing scoped VLAN pool; Hotspot uses address-pool and PPPoE uses remote-address.
+- [Prepaid plan entitlements](prepaid-plan-entitlement.md) — Archive purchased plans; never let deletion clear a buyer's plan link or eligibility.
 - [Reseller payment routing](reseller-payment-routing.md) — Resolve collection accounts by active VLAN port, router, then reseller default; never fall back to the ISP gateway.
 - [Combined VLAN approval pool order](combined-vlan-approval-pool-order.md) — Create both RouterOS address pools before dependent approval-time VLAN resources.
 - [VLAN handoff portal files](vlan-handoff-portal-files.md) — Direct VLAN provisioning must install login.html and rlogin.html before declaring Hotspot active.
@@ -106,3 +113,10 @@
 - [Tenant-facing role copy](tenant-facing-role-copy.md) — Keep platform-role disclosures out of ISP/reseller-facing copy while preserving internal authorization and privileged-only surfaces.
 - [Password minimum policy](password-minimum-policy.md) — Require six characters when setting passwords; preserve stronger minima and legacy login/sync compatibility.
 - [Guest portal brand separation](guest-portal-brand-separation.md) — Keep customer hotspot access visually independent from the ISP billing product while retaining explicit tenant branding.
+- [Open WLAN security](wireless-open-security.md) — “Passwordless” means an explicitly open Wi-Fi network per SSID; it does not remove app/admin authentication.
+- [RouterOS WiFi menu compatibility](routeros-wifi-menu.md) — Fall back to `/interface/wifi` for inventory, but keep its distinct configuration model read-only until writes are verified.
+- [Admin-confirmed bridge moves](admin-confirmed-bridge-moves.md) — Show and recheck the live source bridge; move an interface only after admin confirmation.
+- [M-Pesa receipt identity](mpesa-transaction-reference.md) — Show the verified Safaricom receipt to admins; retain CheckoutRequestID for callback and status correlation.
+- [Hotspot extender topology](hotspot-extender-topology.md) — OCHOLASUPERNET is a router/NAT extender; an upstream MikroTik hosts Hotspot and may not see each client identity.
+- [Customer status totals](customer-status-totals.md) — Keep Dashboard and Customers active/expired counts aligned to effective access, not raw status or total records.
+- [New plan validity default](new-plan-validity-default.md) — Start newly created packages at Minutes while preserving the saved unit when editing existing plans.

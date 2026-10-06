@@ -352,19 +352,19 @@
         <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/></svg>
         M-Pesa Verification
       </div>
-      <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Enter Your M-Pesa Message</h3>
-      <p style="color:rgba(110,231,183,.5);font-size:.875rem;margin-top:.375rem">Paste the confirmation SMS for a completed payment. Access is restored only to the device registered to that active package.</p>
+      <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Verify Your M-Pesa Payment</h3>
+      <p style="color:rgba(110,231,183,.5);font-size:.875rem;margin-top:.375rem">Enter the transaction code from your M-Pesa message, or paste the full SMS. We connect only when the saved payment and the router both confirm this device's MAC; unfinished paid setup is completed automatically.</p>
     </div>
     <div class="sec-body" id="mpesaMsgWrap">
       <div style="display:flex;flex-direction:column;gap:1.125rem">
         <div>
-          <label class="lbl" style="color:rgba(52,211,153,.8)">M-Pesa Confirmation SMS</label>
-          <textarea id="mpesaMsg" rows="4" placeholder="Paste your M-Pesa confirmation message" class="inp inp-green"></textarea>
+          <label class="lbl" style="color:rgba(52,211,153,.8)">M-Pesa receipt / transaction ID</label>
+          <textarea id="mpesaMsg" rows="3" autocomplete="off" placeholder="Type the receipt code (for example ABC1234567) or paste the full confirmation SMS" class="inp inp-green"></textarea>
           <div id="mpesaMsgError" style="display:none;margin-top:.625rem;padding:.7rem .85rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>
         </div>
-        <button onclick="submitMpesa()" class="btn btn-green btn-full" style="margin-top:.25rem">
+        <button id="mpesaVerifyBtn" onclick="submitMpesa()" class="btn btn-green btn-full" style="margin-top:.25rem">
           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg>
-          Submit M-Pesa Message
+          Verify Payment &amp; Connect
         </button>
       </div>
     </div>
@@ -484,10 +484,20 @@ var COLORS=[
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="";
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
+   var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalPaidLoginHandoff=false;
+   var portalMpesaVerifyBusy=false;
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var ROUTER_NAS_IDENTIFIER="$(identity)";
 var ROUTER_HOTSPOT_SERVER_NAME="$(server-name)";
 var EMBEDDED_PLANS=[];
+/* Billing-backed fallback for account 33 / router 243 only. */
+var DEFAULT_HOTSPOT_PLANS=[
+  {id:42,name:"BASIC",price:5,validity:50,validity_unit:"mins"},
+  {id:43,name:"3 HOURS",price:10,validity:150,validity_unit:"mins"},
+  {id:44,name:"SILVER",price:20,validity:8,validity_unit:"days"},
+  {id:45,name:"12 HOURS",price:25,validity:12,validity_unit:"hours"},
+  {id:46,name:"DAILY",price:35,validity:1,validity_unit:"days"}
+];
   var PORTAL_API_TIMEOUT_MS=4000;
   var PLAN_REFRESH_INTERVAL=10000, planRefreshTimer=null, planRequestInFlight=false, plansInitialised=false, lastPlanSignature="";
 var planLoadError="", plansLoadedFromApi=false;
@@ -701,6 +711,68 @@ function checkPortalExpiryOnLanding(){
     notice.hidden=false;
   }).catch(function(){});
 }
+function schedulePortalAutoReconnect(delay){
+  if(portalAutoReconnectDone||portalAutoReconnectAttempts>=5)return;
+  if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
+  portalAutoReconnectTimer=setTimeout(function(){
+    portalAutoReconnectTimer=0;
+    attemptPortalAutoReconnect();
+  },delay);
+}
+function attemptPortalAutoReconnect(){
+  if(PORTAL_PREVIEW_ONLY||portalPaidLoginHandoff||portalAutoReconnectDone||portalAutoReconnectBusy
+    ||PORTAL_ADMIN_ID<1||!DEVICE_MAC||PORTAL_QUERY.get("page")==="troubleshoot")return;
+  portalAutoReconnectBusy=true;
+  portalAutoReconnectAttempts+=1;
+  fetch(apiUrl("/api/customers/hotspot-troubleshoot"),{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      adminId:PORTAL_ADMIN_ID,
+      action:"login",
+      mac_address:DEVICE_MAC,
+      ...(DEVICE_IP?{client_ip:DEVICE_IP}:{}),
+      ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+      ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})
+    })
+  }).then(function(response){
+    return response.json().then(function(data){return{statusCode:response.status,data:data||{}};});
+  }).then(function(result){
+    portalAutoReconnectBusy=false;
+    var data=result.data||{};
+    if(data.connected===true){
+      portalAutoReconnectDone=true;
+      if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
+      portalAutoReconnectTimer=0;
+      return;
+    }
+    if(data.status==="expired"||data.status==="depleted")return;
+    if(portalAutoReconnectAttempts<5){
+      var retryable=data.retryable===true||result.statusCode===409||result.statusCode>=500
+        ||data.status==="active"||data.status==="unavailable"||data.status==="not_found";
+      if(retryable)schedulePortalAutoReconnect([700,1800,4000,8000][portalAutoReconnectAttempts-1]||8000);
+    }
+  }).catch(function(){
+    portalAutoReconnectBusy=false;
+    if(portalAutoReconnectAttempts<5){
+      schedulePortalAutoReconnect([700,1800,4000,8000][portalAutoReconnectAttempts-1]||8000);
+    }
+  });
+}
+function retryPortalAutoReconnectOnReturn(){
+  if(portalAutoReconnectDone||portalPaidLoginHandoff||portalAutoReconnectBusy)return;
+  var now=Date.now();
+  if(now-portalAutoReconnectEventAt<5000)return;
+  portalAutoReconnectEventAt=now;
+  portalAutoReconnectAttempts=0;
+  if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
+  portalAutoReconnectTimer=0;
+  attemptPortalAutoReconnect();
+}
+window.addEventListener("online",retryPortalAutoReconnectOnReturn);
+document.addEventListener("visibilitychange",function(){
+  if(document.visibilityState==="visible")retryPortalAutoReconnectOnReturn();
+});
 function safePublicApiBase(value){
   try{
     var url=new URL(String(value||""));
@@ -732,14 +804,52 @@ function applyPortalBackground(value){
 function normalisePlanList(value){
   if(!Array.isArray(value))return [];
   return value.map(function(p){
+    var dataLimitMb=Number(p&&p.data_limit_mb);
+    var rawPolicy=String(p&&(p.data_cap_mode||p.fup_policy||p.fup_mode||"")||"").trim().toLowerCase();
+    var dataCapMode=["throttle","reduced_speed","reduced-speed","safaricom","fair_use","fair-use"].indexOf(rawPolicy)>=0?"throttle":"disconnect";
+    var rawSpeedDown=Number(p&&(p.fup_speed_down||p.throttle_speed_down||p.speed_after_limit_down||p.reduced_speed_down));
+    var rawSpeedUp=Number(p&&(p.fup_speed_up||p.throttle_speed_up||p.speed_after_limit_up||p.reduced_speed_up));
+    var rawSharedUsers=Number(p&&(p.shared_users!=null?p.shared_users:p.sharedUsers));
     return {
       id:Number(p&&p.id)||0,
       name:typeof(p&&p.name)==="string"?p.name:"",
       price:Number(p&&p.price)||0,
       validity:Number(p&&p.validity)||0,
-      unit:typeof(p&&p.validity_unit)==="string"?p.validity_unit:"Days"
+      unit:typeof(p&&p.validity_unit)==="string"?p.validity_unit:"Days",
+      data_limit_mb:Number.isFinite(dataLimitMb)&&dataLimitMb>0?dataLimitMb:null,
+      data_cap_mode:dataCapMode,
+      fup_speed_down:Number.isFinite(rawSpeedDown)&&rawSpeedDown>0?rawSpeedDown:null,
+      fup_speed_up:Number.isFinite(rawSpeedUp)&&rawSpeedUp>0?rawSpeedUp:null,
+      shared_users:Number.isFinite(rawSharedUsers)&&rawSharedUsers>=1?Math.floor(rawSharedUsers):1
     };
   }).filter(function(p){return p.id>0&&p.name;});
+}
+function formatPortalSpeed(value){
+  var speed=Number(value);
+  if(!Number.isFinite(speed)||speed<=0)return "";
+  var amount=speed>=1000?speed/1000:speed;
+  var rounded=Math.round(amount*100)/100;
+  return String(rounded)+(speed>=1000?" Gbps":" Mbps");
+}
+function formatPortalDataAllowance(plan){
+  var limitMb=Number(plan&&plan.data_limit_mb);
+  if(!Number.isFinite(limitMb)||limitMb<=0)return "Unlimited data";
+  var amountValue=limitMb>=1000000?limitMb/1000000:limitMb>=1000?limitMb/1000:limitMb;
+  var amount=Math.round(amountValue*100)/100;
+  var unit=limitMb>=1000000?" TB":limitMb>=1000?" GB":" MB";
+  var policy=String(plan.data_cap_mode||plan.fup_policy||"").trim().toLowerCase();
+  var throttleDown=Number(plan.fup_speed_down);
+  if(policy==="throttle"&&Number.isFinite(throttleDown)&&throttleDown>0){
+    var throttleUp=Number(plan.fup_speed_up);
+    var upload=Number.isFinite(throttleUp)&&throttleUp>0?" / "+formatPortalSpeed(throttleUp):"";
+    return "Limited · "+amount+unit+" cap · then "+formatPortalSpeed(throttleDown)+upload;
+  }
+  return "Limited · "+amount+unit+" cap · disconnects at the cap";
+}
+function formatPortalSharedDevices(value){
+  var parsed=Number(value);
+  var devices=Number.isFinite(parsed)&&parsed>=1?Math.floor(parsed):1;
+  return devices===1?"1 device":"Up to "+devices+" devices";
 }
 /* Payment availability gates checkout, not whether customers can view packages. */
 function shouldHidePackageSection(maintenanceMode,allowPackagesDuringMaintenance){
@@ -815,7 +925,7 @@ function applyPortalConfig(data){
     logoIcon.replaceChildren(image);
   }
   var announce=typeof data.announcement==="string"?data.announcement.trim():"";
-  var maintenance=Boolean(data.maintenanceMode);
+  var maintenance=data.maintenanceMode===true||data.maintenanceMode==="Maintenance";
   var announceSection=document.getElementById("portalAnnouncement");
   var announceText=document.getElementById("portalAnnouncementText");
   if(announceSection&&announceText&&portalCardEnabled("announcement")&&(announce||maintenance)){
@@ -880,6 +990,29 @@ function applyPortalTypography(data){
    if(publicBase)PORTAL_API_BASE=publicBase;
 }
 
+function applyPublicHotspotBranding(brandingData){
+  var brandingSettings=brandingData&&brandingData.branding&&brandingData.branding.settings;
+  if(!brandingSettings||typeof brandingSettings!=="object"||Array.isArray(brandingSettings))return;
+  var merged=Object.assign({},EMBEDDED_CONFIG||{},brandingSettings);
+  if(EMBEDDED_CONFIG){
+    merged.adminId=EMBEDDED_CONFIG.adminId;
+    merged.resellerId=EMBEDDED_CONFIG.resellerId;
+    merged.routerId=EMBEDDED_CONFIG.routerId;
+    merged.portId=EMBEDDED_CONFIG.portId;
+    merged.portalContextToken=EMBEDDED_CONFIG.portalContextToken;
+    merged.apiBase=EMBEDDED_CONFIG.apiBase||PORTAL_API_BASE;
+    merged.plans=EMBEDDED_CONFIG.plans||EMBEDDED_PLANS;
+  }
+  applyPortalConfig(merged);
+}
+
+function applyPublicHotspotTypography(typographyData){
+  if(!EMBEDDED_CONFIG&&typographyData&&Number.isSafeInteger(Number(typographyData.adminId))){
+    PORTAL_ADMIN_ID=Number(typographyData.adminId);
+  }
+  applyPortalTypography(typographyData);
+}
+
 function loadPortalTypography(done){
    /* Apply the service scope before a local typography request. A captive
       browser can keep that request pending while the walled garden is being
@@ -892,30 +1025,14 @@ function loadPortalTypography(done){
    var brandingUrl=PORTAL_API_BASE?apiUrl("/api/public/hotspot-branding"+adminQuery):"";
    var typographyUrl=PORTAL_API_BASE?apiUrl("/api/public/typography"+adminQuery):"";
    var brandingRequest=brandingUrl?fetch(brandingUrl,{cache:"no-store"})
-     .then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):Promise.resolve(null);
+     .then(function(r){return r.ok?r.json():null;})
+     .then(function(data){applyPublicHotspotBranding(data);return data;})
+     .catch(function(){return null;}):Promise.resolve(null);
    var typographyRequest=typographyUrl?fetch(typographyUrl,{cache:"no-store"})
-     .then(function(r){return r.ok?r.json():null;}).catch(function(){return null;}):Promise.resolve(null);
-   var request=Promise.all([brandingRequest,typographyRequest]).then(function(results){
-     var brandingData=results[0], typographyData=results[1];
-     var brandingSettings=brandingData&&brandingData.branding&&brandingData.branding.settings;
-     if(brandingSettings&&typeof brandingSettings==="object"&&!Array.isArray(brandingSettings)){
-       var merged=Object.assign({},EMBEDDED_CONFIG||{},brandingSettings);
-       if(EMBEDDED_CONFIG){
-         merged.adminId=EMBEDDED_CONFIG.adminId;
-         merged.resellerId=EMBEDDED_CONFIG.resellerId;
-         merged.routerId=EMBEDDED_CONFIG.routerId;
-         merged.portId=EMBEDDED_CONFIG.portId;
-         merged.portalContextToken=EMBEDDED_CONFIG.portalContextToken;
-         merged.apiBase=EMBEDDED_CONFIG.apiBase||PORTAL_API_BASE;
-         merged.plans=EMBEDDED_CONFIG.plans||EMBEDDED_PLANS;
-       }
-       applyPortalConfig(merged);
-     }
-     if(!EMBEDDED_CONFIG&&typographyData&&Number.isSafeInteger(Number(typographyData.adminId))){
-       PORTAL_ADMIN_ID=Number(typographyData.adminId);
-     }
-     applyPortalTypography(typographyData);
-   });
+     .then(function(r){return r.ok?r.json():null;})
+     .then(function(data){applyPublicHotspotTypography(data);return data;})
+     .catch(function(){return null;}):Promise.resolve(null);
+   var request=Promise.all([brandingRequest,typographyRequest]);
   var timeout=new Promise(function(resolve){setTimeout(function(){resolve(null);},5000);});
   Promise.race([request,timeout]).then(function(){if(typeof done==="function")done();});
 }
@@ -973,8 +1090,18 @@ function loadPaymentStatus(){
  /* ── Load and keep hotspot plans fresh ── */
  function planSignature(plans){
    return plans.map(function(plan){
-     return [plan.id,plan.name,plan.price,plan.validity,plan.unit].join("~");
+     return [
+       plan.id,plan.name,plan.price,plan.validity,plan.unit,plan.data_limit_mb,
+       plan.data_cap_mode,plan.fup_speed_down,plan.fup_speed_up,plan.shared_users
+     ].join("~");
    }).join("|");
+ }
+ function hasDefaultPlanFallback(){
+   return !PORTAL_PREVIEW_ONLY&&PORTAL_ADMIN_ID===33&&PORTAL_ROUTER_ID===243&&PORTAL_PORT_ID===0;
+ }
+ function fallbackPlanList(){
+   if(!hasDefaultPlanFallback())return [];
+   return EMBEDDED_PLANS.length?EMBEDDED_PLANS.slice():normalisePlanList(DEFAULT_HOTSPOT_PLANS);
  }
  function refreshPlansFromApi(){
     if(PORTAL_PREVIEW_ONLY||planRequestInFlight||(typeof document!=="undefined"&&document.hidden))return;
@@ -1001,10 +1128,23 @@ function loadPaymentStatus(){
        refreshPlansFromApi();
        return;
      }
-     var remotePlans=normalisePlanList(data);
-      /* A successful empty response is authoritative: it clears stale
-         embedded packages so a new router cannot show another router's plans. */
-      if(apiSucceeded&&Array.isArray(data)&&remotePlans.length===data.length){
+      var remotePlans=normalisePlanList(data);
+      var validResponse=apiSucceeded&&Array.isArray(data)&&remotePlans.length===data.length;
+      if(hasDefaultPlanFallback()&&(!validResponse||remotePlans.length===0)){
+        var fallbackPlans=fallbackPlanList();
+        if(fallbackPlans.length){
+          var fallbackSignature=planSignature(fallbackPlans);
+          var fallbackShouldRender=fallbackSignature!==lastPlanSignature||!plansLoadedFromApi||Boolean(planLoadError);
+          PLANS=fallbackPlans;
+          lastPlanSignature=fallbackSignature;
+          plansLoadedFromApi=Boolean(apiSucceeded);
+          planLoadError="";
+          if(fallbackShouldRender)renderPlans();
+          return;
+        }
+      }
+       /* For other router scopes, a successful empty response is authoritative. */
+       if(validResponse){
        var shouldRender=planSignature(remotePlans)!==lastPlanSignature||!plansLoadedFromApi||Boolean(planLoadError);
        PLANS=remotePlans;
        lastPlanSignature=planSignature(remotePlans);
@@ -1032,9 +1172,9 @@ function loadPaymentStatus(){
  }
  function loadPlans(){
    if(!plansInitialised){
-      PLANS=EMBEDDED_PLANS.slice();
+       PLANS=EMBEDDED_PLANS.length?EMBEDDED_PLANS.slice():fallbackPlanList();
      lastPlanSignature=planSignature(PLANS);
-     renderPlans();
+      renderPlans(PLANS.length===0&&!PORTAL_PREVIEW_ONLY);
      plansInitialised=true;
    }else if(!plansLoadedFromApi&&EMBEDDED_PLANS.length){
      PLANS=EMBEDDED_PLANS.slice();
@@ -1052,9 +1192,10 @@ function loadPaymentStatus(){
    }
  }
 
-function renderPlans(){
+function renderPlans(preserveLoadingMarkup){
   var grid=document.getElementById("plansGrid");
   if(!PLANS.length){
+    if(preserveLoadingMarkup)return;
     grid.innerHTML='<div role="status" style="grid-column:1/-1;text-align:center;padding:2rem;color:rgba(255,255,255,.75)"><p id="planLoadMessage"></p><button type="button" id="retryPlansButton" class="btn" style="margin-top:1rem">Retry packages</button></div>';
     document.getElementById("planLoadMessage").textContent=planLoadError||(plansLoadedFromApi||PORTAL_PREVIEW_ONLY?"No packages are currently available for this hotspot.":"Loading packages…");
     document.getElementById("retryPlansButton").onclick=function(){loadPlans();};
@@ -1062,6 +1203,8 @@ function renderPlans(){
   }
   grid.innerHTML=PLANS.map(function(p,i){
     var c=COLORS[i%COLORS.length];
+    var dataAllowance=formatPortalDataAllowance(p);
+    var sharedDevices=formatPortalSharedDevices(p.shared_users);
     var checkoutAvailable=canStartPaymentCheckout();
     var checkoutLabel=checkoutAvailable
       ?PAYMENT_METHOD_READY?"Connect Now":"Try checkout"
@@ -1073,7 +1216,9 @@ function renderPlans(){
       '<span style="display:inline-block;padding:.25rem .75rem;border-radius:9999px;font-size:.625rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;color:white;margin-bottom:1rem;background:'+c.badge+'">'+p.name+'</span>'+
       '<div style="font-size:2.375rem;font-weight:900;color:white;line-height:1;letter-spacing:-.03em">'+
       '<span style="font-size:.8125rem;font-weight:600;color:'+c.from+'">Ksh</span>&nbsp;'+p.price+'</div>'+
-      '<p style="font-size:.75rem;color:rgba(255,255,255,.5);margin-top:.625rem;font-weight:400">'+p.validity+' '+p.unit+' Unlimited</p>'+
+      '<p style="font-size:.75rem;color:rgba(255,255,255,.5);margin:.625rem 0 0;font-weight:400;line-height:1.4">'+p.validity+' '+p.unit+'</p>'+
+      '<p style="font-size:.75rem;color:rgba(255,255,255,.72);margin:.375rem 0 0;font-weight:600;line-height:1.4">'+dataAllowance+'</p>'+
+      '<p style="font-size:.75rem;color:rgba(255,255,255,.72);margin:.375rem 0 0;font-weight:600;line-height:1.4">'+sharedDevices+'</p>'+
       '</div>'+
         '<button type="button" class="plan-connect-button" data-plan-index="'+i+'" '+(checkoutAvailable?'':'disabled aria-disabled="true"')+' style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:'+(checkoutAvailable?'pointer':'not-allowed')+';opacity:'+(checkoutAvailable?'1':'.55')+';font-family:inherit;transition:opacity .15s" onmouseover="if(!this.disabled)this.style.opacity=\'.88\'" onmouseout="if(!this.disabled)this.style.opacity=\'1\'">'+
        checkoutLabel+'</button></div>';
@@ -1087,7 +1232,7 @@ function openModal(i){
   tvPurchase=false; tvDeviceName=""; tvDeviceRouterId=0; tvRememberDevice=false; tvDeviceSaveNotice="";
   selectedPlan=PLANS[i]; stkState="idle"; stkPhone="";
   document.getElementById("modalPlanName").textContent=selectedPlan.name;
-  document.getElementById("modalPlanDetails").textContent="Ksh "+selectedPlan.price+" · "+selectedPlan.validity+" "+selectedPlan.unit+" Unlimited";
+  document.getElementById("modalPlanDetails").textContent="Ksh "+selectedPlan.price+" · "+selectedPlan.validity+" "+selectedPlan.unit+" · "+formatPortalDataAllowance(selectedPlan)+" · "+formatPortalSharedDevices(selectedPlan.shared_users);
   renderModal();
   document.getElementById("stkModal").style.display="flex";
 }
@@ -1112,7 +1257,7 @@ function renderModal(){
        '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.</p>'+
       '</div>'+
       '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
-      '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX or 2547XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+stkPhone+'" />'+
+      '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+stkPhone+'" />'+
       '<div id="stkErrBox" style="display:none;margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>'+
       '<button onclick="sendStk()" '+((DEVICE_MAC||DEVICE_IP)&&PORTAL_ADMIN_ID>0?'':'disabled')+' class="btn btn-purple btn-full" style="font-size:.875rem;padding:.875rem;opacity:'+((DEVICE_MAC||DEVICE_IP)&&PORTAL_ADMIN_ID>0?'1':'.5')+'">'+
       'Send STK Push &mdash; Ksh '+(selectedPlan?selectedPlan.price:"")+
@@ -1204,7 +1349,7 @@ function renderModal(){
     }
    return true;
  }
-  function assignPaidHotspotAccess(checkoutId,forceRouterRetry){
+  function assignPaidHotspotAccess(checkoutId,forceRouterRetry,forcePortalLoginHandoff){
    return fetch(apiUrl("/api/mpesa/hotspot-mac-access"),{
      method:"POST",
      headers:{"Content-Type":"application/json"},
@@ -1215,8 +1360,8 @@ function renderModal(){
         ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
         ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{}),
        ...(DEVICE_MAC?{mac_address:DEVICE_MAC}:{}),
-        ...(!tvPurchase&&!forceRouterRetry?{portal_login_handoff:true}:{}),
-        ...(tvPurchase&&tvDeviceName?{device_name:tvDeviceName}:{}),
+         ...(forcePortalLoginHandoff||(!tvPurchase&&!forceRouterRetry)?{portal_login_handoff:true}:{}),
+         ...(tvPurchase&&!forcePortalLoginHandoff&&tvDeviceName?{device_name:tvDeviceName}:{}),
        ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
      })
    }).then(function(r){return r.json().then(function(data){return{ok:r.ok,data:data};});})
@@ -1225,7 +1370,7 @@ function renderModal(){
        if(!result.ok||!data.ok||!applyPaidHotspotCredentials(data.credentials)){
          throw new Error(data.error||"Payment was confirmed, but the hotspot account could not be updated.");
        }
-        if(tvPurchase&&tvRememberDevice){
+         if(tvPurchase&&tvRememberDevice&&!forcePortalLoginHandoff){
           var saved=saveSavedTvDevice(DEVICE_MAC||tvMacAddress,tvDeviceName);
           tvDeviceSaveNotice=saved?"This TV is saved on this browser for next time.":"Payment succeeded, but this browser could not save the TV.";
         }
@@ -1501,7 +1646,7 @@ function sendStk(){
      '<label class="lbl" style="color:#6ee7b7">Package to purchase</label>'+
      '<select id="tvPlanId" class="inp" style="margin-bottom:1rem">'+planOptions+'</select>'+
      '<label class="lbl" style="color:#6ee7b7">Phone number</label>'+
-     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="07XXXXXXXX or 2547XXXXXXXX" />'+
+     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" />'+
      '<div id="tvError" style="display:'+(tvError?"block":"none")+';margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem">'+tvEsc(tvError)+'</div>'+
      '<div style="display:flex;gap:.625rem">'+
        '<button type="button" onclick="closeTvModal()" class="btn btn-full" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);box-shadow:none">Cancel</button>'+
@@ -1742,7 +1887,9 @@ function troubleshootConnection(){
        adminId:PORTAL_ADMIN_ID,
        action:action,
        mac_address:DEVICE_MAC,
-       ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+        ...(DEVICE_IP?{client_ip:DEVICE_IP}:{}),
+        ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+        ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})
      })
    }).then(function(response){
      return response.json().then(function(data){return{ok:response.ok,data:data||{}};});
@@ -1786,7 +1933,7 @@ function troubleshootConnection(){
 }
 function applyCredentialsFromHash(){
   var hash=(window.location.hash||"").replace(/^#/,"");
-  if(!hash)return;
+  if(!hash)return false;
   try{
     var params=new URLSearchParams(hash);
     if(applyPaidHotspotCredentials({
@@ -1794,8 +1941,11 @@ function applyCredentialsFromHash(){
       password:params.get("hotspot_password")||""
     })){
       if(window.history&&window.history.replaceState)window.history.replaceState(null,"",window.location.pathname+window.location.search);
+      portalPaidLoginHandoff=true;
+      return true;
     }
   }catch(e){}
+  return false;
 }
 
 /* ── MikroTik login ──
@@ -1836,10 +1986,14 @@ function resetVoucher(){
 }
 
 function submitMpesa(){
+  if(portalMpesaVerifyBusy)return;
   var msg=document.getElementById("mpesaMsg").value.trim();
   if(!msg)return;
    var errorEl=document.getElementById("mpesaMsgError");
+   var verifyButton=document.getElementById("mpesaVerifyBtn");
    if(errorEl){errorEl.style.display="none";errorEl.textContent="";}
+   portalMpesaVerifyBusy=true;
+   if(verifyButton){verifyButton.disabled=true;verifyButton.setAttribute("aria-busy","true");}
    fetch(apiUrl("/api/mpesa/verify"),{
      method:"POST",
      headers:{"Content-Type":"application/json"},
@@ -1853,11 +2007,20 @@ function submitMpesa(){
     .then(function(r){return r.json().then(function(data){return{ok:r.ok,data:data};});})
     .then(function(result){
       if(!result.ok||!result.data||!result.data.ok)throw new Error(result.data&&result.data.error||"The M-Pesa payment could not be verified.");
+       if(result.data.account_setup_required){
+         if(!result.data.checkout_id)throw new Error("The payment was verified, but its hotspot setup reference is missing.");
+         return assignPaidHotspotAccess(result.data.checkout_id,false,true).then(function(){
+           document.getElementById("mpesaMsgWrap").style.display="none";
+           document.getElementById("mpesaMsgSuccess").style.display="block";
+         });
+       }
       if(!applyPaidHotspotCredentials(result.data.credentials))throw new Error("The payment was verified, but hotspot credentials were not returned.");
       document.getElementById("mpesaMsgWrap").style.display="none";
       document.getElementById("mpesaMsgSuccess").style.display="block";
     })
     .catch(function(error){
+       portalMpesaVerifyBusy=false;
+       if(verifyButton){verifyButton.disabled=false;verifyButton.removeAttribute("aria-busy");}
       if(errorEl){
         errorEl.textContent=error&&error.message?error.message:"The M-Pesa message could not be verified.";
         errorEl.style.display="block";
@@ -1877,11 +2040,40 @@ try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
 }
 loadPlans();
 bindPlanButtons();
-loadPortalTypography(loadPlans);
 renderPortalDeviceMac();
-applyCredentialsFromHash();
+var portalPaidHandoffStarted=applyCredentialsFromHash();
+loadPortalTypography(function(){
+  loadPlans();
+  checkPortalExpiryOnLanding();
+  if(!portalPaidHandoffStarted)attemptPortalAutoReconnect();
+});
 if(PORTAL_QUERY.get("page")==="troubleshoot")openTroubleshootModule();
-else checkPortalExpiryOnLanding();
+else{
+  checkPortalExpiryOnLanding();
+  if(!portalPaidHandoffStarted)attemptPortalAutoReconnect();
+}
+</script>
+<script>
+/* Load the configured Tawk widget only when Hotspot Settings enables it for this domain. */
+(function(){
+  var config=window.__HOTSPOT_CONFIG__;
+  if(window.location.hostname === "ocholasupernet.isplatty.org"&&config&&config.tawkEnabled===true){
+    var propertyId="6ac4631c8fd05734c7457563";
+    var widgetId="1k47i6apm";
+    if(propertyId==="YOUR_PROPERTY_ID"||widgetId==="YOUR_WIDGET_ID")return;
+
+    window.Tawk_API=window.Tawk_API||{};
+    window.Tawk_LoadStart=new Date();
+    var tawkScript=document.createElement("script");
+    tawkScript.async=true;
+    tawkScript.src="https://embed.tawk.to/"+encodeURIComponent(propertyId)+"/"+encodeURIComponent(widgetId);
+    tawkScript.charset="UTF-8";
+    tawkScript.setAttribute("crossorigin","*");
+    var firstScript=document.getElementsByTagName("script")[0];
+    if(firstScript&&firstScript.parentNode)firstScript.parentNode.insertBefore(tawkScript,firstScript);
+    else document.head.appendChild(tawkScript);
+  }
+})();
 </script>
 </body>
 </html>

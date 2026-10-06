@@ -5,7 +5,7 @@ import { transactionOwnerFilter } from "../lib/transaction-account-scope.js";
 
 const router: IRouter = Router();
 const PLATFORM_PAYMENT_METHODS = "mpesa_registration,manual_registration,mpesa_platform_billing";
-const TRANSACTION_COLUMNS = "id,customer_id,plan_id,amount,payment_method,reference,status,notes,created_at";
+const TRANSACTION_COLUMNS = "id,customer_id,plan_id,amount,payment_method,reference,mpesa_receipt,status,notes,created_at";
 const HIDDEN_ROUTER_STATUSES = "setup,awaiting_ports,awaiting_sync,awaiting_connection";
 
 type TransactionAccount = NonNullable<Awaited<ReturnType<typeof authenticatedAccount>>>;
@@ -16,6 +16,7 @@ type TransactionRow = {
   amount: number | string;
   payment_method: string;
   reference: string | null;
+  mpesa_receipt: string | null;
   status: string;
   notes: string | null;
   created_at: string;

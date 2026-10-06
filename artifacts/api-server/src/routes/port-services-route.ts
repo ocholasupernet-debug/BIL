@@ -13,6 +13,7 @@ import {
   readRouterSystemIdentity,
   RouterFileExistsError,
   runRouterCommand,
+  runRouterCommands,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
 import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authorization.js";
@@ -22,12 +23,18 @@ import { getDeployableSource } from "../lib/portal-assets.js";
 import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
 import { findEmbeddedHotspotConfig } from "../lib/hotspot-portal-deploy.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
+import { buildHotspotChatWalledGardenCommands } from "../lib/hotspot-chat-walled-garden.js";
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
 import {
   portServiceResourceNames,
   vlanServicePoolRanges,
   type PortServiceResourceNames,
 } from "../lib/port-service-resources.js";
+import {
+  BridgeMoveConfirmationRequiredError,
+  planPortServiceBridgeAddition,
+  resolvePortServiceBridgeName,
+} from "../lib/port-service-bridge-move.js";
 import { getRouterCreds } from "./mikrotik-route.js";
 import { validatePortAccess } from "./reseller-route.js";
 
@@ -510,6 +517,7 @@ export function buildDualServiceCommands(
         )}`,
       ]);
     });
+    commands.push(...buildHotspotChatWalledGardenCommands(resources.hotspotServer));
   }
   if (hotspotPath || pppoePath) {
     if (hotspotPath) {
@@ -639,6 +647,7 @@ function buildVlanServiceCommands(
     ].filter((value): value is string => Boolean(value)))]) {
       commands.push(["/ip/hotspot/walled-garden/ip/add", `=dst-host=${hostname}`, "=action=accept", `=comment=${comment("walled_garden")}`]);
     }
+    commands.push(...buildHotspotChatWalledGardenCommands(resources.hotspotServer));
   }
   if (hotspotPath || pppoePath || port.handoff_mode === "vlan_services") {
     commands.push([
@@ -662,7 +671,55 @@ function buildVlanServiceCommands(
   return commands;
 }
 
-async function executeIdempotentRouterCommand(creds: RouterCredentials, command: string[]): Promise<void> {
+async function readPortServiceBridgeMembership(
+  creds: RouterCredentials,
+  interfaceName: string,
+): Promise<Array<{
+  interfaceName: string;
+  bridgePortId: string;
+  bridgeReference: string;
+  bridgeName: string;
+}>> {
+  const bridgePortRows = await runRouterCommand(creds, [
+    "/interface/bridge/port/print",
+    "=.proplist=.id,bridge,interface",
+    `?interface=${interfaceName}`,
+  ]);
+  const matchingRows = bridgePortRows.filter((row) => String(row.interface ?? "") === interfaceName);
+  if (matchingRows.length === 0) return [];
+
+  const bridgeRows = await runRouterCommand(creds, [
+    "/interface/bridge/print",
+    "=.proplist=.id,name",
+  ]);
+  return matchingRows.map((row) => {
+    const bridgeReference = String(row.bridge ?? "").trim();
+    const bridgeName = resolvePortServiceBridgeName(bridgeReference, bridgeRows.map((bridge) => ({
+      id: bridge[".id"],
+      name: bridge.name,
+    })));
+    if (!bridgeReference || !bridgeName) {
+      throw new Error(
+        `RouterOS returned an unresolved bridge reference for ${interfaceName}; no bridge membership was changed.`,
+      );
+    }
+    return {
+      interfaceName,
+      bridgePortId: String(row[".id"] ?? ""),
+      bridgeReference,
+      bridgeName,
+    };
+  });
+}
+
+async function executeIdempotentRouterCommand(
+  creds: RouterCredentials,
+  command: string[],
+  moveOptions?: {
+    interfaceName: string;
+    confirmedSourceBridgeReference?: string;
+  },
+): Promise<void> {
   const addPath = command[0];
 
   if (addPath === "/interface/bridge/port/add") {
@@ -671,19 +728,42 @@ async function executeIdempotentRouterCommand(creds: RouterCredentials, command:
     const bridgeName = bridgeArg?.slice("=bridge=".length);
     const interfaceName = interfaceArg?.slice("=interface=".length);
     if (!bridgeName || !interfaceName) throw new Error("A port-service bridge binding is incomplete.");
-    const rows = await runRouterCommand(creds, [
-      "/interface/bridge/port/print",
-      "=.proplist=.id,bridge,interface",
-      `?interface=${interfaceName}`,
-    ]);
-    const existing = rows.find((row) => row.interface === interfaceName);
-    if (existing) {
-      if (existing.bridge !== bridgeName) {
-        throw new Error(`Interface ${interfaceName} is already assigned to foreign bridge ${existing.bridge}.`);
+    const confirmedSourceBridgeReference = moveOptions?.interfaceName === interfaceName
+      ? moveOptions.confirmedSourceBridgeReference
+      : undefined;
+    const currentMemberships = await readPortServiceBridgeMembership(creds, interfaceName);
+    const plan = planPortServiceBridgeAddition(
+      interfaceName,
+      bridgeName,
+      currentMemberships,
+      confirmedSourceBridgeReference,
+    );
+    if (plan.action === "skip") return;
+    if (plan.action === "move") {
+      logger.info({
+        interfaceName,
+        sourceBridge: plan.fromBridgeName,
+        targetBridge: bridgeName,
+      }, "[port-services] moving bridge port after admin confirmation");
+      await runRouterCommand(creds, [
+        "/interface/bridge/port/remove",
+        `=.id=${plan.portId}`,
+      ]);
+      const afterRemoval = await readPortServiceBridgeMembership(creds, interfaceName);
+      if (afterRemoval.length > 0) {
+        const currentPlan = planPortServiceBridgeAddition(interfaceName, bridgeName, afterRemoval);
+        if (currentPlan.action === "skip") return;
+        throw new Error(
+          `RouterOS still reports ${interfaceName} assigned to bridge ${afterRemoval[0].bridgeName}; refusing to add it to ${bridgeName}.`,
+        );
       }
-      return;
     }
     await runRouterCommand(creds, command);
+    const verifiedMemberships = await readPortServiceBridgeMembership(creds, interfaceName);
+    const verifiedPlan = planPortServiceBridgeAddition(interfaceName, bridgeName, verifiedMemberships);
+    if (verifiedPlan.action !== "skip") {
+      throw new Error(`RouterOS did not confirm ${interfaceName} on bridge ${bridgeName}.`);
+    }
     return;
   }
 
@@ -1291,6 +1371,10 @@ type ScopedHotspotPlan = {
   speed_down: number | string | null;
   speed_up: number | string | null;
   data_limit_mb: number | string | null;
+  data_cap_mode: string | null;
+  fup_speed_down: number | string | null;
+  fup_speed_up: number | string | null;
+  shared_users: number | string | null;
 };
 
 function injectHotspotRuntimeConfig(
@@ -1343,7 +1427,7 @@ async function buildScopedResellerPortalHtml(
   const [plans, portsWithIdentity] = await Promise.all([
     sbSelectStrict<ScopedHotspotPlan>(
       "isp_plans",
-      `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&owner_reseller_id=eq.${resellerId}&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit,speed_down,speed_up,data_limit_mb&order=price.asc,name.asc`,
+      `admin_id=eq.${port.admin_id}&router_id=eq.${port.router_id}&port_id=eq.${port.id}&owner_reseller_id=eq.${resellerId}&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit,speed_down,speed_up,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users&order=price.asc,name.asc`,
     ),
     sbSelectStrict<{ id: number }>(
       "isp_reseller_ports",
@@ -1465,6 +1549,7 @@ async function executePortServiceDeployment(
   portalHtml: string,
   sourceOrigin: string,
   allowHotspotReplace: boolean,
+  confirmedMoveFromBridge?: string,
 ): Promise<void> {
   const found = await getRouterCreds(port.router_id, port.admin_id);
   if (!found) throw new Error("Router credentials are unavailable for this port.");
@@ -1632,7 +1717,12 @@ async function executePortServiceDeployment(
       } : {}),
     },
   );
-  for (const command of commands) await executeIdempotentRouterCommand(found.creds, command);
+  for (const command of commands) {
+    await executeIdempotentRouterCommand(found.creds, command, {
+      interfaceName: deploymentPort.interface_name,
+      confirmedSourceBridgeReference: confirmedMoveFromBridge,
+    });
+  }
   await updatePortProvisioningState(port, "active");
 }
 
@@ -1674,10 +1764,63 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       return;
     }
 
+    const rawMoveConfirmation = req.body?.confirmMoveFromBridge;
+    if (
+      rawMoveConfirmation !== undefined
+      && (
+        typeof rawMoveConfirmation !== "string"
+        || rawMoveConfirmation !== rawMoveConfirmation.trim()
+        || rawMoveConfirmation.length < 1
+        || rawMoveConfirmation.length > 128
+      )
+    ) {
+      res.status(400).json({ ok: false, error: "The confirmed source bridge reference is invalid." });
+      return;
+    }
+    const confirmedMoveFromBridge = typeof rawMoveConfirmation === "string"
+      ? rawMoveConfirmation
+      : undefined;
+    if (port.handoff_mode !== "vlan_services") {
+      const found = await getRouterCreds(port.router_id, port.admin_id);
+      if (!found) throw new Error("Router credentials are unavailable for this port.");
+      const identity = await resourceIdentityForPort(port);
+      const resources = portServiceResourceNames(port, identity);
+      const targetBridgeName = resources.bridgeName;
+      const memberships = await readPortServiceBridgeMembership(found.creds, port.interface_name);
+      try {
+        planPortServiceBridgeAddition(
+          port.interface_name,
+          targetBridgeName,
+          memberships,
+          confirmedMoveFromBridge,
+        );
+      } catch (error) {
+        if (error instanceof BridgeMoveConfirmationRequiredError) {
+          res.status(409).json({
+            ok: false,
+            code: error.code,
+            error: error.message,
+            interfaceName: error.interfaceName,
+            sourceBridgeReference: error.sourceBridgeReference,
+            sourceBridgeName: error.sourceBridgeName,
+            targetBridgeName: error.targetBridgeName,
+          });
+          return;
+        }
+        throw error;
+      }
+    }
+
     await updatePortProvisioningState(port, "provisioning");
     const sourceOrigin = requestOrigin(req);
     const allowHotspotReplace = hasHotspotFileMutationConfirmation(req.authUser, req.body?.portalFileReplacementConsent);
-    const job = executePortServiceDeployment(port, portalHtml, sourceOrigin, allowHotspotReplace)
+    const job = executePortServiceDeployment(
+      port,
+      portalHtml,
+      sourceOrigin,
+      allowHotspotReplace,
+      confirmedMoveFromBridge,
+    )
       .catch(async (error) => {
         const errorMessage = error instanceof Error ? error.message : "Dual-service deployment failed.";
         try {

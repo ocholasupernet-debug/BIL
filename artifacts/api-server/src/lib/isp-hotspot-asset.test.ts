@@ -9,11 +9,15 @@ const scope = { adminId: 3, routerId: 85, apiBase: "https://tenant.example.test"
 
 test("default ISP template receives its exact scope and real purchasable packages", async () => {
   const output = await prepareIspHotspotAsset("login.html", template, scope, async <T>(table: string, query: string): Promise<T[]> => {
-    assert.equal(table, "isp_plans");
-    for (const filter of ["admin_id=eq.3", "router_id=eq.85", "port_id=is.null", "owner_reseller_id=is.null", "client_can_purchase=is.true", "is_active=is.true"]) {
-      assert.ok(query.includes(filter), filter);
+    if (table === "isp_plans") {
+      for (const filter of ["admin_id=eq.3", "router_id=eq.85", "port_id=is.null", "owner_reseller_id=is.null", "client_can_purchase=is.true", "is_active=is.true"]) {
+        assert.ok(query.includes(filter), filter);
+      }
+      return [{ id: 1, name: "</script> Package", price: 10, validity: 1, validity_unit: "Hours" }] as T[];
     }
-    return [{ id: 1, name: "</script> Package", price: 10, validity: 1, validity_unit: "Hours" }] as T[];
+    assert.equal(table, "isp_hotspot_branding");
+    assert.equal(query, "admin_id=eq.3&select=settings&limit=1");
+    return [{ settings: { tawkEnabled: true } }] as T[];
   });
   const html = output.toString();
   const config = findEmbeddedHotspotConfig(html)?.config;
@@ -21,6 +25,7 @@ test("default ISP template receives its exact scope and real purchasable package
   assert.equal(config?.adminId, 3);
   assert.equal(config?.portId, 0);
   assert.equal(config?.apiBase, scope.apiBase);
+  assert.equal(config?.tawkEnabled, true);
   assert.equal((config?.plans as unknown[]).length, 1);
   assert.ok(html.includes("$(identity) $(server-name)"));
   assert.ok(!html.includes("</script> Package"));
@@ -37,6 +42,14 @@ test("database failures prevent distributing an empty or unconfigured portal", a
   await assert.rejects(prepareIspHotspotAsset("login.html", template, scope, async () => {
     throw new Error("Database unavailable");
   }), /Database unavailable/);
+});
+
+test("default ISP portal keeps Tawk disabled when no saved branding setting exists", async () => {
+  const output = await prepareIspHotspotAsset("login.html", template, scope, async <T>(table: string): Promise<T[]> => {
+    if (table === "isp_plans") return [] as T[];
+    return [] as T[];
+  });
+  assert.equal(findEmbeddedHotspotConfig(output.toString())?.config.tawkEnabled, false);
 });
 
 test("reject invalid scope and unsafe API origins", async () => {

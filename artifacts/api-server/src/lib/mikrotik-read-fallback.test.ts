@@ -320,15 +320,88 @@ test("wireless inventory maps RouterOS master IDs to names and scopes ownership"
     return [];
   }, async ({ port }) => {
     const result = await fetchWireless(routerCredentials(port), 7);
+    assert.equal(result.apiMode, "legacy");
     assert.equal(result.interfaces[0]?.masterInterface, "");
     assert.equal(result.interfaces[1]?.masterInterface, "wlan1");
     assert.equal(result.interfaces[1]?.managedByApp, true);
   });
 });
 
+test("wireless inventory falls back to RouterOS WiFi and maps its read-only fields", async () => {
+  const commands: string[][] = [];
+  await withMockRouterApi((_username, command) => {
+    commands.push(command);
+    if (command[0] === "/interface/wireless/print") {
+      throw new Error("no such command or directory (wireless)");
+    }
+    if (command[0] === "/interface/wifi/print") return [
+      {
+        ".id": "*1",
+        name: "wifi1",
+        "master-interface": "",
+        "configuration.ssid": "Main WiFi",
+        "configuration.mode": "ap",
+        "channel.band": "2ghz-ax",
+        "channel.frequency": "2412",
+        "mac-address": "AA:BB:CC:DD:EE:01",
+        "security.authentication-types": "wpa2-psk,wpa3-psk",
+        disabled: "false",
+        comment: "",
+      },
+      {
+        ".id": "*2",
+        name: "wifi1-guest",
+        "master-interface": "*1",
+        "configuration.ssid": "Guest WiFi",
+        "configuration.mode": "ap",
+        "channel.band": "2ghz-ax",
+        "channel.frequency": "2412",
+        "mac-address": "",
+        "security.authentication-types": "",
+        disabled: "true",
+        comment: "ochola-wireless-app:7:abc123",
+      },
+    ];
+    return [];
+  }, async ({ port }) => {
+    const result = await fetchWireless(routerCredentials(port), 7);
+
+    assert.equal(result.apiMode, "wifi");
+    assert.deepEqual(result.profiles, []);
+    assert.equal(result.interfaces.length, 2);
+    assert.equal(result.interfaces[0]?.ssid, "Main WiFi");
+    assert.equal(result.interfaces[0]?.securitySummary, "Secured (wpa2-psk,wpa3-psk)");
+    assert.equal(result.interfaces[0]?.channel, "2412");
+    assert.equal(result.interfaces[0]?.channelLabel, "freq");
+    assert.equal(result.interfaces[1]?.masterInterface, "wifi1");
+    assert.equal(result.interfaces[1]?.securitySummary, "Open Wi-Fi");
+    assert.equal(result.interfaces[1]?.disabled, true);
+    assert.equal(result.interfaces[1]?.managedByApp, true);
+    assert.deepEqual(commands.map(command => command[0]), [
+      "/interface/wireless/print",
+      "/interface/wifi/print",
+    ]);
+  });
+});
+
+test("wireless inventory does not hide legacy permission errors with WiFi fallback", async () => {
+  const commands: string[][] = [];
+  await withMockRouterApi((_username, command) => {
+    commands.push(command);
+    throw new Error("not enough permissions");
+  }, async ({ port }) => {
+    await assert.rejects(
+      fetchWireless(routerCredentials(port), 7),
+      /not enough permissions/,
+    );
+    assert.deepEqual(commands.map(command => command[0]), ["/interface/wireless/print"]);
+  });
+});
+
 test("wireless virtual AP creation uses the selected master name, not its RouterOS id", async () => {
   let added: string[] = [];
   let profileName = "";
+  const profiles: Record<string, string>[] = [];
   await withMockRouterApi((_username, command) => {
     if (command[0] === "/interface/wireless/print") {
       if (command.some(item => item === "?name=vap-test")) {
@@ -337,10 +410,19 @@ test("wireless virtual AP creation uses the selected master name, not its Router
       }
       return [{ ".id": "*1", name: "wlan1", type: "chipset", "master-interface": "" }];
     }
-    if (command[0] === "/interface/wireless/security-profiles/print") return [];
     if (command[0] === "/interface/wireless/security-profiles/add") {
       profileName = command.find(item => item.startsWith("=name="))?.slice("=name=".length) ?? "";
+      const profile: Record<string, string> = { ".id": "*8" };
+      for (const item of command.slice(1)) {
+        const separator = item.indexOf("=", 1);
+        profile[item.slice(1, separator)] = item.slice(separator + 1);
+      }
+      profiles.push(profile);
       return [];
+    }
+    if (command[0] === "/interface/wireless/security-profiles/print") {
+      const nameFilter = command.find(item => item.startsWith("?name="))?.slice("?name=".length);
+      return nameFilter ? profiles.filter(profile => profile.name === nameFilter) : profiles;
     }
     if (command[0] === "/interface/wireless/add") { added = command; return []; }
     return [];
@@ -350,6 +432,49 @@ test("wireless virtual AP creation uses the selected master name, not its Router
     });
     assert.ok(added.includes("=master-interface=wlan1"));
     assert.ok(!added.includes("=master-interface=*1"));
+    assert.equal(profiles.find(profile => profile.name === profileName)?.mode, "dynamic-keys");
+    assert.equal(profiles.find(profile => profile.name === profileName)?.["wpa2-pre-shared-key"], "password1");
+  });
+});
+
+test("wireless virtual AP can be created with an open security profile", async () => {
+  let profileName = "";
+  const profiles: Record<string, string>[] = [];
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/interface/wireless/print") {
+      if (command.some(item => item === "?name=vap-open")) {
+        return [{ ".id": "*9", name: "vap-open", ssid: "Guest Open", "master-interface": "wlan1",
+          "security-profile": profileName, disabled: "false", comment: "ochola-wireless-app:7:nonce" }];
+      }
+      return [{ ".id": "*1", name: "wlan1", type: "chipset", "master-interface": "" }];
+    }
+    if (command[0] === "/interface/wireless/security-profiles/add") {
+      profileName = command.find(item => item.startsWith("=name="))?.slice("=name=".length) ?? "";
+      const profile: Record<string, string> = { ".id": "*8" };
+      for (const item of command.slice(1)) {
+        const separator = item.indexOf("=", 1);
+        profile[item.slice(1, separator)] = item.slice(separator + 1);
+      }
+      profiles.push(profile);
+      return [];
+    }
+    if (command[0] === "/interface/wireless/security-profiles/print") {
+      const nameFilter = command.find(item => item.startsWith("?name="))?.slice("?name=".length);
+      return nameFilter ? profiles.filter(profile => profile.name === nameFilter) : profiles;
+    }
+    return [];
+  }, async ({ port }) => {
+    await createWirelessVirtualAp(routerCredentials(port), {
+      routerId: 7,
+      name: "vap-open",
+      ssid: "Guest Open",
+      masterInterfaceId: "*1",
+      securityMode: "open",
+    });
+    const openProfile = profiles.find(profile => profile.name === profileName);
+    assert.equal(openProfile?.mode, "none");
+    assert.equal(openProfile?.["wpa2-pre-shared-key"], undefined);
+    assert.equal(openProfile?.["authentication-types"], undefined);
   });
 });
 
@@ -360,7 +485,7 @@ test("wireless patch isolates password, sets disabled, and never edits default p
     "security-profile": "default", disabled: "false",
   };
   const profiles: Record<string, string>[] = [{
-    ".id": "*3", name: "default", "wpa2-pre-shared-key": "unchanged",
+    ".id": "*3", name: "default", mode: "dynamic-keys", "wpa2-pre-shared-key": "unchanged",
     comment: "RouterOS default profile",
   }];
   await withMockRouterApi((_username, command) => {
@@ -403,6 +528,75 @@ test("wireless patch isolates password, sets disabled, and never edits default p
     assert.notEqual(current["security-profile"], "default");
     assert.equal(profiles.find(profile => profile.name === "default")?.["wpa2-pre-shared-key"], "unchanged");
     assert.equal(profiles.find(profile => profile.name === current["security-profile"])?.["wpa2-pre-shared-key"], "newpass123");
+  });
+});
+
+test("wireless patch opens a WLAN and requires a password to restore WPA2", async () => {
+  const current: Record<string, string> = {
+    ".id": "*2", name: "wlan-vap", ssid: "Guest", "master-interface": "wlan1",
+    "security-profile": "default", disabled: "false",
+  };
+  const profiles: Record<string, string>[] = [{
+    ".id": "*3", name: "default", mode: "dynamic-keys", "wpa2-pre-shared-key": "oldpass123",
+    comment: "RouterOS default profile",
+  }];
+  const commands: string[][] = [];
+  await withMockRouterApi((_username, command) => {
+    commands.push(command);
+    if (command[0] === "/interface/wireless/print") return [current];
+    if (command[0] === "/interface/wireless/set") {
+      for (const item of command.slice(2)) {
+        const separator = item.indexOf("=", 1);
+        current[item.slice(1, separator)] = item.slice(separator + 1);
+      }
+      return [];
+    }
+    if (command[0] === "/interface/wireless/security-profiles/add") {
+      const profile: Record<string, string> = { ".id": `*${profiles.length + 3}` };
+      for (const item of command.slice(1)) {
+        const separator = item.indexOf("=", 1);
+        profile[item.slice(1, separator)] = item.slice(separator + 1);
+      }
+      profiles.push(profile);
+      return [];
+    }
+    if (command[0] === "/interface/wireless/security-profiles/print") {
+      const nameFilter = command.find(item => item.startsWith("?name="))?.slice("?name=".length);
+      return nameFilter ? profiles.filter(profile => profile.name === nameFilter) : profiles;
+    }
+    if (command[0] === "/interface/wireless/security-profiles/remove") {
+      const id = command.find(item => item.startsWith("=.id="))?.slice("=.id=".length);
+      const index = profiles.findIndex(profile => profile[".id"] === id);
+      if (index >= 0) profiles.splice(index, 1);
+      return [];
+    }
+    return [];
+  }, async ({ port }) => {
+    await patchWirelessInterface(routerCredentials(port), 7, {
+      interfaceId: "*2",
+      securityMode: "open",
+    });
+    const openProfile = profiles.find(profile => profile.name === current["security-profile"]);
+    assert.equal(openProfile?.mode, "none");
+    assert.equal(openProfile?.["wpa2-pre-shared-key"], undefined);
+
+    await assert.rejects(
+      patchWirelessInterface(routerCredentials(port), 7, {
+        interfaceId: "*2",
+        securityMode: "wpa2",
+      }),
+      /Provide a WPA2 password/,
+    );
+
+    await patchWirelessInterface(routerCredentials(port), 7, {
+      interfaceId: "*2",
+      securityMode: "wpa2",
+      password: "newpass123",
+    });
+    const securedProfile = profiles.find(profile => profile.name === current["security-profile"]);
+    assert.equal(securedProfile?.mode, "dynamic-keys");
+    assert.equal(securedProfile?.["wpa2-pre-shared-key"], "newpass123");
+    assert.equal(commands.filter(command => command[0] === "/interface/wireless/security-profiles/add").length, 2);
   });
 });
 

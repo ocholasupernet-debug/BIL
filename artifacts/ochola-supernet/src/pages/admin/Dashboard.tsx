@@ -41,6 +41,8 @@ import {
 } from "@/lib/supabase";
 import { fmtMoney, getCurrencySymbol } from "@/lib/utils";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
+import { transactionDisplayId } from "@/lib/transaction-reference";
+import { getCustomerServiceStatus } from "@/lib/customer-service-status";
 
 type LiveCounts = { hotspot: number; pppoe: number; vlan: number | null };
 type RevenueSummary = {
@@ -154,12 +156,6 @@ function routerOnline(router: DbRouter): boolean {
     && Date.now() - lastSeen <= ROUTER_HEARTBEAT_MAX_AGE_MS;
 }
 
-function customerIsExpired(expiresAt: string | null | undefined): boolean {
-  if (!expiresAt) return false;
-  const timestamp = new Date(expiresAt).getTime();
-  return Number.isFinite(timestamp) && timestamp < Date.now();
-}
-
 function fmtSince(iso: string | null | undefined): string {
   if (!iso) return "";
   const date = new Date(iso);
@@ -183,12 +179,19 @@ async function fetchRouters(): Promise<DbRouter[]> {
   return data ?? [];
 }
 
-type CustomerBasic = { id: number; type: string | null; status: string; created_at: string; expires_at: string | null };
+type CustomerBasic = {
+  id: number;
+  type: string | null;
+  status: string;
+  created_at: string;
+  expires_at: string | null;
+  depletion_reason: string | null;
+};
 
 async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
   const { data, error } = await supabase
     .from("isp_customers")
-    .select("id, type, status, created_at, expires_at")
+    .select("id, type, status, created_at, expires_at, depletion_reason")
     .eq("admin_id", ADMIN_ID);
   if (error) throw error;
   return data ?? [];
@@ -208,16 +211,49 @@ async function fetchTransactions(customerIds: number[]): Promise<DbTransaction[]
 }
 
 type PaymentSettingsResponse = {
+  configured?: boolean;
   settings?: {
     paymentGateway?: string;
+    destinationConfigured?: boolean;
   };
 };
 
-async function fetchConfiguredGateway(): Promise<string> {
+type ConfiguredGateway = {
+  id: string;
+  configured: boolean;
+  destinationConfigured: boolean;
+};
+
+async function fetchConfiguredGateway(): Promise<ConfiguredGateway> {
   const response = await fetch(`/api/settings/mpesa?adminId=${ADMIN_ID}`);
   if (!response.ok) throw new Error("Could not load payment gateway settings.");
   const data = await response.json() as PaymentSettingsResponse;
-  return data.settings?.paymentGateway || "mpesa_paybill";
+  return {
+    id: data.settings?.paymentGateway || "mpesa_paybill",
+    configured: data.configured === true,
+    destinationConfigured: data.settings?.destinationConfigured === true,
+  };
+}
+
+type MpesaStkPushHealth = {
+  status: "available" | "down";
+  paymentGateway: string;
+  checkedAt: string;
+};
+
+async function fetchMpesaStkPushHealth(): Promise<MpesaStkPushHealth | null> {
+  const token = getAdminApiToken();
+  const response = await fetch("/api/admin/dashboard/mpesa-stk-health", {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    cache: "no-store",
+  });
+  const data = await response.json() as { health?: MpesaStkPushHealth | null; error?: string };
+  if (!response.ok) throw new Error(data.error ?? "Could not load M-Pesa STK Push status.");
+  return data.health ?? null;
+}
+
+function isMpesaStkGateway(gatewayId: string): boolean {
+  return gatewayId === "mpesa_paybill" || gatewayId === "mpesa_till_push";
 }
 
 const PAYMENT_GATEWAY_LABELS: Record<string, string> = {
@@ -363,13 +399,23 @@ export default function Dashboard() {
   const now = new Date();
 
   const {
-    data: configuredGatewayId,
+    data: gatewaySettings,
     isLoading: gatewayLoading,
     isError: gatewayError,
   } = useQuery({
     queryKey: ["isp_payment_gateway", ADMIN_ID],
     queryFn: fetchConfiguredGateway,
     refetchOnWindowFocus: true,
+  });
+  const {
+    data: mpesaStkHealth,
+    isLoading: mpesaStkHealthLoading,
+    isError: mpesaStkHealthError,
+  } = useQuery({
+    queryKey: ["mpesa-stk-push-health", ADMIN_ID],
+    queryFn: fetchMpesaStkPushHealth,
+    refetchInterval: 15_000,
+    retry: false,
   });
   const {
     data: revenueSummary,
@@ -391,9 +437,44 @@ export default function Dashboard() {
     refetchInterval: 15_000,
   });
 
-  const gatewayId = configuredGatewayId || "";
+  const gatewayId = gatewaySettings?.id || "";
   const currentGatewayMode = gatewayLoading ? "Loading…" : gatewayError ? "Unavailable" : gatewayMode(gatewayId);
   const currentGatewayLabel = gatewayId ? gatewayLabel(gatewayId) : "Payment gateway";
+  const isMpesaPushGateway = isMpesaStkGateway(gatewayId);
+  const gatewayIsConfigured = gatewaySettings?.configured === true && gatewaySettings.destinationConfigured;
+  const healthMatchesGateway = mpesaStkHealth?.paymentGateway === gatewayId;
+  const mpesaPushStatus = !isMpesaPushGateway
+    ? null
+    : gatewayLoading || mpesaStkHealthLoading
+      ? "checking"
+      : gatewayError || mpesaStkHealthError
+        ? "unknown"
+        : !gatewayIsConfigured
+          ? "not_configured"
+          : healthMatchesGateway
+            ? mpesaStkHealth.status
+            : "not_checked";
+  const mpesaPushBadge = mpesaPushStatus === "available"
+    ? { label: "Available", className: "isp-badge-green", detail: `Safaricom accepted the last STK request ${fmtSince(mpesaStkHealth?.checkedAt)}` }
+    : mpesaPushStatus === "down"
+      ? { label: "Down", className: "isp-badge-red", detail: `The last STK request failed ${fmtSince(mpesaStkHealth?.checkedAt)}` }
+      : mpesaPushStatus === "checking"
+        ? { label: "Checking", className: "isp-badge-amber", detail: "Loading the latest STK Push result…" }
+        : mpesaPushStatus === "not_configured"
+          ? { label: "Not configured", className: "isp-badge-amber", detail: "Check M-Pesa credentials and the selected Till or PayBill." }
+          : mpesaPushStatus === "not_checked"
+            ? { label: "Not checked", className: "isp-badge-amber", detail: "Waiting for a real STK Push request to confirm availability." }
+            : mpesaPushStatus === "unknown"
+              ? { label: "Status unavailable", className: "isp-badge-amber", detail: "Could not load the latest STK Push result." }
+              : null;
+  const genericGatewayStatus = gatewayError
+    ? { label: "Unavailable", className: "isp-badge-red" }
+    : gatewayIsConfigured
+      ? { label: "Configured", className: "isp-badge-green" }
+      : { label: "Not configured", className: "isp-badge-amber" };
+  const displayedGatewayStatus = mpesaPushBadge ?? genericGatewayStatus;
+  const displayedGatewayDetail = mpesaPushBadge?.detail
+    ?? (gatewayIsConfigured ? "Payment method settings are complete." : "Complete payment gateway setup to accept payments.");
 
   const {
     data: routers = [],
@@ -451,8 +532,8 @@ export default function Dashboard() {
     result.isError || (result.data !== undefined && result.data.vlan === null),
   );
   const onlineStaticUsers = customers.filter((customer) => customer.type === "static" && customer.status === "active").length;
-  const activeUsers = customers.filter((customer) => customer.status === "active" && !customerIsExpired(customer.expires_at)).length;
-  const expiredUsers = customers.filter((customer) => customer.status === "expired" || customerIsExpired(customer.expires_at)).length;
+  const activeUsers = customers.filter((customer) => getCustomerServiceStatus(customer) === "active").length;
+  const expiredUsers = customers.filter((customer) => getCustomerServiceStatus(customer) === "expired").length;
   const totalOnlineNow = onlineHotspotUsers + onlinePppoeUsers + onlineVlanUsers + onlineStaticUsers;
   const liveCountLoading = liveCountResults.some((result) => result.isLoading);
   const totalOnlineValue = vlanCountUnavailable
@@ -572,7 +653,7 @@ export default function Dashboard() {
           <StatMiniCard label="Hotspot online" value={liveCountLoading && onlineHotspotUsers === 0 ? "…" : String(onlineHotspotUsers)} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="deep-teal" />
           <StatMiniCard label="VLAN users online" value={liveCountLoading && onlineVlanUsers === 0 && !vlanCountUnavailable ? "…" : onlineVlanValue} href="/admin/customers?type=vlan" icon={<Wifi size={16} />} tone="indigo" />
           <StatMiniCard label="Static online" value={customersLoading ? "…" : String(onlineStaticUsers)} href="/admin/customers?type=static" icon={<Server size={16} />} tone="green" />
-          <StatMiniCard label="Active / expired users" value={customersLoading ? "…" : `${activeUsers}/${expiredUsers}`} href="/admin/customers" icon={<CircleCheck size={16} />} tone="amber" />
+          <StatMiniCard label="Active / expired accounts" value={customersLoading ? "…" : `${activeUsers}/${expiredUsers}`} href="/admin/customers" icon={<CircleCheck size={16} />} tone="amber" />
            <StatMiniCard label="Active resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.activeResellers ?? 0)} href="/admin/network/resellers" icon={<Users size={16} />} tone="accent" />
            <StatMiniCard label="Online resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.onlineResellers ?? 0)} href="/admin/network/resellers" icon={<Wifi size={16} />} tone="teal" />
         </section>
@@ -580,12 +661,16 @@ export default function Dashboard() {
         <section className="gateway-strip" aria-label="Payment gateway status">
           <span className="gateway-icon" aria-hidden="true"><Landmark size={17} /></span>
           <span className="gateway-copy">
-            <strong>{currentGatewayMode}</strong>
-            <span>{currentGatewayLabel}</span>
+            <strong>{isMpesaPushGateway ? "M-Pesa STK Push" : currentGatewayMode}</strong>
+            <span>{isMpesaPushGateway ? displayedGatewayDetail : currentGatewayLabel}</span>
           </span>
-          <span className={`isp-badge ${gatewayError ? "isp-badge-red" : "isp-badge-green"}`}>
-            {gatewayError ? <CircleAlert size={12} /> : <CircleCheck size={12} />}
-            {gatewayError ? "Unavailable" : "Active"}
+          <span className={`isp-badge ${displayedGatewayStatus.className}`}>
+            {mpesaPushStatus === "down" || gatewayError
+              ? <CircleAlert size={12} />
+              : mpesaPushStatus === "available" || (mpesaPushStatus === null && gatewayIsConfigured)
+                ? <CircleCheck size={12} />
+                : <Activity size={12} />}
+            {displayedGatewayStatus.label}
           </span>
         </section>
 
@@ -824,11 +909,21 @@ export default function Dashboard() {
             <section className="section-card gateway-card">
               <div className="panel-heading panel-heading--compact">
                 <div className="panel-title"><span className="panel-title-icon panel-title-icon--soft"><CreditCard size={16} /></span><h2>Payment gateway</h2></div>
-                <span className="isp-badge isp-badge-green"><CircleCheck size={12} /> Active</span>
+                <span className={`isp-badge ${displayedGatewayStatus.className}`}>
+                  {mpesaPushStatus === "down" || gatewayError
+                    ? <CircleAlert size={12} />
+                    : mpesaPushStatus === "available" || (mpesaPushStatus === null && gatewayIsConfigured)
+                      ? <CircleCheck size={12} />
+                      : <Activity size={12} />}
+                  {displayedGatewayStatus.label}
+                </span>
               </div>
               <div className="gateway-detail">
                 <span className="gateway-detail-icon"><Banknote size={18} /></span>
-                <div><strong>{currentGatewayMode}</strong><span>{currentGatewayLabel} · Ready to accept payments</span></div>
+                <div>
+                  <strong>{isMpesaPushGateway ? "M-Pesa STK Push" : currentGatewayMode}</strong>
+                  <span>{displayedGatewayDetail}</span>
+                </div>
               </div>
             </section>
             <section className="section-card insight-card">
@@ -877,8 +972,8 @@ export default function Dashboard() {
                   <tr><td colSpan={5}><div className="dashboard-empty dashboard-empty--center"><ReceiptText size={19} /><span>No transactions yet.</span></div></td></tr>
                 ) : recentTxs.map((transaction) => (
                   <tr key={transaction.id}>
-                    <td className="table-mono" title={transaction.reference?.trim() || `#${transaction.id}`}>
-                      {transaction.reference?.trim() || `#${transaction.id}`}
+                    <td className="table-mono" title={transactionDisplayId(transaction)}>
+                      {transactionDisplayId(transaction)}
                     </td>
                     <td className="table-amount">{getCurrencySymbol()} {transaction.amount.toLocaleString()}</td>
                     <td><span className={`isp-badge ${transaction.payment_method === "mpesa" ? "isp-badge-blue" : "isp-badge-amber"}`}>{transaction.payment_method.toUpperCase()}</span></td>

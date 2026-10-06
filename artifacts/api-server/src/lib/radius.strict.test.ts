@@ -10,6 +10,7 @@ const {
   moveRadiusCustomerStrict,
   removeRadiusCustomerStrict,
   rollbackRadiusCustomerMoveStrict,
+  syncRadiusHotspotSharingStrict,
   syncRadiusCustomerStrict,
 } = await import("./radius.js");
 
@@ -102,6 +103,15 @@ test("strict RADIUS identity operations preflight, reconcile, remove, and roll b
       planType: "hotspot",
       enabled: true,
     });
+    await syncRadiusHotspotSharingStrict("old-login", 4);
+    assert.equal(
+      tables.radcheck.find(row => row.username === "old-login" && row.attribute === "Simultaneous-Use")?.value,
+      "4",
+    );
+    assert.equal(
+      tables.radcheck.find(row => row.username === "old-login" && row.attribute === "Port-Limit")?.value,
+      "4",
+    );
     assert.equal(
       tables.radcheck.some(row => row.username === "old-login" && row.attribute === "Cleartext-Password"),
       false,

@@ -13,6 +13,7 @@
  */
 
 import { randomBytes } from "node:crypto";
+import { kenyanMobilePhoneVariants } from "./kenyan-phone";
 import { sbSelect, sbSelectStrict, sbInsert, sbUpdate, sbUpdateStrict } from "./supabase-client";
 import {
   addPPPSecret,
@@ -166,7 +167,7 @@ export async function reactivatePppoeAccess(opts: {
     owner_reseller_id: number | null;
   }>(
     "isp_plans",
-    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,router_id,port_id,owner_reseller_id&limit=1`,
+    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&select=id,admin_id,name,type,router_id,port_id,owner_reseller_id&limit=1`,
   );
   const plan = plans[0];
   const planType = String(plan?.type ?? "").toLowerCase();
@@ -275,7 +276,7 @@ export async function reactivateVlanAccess(opts: {
 }): Promise<PppoeRenewalAccessResult> {
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&is_active=is.true&select=id,admin_id,name,type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
+    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&select=id,admin_id,name,type,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,owner_reseller_id&limit=1`,
   );
   const plan = plans[0];
   if (!plan || normalizePlanServiceType(plan.type) !== "vlan") {
@@ -448,21 +449,24 @@ export interface ProvisionResult {
 
 /* ── Normalize phone: strip leading zeros, country codes → raw digits ─────── */
 function normalizePhone(raw: string): string[] {
+  const kenyanVariants = kenyanMobilePhoneVariants(raw);
+  if (kenyanVariants.length > 0) return kenyanVariants;
+
   const digits = raw.replace(/\D/g, "");
   const variants: string[] = [digits];
 
-  /* Kenya: 254XXXXXXXXX → 07XXXXXXXX */
+  /* Kenya: 254XXXXXXXXX → local and subscriber-number variants */
   if (digits.startsWith("254") && digits.length === 12) {
     variants.push("0" + digits.slice(3));
     variants.push(digits.slice(3)); /* 7XXXXXXXX */
   }
-  /* 07XXXXXXXX → 254XXXXXXXXX */
-  if (digits.startsWith("07") && digits.length === 10) {
+  /* 07XXXXXXXX / 01XXXXXXXX → 254XXXXXXXXX */
+  if (/^0[17]\d{8}$/.test(digits)) {
     variants.push("254" + digits.slice(1));
-    variants.push(digits.slice(1)); /* 7XXXXXXXX */
+    variants.push(digits.slice(1));
   }
-  /* +2547XXXXXXXX */
-  if (digits.startsWith("2547") && digits.length === 12) {
+  /* +254[17]XXXXXXXX */
+  if (/^254[17]\d{8}$/.test(digits)) {
     variants.push("0" + digits.slice(3));
   }
   return [...new Set(variants)];
@@ -565,7 +569,7 @@ export async function autoProvision(opts: {
 
   const plans = await sbSelect<SbPlan>(
     "isp_plans",
-    `id=eq.${customer.plan_id}&admin_id=eq.${customer.admin_id}&is_active=is.true&select=id,admin_id,name,type,price,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,active_ip_pool,expired_ip_pool&limit=1`
+    `id=eq.${customer.plan_id}&admin_id=eq.${customer.admin_id}&select=id,admin_id,name,type,price,validity,validity_unit,validity_days,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,active_ip_pool,expired_ip_pool&limit=1`
   );
   const plan = plans[0];
   if (!plan) {
@@ -626,6 +630,12 @@ export async function autoProvision(opts: {
 
   const expiresAt = calcExpiry(plan.validity, plan.validity_unit, plan.validity_days);
   const planType = normalizePlanServiceType(plan.type || "hotspot");
+  const adminSuspended = customer.status === "suspended";
+  const priorExpiryMs = customer.expires_at ? Date.parse(customer.expires_at) : NaN;
+  const hadUnexpiredHotspotAccess = planType === "hotspot"
+    && !adminSuspended
+    && (customer.status === "active" || customer.status === "payment_cleared_router_pending")
+    && (!customer.expires_at || (Number.isFinite(priorExpiryMs) && priorExpiryMs > Date.now()));
   if (planType === "vlan") {
     if (String(customer.type ?? "").toLowerCase() !== "vlan") {
       const msg = "A VLAN plan can only renew an existing VLAN customer account.";
@@ -824,9 +834,13 @@ export async function autoProvision(opts: {
         ? "0"
         : String(dataLimitMegabytesToBytes(dataLimitMb));
       await requireHotspotUserProfile(creds, profile);
+      await scheduleHotspotUserExpiry(creds, {
+        name: username,
+        expiresInSeconds: Math.max(1, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000)),
+      });
       try {
         await updateHotspotUser(creds, username, {
-          disabled: false, profile, comment, limitBytesTotal,
+          disabled: adminSuspended, profile, comment, limitBytesTotal,
           address: customer.ip_address || undefined,
         });
         action = "enabled";
@@ -837,6 +851,7 @@ export async function autoProvision(opts: {
             password,
             profile,
             comment,
+            disabled: adminSuspended,
             address: customer.ip_address || undefined,
             limitBytesTotal,
           });
@@ -844,7 +859,7 @@ export async function autoProvision(opts: {
         } catch (e2) {
           logger.warn({ err: (e2 as Error).message }, "[provision] Hotspot add failed, trying update again");
           await updateHotspotUser(creds, username, {
-            disabled: false,
+            disabled: adminSuspended,
             profile,
             comment,
             address: customer.ip_address || undefined,
@@ -853,12 +868,8 @@ export async function autoProvision(opts: {
           action = "renewed";
         }
       }
-      await disconnectHotspotActiveUser(creds, username);
+      if (!hadUnexpiredHotspotAccess) await disconnectHotspotActiveUser(creds, username);
       await resetHotspotUserCounters(creds, username);
-      await scheduleHotspotUserExpiry(creds, {
-        name: username,
-        expiresInSeconds: Math.max(1, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000)),
-      });
       if (
         dataPolicy.dataCapMode === "throttle"
         && dataLimitMb !== null
@@ -895,16 +906,17 @@ export async function autoProvision(opts: {
       plan,
       `Router provisioning pending: ${msg}`,
     );
-    if (planType === "hotspot") {
+    if (planType === "hotspot" && !hadUnexpiredHotspotAccess) {
       await updateHotspotUser(creds, username, { disabled: true }).catch(() => {});
       await disconnectHotspotActiveUser(creds, username).catch(() => {});
     }
     await sbUpdate("isp_customers", `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`, {
-      status: "payment_cleared_router_pending",
+      status: adminSuspended ? "suspended" : "payment_cleared_router_pending",
       plan_id: plan.id,
+      router_id: plan.router_id,
+      port_id: plan.port_id,
       expires_at: expiresAt,
       ...((planType !== "pppoe" && planType !== "vlan") ? { username } : {}),
-      ...(planType === "vlan" ? { router_id: plan.router_id, port_id: plan.port_id } : {}),
       updated_at: new Date().toISOString(),
     });
     await logEvent({
@@ -954,11 +966,12 @@ async function activateCustomer(
 ): Promise<void> {
   const planType = normalizePlanServiceType(plan.type);
   await sbUpdate("isp_customers", `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`, {
-    status:     "active",
+    status:     customer.status === "suspended" ? "suspended" : "active",
     depletion_reason: null,
     expires_at: expiresAt ?? calcExpiry(plan.validity, plan.validity_unit, plan.validity_days),
+    router_id: plan.router_id,
+    port_id: plan.port_id,
     ...(username && planType !== "pppoe" && planType !== "vlan" ? { username } : {}),
-    ...(planType === "vlan" ? { router_id: plan.router_id, port_id: plan.port_id } : {}),
     ...(resetHotspotUsage ? { data_used_bytes: 0, data_used_mb: 0 } : {}),
     updated_at: new Date().toISOString(),
   });

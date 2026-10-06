@@ -19,6 +19,7 @@ import {
 } from "./router-https-trust.js";
 import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "./payment-walled-garden.js";
+import { renderHotspotChatWalledGardenRules } from "./hotspot-chat-walled-garden.js";
 import {
   legacySharedHotspotResourceNames,
   SHARED_HOTSPOT_POOL_NAME,
@@ -2525,7 +2526,7 @@ export async function addHotspotUser(
   creds: RouterCredentials,
   opts: {
     name: string; password: string; profile?: string; comment?: string;
-    server?: string; email?: string;
+    server?: string; email?: string; disabled?: boolean;
     address?: string; limitUptime?: string; limitBytesTotal?: string;
   }
 ): Promise<void> {
@@ -2537,6 +2538,7 @@ export async function addHotspotUser(
       `=password=${opts.password}`,
       `=profile=${opts.profile ?? "default"}`,
     ];
+    if (opts.disabled !== undefined) params.push(`=disabled=${opts.disabled ? "yes" : "no"}`);
     if (opts.comment)         params.push(`=comment=${opts.comment}`);
     if (opts.server)          params.push(`=server=${opts.server}`);
     if (opts.email)           params.push(`=email=${opts.email}`);
@@ -2580,6 +2582,150 @@ export function paidHotspotBindingMatchesCustomer(
 ): boolean {
   return row.comment === opts.name
     || (Boolean(opts.macAddress) && sameMacAddress(row["mac-address"], opts.macAddress!) && isLegacyPaidHotspotBinding(row));
+}
+
+export type PaidHotspotBindingSnapshot = {
+  macAddress: string;
+  ipAddress: string | null;
+  comment: string;
+  bindingType: "regular" | "bypassed";
+};
+
+export function paidHotspotBindingSnapshotForCustomer(
+  rows: ReadonlyArray<Record<string, string>>,
+  opts: { name: string; macAddress?: string | null },
+): PaidHotspotBindingSnapshot | null {
+  const macAddress = validRouterMac(opts.macAddress);
+  if (!macAddress) return null;
+  const matches = rows.filter((row) =>
+    sameMacAddress(row["mac-address"], macAddress)
+    && paidHotspotBindingMatchesCustomer(row, { name: opts.name, macAddress }),
+  );
+  if (matches.length !== 1) return null;
+  const row = matches[0];
+  if (row.type !== "regular" && row.type !== "bypassed") return null;
+  const comment = String(row.comment ?? "").trim();
+  if (!comment) return null;
+  return {
+    macAddress,
+    ipAddress: String(row.address ?? "").trim() || null,
+    comment,
+    bindingType: row.type,
+  };
+}
+
+export async function getPaidHotspotBindingSnapshot(
+  creds: RouterCredentials,
+  opts: { name: string; macAddress?: string | null },
+): Promise<PaidHotspotBindingSnapshot | null> {
+  const macAddress = validRouterMac(opts.macAddress);
+  if (!macAddress) return null;
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write(["/ip/hotspot/ip-binding/print", "=.proplist=.id,mac-address,address,comment,type"]),
+      ms,
+    ) as Record<string, string>[];
+    if (!Array.isArray(rows)) throw new Error("MikroTik did not return its paid Hotspot binding details.");
+    const snapshot = paidHotspotBindingSnapshotForCustomer(rows, { ...opts, macAddress });
+    if (!snapshot) return null;
+    const matchedRow = rows.find((row) =>
+      sameMacAddress(row["mac-address"], snapshot.macAddress)
+      && row.comment === snapshot.comment,
+    );
+    if (matchedRow && isLegacyPaidHotspotBinding(matchedRow)) return snapshot;
+    const schedulerName = hotspotPaidExpirySchedulerName(snapshot.comment);
+    const schedulers = await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    ) as Record<string, string>[];
+    if (!Array.isArray(schedulers)) {
+      throw new Error("MikroTik did not return the paid Hotspot expiry scheduler details.");
+    }
+    return schedulers.some((row) =>
+      row.name === schedulerName
+      && String(row.comment ?? "").trim().toLowerCase() === "ocholasupernet paid access expiry",
+    ) ? snapshot : null;
+  });
+}
+
+export type PaidHotspotBindingEditIdentity = {
+  macAddress: string;
+  comment: string;
+};
+
+export function paidHotspotBindingEditPlan(opts: {
+  snapshot: PaidHotspotBindingSnapshot;
+  currentName: string;
+  currentMacAddress?: string | null;
+  nextName: string;
+  nextMacAddress?: string | null;
+  enabled: boolean;
+}): {
+  remove: PaidHotspotBindingEditIdentity[];
+  ensure: PaidHotspotBindingEditIdentity | null;
+} {
+  const identity = (name: string, macAddress?: string | null): PaidHotspotBindingEditIdentity | null => {
+    const comment = String(name ?? "").trim();
+    const mac = validRouterMac(String(macAddress ?? "").trim().replace(/-/g, ":"));
+    return comment && mac ? { macAddress: mac, comment } : null;
+  };
+  const key = (value: PaidHotspotBindingEditIdentity) =>
+    `${value.macAddress.replace(/[:-]/g, "").toUpperCase()}:${value.comment}`;
+  const original = identity(opts.snapshot.comment, opts.snapshot.macAddress);
+  const current = identity(opts.currentName, opts.currentMacAddress);
+  const ensure = opts.enabled ? identity(opts.nextName, opts.nextMacAddress) : null;
+  const desiredKey = ensure ? key(ensure) : null;
+  const remove = new Map<string, PaidHotspotBindingEditIdentity>();
+  for (const value of [original, current]) {
+    if (!value || key(value) === desiredKey) continue;
+    remove.set(key(value), value);
+  }
+  return { remove: Array.from(remove.values()), ensure };
+}
+
+export async function reconcilePaidHotspotBinding(
+  creds: RouterCredentials,
+  opts: {
+    snapshot: PaidHotspotBindingSnapshot;
+    currentName: string;
+    currentMacAddress?: string | null;
+    nextName: string;
+    nextMacAddress?: string | null;
+    expiresAt: string | null;
+    enabled: boolean;
+  },
+): Promise<void> {
+  const plan = paidHotspotBindingEditPlan(opts);
+  let expiryMs: number | null = null;
+  if (plan.ensure) {
+    if (!opts.expiresAt) {
+      throw new Error("Paid Hotspot access must keep an expiry date. Choose a specific date and time.");
+    }
+    expiryMs = Date.parse(opts.expiresAt);
+    if (!Number.isFinite(expiryMs)) {
+      throw new Error("A valid expiry date is required for the paid Hotspot binding.");
+    }
+    if (expiryMs <= Date.now()) {
+      throw new Error("The paid Hotspot binding expiry must be in the future.");
+    }
+  }
+  for (const binding of plan.remove) {
+    await removeHotspotIpBinding(creds, binding);
+  }
+  if (!plan.ensure || expiryMs === null) return;
+
+  const sameDevice = sameMacAddress(plan.ensure.macAddress, opts.snapshot.macAddress);
+  const updated = await addHotspotIpBinding(creds, {
+    macAddress: plan.ensure.macAddress,
+    ipAddress: sameDevice ? opts.snapshot.ipAddress ?? undefined : undefined,
+    comment: plan.ensure.comment,
+    expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
+    bindingType: opts.snapshot.bindingType,
+  });
+  if (!updated) {
+    throw new Error("The paid Hotspot device binding could not be synchronized. No customer changes were saved.");
+  }
 }
 
 /** Detect paid bypasses and their expiry schedulers before an admin edit. */
@@ -2831,8 +2977,9 @@ export async function scheduleHotspotUserFup(
 
 /**
  * Reconcile one hotspot account after an admin changes its plan, expiry, or
- * lifecycle status. RouterOS creates the bandwidth queue at login, so an
- * existing active session must be removed after a profile change.
+ * lifecycle status. Keep enabled sessions online; their live queue is updated
+ * separately and RouterOS applies profile changes on the next authentication.
+ * Disabled or expired accounts are still disconnected immediately.
  */
 export async function reconcileHotspotUserAccess(
   creds: RouterCredentials,
@@ -2871,6 +3018,15 @@ export async function reconcileHotspotUserAccess(
   };
 
   await requireHotspotUserProfile(creds, opts.profile);
+
+  if (Number.isFinite(expiryMs) && enabled) {
+    await scheduleHotspotUserExpiry(creds, {
+      name: opts.name,
+      expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
+    });
+  } else if (enabled) {
+    await removeHotspotUserExpiry(creds, opts.name);
+  }
 
   try {
     await updateHotspotUser(creds, opts.name, fields);
@@ -2928,17 +3084,6 @@ export async function reconcileHotspotUserAccess(
     });
   } else {
     await removeHotspotUserFup(creds, opts.name);
-  }
-
-  /* Force RouterOS to recreate the active queue with the current profile. */
-  if (!opts.preserveActiveSession) await disconnectHotspotActiveUser(creds, opts.name);
-  if (Number.isFinite(expiryMs)) {
-    await scheduleHotspotUserExpiry(creds, {
-      name: opts.name,
-      expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
-    });
-  } else {
-    await removeHotspotUserExpiry(creds, opts.name);
   }
 }
 
@@ -3743,6 +3888,8 @@ export interface WirelessInterface {
   mode: string;
   masterInterface: string;
   managedByApp: boolean;
+  securitySummary?: string;
+  channelLabel?: string;
 }
 
 export interface WirelessSecurityProfile {
@@ -3750,29 +3897,74 @@ export interface WirelessSecurityProfile {
   name: string;
   wpa2PreSharedKey: string;
   authentication: string;
+  mode: string;
 }
 
 export async function fetchWireless(
   creds: RouterCredentials,
   routerId?: number,
-): Promise<{ interfaces: WirelessInterface[]; profiles: WirelessSecurityProfile[] }> {
+): Promise<{
+  apiMode: "legacy" | "wifi";
+  interfaces: WirelessInterface[];
+  profiles: WirelessSecurityProfile[];
+}> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
 
-    let ifaceRows: Record<string, string>[], profileRows: Record<string, string>[];
+    let ifaceRows: Record<string, string>[];
     try {
-      [ifaceRows, profileRows] = await Promise.all([
-        withTimeout(conn.write(["/interface/wireless/print"]), ms) as Promise<Record<string, string>[]>,
-        withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Promise<Record<string, string>[]>,
-      ]);
+      ifaceRows = await withTimeout(
+        conn.write(["/interface/wireless/print"]),
+        ms,
+      ) as Record<string, string>[];
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (/no such command|unknown command|bad command|not found|invalid item/i.test(message)) {
-        throw new Error(`RouterOS wireless package is unsupported: ${message}`);
+      if (!/no such command|unknown command|bad command|not found|invalid item/i.test(message)) {
+        throw error;
       }
-      throw error;
+
+      const wifiRows = await withTimeout(
+        conn.write(["/interface/wifi/print"]),
+        ms,
+      ) as Record<string, string>[];
+      const rawWifiInterfaces = Array.isArray(wifiRows) ? wifiRows : [];
+      const namesById = new Map(
+        rawWifiInterfaces.map(row => [String(row[".id"] ?? ""), String(row.name ?? "")]),
+      );
+      const interfaces: WirelessInterface[] = rawWifiInterfaces.map(row => {
+        const authenticationTypes = String(row["security.authentication-types"] ?? "").trim();
+        const hasAuthenticationTypes = Object.prototype.hasOwnProperty.call(row, "security.authentication-types");
+        const frequency = String(row["channel.frequency"] ?? "").trim();
+        const masterId = String(row["master-interface"] ?? "");
+        return {
+          id: row[".id"] ?? "",
+          name: row.name ?? "",
+          ssid: row["configuration.ssid"] ?? row.ssid ?? "",
+          disabled: parseBool(row.disabled),
+          band: row["channel.band"] ?? row.band ?? "",
+          channel: frequency || row["channel.number"] || row.channel || "",
+          channelLabel: frequency ? "freq" : "ch",
+          macAddress: row["mac-address"] ?? "",
+          securityProfile: row.security ?? row["configuration.security"] ?? "",
+          mode: row["configuration.mode"] ?? row.mode ?? "",
+          masterInterface: namesById.get(masterId) ?? masterId,
+          managedByApp: routerId !== undefined
+            ? new RegExp(`^ochola-wireless-app:${routerId}:`, "i").test(String(row.comment ?? "").trim())
+            : false,
+          securitySummary: authenticationTypes
+            ? `Secured (${authenticationTypes})`
+            : hasAuthenticationTypes
+              ? "Open Wi-Fi"
+              : "Security not reported",
+        };
+      });
+      return { apiMode: "wifi", interfaces, profiles: [] };
     }
 
+    const profileRows = await withTimeout(
+      conn.write(["/interface/wireless/security-profiles/print"]),
+      ms,
+    ) as Record<string, string>[];
     const rawInterfaces = Array.isArray(ifaceRows) ? ifaceRows : [];
     const namesById = new Map(rawInterfaces.map(row => [String(row[".id"] ?? ""), String(row.name ?? "")]));
     const interfaces: WirelessInterface[] = rawInterfaces.map(r => ({
@@ -3794,11 +3986,12 @@ export async function fetchWireless(
     const profiles: WirelessSecurityProfile[] = (Array.isArray(profileRows) ? profileRows : []).map(r => ({
       id:               r[".id"]                  ?? "",
       name:             r.name                    ?? "",
-      wpa2PreSharedKey: r["wpa2-pre-shared-key"]  ?? "",
-      authentication:   r["authentication-types"]  ?? "",
+      wpa2PreSharedKey: r["wpa2-pre-shared-key"]   ?? "",
+      authentication:   r["authentication-types"] ?? "",
+      mode:             r.mode                    ?? "",
     }));
 
-    return { interfaces, profiles };
+    return { apiMode: "legacy", interfaces, profiles };
   });
 }
 
@@ -3807,7 +4000,8 @@ export interface WirelessCreateParams {
   name: string;
   ssid: string;
   masterInterfaceId: string;
-  password: string;
+  password?: string;
+  securityMode?: "open" | "wpa2";
   disabled?: boolean;
 }
 
@@ -3828,6 +4022,16 @@ export async function createWirelessVirtualAp(
   params: WirelessCreateParams,
 ): Promise<void> {
   if (!Number.isSafeInteger(params.routerId) || params.routerId <= 0) throw new Error("Invalid router id.");
+  const securityMode = params.securityMode ?? "wpa2";
+  if (securityMode === "open" && params.password !== undefined) {
+    throw new Error("Do not supply a Wi-Fi password for an open network.");
+  }
+  if (securityMode === "wpa2" &&
+      (params.password === undefined ||
+       Buffer.byteLength(params.password, "utf8") < 8 ||
+       Buffer.byteLength(params.password, "utf8") > 63)) {
+    throw new Error("WPA2 passwords must be 8 to 63 bytes.");
+  }
   try {
     await withConn(creds, async (conn) => {
       const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
@@ -3843,11 +4047,16 @@ export async function createWirelessVirtualAp(
         throw new Error("A wireless interface with that name already exists.");
       }
       const comment = wirelessAppComment(params.routerId);
-      await withTimeout(conn.write([
+      const profileCommand = [
         "/interface/wireless/security-profiles/add",
-        `=name=${profileName}`, "=mode=dynamic-keys", "=authentication-types=wpa2-psk",
-        `=wpa2-pre-shared-key=${params.password}`, `=comment=${comment}`,
-      ]), ms);
+        `=name=${profileName}`,
+        `=mode=${securityMode === "open" ? "none" : "dynamic-keys"}`,
+        `=comment=${comment}`,
+      ];
+      if (securityMode === "wpa2") {
+        profileCommand.push("=authentication-types=wpa2-psk", `=wpa2-pre-shared-key=${params.password}`);
+      }
+      await withTimeout(conn.write(profileCommand), ms);
       try {
         await withTimeout(conn.write([
           "/interface/wireless/add", `=name=${params.name}`, `=master-interface=${masterName}`,
@@ -3861,9 +4070,28 @@ export async function createWirelessVirtualAp(
             row["security-profile"] === profileName)) {
           throw new Error("Post-write verification failed: virtual wireless interface was not created.");
         }
+        const createdProfiles = await withTimeout(
+          conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]),
+          ms,
+        ) as Record<string, string>[];
+        const createdProfile = createdProfiles.find(row => row.name === profileName);
+        if (!createdProfile ||
+            createdProfile.mode !== (securityMode === "open" ? "none" : "dynamic-keys") ||
+            (securityMode === "wpa2" && createdProfile["wpa2-pre-shared-key"] !== params.password)) {
+          throw new Error("Post-write verification failed: wireless security profile did not persist.");
+        }
       } catch (error) {
-        const profiles = await withTimeout(conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]), ms) as Record<string, string>[];
-        if (profiles[0]?.[".id"]) await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${profiles[0][".id"]}`]), ms);
+        /* A write error may mean RouterOS applied the interface before the
+           connection failed. Re-read before attempting cleanup. */
+        const [profiles, currentInterfaces] = await Promise.all([
+          withTimeout(conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]), ms) as Promise<Record<string, string>[]>,
+          withTimeout(conn.write(["/interface/wireless/print"]), ms) as Promise<Record<string, string>[]>,
+        ]);
+        const created = profiles.find(row => row.name === profileName);
+        const inUse = currentInterfaces.some(row => row["security-profile"] === profileName);
+        if (created?.[".id"] && !inUse) {
+          await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${created[".id"]}`]), ms);
+        }
         throw error;
       }
     });
@@ -3873,9 +4101,16 @@ export async function createWirelessVirtualAp(
 export async function patchWirelessInterface(
   creds: RouterCredentials,
   routerId: number,
-  params: { interfaceId: string; ssid?: string; password?: string; disabled?: boolean },
+  params: { interfaceId: string; ssid?: string; password?: string; securityMode?: "open" | "wpa2"; disabled?: boolean },
 ): Promise<void> {
   if (!Number.isSafeInteger(routerId) || routerId <= 0) throw new Error("Invalid router id.");
+  if (params.password !== undefined &&
+      (Buffer.byteLength(params.password, "utf8") < 8 || Buffer.byteLength(params.password, "utf8") > 63)) {
+    throw new Error("WPA2 passwords must be 8 to 63 bytes.");
+  }
+  if (params.securityMode === "open" && params.password !== undefined) {
+    throw new Error("Do not supply a Wi-Fi password when switching to an open network.");
+  }
   try {
     await withConn(creds, async (conn) => {
       const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
@@ -3883,45 +4118,82 @@ export async function patchWirelessInterface(
       const current = rows.find(row => row[".id"] === params.interfaceId);
       if (!current) throw new Error("Wireless interface was not found.");
       const oldProfile = String(current["security-profile"] ?? "");
+      const requestedSecurityMode = params.securityMode ?? (params.password !== undefined ? "wpa2" : undefined);
+      let selectedProfile: string | undefined;
+      let newProfile: string | undefined;
+
+      if (requestedSecurityMode) {
+        const profileRows = await withTimeout(
+          conn.write(["/interface/wireless/security-profiles/print"]),
+          ms,
+        ) as Record<string, string>[];
+        const currentProfile = profileRows.find(profile => profile.name === oldProfile);
+        const currentIsOpen = currentProfile?.mode === "none";
+        const needsNewProfile =
+          (requestedSecurityMode === "open" && !currentIsOpen) ||
+          (requestedSecurityMode === "wpa2" &&
+            (currentIsOpen || params.password !== undefined));
+
+        if (requestedSecurityMode === "wpa2" && currentIsOpen && params.password === undefined) {
+          throw new Error("Provide a WPA2 password before enabling Wi-Fi security.");
+        }
+        if (requestedSecurityMode === "wpa2" && !currentIsOpen &&
+            params.password === undefined && !currentProfile) {
+          throw new Error("The current Wi-Fi security profile could not be verified; provide a WPA2 password.");
+        }
+
+        if (needsNewProfile) {
+          if (requestedSecurityMode === "wpa2" && params.password === undefined) {
+            throw new Error("Provide a WPA2 password before enabling Wi-Fi security.");
+          }
+          const profileName = `ochola-wlan-${routerId}-${randomBytes(4).toString("hex")}`;
+          const comment = wirelessAppComment(routerId);
+          const profileCommand = [
+            "/interface/wireless/security-profiles/add",
+            `=name=${profileName}`,
+            `=mode=${requestedSecurityMode === "open" ? "none" : "dynamic-keys"}`,
+            `=comment=${comment}`,
+          ];
+          if (requestedSecurityMode === "wpa2") {
+            profileCommand.push("=authentication-types=wpa2-psk", `=wpa2-pre-shared-key=${params.password}`);
+          }
+          await withTimeout(conn.write(profileCommand), ms);
+          selectedProfile = profileName;
+          newProfile = profileName;
+        } else {
+          selectedProfile = oldProfile;
+        }
+      }
+
       const command = ["/interface/wireless/set", `=.id=${params.interfaceId}`];
       if (params.ssid !== undefined) command.push(`=ssid=${params.ssid}`);
       if (params.disabled !== undefined) command.push(`=disabled=${params.disabled ? "yes" : "no"}`);
-      if (command.length > 2) await withTimeout(conn.write(command), ms);
-      if (params.password !== undefined) {
-        const profileName = `ochola-wlan-${routerId}-${randomBytes(4).toString("hex")}`;
-        const comment = wirelessAppComment(routerId);
-        await withTimeout(conn.write([
-          "/interface/wireless/security-profiles/add", `=name=${profileName}`,
-          "=mode=dynamic-keys", "=authentication-types=wpa2-psk",
-          `=wpa2-pre-shared-key=${params.password}`, `=comment=${comment}`,
-        ]), ms);
-        try {
-          await withTimeout(conn.write(["/interface/wireless/set", `=.id=${params.interfaceId}`, `=security-profile=${profileName}`]), ms);
-        } catch (error) {
-          const created = await withTimeout(conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]), ms) as Record<string, string>[];
-          if (created[0]?.[".id"]) {
-            await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${created[0][".id"]}`]), ms);
-          }
-          throw error;
-        }
+      if (selectedProfile !== undefined && selectedProfile !== oldProfile) {
+        command.push(`=security-profile=${selectedProfile}`);
       }
+      if (command.length > 2) await withTimeout(conn.write(command), ms);
       const verify = await withTimeout(conn.write(["/interface/wireless/print", `?.id=${params.interfaceId}`]), ms) as Record<string, string>[];
       const updated = verify.find(row => row[".id"] === params.interfaceId);
       if (!updated ||
           (params.ssid !== undefined && updated.ssid !== params.ssid) ||
           (params.disabled !== undefined && parseBool(updated.disabled) !== params.disabled) ||
-          (params.password !== undefined && !String(updated["security-profile"] ?? "").startsWith(`ochola-wlan-${routerId}-`))) {
+          (selectedProfile !== undefined && updated["security-profile"] !== selectedProfile) ||
+          (newProfile !== undefined && !String(updated["security-profile"] ?? "").startsWith(`ochola-wlan-${routerId}-`))) {
         throw new Error("Post-write verification failed: wireless settings did not persist.");
       }
-      if (params.password !== undefined) {
+      if (requestedSecurityMode !== undefined) {
         const profileRows = await withTimeout(conn.write([
           "/interface/wireless/security-profiles/print", `?name=${updated["security-profile"]}`,
         ]), ms) as Record<string, string>[];
-        if (profileRows[0]?.["wpa2-pre-shared-key"] !== params.password) {
-          throw new Error("Post-write verification failed: WPA2 profile did not persist.");
+        const verifiedProfile = profileRows.find(profile => profile.name === updated["security-profile"]);
+        if (!verifiedProfile ||
+            (requestedSecurityMode === "open" && verifiedProfile.mode !== "none") ||
+            (requestedSecurityMode === "wpa2" && verifiedProfile.mode === "none") ||
+            (params.password !== undefined && verifiedProfile["wpa2-pre-shared-key"] !== params.password)) {
+          throw new Error("Post-write verification failed: wireless security profile did not persist.");
         }
       }
-      if (params.password !== undefined && oldProfile) {
+      if (selectedProfile !== undefined && selectedProfile !== oldProfile && oldProfile) {
         const profiles = await withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Record<string, string>[];
         const interfaces = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
         const old = profiles.find(profile => profile.name === oldProfile);
@@ -6701,6 +6973,9 @@ ${walledGardenHostnames.map(hostname => `:if ([:len [/ip hotspot walled-garden i
 }`).join("\n")}`);
   }
 
+  blocks.push(`# Allow the chat widget only on this isolated Hotspot server
+${renderHotspotChatWalledGardenRules(hotspotServer)}`);
+
   blocks.push(`# 6. Isolated PPPoE pool, profile, and server
 ${ownedOrConflict(
   "coexistPppoePool",
@@ -6950,6 +7225,7 @@ export function generateServiceSetupScript(
     :error $serviceError
 }`).join("\n")
     : `:put "${tag}: no portal hostname was supplied; walled-garden host entries were not added."`;
+  const chatWalledGardenSetup = renderHotspotChatWalledGardenRules();
   const queueSetup = maxPortSpeedMbps === undefined
     ? `:put "${tag}: no aggregate queue speed was supplied; existing bandwidth policy was preserved."`
     : `# Optional, tagged hierarchy for this shared service wire.
@@ -7162,6 +7438,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name=($hsdir . "/login.html")]]
     :do { remove [find where comment~${routerOsString(`${tag} walled garden `)}] } on-error={}
     :do { remove [find where comment~${routerOsString(`${tag} payment walled garden `)}] } on-error={}
     ${walledGardenSetup}
+    ${chatWalledGardenSetup}
 } on-error={
     :set serviceStepFailed true
     :local serviceStepError $error
