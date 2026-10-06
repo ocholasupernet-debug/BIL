@@ -2057,7 +2057,15 @@ else{
 /* Load the configured Tawk widget only when Hotspot Settings enables it for this domain. */
 (function(){
   var config=window.__HOTSPOT_CONFIG__;
-  if(window.location.hostname === "ocholasupernet.isplatty.org"&&config&&config.tawkEnabled===true){
+  var targetHostname="ocholasupernet.isplatty.org";
+  var pageHostname=String(window.location.hostname||"").toLowerCase();
+  var configuredTenantHostname="";
+  try{
+    var configuredApiBase=new URL(String(config&&config.apiBase||""));
+    if(configuredApiBase.protocol==="https:")configuredTenantHostname=configuredApiBase.hostname.toLowerCase();
+  }catch(_){}
+  /* RouterOS serves login.html from the hotspot gateway, not the tenant website host. */
+  if((pageHostname===targetHostname||configuredTenantHostname===targetHostname)&&config&&config.tawkEnabled===true){
     var propertyId="6ac4631c8fd05734c7457563";
     var widgetId="1k47i6apm";
     if(propertyId==="YOUR_PROPERTY_ID"||widgetId==="YOUR_WIDGET_ID")return;
