@@ -1,5 +1,23 @@
 import { sbSelectStrict } from "./supabase-client.js";
 
+export async function isIspHotspotTawkEnabled(
+  adminId: number,
+  select: typeof sbSelectStrict = sbSelectStrict,
+): Promise<boolean> {
+  if (!Number.isSafeInteger(adminId) || adminId <= 0) {
+    throw new Error("Hotspot branding requires a valid ISP.");
+  }
+  const branding = await select<{ settings?: unknown }>(
+    "isp_hotspot_branding",
+    `admin_id=eq.${adminId}&select=settings&limit=1`,
+  );
+  const settings = branding[0]?.settings;
+  return !!settings
+    && typeof settings === "object"
+    && !Array.isArray(settings)
+    && (settings as Record<string, unknown>).tawkEnabled === true;
+}
+
 /** Personalize only the default ISP login template, never reseller/VLAN exports. */
 export async function prepareIspHotspotAsset(
   name: string,
@@ -24,15 +42,7 @@ export async function prepareIspHotspotAsset(
     "isp_plans",
     `admin_id=eq.${scope.adminId}&router_id=eq.${scope.routerId}&port_id=is.null&owner_reseller_id=is.null&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit&order=price.asc,name.asc`,
   );
-  const branding = await select<{ settings?: unknown }>(
-    "isp_hotspot_branding",
-    `admin_id=eq.${scope.adminId}&select=settings&limit=1`,
-  );
-  const brandingSettings = branding[0]?.settings;
-  const tawkEnabled = !!brandingSettings
-    && typeof brandingSettings === "object"
-    && !Array.isArray(brandingSettings)
-    && (brandingSettings as Record<string, unknown>).tawkEnabled === true;
+  const tawkEnabled = await isIspHotspotTawkEnabled(scope.adminId, select);
   const config = JSON.stringify({
     adminId: scope.adminId, routerId: scope.routerId, portId: 0,
     apiBase: origin.origin, plans, tawkEnabled,

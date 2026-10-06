@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { prepareIspHotspotAsset } from "./isp-hotspot-asset.js";
+import { isIspHotspotTawkEnabled, prepareIspHotspotAsset } from "./isp-hotspot-asset.js";
 import { findEmbeddedHotspotConfig } from "./hotspot-portal-deploy.js";
 
 const template = Buffer.from("<html><head></head><body>$(identity) $(server-name)</body></html>");
@@ -50,6 +50,26 @@ test("default ISP portal keeps Tawk disabled when no saved branding setting exis
     return [] as T[];
   });
   assert.equal(findEmbeddedHotspotConfig(output.toString())?.config.tawkEnabled, false);
+});
+
+test("saved ISP Hotspot branding enables Tawk only for the literal boolean true", async () => {
+  const select = async <T>(_table: string, _query: string): Promise<T[]> =>
+    [{ settings: { tawkEnabled: true } }] as T[];
+  assert.equal(await isIspHotspotTawkEnabled(scope.adminId, select), true);
+
+  const invalidValueSelect = async <T>(_table: string, _query: string): Promise<T[]> =>
+    [{ settings: { tawkEnabled: "true" } }] as T[];
+  assert.equal(await isIspHotspotTawkEnabled(scope.adminId, invalidValueSelect), false);
+});
+
+test("bridge portal refresh includes the saved Tawk flag in its embedded router config", () => {
+  const route = readFileSync(new URL("../routes/mikrotik-route.ts", import.meta.url), "utf8");
+  const start = route.indexOf('router.post("/admin/router/:id/hotspot-portal/bridge-deploy"');
+  const end = route.indexOf('router.post("/router/:id/hotspot-portal/sync-tenant-host"');
+  assert.ok(start >= 0 && end > start);
+  const bridgeRoute = route.slice(start, end);
+  assert.match(bridgeRoute, /const tawkEnabled = await isIspHotspotTawkEnabled\(adminId\);/);
+  assert.match(bridgeRoute, /routerId: id,\s*tawkEnabled,/);
 });
 
 test("reject invalid scope and unsafe API origins", async () => {
