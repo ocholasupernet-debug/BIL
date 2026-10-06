@@ -1792,6 +1792,36 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
   const action = req.body?.action === "login" ? "login" : "check";
   // Landing-page expiry checks only need database status; login requests must still verify hard-cap usage.
   const expiryOnlyCheck = action === "check" && req.body?.expiry_only === true;
+  const reconnectTimingStartedAt = process.hrtime.bigint();
+  const reconnectStageDurationsMs: Record<string, number> = {};
+  let reconnectTimingOutcome = "early_exit";
+  let sessionDisconnectCalls = 0;
+  let successfulSessionDisconnectCalls = 0;
+  const measureReconnectStage = async <T>(
+    stage: string,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    const startedAt = process.hrtime.bigint();
+    try {
+      return await operation();
+    } finally {
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+      reconnectStageDurationsMs[stage] = Math.round(durationMs * 10) / 10;
+    }
+  };
+  res.once("finish", () => {
+    if (action !== "login" || Object.keys(reconnectStageDurationsMs).length === 0) return;
+    const totalMs = Number(process.hrtime.bigint() - reconnectTimingStartedAt) / 1_000_000;
+    logger.info({
+      event: "hotspot.reconnect.timing",
+      outcome: reconnectTimingOutcome,
+      statusCode: res.statusCode,
+      totalMs: Math.round(totalMs * 10) / 10,
+      stageDurationsMs: reconnectStageDurationsMs,
+      sessionDisconnectCalls,
+      successfulSessionDisconnectCalls,
+    }, "[customers/hotspot-troubleshoot] reconnect timing");
+  });
 
   if (!Number.isSafeInteger(adminId) || adminId < 1 || !requestedMac) {
     res.status(400).json({ ok: false, error: "ISP context and the hotspot device MAC address are required." });
@@ -1803,18 +1833,23 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
     : undefined;
   if (!portalScope && !expiryOnlyCheck) {
     try {
-      const resolvedTarget = await resolveHotspotTargetScope(
-        adminId,
-        undefined,
-        req.body?.router_id,
-        req.body?.port_id,
+      const resolvedTarget = await measureReconnectStage(
+        "target_scope_resolution",
+        () => resolveHotspotTargetScope(
+          adminId,
+          undefined,
+          req.body?.router_id,
+          req.body?.port_id,
+        ),
       );
       if (resolvedTarget.error) {
+        reconnectTimingOutcome = "target_scope_invalid";
         res.status(400).json({ ok: false, error: resolvedTarget.error });
         return;
       }
       targetScope = resolvedTarget.scope;
     } catch (error) {
+      reconnectTimingOutcome = "target_scope_error";
       logger.warn({ err: error, adminId }, "[customers/hotspot-troubleshoot] target service validation failed");
       res.status(503).json({ ok: false, error: "Could not verify the selected Hotspot service. Please try again." });
       return;
@@ -1823,8 +1858,12 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
 
   let lookup: HotspotPurchaseLookup;
   try {
-    lookup = await lookupLatestHotspotPurchase(adminId, requestedMac, portalScope, targetScope);
+    lookup = await measureReconnectStage(
+      "purchase_lookup",
+      () => lookupLatestHotspotPurchase(adminId, requestedMac, portalScope, targetScope),
+    );
   } catch (error) {
+    reconnectTimingOutcome = "purchase_lookup_error";
     logger.error({ err: error, adminId, macAddress: requestedMac }, "[customers/hotspot-troubleshoot] purchase lookup failed");
     res.status(503).json({ ok: false, error: "Could not verify the latest hotspot purchase. Please try again." });
     return;
@@ -1853,11 +1892,14 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
     try {
       let totalBytesUsed: number | null = null;
       if (needsSharedUsageRead && targetScope) {
-        sharedUsageSnapshot = await loadSharedRoamingUsage(
-          adminId,
-          plan,
-          String(customer.username ?? ""),
-          targetScope.routerId,
+        sharedUsageSnapshot = await measureReconnectStage(
+          "quota_shared_usage_read",
+          () => loadSharedRoamingUsage(
+            adminId,
+            plan,
+            String(customer.username ?? ""),
+            targetScope.routerId,
+          ),
         );
         totalBytesUsed = sharedUsageSnapshot.totalBytes;
       } else if ((!targetScope || planServiceType === "vlan") && capBytes !== null && plan.data_cap_mode !== "throttle") {
@@ -1868,7 +1910,10 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
           `id=eq.${sourceRouterId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
         ))[0];
         if (!routerRow) throw new Error("The assigned hotspot router could not be found.");
-        const usage = await fetchHotspotUserUsage(routerCredentials(routerRow), String(customer.username ?? ""));
+        const usage = await measureReconnectStage(
+          "quota_router_usage_read",
+          () => fetchHotspotUserUsage(routerCredentials(routerRow), String(customer.username ?? "")),
+        );
         totalBytesUsed = (usage?.bytesIn ?? 0) + (usage?.bytesOut ?? 0);
       }
       if (
@@ -1895,6 +1940,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       lookup.error = "The router could not verify this package's remaining data. Please try again shortly.";
     }
   }
+  reconnectTimingOutcome = lookup.status;
   const response = {
     ok: true,
     found: lookup.found,
@@ -1945,12 +1991,16 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
     const portalOwnerFilter = portalScope
       ? `&assigned_reseller_id=eq.${portalScope.resellerId}&handoff_mode=eq.vlan_services`
       : "&assigned_reseller_id=is.null";
-    const servicePorts = await sbSelectStrict<VlanPortRow>(
-      "isp_reseller_ports",
-      `id=eq.${targetScope.portId}&admin_id=eq.${adminId}&router_id=eq.${targetScope.routerId}${portalOwnerFilter}&status=eq.active&hotspot_enabled=is.true&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status,hotspot_enabled,link_status&limit=1`,
+    const servicePorts = await measureReconnectStage(
+      "target_port_lookup",
+      () => sbSelectStrict<VlanPortRow>(
+        "isp_reseller_ports",
+        `id=eq.${targetScope.portId}&admin_id=eq.${adminId}&router_id=eq.${targetScope.routerId}${portalOwnerFilter}&status=eq.active&hotspot_enabled=is.true&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status,hotspot_enabled,link_status&limit=1`,
+      ),
     );
     const servicePort = servicePorts[0];
     if (!servicePort) {
+      reconnectTimingOutcome = "service_inactive";
       res.status(409).json({ ...response, ok: false, error: "The selected Hotspot service is not active." });
       return;
     }
@@ -1959,51 +2009,72 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       customer.type === "vlan"
       && (!isValidIpv4(customer.ip_address) || !ipv4InSubnet(customer.ip_address, servicePort.subnet_range))
     ) {
+      reconnectTimingOutcome = "vlan_ip_mismatch";
       res.status(409).json({ ...response, ok: false, error: "This VLAN account does not have a valid IP on the assigned service." });
       return;
     }
   }
 
   try {
-    const loginResult = await withCustomerEditLock(customer.admin_id, customer.id, async assertLock => {
+    const loginResult = await measureReconnectStage(
+      "customer_lock_and_reconnect",
+      () => withCustomerEditLock(customer.admin_id, customer.id, async assertLock => {
       await assertLock();
       let usageSnapshot = sharedUsageSnapshot;
       if (targetScope && planServiceType !== "vlan") {
-        // Load all source/destination routers before moving the session. The
-        // second read after disconnect captures RouterOS's final counters.
-        usageSnapshot = await loadSharedRoamingUsage(adminId, plan, username, routerId);
-        let sessionDisconnected = false;
-        const scopedRouterRows = await sbSelectStrict<RouterRow>(
-          "isp_routers",
-          `admin_id=eq.${adminId}&id=in.(${usageSnapshot.routerIds.join(",")})&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=100`,
+        // Re-read usage after a disconnect to capture RouterOS's final counters.
+        const preLoginUsageSnapshot = await measureReconnectStage(
+          "pre_login_shared_usage_read",
+          () => loadSharedRoamingUsage(adminId, plan, username, routerId),
         );
-        if (scopedRouterRows.length !== usageSnapshot.routerIds.length) {
+        usageSnapshot = preLoginUsageSnapshot;
+        let sessionDisconnected = false;
+        const scopedRouterRows = await measureReconnectStage(
+          "router_scope_lookup",
+          () => sbSelectStrict<RouterRow>(
+            "isp_routers",
+            `admin_id=eq.${adminId}&id=in.(${preLoginUsageSnapshot.routerIds.join(",")})&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=100`,
+          ),
+        );
+        if (scopedRouterRows.length !== preLoginUsageSnapshot.routerIds.length) {
           throw new Error("A MikroTik needed to verify the shared package could not be found.");
         }
-        for (const otherRouter of scopedRouterRows) {
-          if (otherRouter.id === routerId) continue;
-          await assertLock();
-          if (await disconnectHotspotActiveUser(routerCredentials(otherRouter), username)) {
-            sessionDisconnected = true;
-          }
-        }
-        const desiredHotspotServer = targetScope.portId === null ? "all" : hotspotServer;
-        if (desiredHotspotServer && desiredHotspotServer !== "all") {
-          const localSessions = await fetchHotspotUsers(creds);
-          const sessionOnAnotherService = localSessions.some(user =>
-            user.user === username
-            && user.server !== desiredHotspotServer,
-          );
-          if (sessionOnAnotherService) {
+        await measureReconnectStage("router_session_cleanup", async () => {
+          for (const otherRouter of scopedRouterRows) {
+            if (otherRouter.id === routerId) continue;
             await assertLock();
-            if (await disconnectHotspotActiveUser(creds, username)) {
+            sessionDisconnectCalls += 1;
+            if (await disconnectHotspotActiveUser(routerCredentials(otherRouter), username)) {
               sessionDisconnected = true;
+              successfulSessionDisconnectCalls += 1;
             }
           }
-        }
+          const desiredHotspotServer = targetScope.portId === null ? "all" : hotspotServer;
+          if (desiredHotspotServer && desiredHotspotServer !== "all") {
+            const localSessions = await measureReconnectStage(
+              "local_active_session_read",
+              () => fetchHotspotUsers(creds),
+            );
+            const sessionOnAnotherService = localSessions.some(user =>
+              user.user === username
+              && user.server !== desiredHotspotServer,
+            );
+            if (sessionOnAnotherService) {
+              await assertLock();
+              sessionDisconnectCalls += 1;
+              if (await disconnectHotspotActiveUser(creds, username)) {
+                sessionDisconnected = true;
+                successfulSessionDisconnectCalls += 1;
+              }
+            }
+          }
+        });
         if (sessionDisconnected) {
           await assertLock();
-          usageSnapshot = await loadSharedRoamingUsage(adminId, plan, username, routerId);
+          usageSnapshot = await measureReconnectStage(
+            "usage_refresh_after_disconnect",
+            () => loadSharedRoamingUsage(adminId, plan, username, routerId),
+          );
         }
       }
 
@@ -2083,56 +2154,69 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
         }
 
         await assertLock();
-        await reconcileHotspotUserAccess(creds, {
-          name: username,
-          password,
-          profile: profileName,
-          server: hotspotRoamingUserServer(plan.router_id, routerId, hotspotServer),
-          ...(isCrossRouter ? { comment: roamingTag } : {}),
-          expiresAt: customer.expires_at,
-          enabled: customer.status === "active",
-          limitBytesTotal: plan.data_cap_mode === "throttle" ? "0" : localLimitBytes,
-          macAddress: requestedMac,
-          rateLimit: fupSpeedLimit ?? routerRateLimit(
-            plan.speed_down,
-            plan.speed_up,
-            plan.speed_down_unit ?? "Mbps",
-            plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
-          ),
-          dataCapMode: plan.data_cap_mode === "throttle" ? "throttle" : "disconnect",
-          ...(fupThresholdBytes !== undefined && fupSpeedLimit ? {
-            fupLimitBytes: fupThresholdBytes,
-            fupSpeedDownMbps: plan.fup_speed_down ?? undefined,
-            fupSpeedUpMbps: plan.fup_speed_up ?? undefined,
-          } : {}),
-          sharedUsers: plan.shared_users ?? 1,
-          preserveActiveSession: true,
-          resetCounters: false,
-        });
+        await measureReconnectStage("router_user_reconciliation", () =>
+          reconcileHotspotUserAccess(creds, {
+            name: username,
+            password,
+            profile: profileName,
+            server: hotspotRoamingUserServer(plan.router_id, routerId, hotspotServer),
+            ...(isCrossRouter ? { comment: roamingTag } : {}),
+            expiresAt: customer.expires_at,
+            enabled: customer.status === "active",
+            limitBytesTotal: plan.data_cap_mode === "throttle" ? "0" : localLimitBytes,
+            macAddress: requestedMac,
+            rateLimit: fupSpeedLimit ?? routerRateLimit(
+              plan.speed_down,
+              plan.speed_up,
+              plan.speed_down_unit ?? "Mbps",
+              plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
+            ),
+            dataCapMode: plan.data_cap_mode === "throttle" ? "throttle" : "disconnect",
+            ...(fupThresholdBytes !== undefined && fupSpeedLimit ? {
+              fupLimitBytes: fupThresholdBytes,
+              fupSpeedDownMbps: plan.fup_speed_down ?? undefined,
+              fupSpeedUpMbps: plan.fup_speed_up ?? undefined,
+            } : {}),
+            sharedUsers: plan.shared_users ?? 1,
+            preserveActiveSession: true,
+            resetCounters: false,
+          }),
+        );
       }
 
-      const activeUsers = await fetchHotspotUsers(creds);
+      const activeUsers = await measureReconnectStage(
+        "router_active_session_read",
+        () => fetchHotspotUsers(creds),
+      );
       const connected = activeUsers.some(user =>
         user.user === username && normalisePortalMac(user.macAddress) === requestedMac,
       );
       if (connected) return { kind: "connected" as const };
 
-      const discoveredIp = await resolveHotspotClientIpByMac(creds, requestedMac);
+      const discoveredIp = await measureReconnectStage(
+        "router_ip_discovery",
+        () => resolveHotspotClientIpByMac(creds, requestedMac),
+      );
       if (!discoveredIp) return { kind: "device-not-found" as const };
       if (portalScope && customer.type === "vlan" && discoveredIp !== customer.ip_address) {
         return { kind: "vlan-ip-mismatch" as const };
       }
 
       await assertLock();
-      const loginAccepted = await connectHotspotUser(creds, {
-        user: username,
-        password,
-        ip: customer.type === "vlan" ? String(customer.ip_address) : discoveredIp,
-        macAddress: requestedMac,
-        ...(targetScope ? { server: hotspotServer ?? "all" } : {}),
-      });
+      const loginAccepted = await measureReconnectStage(
+        "routeros_login_and_confirmation",
+        () => connectHotspotUser(creds, {
+          user: username,
+          password,
+          ip: customer.type === "vlan" ? String(customer.ip_address) : discoveredIp,
+          macAddress: requestedMac,
+          ...(targetScope ? { server: hotspotServer ?? "all" } : {}),
+        }),
+      );
       return loginAccepted ? { kind: "connected" as const } : { kind: "login-pending" as const };
-    });
+    }),
+    );
+    reconnectTimingOutcome = loginResult.kind;
     if (loginResult.kind === "depleted") {
       res.json({ ...response, status: "depleted", error: lookup.error });
       return;
@@ -2146,6 +2230,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       return;
     }
     if (loginResult.kind === "vlan-ip-mismatch") {
+      reconnectTimingOutcome = "vlan_ip_mismatch";
       res.status(409).json({
         ...response,
         ok: false,
@@ -2154,6 +2239,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       return;
     }
     if (loginResult.kind === "login-pending") {
+      reconnectTimingOutcome = "login_pending";
       res.status(503).json({
         ...response,
         ok: false,
@@ -2164,6 +2250,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
     }
     res.json({ ...response, connected: true });
   } catch (error) {
+    reconnectTimingOutcome = "router_error";
     logger.warn({ err: error, adminId, routerId, macAddress: requestedMac }, "[customers/hotspot-troubleshoot] router connection attempt failed");
     res.status(503).json({
       ...response,
