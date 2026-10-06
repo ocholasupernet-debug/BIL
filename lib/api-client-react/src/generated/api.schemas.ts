@@ -72,6 +72,25 @@ export interface Customer {
   createdAt: string;
 }
 
+export type HotspotReconnectResultStatus =
+  (typeof HotspotReconnectResultStatus)[keyof typeof HotspotReconnectResultStatus];
+
+export const HotspotReconnectResultStatus = {
+  connected: "connected",
+  already_connected: "already_connected",
+  device_not_found: "device_not_found",
+  not_eligible: "not_eligible",
+  session_limit: "session_limit",
+  depleted: "depleted",
+  router_rejected: "router_rejected",
+  router_unavailable: "router_unavailable",
+} as const;
+
+export interface HotspotReconnectResult {
+  status: HotspotReconnectResultStatus;
+  message: string;
+}
+
 export interface CreateCustomerBody {
   ispId: number;
   name: string;

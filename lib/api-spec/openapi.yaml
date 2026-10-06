@@ -209,6 +209,29 @@ paths:
         "204":
           description: Deleted
 
+  /customers/{id}/hotspot-reconnect:
+    post:
+      operationId: reconnectPrepaidHotspot
+      tags: [customers]
+      summary: Reconnect an entitled prepaid Hotspot device
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reconnect outcome
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HotspotReconnectResult"
+        "404":
+          description: Customer account not found
+        "503":
+          description: Router access could not be verified
+
   /plans:
     get:
       operationId: listPlans
@@ -593,6 +616,26 @@ components:
         - username
         - status
         - createdAt
+
+    HotspotReconnectResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - connected
+            - already_connected
+            - device_not_found
+            - not_eligible
+            - session_limit
+            - depleted
+            - router_rejected
+            - router_unavailable
+        message:
+          type: string
+      required:
+        - status
+        - message
 
     CreateCustomerBody:
       type: object

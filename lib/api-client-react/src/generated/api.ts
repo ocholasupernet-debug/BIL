@@ -24,6 +24,7 @@ import type {
   Customer,
   GenerateVouchersBody,
   HealthStatus,
+  HotspotReconnectResult,
   Isp,
   IspStats,
   ListCustomersParams,
@@ -877,6 +878,86 @@ export const useDeleteCustomer = <
   TContext
 > => {
   return useMutation(getDeleteCustomerMutationOptions(options));
+};
+
+/**
+ * @summary Reconnect an entitled prepaid Hotspot device
+ */
+export const getReconnectPrepaidHotspotUrl = (id: number) => {
+  return `/api/customers/${id}/hotspot-reconnect`;
+};
+
+export const reconnectPrepaidHotspot = async (
+  id: number,
+  options?: RequestInit,
+): Promise<HotspotReconnectResult> => {
+  return customFetch<HotspotReconnectResult>(getReconnectPrepaidHotspotUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getReconnectPrepaidHotspotMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof reconnectPrepaidHotspot>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof reconnectPrepaidHotspot>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["reconnectPrepaidHotspot"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof reconnectPrepaidHotspot>>,
+    { id: number }
+  > = ({ id }) => reconnectPrepaidHotspot(id, requestOptions);
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ReconnectPrepaidHotspotMutationResult = NonNullable<
+  Awaited<ReturnType<typeof reconnectPrepaidHotspot>>
+>;
+export type ReconnectPrepaidHotspotMutationError = ErrorType<unknown>;
+export type ReconnectPrepaidHotspotMutationVariables = { id: number };
+
+/**
+ * @summary Reconnect an entitled prepaid Hotspot device
+ */
+export const useReconnectPrepaidHotspot = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof reconnectPrepaidHotspot>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof reconnectPrepaidHotspot>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getReconnectPrepaidHotspotMutationOptions(options));
 };
 
 /**

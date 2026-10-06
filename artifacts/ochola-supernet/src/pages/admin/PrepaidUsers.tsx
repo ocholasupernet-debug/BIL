@@ -2,12 +2,13 @@ import React, { useState, useMemo } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
+import { useReconnectPrepaidHotspot, type HotspotReconnectResult } from "@workspace/api-client-react";
 import {
   Loader2, RefreshCw, Wifi, Network, Globe,
   Users, CheckCircle2, XCircle, Clock, AlertTriangle,
   ChevronDown, Filter, Download, UploadCloud, Eye,
   X, Phone, Mail, CalendarDays, Server, Edit3, PlusCircle,
-  Power, Trash2, MoreHorizontal, Database, Save,
+  Power, Trash2, MoreHorizontal, Database, Save, RotateCw,
 } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 import { fetchAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
@@ -376,10 +377,10 @@ async function syncUsersToRouter(
   log:    (m: string) => void,
 ): Promise<{ ok: boolean; syncUsers: SyncUserStatus[] | null }> {
   if (!router.host && !router.bridge_ip) {
-    log(`  ⚠ ${router.name}: no IP address — skipped`);
+    log(`  ${router.name}: no IP address — skipped`);
     return { ok: false, syncUsers: null };
   }
-  log(`\n▶ ${router.name}`);
+  log(`\n${router.name}`);
   const planMap = Object.fromEntries(plans.map(p => [p.id, p]));
   const payloadUsers = users.map(u => ({
     customer_id:  u.id,
@@ -401,7 +402,7 @@ async function syncUsersToRouter(
     expires_at:   u.expires_at || undefined,
   }));
   if (!payloadUsers.length) {
-    log("  ⚠ No users are assigned to this router.");
+    log("  No users are assigned to this router.");
     return { ok: false, syncUsers: null };
   }
 
@@ -443,8 +444,8 @@ async function syncUsersToRouter(
       if (Array.isArray(data.syncUsers)) syncedUsers.push(...data.syncUsers);
       if (data.ok !== true) allBatchesSucceeded = false;
     } catch (e) {
-      log(`  ✗ Batch ${batchIndex + 1}/${batchCount}: ${e instanceof Error ? e.message : e}`);
-      log("  ⚠ Sync stopped because this batch's final result is unknown; some router changes may already have applied.");
+      log(`  Batch ${batchIndex + 1}/${batchCount}: ${e instanceof Error ? e.message : e}`);
+      log("  Sync stopped because this batch's final result is unknown; some router changes may already have applied.");
       return { ok: false, syncUsers: syncedUsers.length ? syncedUsers : null };
     }
   }
@@ -866,6 +867,7 @@ function ExtendUserDialog({
 /* ══════════════════════════════ Page ══════════════════════════════ */
 export default function PrepaidUsers() {
   const qc = useQueryClient();
+  const reconnectMutation = useReconnectPrepaidHotspot();
 
   const { data: customers = [], isLoading } = useQuery<Customer[]>({
     queryKey: ["prepaid_customers", ADMIN_ID],
@@ -973,7 +975,20 @@ export default function PrepaidUsers() {
     });
     return usage;
   }, [liveQueries]);
-
+  const reconnectEligibleUsers = useMemo(() => displayCustomers.filter(user => {
+    const plan = user.plan_id ? planMap[user.plan_id] : null;
+    const routerId = user.router_id ?? plan?.router_id ?? null;
+    const normalizedMac = String(user.mac_address ?? "").toLowerCase().replace(/[^a-f0-9]/g, "");
+    return prepaidServiceType(user.type) === "hotspot"
+      && hasUnexpiredPaidAccess(user)
+      && !customerIsOnline(user, onlineUsers)
+      && Boolean(user.plan_id && plan && routerId && routerMap[routerId])
+      && normalizedMac.length === 12;
+  }), [displayCustomers, planMap, routerMap, onlineUsers]);
+  const reconnectEligibleIds = useMemo(
+    () => new Set(reconnectEligibleUsers.map(user => user.id)),
+    [reconnectEligibleUsers],
+  );
   /* ── UI state ── */
   const [search,      setSearch]      = useState("");
   const [statusTab,   setStatusTab]   = useState<StatusFilter>("all");
@@ -992,6 +1007,91 @@ export default function PrepaidUsers() {
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
   const [actionBusy, setActionBusy] = useState<number | null>(null);
+  const [reconnectingIds, setReconnectingIds] = useState<Set<number>>(() => new Set());
+  const [reconnectProgress, setReconnectProgress] = useState<{
+    completed: number;
+    total: number;
+    results: HotspotReconnectResult[];
+    running: boolean;
+  } | null>(null);
+  const reconnectOutcomes = useMemo(() => {
+    const results = reconnectProgress?.results ?? [];
+    return {
+      connected: results.filter(result => result.status === "connected" || result.status === "already_connected").length,
+      notVisible: results.filter(result => result.status === "device_not_found").length,
+      notEligible: results.filter(result => ["not_eligible", "session_limit", "depleted"].includes(result.status)).length,
+      routerErrors: results.filter(result => ["router_rejected", "router_unavailable"].includes(result.status)).length,
+    };
+  }, [reconnectProgress]);
+
+  async function refreshReconnectData() {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] }),
+      qc.invalidateQueries({ queryKey: ["prepaid_live"] }),
+    ]);
+  }
+
+  async function reconnectOne(user: DisplayCustomer) {
+    setActionError("");
+    setReconnectProgress({ completed: 0, total: 1, results: [], running: true });
+    setReconnectingIds(current => new Set(current).add(user.id));
+    try {
+      const result = await reconnectMutation.mutateAsync({ id: user.id });
+      setReconnectProgress({ completed: 1, total: 1, results: [result], running: false });
+    } catch (error) {
+      const result: HotspotReconnectResult = {
+        status: "router_unavailable",
+        message: error instanceof Error ? error.message : "The router could not be reached.",
+      };
+      setReconnectProgress({ completed: 1, total: 1, results: [result], running: false });
+    } finally {
+      setReconnectingIds(current => {
+        const next = new Set(current);
+        next.delete(user.id);
+        return next;
+      });
+      await refreshReconnectData();
+    }
+  }
+
+  async function reconnectAllEligible() {
+    // This snapshot comes from the complete grouped dataset, not the current
+    // search, status tab, router/package filter, or paginated rows.
+    const queue = [...reconnectEligibleUsers];
+    if (!queue.length) return;
+    setActionError("");
+    setReconnectProgress({ completed: 0, total: queue.length, results: [], running: true });
+    setReconnectingIds(new Set(queue.map(user => user.id)));
+    let nextIndex = 0;
+    const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+      while (nextIndex < queue.length) {
+        const user = queue[nextIndex++];
+        let result: HotspotReconnectResult;
+        try {
+          // Always send the newest canonical displayed customer id.
+          result = await reconnectMutation.mutateAsync({ id: user.id });
+        } catch (error) {
+          result = {
+            status: "router_unavailable",
+            message: error instanceof Error ? error.message : "The router could not be reached.",
+          };
+        }
+        setReconnectProgress(current => current ? ({
+          ...current,
+          completed: current.completed + 1,
+          results: [...current.results, result],
+        }) : current);
+        setReconnectingIds(current => {
+          const next = new Set(current);
+          next.delete(user.id);
+          return next;
+        });
+      }
+    });
+    await Promise.all(workers);
+    setReconnectProgress(current => current ? { ...current, running: false } : current);
+    await refreshReconnectData();
+  }
 
   /* Sync state */
   const [showSyncPicker,  setShowSyncPicker]  = useState(false);
@@ -1134,7 +1234,7 @@ export default function PrepaidUsers() {
       plans,
       log,
     );
-    log(result.ok ? "\n✅ Sync complete." : "\n⚠ Sync finished with errors.");
+    log(result.ok ? "\nSync complete." : "\nSync finished with errors.");
     setSyncOk(result.ok);
     setSyncUserStatuses(result.syncUsers);
     setSyncing(false);
@@ -1247,10 +1347,23 @@ export default function PrepaidUsers() {
         .prepaid-plain-status--online::before{background:var(--isp-green)}
         .prepaid-plain-status--offline::before{background:#c66b5f}
         .prepaid-table-shell th,.prepaid-table-shell td{border-right:1px solid var(--isp-border)}
+        .prepaid-reconnect-report{border:1px solid var(--isp-accent-border);border-radius:10px;background:color-mix(in srgb,var(--isp-card) 94%,var(--isp-accent));padding:12px 14px}
+        .prepaid-reconnect-counts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}
+        .prepaid-reconnect-count{border:1px solid var(--isp-border);border-radius:7px;background:var(--isp-inner-card);padding:8px 10px;min-width:0}
+        .prepaid-reconnect-count strong{display:block;font-size:1rem;color:var(--isp-text)}
+        .prepaid-reconnect-count span{display:block;margin-top:2px;color:var(--isp-text-muted);font-size:.66rem;line-height:1.3}
+        .prepaid-reconnect-progress{height:5px;margin-top:10px;border-radius:8px;overflow:hidden;background:var(--isp-border)}
+        .prepaid-reconnect-progress span{display:block;height:100%;background:var(--isp-accent);transition:width .2s ease}
+        .prepaid-reconnect-detail{margin:8px 0 0;color:var(--isp-text-muted);font-size:.72rem;line-height:1.45}
+        .prepaid-reconnect-button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:27px;padding:4px 8px;border:1px solid var(--isp-accent-border);border-radius:6px;background:var(--isp-accent-glow);color:var(--isp-accent-strong);font:700 .68rem inherit;cursor:pointer;white-space:nowrap}
+        .prepaid-reconnect-button:hover:not(:disabled){background:var(--isp-accent);color:#fff}
+        .prepaid-reconnect-button:disabled{opacity:.55;cursor:wait}
+        .prepaid-reconnect-button:focus-visible{outline:2px solid var(--isp-accent);outline-offset:2px}
         @media(max-width:1150px){.prepaid-table-shell .prepaid-col-optional{display:none}.prepaid-table-shell table{min-width:820px!important}}
         @media(max-width:900px){.prepaid-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media(max-width:520px){.prepaid-filter-grid{grid-template-columns:1fr}.prepaid-recharge-picker{position:static;width:auto;margin-top:10px}}
         @media(max-width:680px){.prepaid-form-grid{grid-template-columns:1fr}.prepaid-table-shell{margin-right:-16px;border-right:0;border-radius:10px 0 0 10px}}
+        @media(max-width:600px){.prepaid-reconnect-counts{grid-template-columns:repeat(2,minmax(0,1fr))}}
       `}</style>
 
       {actionError && (
@@ -1314,6 +1427,25 @@ export default function PrepaidUsers() {
             </p>
           </div>
 
+          <button
+            type="button"
+            onClick={() => void reconnectAllEligible()}
+            disabled={reconnectEligibleUsers.length === 0 || Boolean(reconnectProgress?.running) || reconnectingIds.size > 0}
+            aria-label={`Reconnect all eligible offline Hotspot devices, ${reconnectEligibleUsers.length} available`}
+            title="Processes all eligible grouped Hotspot identities, regardless of the active filters or page."
+            style={{
+              ...BTN(reconnectEligibleUsers.length ? "var(--isp-green)" : "var(--isp-border)", reconnectEligibleUsers.length ? "#fff" : "var(--isp-text-muted)"),
+              opacity: reconnectEligibleUsers.length && !reconnectProgress?.running && reconnectingIds.size === 0 ? 1 : 0.65,
+              cursor: reconnectEligibleUsers.length && !reconnectProgress?.running && reconnectingIds.size === 0 ? "pointer" : "not-allowed",
+            }}
+          >
+            {reconnectProgress?.running ? <Loader2 size={13} className="prepaid-spin" /> : <RotateCw size={13} />}
+            Reconnect offline Hotspots
+            <span style={{ borderRadius: 999, padding: "1px 6px", background: "rgba(255,255,255,.18)", fontSize: ".65rem" }}>
+              {reconnectEligibleUsers.length}
+            </span>
+          </button>
+
           {/* Sync by Router */}
           <div style={{ position: "relative" }}>
             <button onClick={() => setShowSyncPicker(v => !v)} disabled={syncing}
@@ -1336,7 +1468,7 @@ export default function PrepaidUsers() {
                   <option value="">— choose —</option>
                   {routers.map(r => (
                     <option key={r.id} value={r.id}>
-                      {r.name} {r.status === "online" ? "🟢" : "🔴"}
+                      {r.name} · {r.status === "online" ? "Online" : "Offline"}
                     </option>
                   ))}
                 </select>
@@ -1393,6 +1525,50 @@ export default function PrepaidUsers() {
             </div>
           ))}
         </div>
+
+        {reconnectProgress && (
+          <section className="prepaid-reconnect-report" aria-labelledby="prepaid-reconnect-title" aria-live="polite">
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
+                <h2 id="prepaid-reconnect-title" style={{ margin: 0, fontSize: ".82rem", fontWeight: 800, color: "var(--isp-text)" }}>
+                  {reconnectProgress.running ? "Reconnecting Hotspot devices" : "Reconnect operation complete"}
+                </h2>
+                <p style={{ margin: "3px 0 0", color: "var(--isp-text-muted)", fontSize: ".7rem" }}>
+                  {reconnectProgress.completed} of {reconnectProgress.total} canonical account{reconnectProgress.total === 1 ? "" : "s"} processed
+                  {reconnectProgress.running ? " · up to 3 router operations at once" : ""}
+                </p>
+              </div>
+              {!reconnectProgress.running && (
+                <button type="button" onClick={() => setReconnectProgress(null)} style={iconButton("#64748b")} aria-label="Dismiss reconnect results">
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+            {reconnectProgress.running && (
+              <div
+                className="prepaid-reconnect-progress"
+                role="progressbar"
+                aria-label="Hotspot reconnect progress"
+                aria-valuemin={0}
+                aria-valuemax={reconnectProgress.total}
+                aria-valuenow={reconnectProgress.completed}
+              >
+                <span style={{ width: `${reconnectProgress.total ? reconnectProgress.completed / reconnectProgress.total * 100 : 0}%` }} />
+              </div>
+            )}
+            <div className="prepaid-reconnect-counts">
+              <div className="prepaid-reconnect-count"><strong>{reconnectOutcomes.connected}</strong><span>Connected / already connected</span></div>
+              <div className="prepaid-reconnect-count"><strong>{reconnectOutcomes.notVisible}</strong><span>Device not visible on router</span></div>
+              <div className="prepaid-reconnect-count"><strong>{reconnectOutcomes.notEligible}</strong><span>Not eligible, quota, or session limit</span></div>
+              <div className="prepaid-reconnect-count"><strong>{reconnectOutcomes.routerErrors}</strong><span>Router errors</span></div>
+            </div>
+            {reconnectProgress.results.length > 0 && (
+              <p className="prepaid-reconnect-detail">
+                Latest result: {reconnectProgress.results[reconnectProgress.results.length - 1].message}
+              </p>
+            )}
+          </section>
+        )}
 
         {/* ── Sync log ── */}
         {syncLogs && (
@@ -1633,6 +1809,19 @@ export default function PrepaidUsers() {
                        </td>
                       <td style={{ ...TD, textAlign: "center" }}>
                         <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          {reconnectEligibleIds.has(user.id) && (
+                            <button
+                              type="button"
+                              className="prepaid-reconnect-button"
+                              title="Reconnect this entitled Hotspot device"
+                              aria-label={`Reconnect Hotspot device for ${username}`}
+                              onClick={() => void reconnectOne(user)}
+                              disabled={reconnectingIds.has(user.id) || Boolean(reconnectProgress?.running) || actionBusy === user.id}
+                            >
+                              {reconnectingIds.has(user.id) ? <Loader2 size={12} className="prepaid-spin" /> : <RotateCw size={12} />}
+                              <span className="prepaid-reconnect-label">Reconnect</span>
+                            </button>
+                          )}
                           <button title="Edit user" aria-label={`Edit ${username}`} onClick={() => setEditingUser(user)} disabled={actionBusy === user.id}
                             style={{ ...iconButton("#60a5fa"), opacity: actionBusy === user.id ? 0.5 : 1 }}><Edit3 size={13} /></button>
                           <button title="Extend access" aria-label={`Extend ${username}`} onClick={() => setExtendingUser(user)} disabled={actionBusy === user.id}

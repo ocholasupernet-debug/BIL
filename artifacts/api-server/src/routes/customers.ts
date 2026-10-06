@@ -78,6 +78,15 @@ import { customerStatusForExpiryEdit } from "../lib/customer-expiry-edit.js";
 
 const router: IRouter = Router();
 
+export const prepaidHotspotReconnectOperations = {
+  withCustomerEditLock,
+  fetchHotspotUsers,
+  fetchHotspotUserUsage,
+  resolveHotspotClientIpByMac,
+  reconcileHotspotUserAccess,
+  connectHotspotUser,
+};
+
 type CustomerRow = {
   id: number;
   admin_id: number;
@@ -284,6 +293,33 @@ function routerCredentials(row: RouterRow) {
       ? [ROUTER_MANAGEMENT_API_USERNAME]
       : undefined,
     bridgeIp: managementIp && managementIp !== host ? managementIp : undefined,
+    connectTimeoutMs: 10_000,
+    requestTimeoutMs: 12_000,
+  };
+}
+
+function hotspotReconnectRouterCredentials(row: RouterRow) {
+  const storedManagementIp = [row.vpn_ip, row.bridge_ip].find(isManagementVpnIp)?.trim() || "";
+  const vpnClients = readVpnClients();
+  const discoveredCandidate = vpnIpFor(row.host ?? "", vpnClients)
+    ?? vpnIpFor(row.name ?? "", vpnClients)
+    ?? "";
+  const discoveredManagementIp = isManagementVpnIp(discoveredCandidate)
+    ? discoveredCandidate.trim()
+    : "";
+  const host = discoveredManagementIp || storedManagementIp;
+  if (!host) throw new Error(`Router '${row.name}' has no verified management VPN address`);
+  const username = ROUTER_MANAGEMENT_API_USERNAME;
+  return {
+    host,
+    port: 8728,
+    username,
+    password: row.router_secret || "",
+    alternateUsernames: row.router_username && row.router_username !== username
+      ? [row.router_username]
+      : undefined,
+    bridgeIp: undefined,
+    useSSL: false,
     connectTimeoutMs: 10_000,
     requestTimeoutMs: 12_000,
   };
@@ -657,6 +693,258 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
   }
   const rows = await sbSelect("isp_customers", `admin_id=eq.${adminId}&select=*`);
   res.json(rows);
+});
+
+router.post("/customers/:id/hotspot-reconnect", requireAdmin(), async (req, res): Promise<void> => {
+  const sessionAdminId = authenticatedAdminId(req);
+  const customerId = positivePortalId(req.params.id);
+  if (!sessionAdminId || !customerId) {
+    res.status(400).json({ error: "A valid signed-in account and customer ID are required." });
+    return;
+  }
+  const account = await authenticatedAccount(req);
+  if (!account) {
+    res.status(401).json({ error: "A valid signed-in account is required." });
+    return;
+  }
+
+  const customerFilter =
+    `id=eq.${customerId}&admin_id=eq.${sessionAdminId}&select=id,admin_id,name,mac_address,username,password,type,plan_id,router_id,port_id,ip_address,status,expires_at,fup_limit_mb,depletion_reason&limit=1`;
+  const initialRows = await sbSelectStrict<CustomerRow>("isp_customers", customerFilter);
+  const initial = initialRows[0];
+  if (!initial) {
+    res.status(404).json({ error: "Prepaid Hotspot account not found." });
+    return;
+  }
+
+  try {
+    const result = await prepaidHotspotReconnectOperations.withCustomerEditLock(
+      initial.admin_id,
+      customerId,
+      async assertLock => {
+      await assertLock();
+      const customer = (await sbSelectStrict<CustomerRow>("isp_customers", customerFilter))[0];
+      if (!customer) {
+        return { status: "not_eligible" as const, message: "This prepaid Hotspot account no longer exists." };
+      }
+      if (normalizePlanServiceType(customer.type) !== "hotspot") {
+        return { status: "not_eligible" as const, message: "Reconnect is available for Hotspot accounts only." };
+      }
+      if (!isPrepaidCustomerEntitled(
+        customer.status,
+        customer.expires_at,
+        customer.depletion_reason,
+        Date.now(),
+      )) {
+        return {
+          status: "not_eligible" as const,
+          message: "This account is suspended, expired, or has exhausted its package data.",
+        };
+      }
+      const username = String(customer.username ?? "").trim();
+      const password = String(customer.password ?? "");
+      const macAddress = normalisePortalMac(customer.mac_address);
+      const planId = positivePortalId(customer.plan_id);
+      if (!username || !password || !macAddress || !planId) {
+        return {
+          status: "not_eligible" as const,
+          message: "This account is missing its Hotspot login, device MAC, or package assignment.",
+        };
+      }
+
+      const plan = await loadScopedCustomerPlan(
+        account,
+        planId,
+        "hotspot",
+        customer.router_id ?? undefined,
+        customer.port_id ?? undefined,
+        true,
+      );
+      if (
+        !plan
+        || normalizePlanServiceType(plan.type) !== "hotspot"
+        || (customer.router_id !== null && customer.router_id !== plan.router_id)
+        || (customer.port_id !== null && customer.port_id !== plan.port_id)
+        || !plan.router_id
+      ) {
+        return {
+          status: "not_eligible" as const,
+          message: "The account's Hotspot package or router assignment could not be verified.",
+        };
+      }
+
+      const tenantId = account.parent_id ?? account.id;
+      const routerRow = (await sbSelectStrict<RouterRow>(
+        "isp_routers",
+        `id=eq.${plan.router_id}&admin_id=eq.${tenantId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+      ))[0];
+      if (!routerRow) {
+        return { status: "router_unavailable" as const, message: "The account's Hotspot router could not be found." };
+      }
+      const creds = hotspotReconnectRouterCredentials(routerRow);
+
+      let hotspotServer: string | undefined;
+      if (plan.port_id) {
+        const portOwnerFilter = account.role === "reseller"
+          ? `&assigned_reseller_id=eq.${account.id}&handoff_mode=eq.vlan_services`
+          : "&assigned_reseller_id=is.null";
+        const port = (await sbSelectStrict<VlanPortRow>(
+          "isp_reseller_ports",
+          `id=eq.${plan.port_id}&admin_id=eq.${tenantId}&router_id=eq.${plan.router_id}${portOwnerFilter}&status=eq.active&hotspot_enabled=is.true&select=id,admin_id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag,subnet_range,status,hotspot_enabled,link_status&limit=1`,
+        ))[0];
+        if (!port) {
+          return {
+            status: "not_eligible" as const,
+            message: "The account's assigned Hotspot service port is not active.",
+          };
+        }
+        hotspotServer = portServiceResourceNames(port).hotspotServer;
+      }
+
+      const activeUsers = await prepaidHotspotReconnectOperations.fetchHotspotUsers(creds);
+      const userSessions = activeUsers.filter(user => user.user === username);
+      if (userSessions.some(user => normalisePortalMac(user.macAddress) === macAddress)) {
+        return { status: "already_connected" as const, message: "This device already has an active Hotspot session." };
+      }
+      const maxSessions = Math.max(1, Math.floor(Number(plan.shared_users) || 1));
+      if (userSessions.length >= maxSessions) {
+        return {
+          status: "session_limit" as const,
+          message: `This account is already using its ${maxSessions}-device limit on another device.`,
+        };
+      }
+
+      const clientIp = await prepaidHotspotReconnectOperations.resolveHotspotClientIpByMac(creds, macAddress);
+      if (!clientIp || !isValidIpv4(clientIp)) {
+        return {
+          status: "device_not_found" as const,
+          message: "The router cannot see this device yet. Connect it to the Hotspot Wi-Fi, then retry.",
+        };
+      }
+
+      const rawLimitMb = Number(customer.fup_limit_mb ?? plan.data_limit_mb);
+      const dataLimitMb = Number.isFinite(rawLimitMb) && rawLimitMb > 0 ? rawLimitMb : null;
+      const dataPolicy = dataLimitMb === null
+        ? null
+        : validateFupPolicy(
+          plan.type,
+          dataLimitMb,
+          plan.data_cap_mode ?? "disconnect",
+          plan.fup_speed_down,
+          plan.fup_speed_up,
+          plan.speed_down,
+          plan.speed_up,
+          plan.speed_down_unit,
+          plan.speed_up_unit,
+        );
+      const capBytes = dataLimitMb === null ? null : dataLimitMegabytesToBytes(dataLimitMb);
+      let limitBytesTotal = "0";
+      let fupLimitBytes: number | undefined;
+      if (capBytes !== null) {
+        const usage = await loadSharedRoamingUsage(
+          tenantId,
+          plan,
+          username,
+          plan.router_id,
+          {
+            credentialsForRouter: hotspotReconnectRouterCredentials,
+            fetchUsage: prepaidHotspotReconnectOperations.fetchHotspotUserUsage,
+          },
+        );
+        const allowance = sharedHotspotUsageAllowance(
+          capBytes,
+          usage.totalBytes,
+          usage.targetRouterBytes,
+        );
+        if (dataPolicy?.dataCapMode === "throttle") {
+          fupLimitBytes = Math.max(1, allowance.targetFupThresholdBytes);
+        } else {
+          limitBytesTotal = String(allowance.targetRouterLimitBytes);
+          if (usage.totalBytes >= capBytes) {
+            await assertLock();
+            await prepaidHotspotReconnectOperations.reconcileHotspotUserAccess(creds, {
+              name: username,
+              password,
+              profile: hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id),
+              ...(hotspotServer ? { server: hotspotServer } : {}),
+              expiresAt: customer.expires_at,
+              enabled: false,
+              limitBytesTotal,
+              macAddress,
+              resetCounters: false,
+            });
+            await assertLock();
+            await sbUpdateStrict(
+              "isp_customers",
+              `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}&select=id`,
+              { status: "expired", depletion_reason: "data_limit" },
+            );
+            return {
+              status: "depleted" as const,
+              message: "This package has used its full data allowance and has been disabled.",
+            };
+          }
+        }
+      }
+
+      await assertLock();
+      await prepaidHotspotReconnectOperations.reconcileHotspotUserAccess(creds, {
+        name: username,
+        password,
+        profile: hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id),
+        ...(hotspotServer ? { server: hotspotServer } : {}),
+        preserveActiveSession: true,
+        comment: username,
+        expiresAt: customer.expires_at,
+        enabled: true,
+        limitBytesTotal,
+        address: clientIp,
+        macAddress,
+        rateLimit: routerRateLimit(
+          plan.speed_down,
+          plan.speed_up,
+          plan.speed_down_unit ?? "Mbps",
+          plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
+        ),
+        ...(dataPolicy
+          ? {
+              dataCapMode: dataPolicy.dataCapMode,
+              ...(dataPolicy.dataCapMode === "throttle" && fupLimitBytes !== undefined
+                ? {
+                    fupLimitBytes,
+                    fupSpeedDownMbps: dataPolicy.fupSpeedDown ?? undefined,
+                    fupSpeedUpMbps: dataPolicy.fupSpeedUp ?? undefined,
+                  }
+                : {}),
+            }
+          : {}),
+        sharedUsers: plan.shared_users ?? 1,
+        resetCounters: false,
+      });
+      await assertLock();
+      const connected = await prepaidHotspotReconnectOperations.connectHotspotUser(creds, {
+        user: username,
+        password,
+        ip: clientIp,
+        macAddress,
+        ...(hotspotServer ? { server: hotspotServer } : {}),
+      });
+      return connected
+        ? { status: "connected" as const, message: "The device reconnected to the Hotspot." }
+        : {
+            status: "router_rejected" as const,
+            message: "The router restored the account but did not confirm a connection. Retry after checking the device.",
+          };
+      },
+    );
+    res.json(result);
+  } catch (error) {
+    logger.warn({ err: error, adminId: sessionAdminId, customerId }, "[customers/hotspot-reconnect] failed");
+    res.status(503).json({
+      error: "Could not safely reconnect this device. Check the account and router connection, then retry.",
+      status: "router_unavailable",
+    });
+  }
 });
 
 router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
@@ -1361,6 +1649,10 @@ async function loadSharedRoamingUsage(
   plan: PlanRow,
   username: string,
   targetRouterId: number,
+  options: {
+    credentialsForRouter?: (row: RouterRow) => ReturnType<typeof routerCredentials>;
+    fetchUsage?: typeof fetchHotspotUserUsage;
+  } = {},
 ): Promise<{ totalBytes: number; targetRouterBytes: number; routerIds: number[] }> {
   if (!plan.router_id) throw new Error("The purchased package has no source MikroTik.");
   const historicalRules = await sbSelectStrict<RoamingRuleRow>(
@@ -1386,7 +1678,10 @@ async function loadSharedRoamingUsage(
   }
   const usageRows = await Promise.all(routers.map(async row => ({
     routerId: row.id,
-    usage: await fetchHotspotUserUsage(routerCredentials(row), username),
+    usage: await (options.fetchUsage ?? fetchHotspotUserUsage)(
+      (options.credentialsForRouter ?? routerCredentials)(row),
+      username,
+    ),
   })));
   const sourceUsage = usageRows.find(row => row.routerId === plan.router_id);
   if (!sourceUsage?.usage) {

@@ -7,6 +7,12 @@ A successful runner build, archive copy, healthy API endpoint, or updated fronte
 
 Before deploying, identify the latest successful VPS workflow run's `head_branch` and `head_sha`, then compare that complete tree with the workspace. A manual deployment can run from a feature branch while `main` remains behind. Merge the deployed release into the workspace before updating `main`; otherwise a normal push can roll production back.
 
+Direct SSH releases do not appear in GitHub Actions history. A direct release records source identity and build checksums in the VPS project's `.deployment-release.json`; do not assume the newest successful Actions run is still the live release.
+
+**Why:** Direct delivery can advance the VPS without advancing GitHub refs. Deploying an older repository tree afterward can remove live fixes, and the direct-release marker can itself become stale after another archive deployment.
+
+**How to apply:** Compare actual deployed source files and build checksums with the marker before treating it as current. Preserve the verified live application changes when reconciling a later GitHub release. Keep a pre-release application backup, preserve runtime secrets, and suppress unrelated RouterOS actions for an application-only deployment.
+
 During branch reconciliation, pause preview processes that generate tracked files and recheck the branch head and working tree after switching. Automatic checkpoints can create a new commit between an earlier clean-status check and the merge.
 
 If the management VPN bootstrap reports `TUNSETIFF` with “Device or resource busy,” treat it as an interface ownership conflict. A healthy compatibility `openvpn@` unit may already own the management TUN while a duplicate `openvpn-server@` instance fails; verify its config, address, and listener before changing units.
