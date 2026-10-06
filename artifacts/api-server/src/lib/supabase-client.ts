@@ -192,7 +192,23 @@ export async function sbRpc<T>(
     },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(`Supabase RPC ${functionName} failed: ${res.status}`);
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const body = await res.json() as { code?: unknown; message?: unknown };
+      detail = [body.code, body.message]
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .map(value => value.trim().replace(/\s+/g, " "))
+        .join(" — ")
+        .slice(0, 400);
+    } catch {
+      // Keep the status-only failure if Supabase did not return JSON.
+    }
+    throw new SupabaseHttpError(
+      `Supabase RPC ${functionName} failed (HTTP ${res.status})${detail ? `: ${detail}` : "."}`,
+      res.status,
+    );
+  }
   return res.json() as Promise<T[]>;
 }
 /** UPDATE rows matching `filterQuery`. Returns updated rows. */

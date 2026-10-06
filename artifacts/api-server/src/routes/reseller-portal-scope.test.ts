@@ -234,6 +234,7 @@ test("signed reseller portal requests stay within their assigned service", async
   let customers: Record<string, unknown>[] = [];
   let legacyCheckout = false;
   let includeRouterFixture = false;
+  let failHotspotTransactionNoteWrites = false;
   let requireConcurrentAccountClaims = false;
   let concurrentAccountClaimCalls = 0;
   let accountClaimCreations = 0;
@@ -317,6 +318,19 @@ test("signed reseller portal requests stay within their assigned service", async
       : undefined;
     const request: DbRequest = { table, method, query, rawQuery: url.search.slice(1), ...(body ? { body } : {}) };
     dbRequests.push(request);
+
+    if (
+      failHotspotTransactionNoteWrites
+      && table === "isp_transactions"
+      && method === "PATCH"
+      && typeof body?.notes === "string"
+      && body.notes.includes("prepaid hotspot account saved")
+    ) {
+      return new Response(JSON.stringify({
+        code: "TEST_NOTE_WRITE_FAILED",
+        message: "Simulated transaction note write failure",
+      }), { status: 500, headers: { "Content-Type": "application/json" } });
+    }
 
     let rows: Record<string, unknown>[] = [];
     if (table === "claim_prepaid_hotspot_transaction_account" && method === "POST" && body) {
@@ -885,7 +899,7 @@ test("signed reseller portal requests stay within their assigned service", async
     }
   });
 
-  await t.test("paid account is saved before an unavailable router can block activation", async () => {
+  await t.test("paid account remains saved when its status note fails before router activation", async () => {
     const routerUnavailableTransaction = {
       ...assignedTransaction,
       id: 705,
@@ -897,6 +911,7 @@ test("signed reseller portal requests stay within their assigned service", async
     routerOperations.length = 0;
     clearRequests();
     includeRouterFixture = false;
+    failHotspotTransactionNoteWrites = true;
     try {
       const activation = await request("/api/mpesa/hotspot-mac-access", {
         method: "POST",
@@ -908,6 +923,7 @@ test("signed reseller portal requests stay within their assigned service", async
       assert.equal(activation.status, 503, await activation.clone().text());
       const body = await activation.json() as { error?: string };
       assert.match(body.error ?? "", /prepaid account is saved/i);
+      assert.match(body.error ?? "", /router is not reachable/i);
       assert.equal(customers.length, 1, "a confirmed payment must create its prepaid account despite router downtime");
       assert.equal(routerUnavailableTransaction.customer_id, customers[0]?.id);
 
@@ -917,6 +933,7 @@ test("signed reseller portal requests stay within their assigned service", async
       assert.ok(routerLookupIndex > accountClaimIndex, "claim the paid account before looking up RouterOS");
       assert.deepEqual(routerOperations, [], "router work must not run before the account claim");
     } finally {
+      failHotspotTransactionNoteWrites = false;
       includeRouterFixture = false;
     }
   });

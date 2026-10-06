@@ -2997,17 +2997,27 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
       }
     }
     if (!customer?.id) throw new Error("The paid hotspot customer account could not be saved.");
-
-    await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
-      notes: "M-Pesa payment verified; prepaid hotspot account saved and awaiting router access.",
-    });
   } catch (error) {
-    logger.error({ err: error, checkoutId, routerId: plan.router_id, mac }, "[mpesa/hotspot-mac-access] prepaid account persistence failed");
+    logger.error(
+      { err: error, transactionId: transaction.id, routerId: plan.router_id },
+      "[mpesa/hotspot-mac-access] prepaid account persistence failed",
+    );
     res.status(503).json({
       ok: false,
       error: "Payment is confirmed, but the prepaid account could not be saved. Please retry connection.",
     });
     return;
+  }
+
+  try {
+    await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
+      notes: "M-Pesa payment verified; prepaid hotspot account saved and awaiting router access.",
+    });
+  } catch (error) {
+    logger.warn(
+      { err: error, transactionId: transaction.id, customerId: customer.id },
+      "[mpesa/hotspot-mac-access] prepaid account saved; transaction status note update failed",
+    );
   }
 
   const routers = await sbSelect<{
