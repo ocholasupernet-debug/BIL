@@ -658,7 +658,7 @@ export default function Multiport() {
                 </Field>
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button type="submit" disabled={saving || unassigning || portsLoading || !selectedPortKey} style={{ border: 0, borderRadius: 9, minHeight: 41, padding: "0 16px", color: "#fff", background: "var(--isp-accent)", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <button type="submit" disabled={saving || deploying || unassigning || portsLoading || !selectedPortKey} style={{ border: 0, borderRadius: 9, minHeight: 41, padding: "0 16px", color: "#fff", background: "var(--isp-accent)", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>
                   {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} {saving ? "Saving…" : selectedAssignment ? "Save configuration" : "Assign & save port"}
                 </button>
                 <button type="button" onClick={() => void deploy()} disabled={deploying || saving || unassigning || !selectedAssignment} style={{ border: "1px solid var(--isp-border)", borderRadius: 9, minHeight: 41, padding: "0 16px", color: "var(--isp-text)", background: "transparent", fontWeight: 850, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 8 }}>

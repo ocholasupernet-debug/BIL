@@ -13,6 +13,7 @@ import {
   readRouterSystemIdentity,
   RouterFileExistsError,
   runRouterCommand,
+  runRouterCommands,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
 import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authorization.js";
@@ -22,6 +23,7 @@ import { getDeployableSource } from "../lib/portal-assets.js";
 import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
 import { findEmbeddedHotspotConfig } from "../lib/hotspot-portal-deploy.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
+import { buildHotspotChatWalledGardenCommands } from "../lib/hotspot-chat-walled-garden.js";
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
 import {
   portServiceResourceNames,
@@ -515,6 +517,7 @@ export function buildDualServiceCommands(
         )}`,
       ]);
     });
+    commands.push(...buildHotspotChatWalledGardenCommands(resources.hotspotServer));
   }
   if (hotspotPath || pppoePath) {
     if (hotspotPath) {
@@ -644,6 +647,7 @@ function buildVlanServiceCommands(
     ].filter((value): value is string => Boolean(value)))]) {
       commands.push(["/ip/hotspot/walled-garden/ip/add", `=dst-host=${hostname}`, "=action=accept", `=comment=${comment("walled_garden")}`]);
     }
+    commands.push(...buildHotspotChatWalledGardenCommands(resources.hotspotServer));
   }
   if (hotspotPath || pppoePath || port.handoff_mode === "vlan_services") {
     commands.push([

@@ -24,9 +24,18 @@ export async function prepareIspHotspotAsset(
     "isp_plans",
     `admin_id=eq.${scope.adminId}&router_id=eq.${scope.routerId}&port_id=is.null&owner_reseller_id=is.null&type=in.(hotspot,trials,trial)&is_active=is.true&client_can_purchase=is.true&select=id,name,price,validity,validity_unit&order=price.asc,name.asc`,
   );
+  const branding = await select<{ settings?: unknown }>(
+    "isp_hotspot_branding",
+    `admin_id=eq.${scope.adminId}&select=settings&limit=1`,
+  );
+  const brandingSettings = branding[0]?.settings;
+  const tawkEnabled = !!brandingSettings
+    && typeof brandingSettings === "object"
+    && !Array.isArray(brandingSettings)
+    && (brandingSettings as Record<string, unknown>).tawkEnabled === true;
   const config = JSON.stringify({
     adminId: scope.adminId, routerId: scope.routerId, portId: 0,
-    apiBase: origin.origin, plans,
+    apiBase: origin.origin, plans, tawkEnabled,
   }).replace(/</g, "\\u003c");
   return Buffer.from(html.replace(/<\/head>/i,
     () => `<script>window.__HOTSPOT_CONFIG__=${config};</script>\n</head>`));

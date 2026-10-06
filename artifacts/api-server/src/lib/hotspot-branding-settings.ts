@@ -3,7 +3,7 @@ const SAFE_SETTINGS = new Set([
   "mpesaPrompt", "testimonials", "faqSection", "logoUrl", "advertUrl", "announcement",
   "paymentInstructions", "supportPhone", "supportEmail", "whatsappNumber", "termsUrl",
   "privacyUrl", "maintenanceMode", "maintenanceMessage", "testimonialText", "faqText", "colors",
-  "portalCards", "portalLayout",
+  "portalCards", "portalLayout", "tawkEnabled",
 ]);
 
 const SAFE_PORTAL_CARD_KEYS = new Set([
@@ -41,6 +41,8 @@ export function sanitizeHotspotBrandingSettings(value: unknown): Record<string, 
       // customer checkout visible without requiring a MikroTik file update.
       cards.packages = true;
       output.portalCards = cards;
+    } else if (key === "tawkEnabled") {
+      if (typeof item === "boolean") output.tawkEnabled = item;
     } else if (key === "portalLayout") {
       if (typeof item === "string" && SAFE_PORTAL_LAYOUTS.has(item)) output.portalLayout = item;
     } else if (typeof item === "string" && item.length <= 2_000_000) {

@@ -32,6 +32,7 @@ import {
   fetchRouterFiles,
   ensureRouterFileDirectory,
   runRouterCommand,
+  runRouterCommands,
   fetchRouterSecurityState,
   deployRouterFile,
   syncHotspotPortalHostname,
@@ -67,7 +68,7 @@ import {
   routerManagementBackupIp,
   routerManagementVpnPortForRouter,
 } from "../lib/router-management-vpn.js";
-import { validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
+import { findEmbeddedHotspotConfig, validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
 import { selectUniqueActiveHotspotServer } from "../lib/hotspot-portal-target.js";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
@@ -82,6 +83,7 @@ import {
 import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authorization.js";
 import { validateRouterTakeoverMainhotspot } from "../lib/router-takeover-template.js";
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
+import { planHotspotChatWalledGardenAdds } from "../lib/hotspot-chat-walled-garden.js";
 
 const router: IRouter = Router();
 
@@ -1600,6 +1602,10 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
     .replaceAll("\\", "/")
     .replace(/^\/+|\/+$/g, "");
   const portal = validateGeneratedHotspotPortal(req.body?.html);
+  const portalConfig = typeof req.body?.html === "string"
+    ? findEmbeddedHotspotConfig(req.body.html)?.config
+    : null;
+  const enableTawk = portalConfig?.tawkEnabled === true && Number(portalConfig.portId ?? 0) <= 0;
 
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
   if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
@@ -1620,6 +1626,34 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
   if (!found) {
     res.status(404).json({ error: "Router not found or not assigned to this administrator" });
     return;
+  }
+
+  let walledGarden = {
+    rulesAdded: 0,
+    rulesAlreadyAllowed: 0,
+    conflicts: [] as string[],
+  };
+  if (enableTawk) {
+    try {
+      const existingEntries = await runRouterCommand(found.creds, [
+        "/ip/hotspot/walled-garden/print",
+        "=.proplist=server,dst-host,action,disabled,comment",
+      ]);
+      const plan = planHotspotChatWalledGardenAdds(existingEntries);
+      if (plan.commands.length) await runRouterCommands(found.creds, plan.commands);
+      walledGarden = {
+        rulesAdded: plan.commands.length,
+        rulesAlreadyAllowed: plan.alreadyAllowed.length,
+        conflicts: plan.conflicts,
+      };
+      if (plan.conflicts.length) {
+        logger.warn({ routerId: id, adminId, conflicts: plan.conflicts }, "Existing Hotspot deny rules prevent some Tawk destinations");
+      }
+    } catch (err) {
+      logger.warn({ err, routerId: id, adminId }, "Unable to add Tawk Hotspot walled-garden rules");
+      routerErrorResponse(res, err);
+      return;
+    }
   }
 
   cleanPendingRouterFileSources();
@@ -1678,6 +1712,10 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
         { destinationPath: result.destinationPath, size: result.size, replaced: result.replaced },
         { destinationPath: roamingResult.destinationPath, size: roamingResult.size, replaced: roamingResult.replaced },
       ],
+      walledGarden,
+      warnings: walledGarden.conflicts.length
+        ? [`Existing Hotspot deny rules are still blocking: ${walledGarden.conflicts.join(", ")}. Those rules were left unchanged.`]
+        : [],
       source: { name: "generated login.html and rlogin.html", type: "hotspot", generated: true },
     });
   } catch (err) {

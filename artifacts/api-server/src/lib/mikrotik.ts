@@ -19,6 +19,7 @@ import {
 } from "./router-https-trust.js";
 import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "./payment-walled-garden.js";
+import { renderHotspotChatWalledGardenRules } from "./hotspot-chat-walled-garden.js";
 import {
   legacySharedHotspotResourceNames,
   SHARED_HOTSPOT_POOL_NAME,
@@ -6972,6 +6973,9 @@ ${walledGardenHostnames.map(hostname => `:if ([:len [/ip hotspot walled-garden i
 }`).join("\n")}`);
   }
 
+  blocks.push(`# Allow the chat widget only on this isolated Hotspot server
+${renderHotspotChatWalledGardenRules(hotspotServer)}`);
+
   blocks.push(`# 6. Isolated PPPoE pool, profile, and server
 ${ownedOrConflict(
   "coexistPppoePool",
@@ -7221,6 +7225,7 @@ export function generateServiceSetupScript(
     :error $serviceError
 }`).join("\n")
     : `:put "${tag}: no portal hostname was supplied; walled-garden host entries were not added."`;
+  const chatWalledGardenSetup = renderHotspotChatWalledGardenRules();
   const queueSetup = maxPortSpeedMbps === undefined
     ? `:put "${tag}: no aggregate queue speed was supplied; existing bandwidth policy was preserved."`
     : `# Optional, tagged hierarchy for this shared service wire.
@@ -7433,6 +7438,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name=($hsdir . "/login.html")]]
     :do { remove [find where comment~${routerOsString(`${tag} walled garden `)}] } on-error={}
     :do { remove [find where comment~${routerOsString(`${tag} payment walled garden `)}] } on-error={}
     ${walledGardenSetup}
+    ${chatWalledGardenSetup}
 } on-error={
     :set serviceStepFailed true
     :local serviceStepError $error

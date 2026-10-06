@@ -37,6 +37,11 @@ assert.doesNotMatch(
 );
 assert.match(output, /data-portal-layout="classic"/);
 assert.match(output, /\/api\/public\/hotspot-branding/);
+assert.match(
+  output,
+  /window\.location\.hostname === "ocholasupernet\.isplatty\.org"&&config&&config\.tawkEnabled===true/,
+  "Tawk.to must be opt-in and restricted to the OcholaSupernet portal hostname",
+);
 assert.doesNotMatch(
   output,
   /function applyPortalLayout\s*\(|applyPortalLayout\s*\(|data\.portalLayout|hotspot-portal-layout-runtime|\/hotspot\/portal-layouts\.css/,

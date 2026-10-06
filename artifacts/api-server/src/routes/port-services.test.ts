@@ -58,6 +58,9 @@ test("a port service gets isolated Hotspot and PPPoE resources", () => {
   assert.match(script, /dst-host=come\.isplatty\.org/);
   assert.match(script, /dst-host=api\.safaricom\.co\.ke/);
   assert.match(script, /comment=[^ \n]*payment_walled_garden/);
+  assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=\*\.tawk\.to =action=allow =comment=Allow tawk\.to Chat Engine/);
+  assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=\*\.tawk\.link =action=allow =comment=Allow tawk\.to Calling Assets/);
+  assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=ocholasupernet\.isplatty\.org =action=allow =comment=Allow OcholaSupernet Portal Domain/);
   assert.match(script, /address=192\.168\.30\.1\/24/);
   assert.match(script, /target=192\.168\.30\.0\/24 =parent=SERVICE_ROOT_router-3-ether2/);
   assert.match(script, /\/ip\/firewall\/filter\/add =chain=input =in-interface=router-3-ether2-bridge =protocol=udp =dst-port=53/);
@@ -86,6 +89,9 @@ test("custom portal hostnames are included in both physical-port and VLAN walled
   for (const commands of [physicalCommands, vlanCommands]) {
     const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
     assert.match(script, /dst-host=ocholasupernet\.com/);
+    assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=\*\.tawk\.to =action=allow =comment=Allow tawk\.to Chat Engine/);
+    assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=\*\.tawk\.link =action=allow =comment=Allow tawk\.to Calling Assets/);
+    assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=ocholasupernet\.isplatty\.org =action=allow =comment=Allow OcholaSupernet Portal Domain/);
   }
 });
 

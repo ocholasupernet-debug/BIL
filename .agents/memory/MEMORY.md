@@ -25,6 +25,7 @@
 - [Hotspot purchase login handoff](hotspot-purchase-login-handoff.md) — Provision verified purchases server-side, then let the RouterOS portal sign in normal devices; TV purchases and explicit retries stay direct.
 - [Hotspot private portal DNS](hotspot-private-dns.md) — Advertise only the MikroTik gateway DNS when the portal hostname is internal; public fallback causes NXDOMAIN before login.
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
+- [Hotspot chat setting](hotspot-chat-setting.md) — Control Tawk visibility from saved Hotspot Settings and sync through the normal portal flow, not a Multiport bulk action.
 - [Hotspot roaming allowance](hotspot-roaming-allowance.md) — Share one package data allowance across explicitly permitted routers and retain revoked destinations for historical accounting.
 - [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
 - [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.
@@ -87,6 +88,7 @@
 - [ISP-owned port services](isp-owned-port-services.md) — Legacy port rows require reseller_id; ISP-owned multiport rows use the tenant owner while assigned_reseller_id stays empty.
 - [Reseller direct payment routing](reseller-direct-payment-routing.md) — Resolve the merchant from the active tenant-scoped assigned port; never fall back silently or trust browser reseller IDs.
 - [Captive portal recovery and appearance](captive-portal-recovery-appearance.md) — Keep hotspot recovery server-side and carry tenant appearance through generated router-served portal exports.
+- [Portal branding load order](portal-branding-load-order.md) — Apply each tenant’s saved company name as soon as branding loads, without waiting for typography.
 - [Hotspot preview plan source](hotspot-preview-plan-source.md) — Local previews must keep embedded plans and skip empty live API refreshes; deployed portals retain live scoped refresh.
 - [Hotspot template macro contract](hotspot-template-macro-contract.md) — Keep required RouterOS tokens in exported templates, even when local fallbacks make the preview readable.
 - [Reseller Daraja bridge](reseller-daraja-bridge.md) — Use global encrypted Daraja credentials; reseller rows hold only destinations and callback settlement credits earnings atomically.

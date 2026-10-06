@@ -5,6 +5,7 @@ import { sanitizeHotspotBrandingSettings } from "./hotspot-branding-settings.js"
 test("keeps only allowlisted boolean hotspot card visibility settings", () => {
   const sanitized = sanitizeHotspotBrandingSettings({
     ispName: "Example ISP",
+    tawkEnabled: true,
     unknownSetting: "discard",
     portalCards: {
       header: false,
@@ -16,6 +17,7 @@ test("keeps only allowlisted boolean hotspot card visibility settings", () => {
 
   assert.deepEqual(sanitized, {
     ispName: "Example ISP",
+    tawkEnabled: true,
     portalCards: {
       header: false,
       packages: true,
@@ -51,4 +53,10 @@ test("keeps only supported portal layout values", () => {
     sanitizeHotspotBrandingSettings({ portalLayout: "unknown-layout" }),
     {},
   );
+});
+
+test("accepts only boolean Tawk enablement values", () => {
+  assert.deepEqual(sanitizeHotspotBrandingSettings({ tawkEnabled: true }), { tawkEnabled: true });
+  assert.deepEqual(sanitizeHotspotBrandingSettings({ tawkEnabled: false }), { tawkEnabled: false });
+  assert.deepEqual(sanitizeHotspotBrandingSettings({ tawkEnabled: "true" }), {});
 });
