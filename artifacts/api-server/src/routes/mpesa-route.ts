@@ -2797,101 +2797,6 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     ? "0"
     : String(dataLimitMegabytesToBytes(capForPolicy));
 
-  const routers = await sbSelect<{
-    id: number;
-    name: string;
-    host: string;
-    bridge_ip: string | null;
-    vpn_ip: string | null;
-    router_username: string | null;
-    router_secret: string | null;
-  }>(
-    "isp_routers",
-    `id=eq.${plan.router_id}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
-  );
-  const routerRow = routers[0];
-  if (!routerRow || (!routerRow.host && !routerRow.bridge_ip && !routerRow.vpn_ip)) {
-    res.status(503).json({ ok: false, error: "The hotspot router is not reachable from the ISP server." });
-    return;
-  }
-
-  let credentialRouterRow = routerRow;
-  if (forceRouterRetry) {
-    const refreshedRouters = await sbSelect<typeof routerRow>(
-      "isp_routers",
-      `id=eq.${plan.router_id}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
-    );
-    credentialRouterRow = refreshedRouters[0] ?? routerRow;
-  }
-  let credentials: RouterCredentials;
-  try {
-    credentials = hotspotRouterCredentials(credentialRouterRow, {
-      forceManagementVpn: forceRouterRetry,
-    });
-  } catch (error) {
-    const diagnosis = logRouterConnectionFailure(
-      error,
-      {
-        checkoutId,
-        routerId: credentialRouterRow.id,
-        router: credentialRouterRow.name,
-        retry: forceRouterRetry,
-      },
-      "[mpesa/hotspot-mac-access] RouterOS retry preflight failed",
-    );
-    res.status(503).json({
-      ok: false,
-      error: `${diagnosis.userMessage} Keep this page open and retry account setup when the router is online.`,
-    });
-    return;
-  }
-  const routerAddressPromise = hotspotPaymentOperations.resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
-    logger.warn({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] target device address lookup failed");
-    return null;
-  });
-  let hotspotServer: string | undefined;
-  if (plan.port_id) {
-    let port: HotspotPortContext | null;
-    try {
-      port = await loadHotspotPortContext(adminId, plan.router_id, plan.port_id, portalScope?.resellerId);
-    } catch (error) {
-      logger.warn({ err: error, checkoutId, planId: plan.id, portId: plan.port_id }, "[mpesa/hotspot-mac-access] hotspot port unavailable");
-      res.status(409).json({ ok: false, error: "The selected package's Hotspot port is not deployed or enabled yet." });
-      return;
-    }
-    if (!port) {
-      res.status(409).json({ ok: false, error: "The selected package's Hotspot port could not be found." });
-      return;
-    }
-    const companyName = await loadTenantCompanyName(adminId);
-    const livePort = portalScope
-      ? await loadHotspotPortContext(adminId, plan.router_id, plan.port_id, portalScope.resellerId)
-      : port;
-    if (!livePort) {
-      res.status(409).json({ ok: false, error: "The reseller Hotspot port assignment changed before activation." });
-      return;
-    }
-    const resources = hotspotPortResources(livePort, {
-      companyName,
-      routerName: routerRow.name,
-    });
-    try {
-      await hotspotPaymentOperations.ensureHotspotServerAddressPool(credentials, {
-        serverName: resources.serverName,
-        poolName: resources.poolName,
-        poolRanges: resources.poolRanges,
-        comment: `${resources.poolName}_hotspot_pool`,
-      });
-      hotspotServer = resources.serverName;
-    } catch (error) {
-      logger.warn({ err: error, checkoutId, router: routerRow.name, portId: plan.port_id, server: resources.serverName, pool: resources.poolName }, "[mpesa/hotspot-mac-access] hotspot server or pool unavailable");
-      res.status(503).json({
-        ok: false,
-        error: `The Hotspot service for this port is not ready on ${routerRow.name}. Deploy the port service, then retry connection.`,
-      });
-      return;
-    }
-  }
   const paymentPhone = normaliseKenyanPhone(String(transaction.payment_phone ?? ""));
   if (!isKenyanMobileNumber(paymentPhone)) {
     res.status(409).json({ ok: false, error: "The paid checkout has no valid Kenyan purchase phone number." });
@@ -2990,7 +2895,6 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
   }
   let hotspotPassword = "12345";
   let isSameCheckoutRetry = !!reusableCustomer && transaction.customer_id === reusableCustomer.id;
-  const routerAddress = (await routerAddressPromise) ?? "";
   const existingExpiry = reusableCustomer?.expires_at ? Date.parse(reusableCustomer.expires_at) : 0;
   let expiresAt = isSameCheckoutRetry
     ? new Date(existingExpiry)
@@ -3008,7 +2912,7 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     port_id: plan.port_id,
     type: "hotspot",
     mac_address: mac,
-    ip_address: routerAddress || null,
+    ip_address: null,
     status: "active",
      depletion_reason: null,
     expires_at: expiresAt.toISOString(),
@@ -3095,15 +2999,139 @@ router.post("/mpesa/hotspot-mac-access", async (req: Request, res: Response): Pr
     if (!customer?.id) throw new Error("The paid hotspot customer account could not be saved.");
 
     await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
-      notes: `M-Pesa payment verified; prepaid hotspot account saved and awaiting router access on ${routerRow.name}.`,
+      notes: "M-Pesa payment verified; prepaid hotspot account saved and awaiting router access.",
     });
   } catch (error) {
-    logger.error({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] prepaid account persistence failed");
+    logger.error({ err: error, checkoutId, routerId: plan.router_id, mac }, "[mpesa/hotspot-mac-access] prepaid account persistence failed");
     res.status(503).json({
       ok: false,
       error: "Payment is confirmed, but the prepaid account could not be saved. Please retry connection.",
     });
     return;
+  }
+
+  const routers = await sbSelect<{
+    id: number;
+    name: string;
+    host: string;
+    bridge_ip: string | null;
+    vpn_ip: string | null;
+    router_username: string | null;
+    router_secret: string | null;
+  }>(
+    "isp_routers",
+    `id=eq.${plan.router_id}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+  );
+  const routerRow = routers[0];
+  if (!routerRow || (!routerRow.host && !routerRow.bridge_ip && !routerRow.vpn_ip)) {
+    logger.warn({ checkoutId, routerId: plan.router_id, customerId: customer.id }, "[mpesa/hotspot-mac-access] paid account saved; router is unavailable");
+    res.status(503).json({
+      ok: false,
+      error: "Payment is confirmed and the prepaid account is saved, but the hotspot router is not reachable. Retry Account Setup when it is online.",
+    });
+    return;
+  }
+
+  let credentialRouterRow = routerRow;
+  if (forceRouterRetry) {
+    const refreshedRouters = await sbSelect<typeof routerRow>(
+      "isp_routers",
+      `id=eq.${plan.router_id}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    );
+    credentialRouterRow = refreshedRouters[0] ?? routerRow;
+  }
+  let credentials: RouterCredentials;
+  try {
+    credentials = hotspotRouterCredentials(credentialRouterRow, {
+      forceManagementVpn: forceRouterRetry,
+    });
+  } catch (error) {
+    const diagnosis = logRouterConnectionFailure(
+      error,
+      {
+        checkoutId,
+        routerId: credentialRouterRow.id,
+        router: credentialRouterRow.name,
+        retry: forceRouterRetry,
+      },
+      "[mpesa/hotspot-mac-access] RouterOS retry preflight failed",
+    );
+    res.status(503).json({
+      ok: false,
+      error: `Payment is confirmed and the prepaid account is saved. ${diagnosis.userMessage} Keep this page open and retry account setup when the router is online.`,
+    });
+    return;
+  }
+  const routerAddressPromise = hotspotPaymentOperations.resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
+    logger.warn({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] target device address lookup failed");
+    return null;
+  });
+  let hotspotServer: string | undefined;
+  if (plan.port_id) {
+    let port: HotspotPortContext | null;
+    try {
+      port = await loadHotspotPortContext(adminId, plan.router_id, plan.port_id, portalScope?.resellerId);
+    } catch (error) {
+      logger.warn({ err: error, checkoutId, planId: plan.id, portId: plan.port_id }, "[mpesa/hotspot-mac-access] hotspot port unavailable");
+      res.status(503).json({
+        ok: false,
+        error: "Payment is confirmed and the prepaid account is saved, but the package's Hotspot port is not available. Retry Account Setup after it is restored.",
+      });
+      return;
+    }
+    if (!port) {
+      res.status(503).json({
+        ok: false,
+        error: "Payment is confirmed and the prepaid account is saved, but the package's Hotspot port could not be found. Retry Account Setup after it is restored.",
+      });
+      return;
+    }
+    const companyName = await loadTenantCompanyName(adminId);
+    const livePort = portalScope
+      ? await loadHotspotPortContext(adminId, plan.router_id, plan.port_id, portalScope.resellerId)
+      : port;
+    if (!livePort) {
+      res.status(503).json({
+        ok: false,
+        error: "Payment is confirmed and the prepaid account is saved, but the reseller Hotspot port assignment changed. Retry Account Setup after it is restored.",
+      });
+      return;
+    }
+    const resources = hotspotPortResources(livePort, {
+      companyName,
+      routerName: routerRow.name,
+    });
+    try {
+      await hotspotPaymentOperations.ensureHotspotServerAddressPool(credentials, {
+        serverName: resources.serverName,
+        poolName: resources.poolName,
+        poolRanges: resources.poolRanges,
+        comment: `${resources.poolName}_hotspot_pool`,
+      });
+      hotspotServer = resources.serverName;
+    } catch (error) {
+      logger.warn({ err: error, checkoutId, router: routerRow.name, portId: plan.port_id, server: resources.serverName, pool: resources.poolName }, "[mpesa/hotspot-mac-access] hotspot server or pool unavailable");
+      res.status(503).json({
+        ok: false,
+        error: `Payment is confirmed and the prepaid account is saved, but the Hotspot service for this port is not ready on ${routerRow.name}. Deploy the port service, then retry Account Setup.`,
+      });
+      return;
+    }
+  }
+  const routerAddress = (await routerAddressPromise) ?? "";
+  if (routerAddress && customer?.id) {
+    try {
+      const updatedCustomer = await sbUpdateStrict(
+        "isp_customers",
+        `id=eq.${customer.id}&admin_id=eq.${customerAdminId}`,
+        { ip_address: routerAddress },
+      );
+      if (!updatedCustomer.length) {
+        throw new Error("The paid Hotspot customer's IP address could not be updated.");
+      }
+    } catch (error) {
+      logger.warn({ err: error, checkoutId, customerId: customer.id }, "[mpesa/hotspot-mac-access] device IP persistence deferred");
+    }
   }
 
   try {
