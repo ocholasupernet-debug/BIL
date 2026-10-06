@@ -11,6 +11,15 @@ test("classifies an unreachable RouterOS API port as a TCP timeout", () => {
   assert.equal(diagnosis.summary, "TCP Timeout (Port 8728 blocked/unreachable)");
 });
 
+test("classifies RouterOS timeout-connecting errors as a TCP timeout", () => {
+  const diagnosis = classifyRouterConnectionFailure(
+    new Error("failure: timeout connecting"),
+  );
+
+  assert.equal(diagnosis.profile, "tcp_timeout");
+  assert.equal(diagnosis.summary, "TCP Timeout (Port 8728 blocked/unreachable)");
+});
+
 test("classifies RouterOS login rejection even when the host is a VPN address", () => {
   const diagnosis = classifyRouterConnectionFailure(
     new Error("RouterOS API login failed for 10.8.5.6 (VPN tunnel)"),

@@ -21,6 +21,7 @@ import {
   testConnection,
   probeAllHosts,
   probePort,
+  classifyRouterConnectionFailure,
   generateOvpnClientConfig,
   generateRouterManagementVpnScript,
   generateNetworkSetupScript,
@@ -704,21 +705,19 @@ async function getRouterCredsByHost(host: string): Promise<RouterCredentials | n
 /* ─── Graceful offline error ─────────────────────────────────────────────── */
 function routerErrorResponse(res: import("express").Response, err: unknown): void {
   const msg = err instanceof Error ? err.message : String(err);
+  const normalizedMessage = msg.toLowerCase();
+  const connectionFailure = classifyRouterConnectionFailure(err);
   const isOffline =
-    msg.includes("timed out") ||
-    msg.includes("ECONNREFUSED") ||
-    msg.includes("ETIMEDOUT") ||
-    msg.includes("EHOSTUNREACH") ||
-    msg.includes("ENOTFOUND") ||
-    msg.includes("Cannot reach router");
+    connectionFailure.profile === "tcp_timeout" ||
+    connectionFailure.profile === "offline_vpn_tunnel" ||
+    normalizedMessage.includes("enotfound") ||
+    normalizedMessage.includes("cannot reach router");
   logger.warn({ err: msg }, "MikroTik API error");
   if (isOffline) {
     res.status(503).json({
       error:    "Router is offline or unreachable",
       detail:   msg,
-      hint:     "Ensure the router's public IP is set, API port 8728/8729 is open, " +
-                "and the VPS IP is allowed in the router's firewall. " +
-                 "If behind NAT, configure the router-management VPN and set vpn_ip.",
+      hint:     "Check that the router's management VPN is connected, its saved VPN address matches the active tunnel, and the RouterOS API is reachable through that VPN. Do not expose API ports 8728/8729 to the public Internet.",
     });
   } else {
     res.status(500).json({ error: "MikroTik API error", detail: msg });
