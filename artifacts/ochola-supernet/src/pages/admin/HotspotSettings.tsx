@@ -1240,6 +1240,8 @@ export default function HotspotSettings() {
     }
     setSaving(true);
     setNotice(null);
+    let brandingSavedOnServer = false;
+    let routerSyncStarted = false;
     try {
       localStorage.setItem(storageKey, JSON.stringify(settings));
       const brandingResponse = await fetch("/api/admin/hotspot-branding", {
@@ -1249,6 +1251,7 @@ export default function HotspotSettings() {
       });
       const brandingData = await parseApiResponse<{ ok?: boolean }>(brandingResponse, "Hotspot branding could not be saved.");
       if (!brandingResponse.ok) throw new Error(brandingData.error || "Hotspot branding could not be saved.");
+      brandingSavedOnServer = true;
       await savePreferences({
         ...preferences,
         portalBackground,
@@ -1259,6 +1262,7 @@ export default function HotspotSettings() {
         if (!selectedPort) {
           throw new Error("Choose an assigned Hotspot service before syncing.");
         }
+        routerSyncStarted = true;
         if (!await saveAssignedPort(selectedPort)) return;
         setSaved(true);
         window.setTimeout(() => setSaved(false), 2500);
@@ -1292,6 +1296,7 @@ export default function HotspotSettings() {
         if (token) headers.set("Authorization", `Bearer ${token}`);
         if (role === "superadmin") headers.set("X-Impersonated-Admin-Id", String(adminId));
 
+        routerSyncStarted = true;
         const response = await fetch(`/api/router/${routerId}/hotspot-portal/deploy`, {
           method: "POST",
           headers,
@@ -1303,14 +1308,14 @@ export default function HotspotSettings() {
             destinationDirectory: "flash/hotspot",
           }),
         });
-        let data: { error?: string; detail?: string; destinationPath?: string; warnings?: string[] } = {};
+        let data: { error?: string; detail?: string; hint?: string; destinationPath?: string; warnings?: string[] } = {};
         try {
           data = await response.json();
         } catch {
           /* Use the HTTP status below when the server did not return JSON. */
         }
         if (!response.ok) {
-          const serverMessage = [data.error, data.detail]
+          const serverMessage = [data.error, data.detail, data.hint]
             .filter((value, index, values): value is string => Boolean(value) && values.indexOf(value) === index)
             .join(": ");
           throw new Error(serverMessage || `Portal refresh failed (HTTP ${response.status})`);
@@ -1327,9 +1332,21 @@ export default function HotspotSettings() {
       setNotice({ type: "success", text: noticeText });
       window.setTimeout(() => setSaved(false), 2500);
     } catch (error) {
-      setNotice({ type: "error", text: "Settings could not be saved in this browser. Check available storage and try again." });
-      if (error instanceof Error && error.message !== "Failed to fetch") {
-        setNotice({ type: "error", text: error.message });
+      const errorMessage = error instanceof Error
+        ? error.message
+        : "An unexpected error occurred.";
+      if (brandingSavedOnServer) {
+        const prefix = routerSyncStarted
+          ? "Hotspot settings were saved, but the MikroTik sync failed."
+          : "Hotspot portal settings were saved, but a later step failed.";
+        setNotice({ type: "error", text: `${prefix} ${errorMessage}` });
+      } else {
+        setNotice({
+          type: "error",
+          text: errorMessage === "Failed to fetch"
+            ? "Hotspot settings could not be saved because the server could not be reached. Try again when the connection is available."
+            : errorMessage,
+        });
       }
     } finally {
       setSaving(false);
