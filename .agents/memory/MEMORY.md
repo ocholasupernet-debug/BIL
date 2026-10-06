@@ -115,3 +115,6 @@
 - [RouterOS WiFi menu compatibility](routeros-wifi-menu.md) — Fall back to `/interface/wifi` for inventory, but keep its distinct configuration model read-only until writes are verified.
 - [Admin-confirmed bridge moves](admin-confirmed-bridge-moves.md) — Show and recheck the live source bridge; move an interface only after admin confirmation.
 - [M-Pesa receipt identity](mpesa-transaction-reference.md) — Show the verified Safaricom receipt to admins; retain CheckoutRequestID for callback and status correlation.
+- [Hotspot extender topology](hotspot-extender-topology.md) — OCHOLASUPERNET is a router/NAT extender; an upstream MikroTik hosts Hotspot and may not see each client identity.
+- [Customer status totals](customer-status-totals.md) — Keep Dashboard and Customers active/expired counts aligned to effective access, not raw status or total records.
+- [New plan validity default](new-plan-validity-default.md) — Start newly created packages at Minutes while preserving the saved unit when editing existing plans.

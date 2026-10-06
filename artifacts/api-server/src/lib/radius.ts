@@ -437,6 +437,17 @@ async function strictUpsertRadCheck(
   }
 }
 
+/** Update only the concurrency controls when an admin changes a Hotspot plan's share limit. */
+export async function syncRadiusHotspotSharingStrict(
+  username: string,
+  sharedUsers: number,
+): Promise<void> {
+  const requested = Number(sharedUsers);
+  const limit = String(Math.max(1, Math.floor(Number.isFinite(requested) ? requested : 1)));
+  await strictUpsertRadCheck(username, "Simultaneous-Use", limit);
+  await strictUpsertRadCheck(username, "Port-Limit", limit);
+}
+
 async function strictDeleteRadCheck(username: string, attribute: string): Promise<void> {
   await sbDeleteStrict("radcheck", `username=eq.${enc(username)}&attribute=eq.${enc(attribute)}`);
 }

@@ -42,6 +42,7 @@ import {
 import { fmtMoney, getCurrencySymbol } from "@/lib/utils";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 import { transactionDisplayId } from "@/lib/transaction-reference";
+import { getCustomerServiceStatus } from "@/lib/customer-service-status";
 
 type LiveCounts = { hotspot: number; pppoe: number; vlan: number | null };
 type RevenueSummary = {
@@ -155,12 +156,6 @@ function routerOnline(router: DbRouter): boolean {
     && Date.now() - lastSeen <= ROUTER_HEARTBEAT_MAX_AGE_MS;
 }
 
-function customerIsExpired(expiresAt: string | null | undefined): boolean {
-  if (!expiresAt) return false;
-  const timestamp = new Date(expiresAt).getTime();
-  return Number.isFinite(timestamp) && timestamp < Date.now();
-}
-
 function fmtSince(iso: string | null | undefined): string {
   if (!iso) return "";
   const date = new Date(iso);
@@ -184,12 +179,19 @@ async function fetchRouters(): Promise<DbRouter[]> {
   return data ?? [];
 }
 
-type CustomerBasic = { id: number; type: string | null; status: string; created_at: string; expires_at: string | null };
+type CustomerBasic = {
+  id: number;
+  type: string | null;
+  status: string;
+  created_at: string;
+  expires_at: string | null;
+  depletion_reason: string | null;
+};
 
 async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
   const { data, error } = await supabase
     .from("isp_customers")
-    .select("id, type, status, created_at, expires_at")
+    .select("id, type, status, created_at, expires_at, depletion_reason")
     .eq("admin_id", ADMIN_ID);
   if (error) throw error;
   return data ?? [];
@@ -530,8 +532,8 @@ export default function Dashboard() {
     result.isError || (result.data !== undefined && result.data.vlan === null),
   );
   const onlineStaticUsers = customers.filter((customer) => customer.type === "static" && customer.status === "active").length;
-  const activeUsers = customers.filter((customer) => customer.status === "active" && !customerIsExpired(customer.expires_at)).length;
-  const expiredUsers = customers.filter((customer) => customer.status === "expired" || customerIsExpired(customer.expires_at)).length;
+  const activeUsers = customers.filter((customer) => getCustomerServiceStatus(customer) === "active").length;
+  const expiredUsers = customers.filter((customer) => getCustomerServiceStatus(customer) === "expired").length;
   const totalOnlineNow = onlineHotspotUsers + onlinePppoeUsers + onlineVlanUsers + onlineStaticUsers;
   const liveCountLoading = liveCountResults.some((result) => result.isLoading);
   const totalOnlineValue = vlanCountUnavailable
@@ -651,7 +653,7 @@ export default function Dashboard() {
           <StatMiniCard label="Hotspot online" value={liveCountLoading && onlineHotspotUsers === 0 ? "…" : String(onlineHotspotUsers)} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="deep-teal" />
           <StatMiniCard label="VLAN users online" value={liveCountLoading && onlineVlanUsers === 0 && !vlanCountUnavailable ? "…" : onlineVlanValue} href="/admin/customers?type=vlan" icon={<Wifi size={16} />} tone="indigo" />
           <StatMiniCard label="Static online" value={customersLoading ? "…" : String(onlineStaticUsers)} href="/admin/customers?type=static" icon={<Server size={16} />} tone="green" />
-          <StatMiniCard label="Active / expired users" value={customersLoading ? "…" : `${activeUsers}/${expiredUsers}`} href="/admin/customers" icon={<CircleCheck size={16} />} tone="amber" />
+          <StatMiniCard label="Active / expired accounts" value={customersLoading ? "…" : `${activeUsers}/${expiredUsers}`} href="/admin/customers" icon={<CircleCheck size={16} />} tone="amber" />
            <StatMiniCard label="Active resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.activeResellers ?? 0)} href="/admin/network/resellers" icon={<Users size={16} />} tone="accent" />
            <StatMiniCard label="Online resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.onlineResellers ?? 0)} href="/admin/network/resellers" icon={<Wifi size={16} />} tone="teal" />
         </section>

@@ -3,6 +3,7 @@ import { RouterOSAPI } from "node-routeros";
 import { readVpnClients, syncIppEntry, vpnIpFor, VPN_STATUS_PATHS } from "../lib/vpn-status";
 import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
 import { sbSelect, sbSelectStrict } from "../lib/supabase-client.js";
+import { syncRadiusHotspotSharingStrict } from "../lib/radius.js";
 import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
 import {
   ROUTER_MANAGEMENT_API_USERNAME,
@@ -581,9 +582,11 @@ router.post("/admin/sync", async (req, res): Promise<void> => {
    }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void> => {
-  let { host, bridgeIp, username, password, routerId, plans } = req.body as {
+  let { host, bridgeIp, username, password, routerId, plans, syncExistingUsers, skipLegacyCleanup } = req.body as {
     host: string; bridgeIp?: string; username: string; password: string;
     routerId?: number;
+    syncExistingUsers?: boolean;
+    skipLegacyCleanup?: boolean;
     plans: Array<{
       id: number; name: string; type: string;
       router_id?: number | null; port_id?: number | null;
@@ -728,7 +731,7 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
           log(`  ❌ ${enrichPermErr(e, username)}`);
           skipped++;
         }
-      } else if (plan.type === "hotspot" || plan.type === "trials") {
+      } else if (plan.type === "hotspot" || plan.type === "trials" || plan.type === "trial") {
         /* ── Hotspot user profile ── */
          log(`▶ Hotspot profile: ${profileName} | pool: ${activeIpPool || "none"} | rate-limit: ${rateLimit} | session: ${sessionTime} | shared: ${plan.shared_users}`);
         try {
@@ -741,6 +744,41 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
           });
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
+          if (syncExistingUsers === true) {
+            try {
+              const customerRows = await sbSelectStrict<{ username: string | null }>(
+                "isp_customers",
+                `admin_id=eq.${tenantId}&plan_id=eq.${plan.id}&select=username&limit=5000`,
+              );
+              const usernames = [...new Set(
+                customerRows
+                  .map(customer => String(customer.username ?? "").trim())
+                  .filter(Boolean),
+              )];
+              let synced = 0;
+              let failed = 0;
+              for (let offset = 0; offset < usernames.length; offset += 10) {
+                const batch = usernames.slice(offset, offset + 10);
+                const results = await Promise.allSettled(
+                  batch.map(name => syncRadiusHotspotSharingStrict(
+                    name,
+                    Math.max(1, Math.floor(Number(plan.shared_users ?? 1) || 1)),
+                  )),
+                );
+                for (const result of results) {
+                  if (result.status === "fulfilled") synced++;
+                  else failed++;
+                }
+              }
+              log(`  ✓ RADIUS share limit updated for ${synced} existing account(s)`);
+              if (failed > 0) {
+                log(`  ❌ RADIUS share-limit update failed for ${failed} existing account(s)`);
+              }
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error);
+              log(`  ❌ Existing account RADIUS share limits could not be synchronized: ${message}`);
+            }
+          }
         } catch (e) {
           log(`  ❌ ${enrichPermErr(e, username)}`);
           skipped++;
@@ -751,7 +789,11 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
       }
     }
 
-    await cleanupLegacyPlanProfiles(conn, scopedPlans, log);
+    if (skipLegacyCleanup === true) {
+      log("  — Skipped legacy profile cleanup for targeted plan sync");
+    } else {
+      await cleanupLegacyPlanProfiles(conn, scopedPlans, log);
+    }
     await conn.write(["/log/info", `=message=OcholaNet: Synced ${created + updated} plan profiles`]);
     log(`\n✅ Done — ${created} created, ${updated} updated, ${skipped} skipped`);
     conn.close();

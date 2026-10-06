@@ -367,6 +367,8 @@ async function fetchPayments(customerIds: number[]): Promise<Payment[]> {
 }
 
 /* ══════════════════════════════ Sync ══════════════════════════════ */
+const SYNC_USERS_BATCH_SIZE = 5;
+
 async function syncUsersToRouter(
   router: Router,
   users:  Customer[],
@@ -379,56 +381,75 @@ async function syncUsersToRouter(
   }
   log(`\n▶ ${router.name}`);
   const planMap = Object.fromEntries(plans.map(p => [p.id, p]));
-  const payload = {
-    adminId: ADMIN_ID,
-    routerId: router.id,
-    users: users.map(u => ({
-      customer_id:  u.id,
-      router_id:    u.router_id ?? (u.plan_id ? planMap[u.plan_id]?.router_id : undefined),
-      username:     u.type === "hotspot" ? purchaseUsername(u) : (u.pppoe_username || u.username || ""),
-      password:     u.password || "",
-      type:         u.type || "hotspot",
-      status:       u.status,
-      plan_id:      u.plan_id || undefined,
-      mac_address:  u.mac_address || undefined,
-      plan_name:    u.plan_id ? planMap[u.plan_id]?.name : "",
-      ip_address:   u.ip_address || undefined,
-      speed_down:   u.plan_id ? planMap[u.plan_id]?.speed_down : undefined,
-      speed_up:     u.plan_id ? planMap[u.plan_id]?.speed_up : undefined,
-      speed_down_unit: u.plan_id ? planMap[u.plan_id]?.speed_down_unit || "Mbps" : "Mbps",
-      speed_up_unit: u.plan_id ? planMap[u.plan_id]?.speed_up_unit || "Mbps" : "Mbps",
-      data_limit_mb: u.fup_limit_mb ?? (u.plan_id ? planMap[u.plan_id]?.data_limit_mb : undefined),
-      shared_users: 1,
-      expires_at:   u.expires_at || undefined,
-    })),
-  };
-  try {
-    const res  = await fetch(apiUrl("/api/admin/sync/users"), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(getAdminApiToken() ? { Authorization: `Bearer ${getAdminApiToken()}` } : {}),
-      },
-      body: JSON.stringify(payload),
-    });
-    const data = await parseJsonResponse<{
-      ok: boolean;
-      error?: string;
-      logs?: string[];
-      syncUsers?: SyncUserStatus[];
-    }>(res);
-    (data.logs ?? []).forEach((l: string) => log(l));
-    if (!res.ok) {
-      throw new Error(data.error || `User sync failed (HTTP ${res.status}).`);
-    }
-    return {
-      ok: data.ok,
-      syncUsers: Array.isArray(data.syncUsers) ? data.syncUsers : [],
-    };
-  } catch (e) {
-    log(`  ✗ ${e instanceof Error ? e.message : e}`);
+  const payloadUsers = users.map(u => ({
+    customer_id:  u.id,
+    router_id:    u.router_id ?? (u.plan_id ? planMap[u.plan_id]?.router_id : undefined),
+    username:     u.type === "hotspot" ? purchaseUsername(u) : (u.pppoe_username || u.username || ""),
+    password:     u.password || "",
+    type:         u.type || "hotspot",
+    status:       u.status,
+    plan_id:      u.plan_id || undefined,
+    mac_address:  u.mac_address || undefined,
+    plan_name:    u.plan_id ? planMap[u.plan_id]?.name : "",
+    ip_address:   u.ip_address || undefined,
+    speed_down:   u.plan_id ? planMap[u.plan_id]?.speed_down : undefined,
+    speed_up:     u.plan_id ? planMap[u.plan_id]?.speed_up : undefined,
+    speed_down_unit: u.plan_id ? planMap[u.plan_id]?.speed_down_unit || "Mbps" : "Mbps",
+    speed_up_unit: u.plan_id ? planMap[u.plan_id]?.speed_up_unit || "Mbps" : "Mbps",
+    data_limit_mb: u.fup_limit_mb ?? (u.plan_id ? planMap[u.plan_id]?.data_limit_mb : undefined),
+    shared_users: 1,
+    expires_at:   u.expires_at || undefined,
+  }));
+  if (!payloadUsers.length) {
+    log("  ⚠ No users are assigned to this router.");
     return { ok: false, syncUsers: null };
   }
+
+  const batchCount = Math.ceil(payloadUsers.length / SYNC_USERS_BATCH_SIZE);
+  const syncedUsers: SyncUserStatus[] = [];
+  let allBatchesSucceeded = true;
+
+  for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
+    const userBatch = payloadUsers.slice(
+      batchIndex * SYNC_USERS_BATCH_SIZE,
+      (batchIndex + 1) * SYNC_USERS_BATCH_SIZE,
+    );
+    log(`  Sending batch ${batchIndex + 1}/${batchCount} (${userBatch.length} users)…`);
+    const payload = {
+      adminId: ADMIN_ID,
+      routerId: router.id,
+      users: userBatch,
+    };
+
+    try {
+      const res  = await fetch(apiUrl("/api/admin/sync/users"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(getAdminApiToken() ? { Authorization: `Bearer ${getAdminApiToken()}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await parseJsonResponse<{
+        ok: boolean;
+        error?: string;
+        logs?: string[];
+        syncUsers?: SyncUserStatus[];
+      }>(res);
+      (data.logs ?? []).forEach((l: string) => log(l));
+      if (!res.ok) {
+        throw new Error(data.error || `User sync failed (HTTP ${res.status}).`);
+      }
+      if (Array.isArray(data.syncUsers)) syncedUsers.push(...data.syncUsers);
+      if (data.ok !== true) allBatchesSucceeded = false;
+    } catch (e) {
+      log(`  ✗ Batch ${batchIndex + 1}/${batchCount}: ${e instanceof Error ? e.message : e}`);
+      log("  ⚠ Sync stopped because this batch's final result is unknown; some router changes may already have applied.");
+      return { ok: false, syncUsers: syncedUsers.length ? syncedUsers : null };
+    }
+  }
+
+  return { ok: allBatchesSucceeded, syncUsers: syncedUsers };
 }
 
 function iconButton(color: string): React.CSSProperties {
