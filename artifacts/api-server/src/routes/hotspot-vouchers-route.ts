@@ -6,6 +6,7 @@ import {
   sbInsertStrict,
   sbSelectStrict,
 } from "../lib/supabase-client.js";
+import { normalizeFixedHotspotVoucherCode } from "../lib/hotspot-voucher-utils.js";
 
 const router: IRouter = Router();
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -42,6 +43,7 @@ interface StoredVoucher {
   validity_mins: number;
   expires_at: string | null;
   created_at: string;
+  redeemed_at: string | null;
 }
 
 function requestedAdminId(req: Request, res: Response): number | null {
@@ -170,7 +172,7 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
   try {
     const vouchers = await sbSelectStrict<StoredVoucher>(
       "isp_radius_vouchers",
-      `admin_id=eq.${adminId}&select=id,admin_id,code,plan_id,plan_name,router_id,router_name,price,validity_mins,expires_at,created_at&order=created_at.desc&limit=10000`,
+      `admin_id=eq.${adminId}&select=id,admin_id,code,plan_id,plan_name,router_id,router_name,price,validity_mins,expires_at,created_at,redeemed_at&order=created_at.desc&limit=10000`,
     );
     const usernames = vouchers.map(voucher => voucher.code);
     const accountRows: { username: string }[] = [];
@@ -189,7 +191,7 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
       price: Number(voucher.price),
       validity_mins: Number(voucher.validity_mins),
       expiry: voucher.expires_at,
-      used: usedCodes.has(voucher.code),
+      used: Boolean(voucher.redeemed_at) || usedCodes.has(voucher.code),
       created_at: voucher.created_at,
     })));
   } catch {
@@ -209,6 +211,8 @@ router.post("/vouchers/hotspot/generate", requireAdmin(), async (req, res): Prom
     : Number(routerValue);
   const rawPrefix = typeof req.body?.prefix === "string" ? req.body.prefix.trim().toUpperCase() : "";
   const prefix = rawPrefix.replace(/-+$/g, "");
+  const fixedCodeInput = typeof req.body?.fixedCode === "string" ? req.body.fixedCode.trim() : "";
+  const rawFixedCode = fixedCodeInput ? normalizeFixedHotspotVoucherCode(fixedCodeInput) : null;
   const rawExpiry = req.body?.expiryDate;
   const expiryDate = rawExpiry == null || rawExpiry === "" ? null : String(rawExpiry);
 
@@ -226,6 +230,14 @@ router.post("/vouchers/hotspot/generate", requireAdmin(), async (req, res): Prom
   }
   if (prefix.length > 12 || !/^[A-Z0-9-]*$/.test(prefix) || prefix.startsWith("-")) {
     res.status(400).json({ error: "Voucher prefix may contain up to 12 letters, numbers, or hyphens." });
+    return;
+  }
+  if (fixedCodeInput && !rawFixedCode) {
+    res.status(400).json({ error: "A fixed voucher code must contain 3–32 letters or numbers with no spaces." });
+    return;
+  }
+  if (rawFixedCode && quantity !== 1) {
+    res.status(400).json({ error: "A fixed voucher code can only be created once. Set quantity to 1." });
     return;
   }
   if (expiryDate !== null && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) {
@@ -257,7 +269,26 @@ router.post("/vouchers/hotspot/generate", requireAdmin(), async (req, res): Prom
       return;
     }
 
-    const codes = await generateUniqueCodes(prefix, quantity);
+    let codes: string[];
+    if (rawFixedCode) {
+      const [existingVoucher, existingRadiusUser] = await Promise.all([
+        sbSelectStrict<{ id: number }>(
+          "isp_radius_vouchers",
+          `code=ilike.${encodeURIComponent(rawFixedCode)}&select=id&limit=1`,
+        ),
+        sbSelectStrict<{ username: string }>(
+          "radcheck",
+          `username=eq.${encodeURIComponent(rawFixedCode)}&select=username&limit=1`,
+        ),
+      ]);
+      if (existingVoucher.length || existingRadiusUser.length) {
+        res.status(409).json({ error: "That voucher code already exists. Choose a different code." });
+        return;
+      }
+      codes = [rawFixedCode];
+    } else {
+      codes = await generateUniqueCodes(prefix, quantity);
+    }
     const now = new Date().toISOString();
     const validityMins = Number(plan.validity) * (
       Number(plan.validity) <= 30 && plan.name.toLowerCase().includes("min") ? 1 : 1440

@@ -16,9 +16,29 @@ import {
 interface DbCustomer {
   id: number; name: string | null; username: string | null;
   mac_address: string | null; ip_address: string | null;
-  type: string | null; status: string; expires_at: string | null;
+  phone: string | null; type: string | null; status: string; expires_at: string | null;
+  plan_id: number | null; router_id: number | null; port_id: number | null;
+  data_used_bytes: number | null; service_online: boolean | null; last_seen: string | null;
 }
 interface RouterLite { id: number; name: string; host: string; status: string; }
+interface HotspotPlanLite {
+  id: number; name: string; router_id: number | null; port_id: number | null;
+  speed_down: number | null; speed_up: number | null;
+  speed_down_unit: string | null; speed_up_unit: string | null; data_limit_mb: number | null;
+}
+interface ConnectedDevice {
+  routerId: number; routerName: string; name: string; macAddress: string; ipAddress: string;
+  connected: boolean; source: string; uptime: string; lastSeen: string | null;
+  customerId: number | null; username: string | null; phone: string | null;
+  accountStatus: string | null; expiresAt: string | null; planId: number | null; planName: string | null;
+  speedDown: number | null; speedUp: number | null; speedDownUnit: string; speedUpUnit: string;
+  dataUsedBytes: number; queueRate: string; queueMaxLimit: string;
+}
+interface ConnectedDevicesResponse {
+  devices: ConnectedDevice[];
+  routers: RouterLite[];
+  routerErrors: Array<{ routerId: number; routerName: string; error: string }>;
+}
 interface RadCheck { id: number; username: string; attribute: string; op: string; value: string; }
 interface RadAcct {
   radacctid: number; username: string; nasipaddress: string;
@@ -77,6 +97,7 @@ function fmtBytes(bytes: number): string {
 interface HotspotBindingConfig {
   customers: DbCustomer[];
   allCustomers: DbCustomer[];
+  plans: HotspotPlanLite[];
   bypasses: RadCheck[];
   bypassIps: RadCheck[];
   routers: RouterLite[];
@@ -101,6 +122,23 @@ async function fetchBindingConfig(): Promise<HotspotBindingConfig> {
 
 async function fetchSessions(active: boolean): Promise<RadAcct[]> {
   return hotspotBindingApi(`/api/hotspot-bindings/sessions?active=${active}`);
+}
+
+async function fetchConnectedDevices(routerId: string): Promise<ConnectedDevicesResponse> {
+  const query = new URLSearchParams();
+  if (ADMIN_ID) query.set("adminId", String(ADMIN_ID));
+  if (routerId !== "all") query.set("routerId", routerId);
+  return hotspotBindingApi(`/api/customers/hotspot-connected-devices?${query.toString()}`);
+}
+
+async function bindConnectedDevice(input: {
+  customerId: number; routerId: number; macAddress: string; ipAddress: string;
+}): Promise<void> {
+  await hotspotBindingApi("/api/customers/hotspot-bind-device", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...input, adminId: ADMIN_ID }),
+  });
 }
 
 async function addUserMacBinding(customerId: number, mac: string): Promise<void> {
@@ -436,11 +474,18 @@ function SessionsTab() {
 /* ══════════════════════════ Main Page ══════════════════════════ */
 export default function HotspotBinding() {
   const [location] = useLocation();
-  const initialTab = (typeof window !== "undefined" && window.location.search.includes("tab=sessions")) ? "sessions" : "bindings";
-  const [tab, setTab] = useState<"bindings" | "sessions">(initialTab);
+  const initialTab: "bindings" | "sessions" | "devices" = typeof window !== "undefined"
+    ? window.location.search.includes("tab=sessions")
+      ? "sessions"
+      : window.location.search.includes("tab=devices") ? "devices" : "bindings"
+    : "bindings";
+  const [tab, setTab] = useState<"bindings" | "sessions" | "devices">(initialTab);
   const [search, setSearch] = useState("");
+  const [routerFilter, setRouterFilter] = useState("all");
   const [filterType, setFilterType] = useState("all");
   const [showAdd, setShowAdd] = useState(false);
+  const [bindingDevice, setBindingDevice] = useState<ConnectedDevice | null>(null);
+  const [selectedBindCustomerId, setSelectedBindCustomerId] = useState("");
   const [deleting, setDeleting] = useState<Binding | null>(null);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const qc = useQueryClient();
@@ -460,6 +505,7 @@ export default function HotspotBinding() {
   const bypasses = bindingConfig?.bypasses ?? [];
   const bypassIps = bindingConfig?.bypassIps ?? [];
   const routers = bindingConfig?.routers ?? [];
+  const plans = bindingConfig?.plans ?? [];
   const bindings  = useMemo(() => composeBindings(customers, bypasses, bypassIps, routers), [customers, bypasses, bypassIps, routers]);
 
   const filtered = useMemo(() => {
@@ -478,6 +524,51 @@ export default function HotspotBinding() {
   const userMacCount  = bindings.filter(b => b.type === "user-mac").length;
   const bypassCount   = bindings.filter(b => b.type === "bypass").length;
   const activeCount   = bindings.filter(b => b.status === "active").length;
+
+  const {
+    data: connectedDeviceData,
+    isLoading: connectedDevicesLoading,
+    isFetching: connectedDevicesFetching,
+  } = useQuery({
+    queryKey: ["hotspot-connected-devices", ADMIN_ID, routerFilter],
+    queryFn: () => fetchConnectedDevices(routerFilter),
+    enabled: tab === "devices",
+    refetchInterval: tab === "devices" ? 30_000 : false,
+  });
+  const connectedDevices = connectedDeviceData?.devices ?? [];
+  const visibleConnectedDevices = connectedDevices.filter(device => {
+    const term = search.trim().toLowerCase();
+    return !term || [
+      device.name, device.macAddress, device.ipAddress, device.phone,
+      device.username, device.routerName, device.planName,
+    ].some(value => String(value ?? "").toLowerCase().includes(term));
+  });
+  const bindableAccounts = bindingDevice
+    ? allCustomers.filter(customer => {
+        const plan = plans.find(item => Number(item.id) === Number(customer.plan_id));
+        const expiresAt = customer.expires_at ? Date.parse(customer.expires_at) : Infinity;
+        const effectiveRouterId = Number(customer.router_id ?? plan?.router_id ?? 0);
+        return customer.type === "hotspot"
+          && customer.status === "active"
+          && expiresAt > Date.now()
+          && !customer.port_id
+          && (!customer.mac_address || formatMac(customer.mac_address) === formatMac(bindingDevice.macAddress))
+          && (!effectiveRouterId || effectiveRouterId === bindingDevice.routerId)
+          && Boolean(plan);
+      })
+    : [];
+
+  const bindDeviceMutation = useMutation({
+    mutationFn: bindConnectedDevice,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["hotspot-connected-devices", ADMIN_ID] });
+      qc.invalidateQueries({ queryKey: ["hotspot_binding_config", ADMIN_ID] });
+      setBindingDevice(null);
+      setSelectedBindCustomerId("");
+      showToast("Device is bound to the prepaid account and can connect without signing in.");
+    },
+    onError: (error: Error) => showToast(`Could not bind device: ${error.message}`, false),
+  });
 
   const addMutation = useMutation({
     mutationFn: async ({ btype, customerId, mac, ip }: { btype: "user-mac" | "bypass"; customerId: number | null; mac: string; ip: string }) => {
@@ -527,6 +618,69 @@ export default function HotspotBinding() {
         />
       )}
 
+      {bindingDevice && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+          <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 14, width: "100%", maxWidth: 460, padding: "1.5rem", boxShadow: "0 24px 60px rgba(0,0,0,0.5)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 16 }}>
+              <div>
+                <h2 style={{ fontSize: "1.05rem", fontWeight: 800, color: "var(--isp-text)", margin: 0 }}>Bind connected device</h2>
+                <p style={{ fontSize: "0.78rem", color: "var(--isp-text-muted)", margin: "0.35rem 0 0" }}>
+                  {bindingDevice.name || "Device"} · {formatMac(bindingDevice.macAddress)} · {bindingDevice.routerName}
+                </p>
+              </div>
+              <button type="button" onClick={() => { setBindingDevice(null); setSelectedBindCustomerId(""); }}
+                style={{ background: "transparent", border: "none", color: "var(--isp-text-muted)", cursor: "pointer" }} aria-label="Close">
+                <X size={18} />
+              </button>
+            </div>
+            <p style={{ fontSize: "0.78rem", lineHeight: 1.5, color: "var(--isp-text-muted)", marginBottom: 14 }}>
+              Choose an active prepaid Hotspot account. This device will get direct access without entering a username and password, using the account’s expiry and speed.
+            </p>
+            {bindableAccounts.length ? (
+              <select
+                value={selectedBindCustomerId}
+                onChange={event => setSelectedBindCustomerId(event.target.value)}
+                style={{ ...inp, marginBottom: 14 }}
+              >
+                <option value="">Choose prepaid account…</option>
+                {bindableAccounts.map(customer => {
+                  const plan = plans.find(item => Number(item.id) === Number(customer.plan_id));
+                  return (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.phone || customer.username || customer.name || `Account ${customer.id}`} — {plan?.name ?? "Hotspot plan"}
+                    </option>
+                  );
+                })}
+              </select>
+            ) : (
+              <div style={{ padding: "0.8rem", marginBottom: 14, borderRadius: 8, background: "rgba(245,158,11,0.08)", color: "#fbbf24", fontSize: "0.78rem" }}>
+                No unbound active prepaid Hotspot accounts are available for this router.
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 10 }}>
+              <button type="button" onClick={() => { setBindingDevice(null); setSelectedBindCustomerId(""); }}
+                style={{ flex: 1, padding: "0.65rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!selectedBindCustomerId || bindDeviceMutation.isPending}
+                onClick={() => bindDeviceMutation.mutate({
+                  customerId: Number(selectedBindCustomerId),
+                  routerId: bindingDevice.routerId,
+                  macAddress: bindingDevice.macAddress,
+                  ipAddress: bindingDevice.ipAddress,
+                })}
+                style={{ flex: 1, padding: "0.65rem", borderRadius: 8, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, cursor: !selectedBindCustomerId || bindDeviceMutation.isPending ? "not-allowed" : "pointer", opacity: !selectedBindCustomerId ? 0.55 : 1, fontFamily: "inherit", display: "flex", justifyContent: "center", alignItems: "center", gap: 7 }}
+              >
+                {bindDeviceMutation.isPending ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <ShieldCheck size={14} />}
+                {bindDeviceMutation.isPending ? "Binding…" : "Bind device"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete confirm */}
       {deleting && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
@@ -563,11 +717,11 @@ export default function HotspotBinding() {
           <div>
             <h1 style={{ fontSize: "1.4rem", fontWeight: 800, color: "var(--isp-text)", margin: 0 }}>Hotspot Binding</h1>
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", marginTop: "0.2rem" }}>
-              MAC-to-user locks and device bypass rules
+              Bind prepaid Hotspot plans to devices that need access without signing in
             </p>
           </div>
           <div style={{ display: "flex", gap: "0.625rem" }}>
-            <button onClick={() => { qc.invalidateQueries({ queryKey: ["hotspot_binding_config", ADMIN_ID] }); qc.invalidateQueries({ queryKey: ["radacct", ADMIN_ID] }); }}
+            <button onClick={() => { qc.invalidateQueries({ queryKey: ["hotspot_binding_config", ADMIN_ID] }); qc.invalidateQueries({ queryKey: ["radacct", ADMIN_ID] }); qc.invalidateQueries({ queryKey: ["hotspot-connected-devices", ADMIN_ID] }); }}
               style={{ padding: "0.5rem 0.75rem", borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", cursor: "pointer", display: "flex", alignItems: "center", gap: "0.375rem", fontFamily: "inherit", fontWeight: 600, fontSize: "0.8rem" }}>
               <RefreshCw size={13} style={{ animation: isLoading ? "spin 1s linear infinite" : "none" }} />
             </button>
@@ -580,7 +734,11 @@ export default function HotspotBinding() {
 
         {/* ─── Tabs ─── */}
         <div style={{ display: "flex", gap: 0, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 10, padding: 4, alignSelf: "flex-start" }}>
-          {([["bindings", <Link2 size={13} />, "Bindings"], ["sessions", <Activity size={13} />, "Sessions"]] as const).map(([t, icon, label]) => (
+          {([
+            ["bindings", <Link2 size={13} />, "Bindings"],
+            ["devices", <Monitor size={13} />, "Connected devices"],
+            ["sessions", <Activity size={13} />, "Sessions"],
+          ] as const).map(([t, icon, label]) => (
             <button key={t} onClick={() => setTab(t)}
               style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.45rem 1.1rem", borderRadius: 8, fontFamily: "inherit", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", border: "none", background: tab === t ? "var(--isp-accent-glow)" : "transparent", color: tab === t ? "var(--isp-accent)" : "var(--isp-text-muted)", transition: "all 0.14s" }}>
               {icon} {label}
@@ -742,6 +900,115 @@ export default function HotspotBinding() {
         )}
 
         {/* ══════════ SESSIONS TAB ══════════ */}
+        {tab === "devices" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <h2 style={{ color: "var(--isp-text)", fontSize: "1rem", fontWeight: 800, margin: 0 }}>Hotspot devices</h2>
+                <p style={{ color: "var(--isp-text-muted)", fontSize: "0.75rem", margin: "0.3rem 0 0" }}>
+                  Bind an active prepaid account to a connected device. Speed and expiry follow its plan.
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <select value={routerFilter} onChange={event => setRouterFilter(event.target.value)}
+                  style={{ ...inp, width: "auto", minWidth: 160 }}>
+                  <option value="all">All routers</option>
+                  {(connectedDeviceData?.routers ?? routers).map(router => (
+                    <option key={router.id} value={router.id}>{router.name}</option>
+                  ))}
+                </select>
+                <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search device, MAC, account…"
+                  style={{ ...inp, width: 230 }} />
+                <button type="button" onClick={() => qc.invalidateQueries({ queryKey: ["hotspot-connected-devices", ADMIN_ID] })}
+                  style={{ ...inp, width: "auto", display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
+                  <RefreshCw size={14} style={{ animation: connectedDevicesFetching ? "spin 1s linear infinite" : "none" }} /> Refresh
+                </button>
+              </div>
+            </div>
+
+            {(connectedDeviceData?.routerErrors ?? []).map(routerError => (
+              <div key={routerError.routerId} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "0.7rem 0.85rem", borderRadius: 9, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.18)", color: "#fbbf24", fontSize: "0.77rem" }}>
+                <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>Could not read live devices from {routerError.routerName}: {routerError.error}</span>
+              </div>
+            ))}
+
+            <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 14, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", minWidth: 850, borderCollapse: "collapse", fontSize: "0.8rem" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid var(--isp-border-subtle)" }}>
+                      {["Device", "MAC / IP", "Connection", "Data used", "Allowed speed", "Prepaid account"].map(header => (
+                        <th key={header} style={{ textAlign: "left", padding: "0.75rem 1rem", color: "var(--isp-text-sub)", fontWeight: 600, fontSize: "0.66rem", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{header}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {connectedDevicesLoading ? (
+                      <tr><td colSpan={6} style={{ textAlign: "center", padding: "3rem", color: "var(--isp-text-muted)" }}>
+                        <Loader2 size={16} style={{ animation: "spin 1s linear infinite", marginRight: 8, verticalAlign: "middle" }} /> Reading router devices…
+                      </td></tr>
+                    ) : visibleConnectedDevices.length === 0 ? (
+                      <tr><td colSpan={6} style={{ textAlign: "center", padding: "3rem 1rem", color: "var(--isp-text-muted)" }}>
+                        {connectedDevices.length ? "No devices match your search." : "No Hotspot-connected or previously bound devices were found."}
+                      </td></tr>
+                    ) : visibleConnectedDevices.map(device => {
+                      const speed = device.speedDown !== null || device.speedUp !== null
+                        ? `${device.speedDown ?? "—"} ${device.speedDownUnit} ↓ / ${device.speedUp ?? "—"} ${device.speedUpUnit} ↑`
+                        : device.queueMaxLimit || "Plan default";
+                      return (
+                        <tr key={`${device.routerId}:${device.macAddress}`} className="crow" style={{ borderBottom: "1px solid var(--isp-border-subtle)" }}>
+                          <td style={{ padding: "0.8rem 1rem" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--isp-text)", fontWeight: 700 }}>
+                              <Monitor size={15} style={{ color: "var(--isp-accent)" }} /> {device.name || "Unknown device"}
+                            </div>
+                            <div style={{ margin: "0.3rem 0 0 23px", color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>{device.routerName}</div>
+                          </td>
+                          <td style={{ padding: "0.8rem 1rem", fontFamily: "monospace", fontSize: "0.76rem" }}>
+                            <div style={{ color: "var(--isp-text)" }}>{formatMac(device.macAddress)}</div>
+                            <div style={{ color: "var(--isp-text-muted)", marginTop: 4 }}>{device.ipAddress || "No IP reported"}</div>
+                          </td>
+                          <td style={{ padding: "0.8rem 1rem" }}>
+                            <Badge variant={device.connected ? "success" : "warning"}>{device.connected ? "Online" : "Offline"}</Badge>
+                            <div style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", marginTop: 5 }}>
+                              {device.connected
+                                ? device.uptime ? `Session ${device.uptime}` : "Connected now"
+                                : device.lastSeen ? `Last seen ${new Date(device.lastSeen).toLocaleString("en-KE")}` : "No recent session"}
+                            </div>
+                          </td>
+                          <td style={{ padding: "0.8rem 1rem", color: "var(--isp-text)", fontWeight: 700, whiteSpace: "nowrap" }}>
+                            {fmtBytes(Number(device.dataUsedBytes) || 0)}
+                            {device.queueRate && <div style={{ color: "var(--isp-text-muted)", fontWeight: 400, fontSize: "0.68rem", marginTop: 4 }}>Live rate {device.queueRate}</div>}
+                          </td>
+                          <td style={{ padding: "0.8rem 1rem", color: "var(--isp-text-muted)", whiteSpace: "nowrap" }}>{speed}</td>
+                          <td style={{ padding: "0.8rem 1rem" }}>
+                            {device.customerId ? (
+                              <>
+                                <div style={{ color: "var(--isp-text)", fontWeight: 700 }}>{device.phone || device.username || `Account ${device.customerId}`}</div>
+                                <div style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", marginTop: 4 }}>
+                                  {device.planName ?? "Hotspot plan"} · {device.accountStatus ?? "account"}
+                                </div>
+                              </>
+                            ) : device.connected ? (
+                              <button type="button" onClick={() => { setBindingDevice(device); setSelectedBindCustomerId(""); }}
+                                style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "0.45rem 0.7rem", borderRadius: 8, background: "var(--isp-accent)", border: "none", color: "#fff", fontWeight: 700, fontSize: "0.74rem", cursor: "pointer", fontFamily: "inherit" }}>
+                                <Link2 size={13} /> Bind account
+                              </button>
+                            ) : <span style={{ color: "var(--isp-text-muted)" }}>No account bound</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ padding: "0.55rem 1rem", borderTop: "1px solid var(--isp-border-subtle)", color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>
+                Device usage is read from its MikroTik rate queue when available. Offline devices keep their last seen time and queue totals.
+              </div>
+            </div>
+          </div>
+        )}
+
         {tab === "sessions" && <SessionsTab />}
 
       </div>

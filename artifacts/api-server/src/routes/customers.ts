@@ -9,6 +9,7 @@ import {
   sbUpdateStrict,
   sbDelete,
   sbDeleteStrict,
+  sbRpc,
   SupabaseHttpError,
 } from "../lib/supabase-client.js";
 import { logActivity } from "../lib/activity-log.js";
@@ -23,6 +24,10 @@ import {
   reconcileHotspotUserAccess,
   reconcilePppoeUserAccess,
   disconnectHotspotActiveUser,
+  fetchHotspotConnectedDevices,
+  fetchHotspotUserRateQueueStatsBulk,
+  addHotspotIpBinding,
+  ensureHotspotUserRateQueue,
   fetchHotspotUsers,
   fetchHotspotUserUsage,
   fetchHotspotUserList,
@@ -75,6 +80,12 @@ import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-
 import { saveCustomerEditWithRouter } from "../lib/customer-edit-consistency.js";
 import { withCustomerEditLock } from "../lib/customer-edit-lock.js";
 import { customerStatusForExpiryEdit } from "../lib/customer-expiry-edit.js";
+import {
+  formatVoucherDuration,
+  normalizeHotspotMac,
+  normalizeKenyanVoucherPhone,
+  normalizeRedeemableHotspotVoucherCode,
+} from "../lib/hotspot-voucher-utils.js";
 
 const router: IRouter = Router();
 
@@ -105,6 +116,9 @@ type CustomerRow = {
   expires_at: string | null;
   fup_limit_mb: number | null;
   depletion_reason: string | null;
+  data_used_bytes?: number | null;
+  service_online?: boolean | null;
+  last_seen?: string | null;
 };
 
 type PlanRow = {
@@ -124,6 +138,12 @@ type PlanRow = {
   fup_speed_up: number | null;
   shared_users: number | null;
   owner_reseller_id?: number | null;
+};
+
+type ConnectedDeviceCustomerRow = CustomerRow & {
+  data_used_bytes: number | null;
+  service_online: boolean | null;
+  last_seen: string | null;
 };
 
 type RouterRow = {
@@ -1380,6 +1400,617 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
  * Validates a hotspot customer's username + password.
  * Returns the customer row (without password) on success.
  */
+router.get("/customers/hotspot-connected-devices", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const adminId = authenticatedAdminId(req, req.query.adminId);
+    if (!adminId) {
+      res.status(400).json({ error: "ISP account is required." });
+      return;
+    }
+    const requestedRouterId = Number(req.query.routerId ?? 0);
+    const routerFilter = Number.isSafeInteger(requestedRouterId) && requestedRouterId > 0
+      ? `&id=eq.${requestedRouterId}`
+      : "";
+    const routers = await sbSelectStrict<RouterRow>(
+      "isp_routers",
+      `admin_id=eq.${adminId}${routerFilter}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&order=name.asc`,
+    );
+    const customers = await sbSelectStrict<ConnectedDeviceCustomerRow>(
+      "isp_customers",
+      `admin_id=eq.${adminId}&type=eq.hotspot&select=id,admin_id,name,phone,mac_address,username,pppoe_username,password,type,plan_id,router_id,port_id,ip_address,status,expires_at,fup_limit_mb,depletion_reason,data_used_bytes,service_online,last_seen&limit=10000`,
+    );
+    const planIds = [...new Set(customers.map(row => Number(row.plan_id)).filter(id => Number.isSafeInteger(id) && id > 0))];
+    const plans = planIds.length
+      ? await sbSelectStrict<PlanRow>(
+          "isp_plans",
+          `admin_id=eq.${adminId}&id=in.(${planIds.join(",")})&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,is_active`,
+        )
+      : [];
+    const plansById = new Map(plans.map(plan => [Number(plan.id), plan]));
+    const output: Array<Record<string, unknown>> = [];
+    const seenCustomers = new Set<number>();
+    const routerErrors: Array<{ routerId: number; routerName: string; error: string }> = [];
+    const queueStatsByRouter = new Map<number, Record<string, {
+      bytesIn: number; bytesOut: number; totalBytes: number; rate: string; maxLimit: string;
+    }>>();
+
+    for (const routerRow of routers) {
+      let liveDevices;
+      const creds = routerCredentials(routerRow);
+      try {
+        liveDevices = await fetchHotspotConnectedDevices(creds);
+      } catch (error) {
+        logger.warn({ err: error, adminId, routerId: routerRow.id }, "[customers/hotspot-connected-devices] router query failed");
+        routerErrors.push({
+          routerId: Number(routerRow.id),
+          routerName: routerRow.name,
+          error: error instanceof Error ? error.message : "Router is unreachable.",
+        });
+        continue;
+      }
+      const routerCustomers = customers.filter((row) =>
+        Number(row.router_id ?? plansById.get(Number(row.plan_id))?.router_id) === Number(routerRow.id)
+        && Boolean(row.username?.trim()),
+      );
+      try {
+        queueStatsByRouter.set(
+          Number(routerRow.id),
+          await fetchHotspotUserRateQueueStatsBulk(creds, routerCustomers.map(row => row.username!.trim())),
+        );
+      } catch (error) {
+        logger.warn({ err: error, adminId, routerId: routerRow.id }, "[customers/hotspot-connected-devices] queue counters unavailable");
+        queueStatsByRouter.set(Number(routerRow.id), {});
+      }
+
+      for (const device of liveDevices) {
+        if (device.source !== "hotspot" && device.source !== "host") continue;
+        const macAddress = normalizeHotspotMac(device.macAddress);
+        if (!macAddress) continue;
+        const customer = customers.find((row) =>
+          normalizeHotspotMac(row.mac_address) === macAddress
+          && Number(row.router_id ?? plansById.get(Number(row.plan_id))?.router_id) === Number(routerRow.id),
+        );
+        const plan = customer?.plan_id ? plansById.get(Number(customer.plan_id)) : undefined;
+        const username = customer?.username?.trim() ?? "";
+        const queueStats = username ? queueStatsByRouter.get(Number(routerRow.id))?.[username] : undefined;
+        if (customer) {
+          seenCustomers.add(Number(customer.id));
+          await sbUpdate(
+            "isp_customers",
+            `id=eq.${customer.id}&admin_id=eq.${adminId}`,
+            { service_online: true, last_seen: new Date().toISOString(), ip_address: device.address || customer.ip_address },
+          );
+        }
+        output.push({
+          routerId: Number(routerRow.id),
+          routerName: routerRow.name,
+          name: device.name || customer?.name || "",
+          macAddress,
+          ipAddress: device.address || customer?.ip_address || "",
+          connected: true,
+          source: device.source,
+          uptime: device.uptime ?? "",
+          lastSeen: customer ? new Date().toISOString() : null,
+          customerId: customer ? Number(customer.id) : null,
+          username: customer?.username ?? null,
+          phone: customer?.phone ?? null,
+          accountStatus: customer?.status ?? null,
+          expiresAt: customer?.expires_at ?? null,
+          planId: customer?.plan_id ?? null,
+          planName: plan?.name ?? null,
+          speedDown: plan?.speed_down ?? null,
+          speedUp: plan?.speed_up ?? null,
+          speedDownUnit: plan?.speed_down_unit ?? "Mbps",
+          speedUpUnit: plan?.speed_up_unit ?? plan?.speed_down_unit ?? "Mbps",
+          dataUsedBytes: queueStats?.totalBytes
+            ?? (customer?.data_used_bytes != null
+              ? Number(customer.data_used_bytes)
+              : (device.bytesIn ?? 0) + (device.bytesOut ?? 0)),
+          queueRate: queueStats?.rate ?? "",
+          queueMaxLimit: queueStats?.maxLimit ?? "",
+        });
+      }
+    }
+
+    for (const customer of customers) {
+      const plan = customer.plan_id ? plansById.get(Number(customer.plan_id)) : undefined;
+      const routerId = Number(customer.router_id ?? plan?.router_id ?? 0);
+      if (!customer.mac_address || seenCustomers.has(Number(customer.id)) || !routers.some(row => Number(row.id) === routerId)) continue;
+      const queueStats = customer.username ? queueStatsByRouter.get(routerId)?.[customer.username] : undefined;
+      await sbUpdate(
+        "isp_customers",
+        `id=eq.${customer.id}&admin_id=eq.${adminId}`,
+        { service_online: false },
+      );
+      output.push({
+        routerId,
+        routerName: routers.find(row => Number(row.id) === routerId)?.name ?? "Router",
+        name: customer.name ?? "",
+        macAddress: normalizeHotspotMac(customer.mac_address) ?? customer.mac_address,
+        ipAddress: customer.ip_address ?? "",
+        connected: false,
+        source: "account",
+        uptime: "",
+        lastSeen: customer.last_seen ?? null,
+        customerId: Number(customer.id),
+        username: customer.username,
+        phone: customer.phone,
+        accountStatus: customer.status,
+        expiresAt: customer.expires_at,
+        planId: customer.plan_id,
+        planName: plan?.name ?? null,
+        speedDown: plan?.speed_down ?? null,
+        speedUp: plan?.speed_up ?? null,
+        speedDownUnit: plan?.speed_down_unit ?? "Mbps",
+        speedUpUnit: plan?.speed_up_unit ?? plan?.speed_down_unit ?? "Mbps",
+        dataUsedBytes: queueStats?.totalBytes ?? Number(customer.data_used_bytes ?? 0),
+        queueRate: queueStats?.rate ?? "",
+        queueMaxLimit: queueStats?.maxLimit ?? "",
+      });
+    }
+
+    res.json({
+      devices: output.sort((a, b) => String(a.routerName).localeCompare(String(b.routerName)) || String(a.name || a.macAddress).localeCompare(String(b.name || b.macAddress))),
+      routers: routers.map(row => ({ id: Number(row.id), name: row.name })),
+      routerErrors,
+    });
+  } catch (error) {
+    logger.error({ err: error }, "[customers/hotspot-connected-devices] failed");
+    res.status(500).json({ error: "Could not load Hotspot devices." });
+  }
+});
+
+router.post("/customers/hotspot-bind-device", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  if (!adminId) {
+    res.status(400).json({ error: "ISP account is required." });
+    return;
+  }
+  const customerId = Number(req.body?.customerId);
+  const routerId = Number(req.body?.routerId);
+  const macAddress = normalizeHotspotMac(req.body?.macAddress);
+  const requestedIp = String(req.body?.ipAddress ?? "").trim();
+  if (!Number.isSafeInteger(customerId) || customerId < 1 || !Number.isSafeInteger(routerId) || routerId < 1 || !macAddress) {
+    res.status(400).json({ error: "Choose a prepaid Hotspot account and a valid connected device." });
+    return;
+  }
+
+  let bindingApplied = false;
+  let queuePrepared = false;
+  let accountAlreadyHadMac = false;
+  let bindingComment = "";
+  let creds: ReturnType<typeof routerCredentials> | null = null;
+  try {
+    const customers = await sbSelectStrict<ConnectedDeviceCustomerRow>(
+      "isp_customers",
+      `id=eq.${customerId}&admin_id=eq.${adminId}&select=id,admin_id,name,phone,mac_address,username,pppoe_username,password,type,plan_id,router_id,port_id,ip_address,status,expires_at,fup_limit_mb,depletion_reason,data_used_bytes,service_online,last_seen&limit=1`,
+    );
+    const customer = customers[0];
+    if (!customer || customer.type !== "hotspot" || !customer.plan_id || !customer.username?.trim()) {
+      res.status(404).json({ error: "Active prepaid Hotspot account not found." });
+      return;
+    }
+    if (customer.status !== "active" || (customer.expires_at && Date.parse(customer.expires_at) <= Date.now())) {
+      res.status(409).json({ error: "This account is expired or suspended and cannot be bound." });
+      return;
+    }
+    if (!customer.expires_at || !Number.isFinite(Date.parse(customer.expires_at))) {
+      res.status(409).json({ error: "This account has no valid expiry time, so the router cannot safely schedule its device access." });
+      return;
+    }
+    if (customer.mac_address && normalizeHotspotMac(customer.mac_address) !== macAddress) {
+      res.status(409).json({ error: "This account is already bound to another device. Unbind it before moving the account." });
+      return;
+    }
+    accountAlreadyHadMac = normalizeHotspotMac(customer.mac_address) === macAddress;
+
+    const plans = await sbSelectStrict<PlanRow>(
+      "isp_plans",
+      `id=eq.${customer.plan_id}&admin_id=eq.${adminId}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,is_active&limit=1`,
+    );
+    const plan = plans[0];
+    if (!plan || normalizePlanServiceType(plan.type ?? "") !== "hotspot" || plan.is_active === false) {
+      res.status(409).json({ error: "The account's Hotspot plan is no longer available." });
+      return;
+    }
+    if (customer.port_id || plan.port_id) {
+      res.status(409).json({ error: "Direct device binding is available for router-level Hotspot accounts, not port-assigned services." });
+      return;
+    }
+    if ((customer.router_id && Number(customer.router_id) !== routerId) || (plan.router_id && Number(plan.router_id) !== routerId)) {
+      res.status(409).json({ error: "The account and plan must belong to the selected router." });
+      return;
+    }
+    const sameMacRows = await sbSelectStrict<ConnectedDeviceCustomerRow>(
+      "isp_customers",
+      `admin_id=eq.${adminId}&type=eq.hotspot&select=id,admin_id,name,phone,mac_address,username,pppoe_username,password,type,plan_id,router_id,port_id,ip_address,status,expires_at,fup_limit_mb,depletion_reason,data_used_bytes,service_online,last_seen&limit=10000`,
+    );
+    const conflictingAccount = sameMacRows.find((row) =>
+      Number(row.id) !== customerId
+      && normalizeHotspotMac(row.mac_address) === macAddress
+      && Number(row.router_id ?? plan.router_id ?? 0) === routerId
+      && row.status === "active",
+    );
+    if (conflictingAccount) {
+      res.status(409).json({ error: "This device is already linked to another active Hotspot account." });
+      return;
+    }
+
+    const routers = await sbSelectStrict<RouterRow>(
+      "isp_routers",
+      `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    );
+    const routerRow = routers[0];
+    if (!routerRow) {
+      res.status(404).json({ error: "Router not found for this ISP account." });
+      return;
+    }
+    creds = routerCredentials(routerRow);
+    const connectedDevices = await fetchHotspotConnectedDevices(creds, macAddress);
+    const liveDevice = connectedDevices.find((device) =>
+      normalizeHotspotMac(device.macAddress) === macAddress
+      && (device.source === "hotspot" || device.source === "host"),
+    );
+    if (!liveDevice) {
+      res.status(409).json({ error: "The device is no longer visible on this router. Refresh the connected-device list and try again." });
+      return;
+    }
+    const ipAddress = liveDevice.address || await resolveHotspotClientIpByMac(creds, macAddress);
+    if (!isValidIpv4(ipAddress)) {
+      res.status(409).json({ error: "The router has not reported a usable IP address for this device yet." });
+      return;
+    }
+    if (requestedIp && isValidIpv4(requestedIp) && requestedIp !== ipAddress) {
+      res.status(409).json({ error: "The device IP changed. Refresh the list and try again." });
+      return;
+    }
+    bindingComment = customer.username.trim();
+    const rateLimit = routerRateLimit(
+      plan.speed_down,
+      plan.speed_up,
+      plan.speed_down_unit ?? "Mbps",
+      plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
+    );
+    const expiresInSeconds = Math.max(1, Math.ceil((Date.parse(customer.expires_at) - Date.now()) / 1000));
+
+    bindingApplied = await addHotspotIpBinding(creds, {
+      macAddress,
+      ipAddress,
+      comment: bindingComment,
+      expiresInSeconds,
+      bindingType: "bypassed",
+    });
+    if (!bindingApplied) {
+      res.status(409).json({ error: "The router already has an administrator-managed binding for this device; it was left unchanged." });
+      return;
+    }
+    try {
+      await ensureHotspotUserRateQueue(creds, {
+        username: bindingComment,
+        address: ipAddress,
+        maxLimit: rateLimit,
+      });
+      queuePrepared = true;
+      await sbUpdateStrict(
+        "isp_customers",
+        `id=eq.${customerId}&admin_id=eq.${adminId}`,
+        {
+          mac_address: macAddress,
+          ip_address: ipAddress,
+          service_online: true,
+          last_seen: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      );
+    } catch (error) {
+      if (!accountAlreadyHadMac) {
+        await removeHotspotIpBinding(creds, { macAddress, comment: bindingComment }).catch(() => {});
+        if (queuePrepared) await removeHotspotUserRateQueue(creds, bindingComment).catch(() => {});
+      }
+      throw error;
+    }
+    res.json({
+      ok: true,
+      connected: true,
+      customerId,
+      username: bindingComment,
+      routerId,
+      macAddress,
+      ipAddress,
+      speed: rateLimit ?? "Plan default",
+      expiresAt: customer.expires_at,
+    });
+  } catch (error) {
+    logger.error({ err: error, adminId, customerId, routerId }, "[customers/hotspot-bind-device] failed");
+    if (bindingApplied && creds && !accountAlreadyHadMac && bindingComment) {
+      await removeHotspotIpBinding(creds, { macAddress, comment: bindingComment }).catch(() => {});
+      if (queuePrepared) await removeHotspotUserRateQueue(creds, bindingComment).catch(() => {});
+    }
+    res.status(500).json({ error: error instanceof Error ? error.message : "Could not bind this device." });
+  }
+});
+
+router.post("/customers/hotspot-voucher-activate", async (req, res): Promise<void> => {
+  const portal = req.hotspotPortalContext;
+  const adminId = Number(portal?.adminId ?? req.body?.adminId);
+  const routerId = Number(portal?.routerId ?? req.body?.routerId);
+  if (!Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(routerId) || routerId < 1) {
+    res.status(400).json({ error: "The ISP and router are required to activate this voucher." });
+    return;
+  }
+  if (portal?.portId) {
+    res.status(403).json({ error: "Voucher activation is not enabled for port-assigned services." });
+    return;
+  }
+  const requestedRouterId = Number(req.body?.routerId ?? 0);
+  if (requestedRouterId && requestedRouterId !== routerId) {
+    res.status(403).json({ error: "The voucher portal router does not match this device." });
+    return;
+  }
+
+  const code = normalizeRedeemableHotspotVoucherCode(req.body?.code);
+  const phone = normalizeKenyanVoucherPhone(req.body?.phone);
+  const macAddress = normalizeHotspotMac(req.body?.macAddress);
+  const ipAddress = String(req.body?.ipAddress ?? "").trim();
+  if (!code) {
+    res.status(400).json({ error: "Enter a valid voucher code with no spaces." });
+    return;
+  }
+  if (!phone) {
+    res.status(400).json({ error: "Enter a valid Kenyan mobile number." });
+    return;
+  }
+  if (!macAddress || !isValidIpv4(ipAddress)) {
+    res.status(400).json({ error: "The router did not provide this device's MAC address and IP. Reopen the Hotspot page and try again." });
+    return;
+  }
+
+  let accountCreated = false;
+  let claimedCustomer: CustomerRow | null = null;
+  let planName = "";
+  let duration = "";
+  let username = phone;
+  try {
+    const vouchers = await sbSelectStrict<{
+      id: number;
+      admin_id: number;
+      code: string;
+      plan_id: number | null;
+      plan_name: string;
+      router_id: number | null;
+      validity_mins: number;
+      expires_at: string | null;
+      redeemed_at: string | null;
+      redeemed_by_phone: string | null;
+      prepaid_customer_id: number | null;
+    }>(
+      "isp_radius_vouchers",
+      `admin_id=eq.${adminId}&code=ilike.${encodeURIComponent(code)}&select=id,admin_id,code,plan_id,plan_name,router_id,validity_mins,expires_at,redeemed_at,redeemed_by_phone,prepaid_customer_id&limit=1`,
+    );
+    const voucher = vouchers[0];
+    if (!voucher) {
+      res.status(404).json({ error: "Voucher code not found for this ISP." });
+      return;
+    }
+    if (voucher.redeemed_at && (voucher.redeemed_by_phone !== phone || !voucher.prepaid_customer_id)) {
+      res.status(409).json({ error: "This voucher has already been used." });
+      return;
+    }
+    if (!voucher.redeemed_at && voucher.expires_at && Date.parse(voucher.expires_at) <= Date.now()) {
+      res.status(410).json({ error: "This voucher has expired." });
+      return;
+    }
+    if (voucher.router_id && Number(voucher.router_id) !== routerId) {
+      res.status(409).json({ error: "This voucher is assigned to a different router." });
+      return;
+    }
+    if (!voucher.plan_id || Number(voucher.validity_mins) <= 0) {
+      res.status(409).json({ error: "This voucher is missing its plan or validity. Contact the ISP." });
+      return;
+    }
+
+    const plans = await sbSelectStrict<PlanRow>(
+      "isp_plans",
+      `id=eq.${voucher.plan_id}&admin_id=eq.${adminId}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,is_active&limit=1`,
+    );
+    const plan = plans[0];
+    if (
+      !plan
+      || normalizePlanServiceType(plan.type ?? "") !== "hotspot"
+      || plan.port_id
+      || (plan.router_id && Number(plan.router_id) !== routerId)
+      || (!voucher.redeemed_at && plan.is_active === false)
+    ) {
+      res.status(409).json({ error: "This voucher's Hotspot plan is unavailable on this router." });
+      return;
+    }
+    planName = plan.name;
+    duration = formatVoucherDuration(Number(voucher.validity_mins));
+
+    const routerRows = await sbSelectStrict<RouterRow>(
+      "isp_routers",
+      `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    );
+    const routerRow = routerRows[0];
+    if (!routerRow) {
+      res.status(404).json({ error: "The Hotspot router was not found." });
+      return;
+    }
+    const creds = routerCredentials(routerRow);
+    const liveDevices = await fetchHotspotConnectedDevices(creds, macAddress);
+    const liveDevice = liveDevices.find((device) =>
+      normalizeHotspotMac(device.macAddress) === macAddress
+      && (device.source === "hotspot" || device.source === "host")
+      && device.address === ipAddress,
+    );
+    if (!liveDevice) {
+      res.status(409).json({ error: "This device is not currently visible on the router. Reopen the Hotspot page and try again." });
+      return;
+    }
+
+    const generatedPassword = randomBytes(24).toString("base64url");
+    const claimResult = await sbRpc<Record<string, unknown> | Array<Record<string, unknown>>>(
+      "claim_hotspot_voucher_account",
+      {
+        p_admin_id: adminId,
+        p_code: code,
+        p_phone: phone,
+        p_password: generatedPassword,
+        p_router_id: routerId,
+        p_mac_address: macAddress,
+        p_ip_address: ipAddress,
+      },
+    );
+    const claim = (Array.isArray(claimResult) ? claimResult[0] : claimResult) as Record<string, unknown> | undefined;
+    const customerId = Number(claim?.customer_id);
+    if (!Number.isSafeInteger(customerId) || customerId < 1) {
+      throw new Error("Voucher account creation did not return a customer record.");
+    }
+    accountCreated = true;
+    const claimedRows = await sbSelectStrict<CustomerRow>(
+      "isp_customers",
+      `id=eq.${customerId}&admin_id=eq.${adminId}&select=id,admin_id,name,phone,mac_address,username,pppoe_username,password,type,plan_id,router_id,port_id,ip_address,status,expires_at,fup_limit_mb,depletion_reason&limit=1`,
+    );
+    claimedCustomer = claimedRows[0] ?? null;
+    if (!claimedCustomer?.username || !claimedCustomer.password) {
+      throw new Error("The voucher account was created but its login record is incomplete.");
+    }
+    if (!claimedCustomer.expires_at || !Number.isFinite(Date.parse(claimedCustomer.expires_at))) {
+      throw new Error("The voucher account does not have a valid expiry time.");
+    }
+    username = claimedCustomer.username;
+
+    // Remove the voucher credential after the atomic claim. A retry with the
+    // same phone returns the existing account and safely repeats this cleanup.
+    await Promise.all([
+      sbDeleteStrict("radcheck", `username=eq.${encodeURIComponent(code)}`),
+      sbDeleteStrict("radusergroup", `username=eq.${encodeURIComponent(code)}`),
+    ]);
+
+    const possibleRouters = voucher.router_id || plan.router_id
+      ? await sbSelectStrict<RouterRow>(
+          "isp_routers",
+          `id=eq.${Number(voucher.router_id ?? plan.router_id)}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+        )
+      : await sbSelectStrict<RouterRow>(
+          "isp_routers",
+          `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret`,
+        );
+    const warnings: string[] = [];
+    const localVoucherCleanup = await Promise.allSettled(possibleRouters.map(async (candidateRouter) => {
+      const candidateCreds = routerCredentials(candidateRouter);
+      const localUsers = await fetchHotspotUserList(candidateCreds);
+      const syncedVoucher = localUsers.find((user) =>
+        user.name === code && String(user.comment ?? "").includes(" voucher · "),
+      );
+      if (syncedVoucher) await removeHotspotUser(candidateCreds, code);
+    }));
+    if (localVoucherCleanup.some(result => result.status === "rejected")) {
+      warnings.push("Some offline routers may still have an old copy of this voucher; the voucher is already blocked in the account system.");
+    }
+
+    const profile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
+    const normalRateLimit = routerRateLimit(
+      plan.speed_down,
+      plan.speed_up,
+      plan.speed_down_unit ?? "Mbps",
+      plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
+    );
+    const dataLimitMb = Number(plan.data_limit_mb ?? 0);
+    const capBytes = dataLimitMb > 0 ? dataLimitMegabytesToBytes(dataLimitMb) : null;
+    const dataCapMode = plan.data_cap_mode === "throttle" ? "throttle" : "disconnect";
+    const fupRateLimit = dataCapMode === "throttle" && capBytes !== null
+      ? routerRateLimit(plan.fup_speed_down, plan.fup_speed_up, "Mbps", "Mbps")
+      : undefined;
+    if (dataCapMode === "throttle" && capBytes !== null && !fupRateLimit) {
+      throw new Error("The plan's reduced-speed settings are incomplete.");
+    }
+    await ensureHotspotUserProfile(creds, {
+      name: profile,
+      sharedUsers: plan.shared_users ?? 1,
+      rateLimit: fupRateLimit ?? normalRateLimit,
+    });
+    await reconcileHotspotUserAccess(creds, {
+      name: claimedCustomer.username,
+      password: claimedCustomer.password,
+      profile,
+      comment: `OSN-VOUCHER:${voucher.id}`,
+      expiresAt: claimedCustomer.expires_at,
+      enabled: claimedCustomer.status === "active",
+      limitBytesTotal: dataCapMode === "throttle" ? "0" : capBytes === null ? "0" : String(capBytes),
+      address: ipAddress,
+      macAddress,
+      rateLimit: fupRateLimit ?? normalRateLimit,
+      dataCapMode,
+      ...(dataCapMode === "throttle" && capBytes !== null && fupRateLimit ? {
+        fupLimitBytes: capBytes,
+        fupSpeedDownMbps: Number(plan.fup_speed_down),
+        fupSpeedUpMbps: Number(plan.fup_speed_up),
+      } : {}),
+      sharedUsers: plan.shared_users ?? 1,
+      resetCounters: false,
+    });
+    const expiresInSeconds = Math.max(1, Math.ceil((Date.parse(claimedCustomer.expires_at) - Date.now()) / 1000));
+    const bindingCreated = await addHotspotIpBinding(creds, {
+      macAddress,
+      ipAddress,
+      comment: claimedCustomer.username,
+      expiresInSeconds,
+      bindingType: "bypassed",
+    });
+    if (!bindingCreated) {
+      throw new Error("The router has an administrator-managed binding for this device; it was not changed.");
+    }
+    await ensureHotspotUserRateQueue(creds, {
+      username: claimedCustomer.username,
+      address: ipAddress,
+      maxLimit: fupRateLimit ?? normalRateLimit,
+    });
+    await sbUpdateStrict(
+      "isp_customers",
+      `id=eq.${customerId}&admin_id=eq.${adminId}`,
+      {
+        mac_address: macAddress,
+        ip_address: ipAddress,
+        service_online: true,
+        last_seen: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    );
+    res.json({
+      ok: true,
+      accountCreated: true,
+      connected: true,
+      username,
+      voucher: {
+        plan_name: planName,
+        duration,
+        username,
+        connected: true,
+      },
+      warning: warnings.join(" ") || undefined,
+    });
+  } catch (error) {
+    logger.error({ err: error, adminId, routerId, accountCreated }, "[customers/hotspot-voucher-activate] failed");
+    if (accountCreated) {
+      res.status(503).json({
+        error: "Your account has been created, but the router has not confirmed the connection. Keep this voucher and phone number, then retry.",
+        accountCreated: true,
+        connected: false,
+        username,
+        voucher: {
+          plan_name: planName,
+          duration,
+          username,
+          connected: false,
+        },
+      });
+      return;
+    }
+    res.status(500).json({ error: error instanceof Error ? error.message : "Voucher activation failed." });
+  }
+});
+
 router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   const adminId = Number(req.body?.adminId);
   const username = String(req.body?.username ?? "").trim();

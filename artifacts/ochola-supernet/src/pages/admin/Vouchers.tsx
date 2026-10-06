@@ -82,6 +82,7 @@ interface VoucherGenerationInput {
   planId: number;
   routerId: number | null;
   prefix: string;
+  fixedCode: string;
   expiryDate: string | null;
 }
 
@@ -141,6 +142,7 @@ function GenerateModal({
   const [selectedRouterId, setSelectedRouterId] = useState<number | "all">("all");
   const [qty, setQty] = useState(5);
   const [prefix, setPrefix] = useState("");
+  const [fixedCode, setFixedCode] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
   const [generating, setGenerating] = useState(false);
 
@@ -151,10 +153,11 @@ function GenerateModal({
     if (!plan) return;
     setGenerating(true);
     onGenerate({
-      quantity: qty,
+      quantity: fixedCode ? 1 : qty,
       planId: plan.id,
       routerId: router?.id ?? null,
       prefix,
+      fixedCode: fixedCode.trim().toUpperCase(),
       expiryDate: expiryDate || null,
     });
   };
@@ -230,18 +233,35 @@ function GenerateModal({
             <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
               <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Quantity</span>
               <input
-                type="number" min={1} max={100} value={qty}
+                type="number" min={1} max={100} value={fixedCode ? 1 : qty} disabled={!!fixedCode}
                 onChange={e => setQty(Math.min(100, Math.max(1, Number(e.target.value))))}
-                style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%" }} />
+                style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%", opacity: fixedCode ? 0.6 : 1 }} />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
               <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Code Prefix <span style={{ textTransform: "none", opacity: 0.6 }}>(optional)</span></span>
               <input
-                type="text" placeholder="e.g. HN" value={prefix}
+                type="text" placeholder="e.g. HN" value={prefix} disabled={!!fixedCode}
                 onChange={e => setPrefix(e.target.value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 6))}
-                style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%" }} />
+                style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%", opacity: fixedCode ? 0.6 : 1 }} />
             </label>
           </div>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              Fixed voucher code <span style={{ textTransform: "none", opacity: 0.6 }}>(optional · 3–32 letters or numbers, no spaces)</span>
+            </span>
+            <input
+              type="text"
+              placeholder="e.g. HYT46 or T6Y"
+              maxLength={32}
+              value={fixedCode}
+              onChange={e => setFixedCode(e.target.value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 32).toUpperCase())}
+              style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%" }}
+            />
+            {fixedCode.length > 0 && fixedCode.length < 3 && (
+              <span style={{ fontSize: "0.68rem", color: "#f87171" }}>Use at least three letters or numbers.</span>
+            )}
+          </label>
 
           {/* Expiry */}
           <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
@@ -255,7 +275,7 @@ function GenerateModal({
           {/* Preview code */}
           <div style={{ background: "var(--isp-inner-card)", borderRadius: 8, padding: "0.75rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
             <span style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>Sample code:</span>
-            <code style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-accent)", letterSpacing: "0.12em" }}>{previewCode(prefix)}</code>
+            <code style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-accent)", letterSpacing: "0.12em" }}>{fixedCode || previewCode(prefix)}</code>
           </div>
 
           {/* Actions */}
@@ -265,10 +285,10 @@ function GenerateModal({
             </button>
             <button
               onClick={handleGenerate}
-              disabled={generating || !plan}
+              disabled={generating || !plan || (fixedCode.length > 0 && fixedCode.length < 3)}
               style={{ flex: 2, padding: "0.7rem", borderRadius: 10, background: generating ? "var(--isp-accent-border)" : "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: generating ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
               {generating ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Ticket size={15} />}
-              {generating ? "Generating…" : `Generate ${qty} Voucher${qty !== 1 ? "s" : ""}`}
+              {generating ? "Generating…" : fixedCode ? "Create Fixed Voucher" : `Generate ${qty} Voucher${qty !== 1 ? "s" : ""}`}
             </button>
           </div>
         </div>
