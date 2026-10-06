@@ -2190,6 +2190,9 @@ export interface HotspotConnectedDevice {
   macAddress: string;
   address: string;
   source: "hotspot" | "dhcp" | "host" | "arp";
+  uptime?: string;
+  bytesIn?: number;
+  bytesOut?: number;
 }
 
 function validRouterMac(value: unknown): string {
@@ -2227,8 +2230,29 @@ export async function fetchHotspotConnectedDevices(
       const address = String(row.address ?? "").trim();
       const name = (reportedName || `Network device ${mac}`).slice(0, 64);
       const previous = byMac.get(mac);
-      if (!previous || source === "hotspot" || (!previous.address && address)) {
-        byMac.set(mac, { name, macAddress: mac, address, source });
+      const candidate: HotspotConnectedDevice = {
+        name,
+        macAddress: mac,
+        address,
+        source,
+        uptime: String(row.uptime ?? "").trim() || undefined,
+        bytesIn: parseBytes(row["bytes-in"]),
+        bytesOut: parseBytes(row["bytes-out"]),
+      };
+      if (!previous) {
+        byMac.set(mac, candidate);
+      } else if (source === "hotspot" || source === "host") {
+        byMac.set(mac, {
+          ...previous,
+          ...candidate,
+          name: reportedName || previous.name,
+          address: address || previous.address,
+          uptime: candidate.uptime || previous.uptime,
+          bytesIn: Math.max(previous.bytesIn ?? 0, candidate.bytesIn ?? 0),
+          bytesOut: Math.max(previous.bytesOut ?? 0, candidate.bytesOut ?? 0),
+        });
+      } else if (!previous.address && address) {
+        byMac.set(mac, { ...candidate, uptime: previous.uptime, bytesIn: previous.bytesIn, bytesOut: previous.bytesOut });
       }
     };
 
@@ -3697,6 +3721,58 @@ export async function ensureHotspotUserRateQueue(
     );
     await withTimeout(conn.write(command), ms);
   });
+}
+
+export async function fetchHotspotUserRateQueueStatsBulk(
+  creds: RouterCredentials,
+  usernames: string[],
+): Promise<Record<string, { bytesIn: number; bytesOut: number; totalBytes: number; rate: string; maxLimit: string }>> {
+  const requested = new Map<string, { username: string; comment: string }>();
+  for (const rawUsername of usernames) {
+    const username = String(rawUsername ?? "").trim();
+    if (!username) continue;
+    requested.set(hotspotRateQueueName(username), {
+      username,
+      comment: hotspotRateQueueComment(username),
+    });
+  }
+  if (!requested.size) return {};
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write([
+        "/queue/simple/print",
+        "=.proplist=name,comment,bytes,bytes-in,bytes-out,rate,max-limit",
+      ]),
+      ms,
+    ) as Record<string, string>[];
+    const result: Record<string, { bytesIn: number; bytesOut: number; totalBytes: number; rate: string; maxLimit: string }> = {};
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const expected = requested.get(String(row.name ?? ""));
+      if (!expected || (row.comment !== expected.comment && row.comment !== expected.username)) continue;
+      const byteParts = String(row.bytes ?? "").split("/");
+      const bytesIn = row["bytes-in"] !== undefined ? parseBytes(row["bytes-in"]) : parseBytes(byteParts[1]);
+      const bytesOut = row["bytes-out"] !== undefined ? parseBytes(row["bytes-out"]) : parseBytes(byteParts[0]);
+      result[expected.username] = {
+        bytesIn,
+        bytesOut,
+        totalBytes: bytesIn + bytesOut,
+        rate: String(row.rate ?? ""),
+        maxLimit: String(row["max-limit"] ?? ""),
+      };
+    }
+    return result;
+  });
+}
+
+export async function fetchHotspotUserRateQueueStats(
+  creds: RouterCredentials,
+  username: string,
+): Promise<{ bytesIn: number; bytesOut: number; totalBytes: number; rate: string; maxLimit: string } | null> {
+  const cleanUsername = String(username ?? "").trim();
+  if (!cleanUsername) return null;
+  const stats = await fetchHotspotUserRateQueueStatsBulk(creds, [cleanUsername]);
+  return stats[cleanUsername] ?? null;
 }
 
 export async function removeHotspotUserRateQueue(

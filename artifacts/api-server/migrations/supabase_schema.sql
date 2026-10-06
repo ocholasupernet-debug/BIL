@@ -772,10 +772,16 @@ create table if not exists isp_radius_vouchers (
   price          numeric(12,2) not null default 0,
   validity_mins  integer not null default 0,
   expires_at     timestamptz,
-  created_at     timestamptz not null default now()
+  created_at     timestamptz not null default now(),
+  redeemed_at    timestamptz,
+  redeemed_by_phone text,
+  prepaid_customer_id bigint references isp_customers(id) on delete set null
 );
 create index if not exists isp_radius_vouchers_admin_created_idx
   on isp_radius_vouchers(admin_id, created_at desc);
+create unique index if not exists isp_radius_vouchers_prepaid_customer_uidx
+  on isp_radius_vouchers(prepaid_customer_id)
+  where prepaid_customer_id is not null;
 
 -- Tenant-owned index for MAC bypass credentials stored in FreeRADIUS.
 create table if not exists isp_hotspot_mac_bypasses (

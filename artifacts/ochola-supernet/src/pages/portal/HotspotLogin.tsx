@@ -445,7 +445,7 @@ function HotspotLoginView({
       const params = new URLSearchParams(window.location.search);
       return {
         mac: normalizeMacAddress(params.get("mac") ?? params.get("mac-address") ?? ""),
-        ip: normalizeClientIp(params.get("ip") ?? ""),
+        ip: normalizeClientIp(params.get("ip") ?? params.get("ip-address") ?? ""),
         linkLogin: params.get("link-login-only") ?? params.get("link-login") ?? "",
         linkOrig: params.get("link-orig") ?? "",
       };
@@ -1426,23 +1426,35 @@ function HotspotLoginView({
   );
 
   const [voucherCode, setVoucherCode] = useState("");
+  const [voucherPhone, setVoucherPhone] = useState("");
   const [voucherLoading, setVoucherLoading] = useState(false);
   const [voucherError, setVoucherError] = useState("");
   const [voucherSuccess, setVoucherSuccess] = useState(false);
   const [voucherInfo, setVoucherInfo] = useState<Record<string, unknown> | null>(null);
-
-  const handleVoucher = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleVoucher = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     setVoucherError(""); setVoucherLoading(true);
     try {
-      const res = await hotspotPortalFetch(hotspotApiUrl("/api/vouchers/redeem"), {
+      const res = await hotspotPortalFetch(hotspotApiUrl("/api/customers/hotspot-voucher-activate"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...(adminId ? { adminId } : {}), code: voucherCode.trim().toUpperCase() }),
+        body: JSON.stringify({
+          ...(adminId ? { adminId } : {}),
+          code: voucherCode.trim().toUpperCase(),
+          phone: voucherPhone.trim(),
+          macAddress: portalContext.mac,
+          ipAddress: portalContext.ip,
+          routerId: portalScope.routerId,
+        }),
       });
       const data = await res.json();
-      if (!res.ok) setVoucherError(data.error ?? "Voucher redemption failed");
-      else { setVoucherInfo(data.voucher); setVoucherSuccess(true); }
+      if (!res.ok && !data.accountCreated) setVoucherError(data.error ?? "Voucher activation failed");
+      else {
+        setVoucherInfo(data.voucher ?? data);
+        setVoucherSuccess(true);
+        if (data.connected === false) setVoucherError(String(data.error ?? "The account is saved; connection is still pending."));
+        else if (data.warning) setVoucherError(String(data.warning));
+      }
     } catch { setVoucherError("Could not reach the server. Please try again."); }
     finally { setVoucherLoading(false); }
   };
@@ -1456,6 +1468,8 @@ function HotspotLoginView({
   const isTvMode = paymentMode === "tv";
   const voucherPlanName = voucherInfo?.plan_name == null ? "" : String(voucherInfo.plan_name);
   const voucherDuration = voucherInfo?.duration == null ? "" : String(voucherInfo.duration);
+  const voucherUsername = voucherInfo?.username == null ? "" : String(voucherInfo.username);
+  const voucherConnected = voucherInfo?.connected === true;
   const troubleshootStatus = loginSession
     ? {
         active: {
@@ -2832,7 +2846,7 @@ function HotspotLoginView({
                   </div>
                   <div>
                     <div className="hp-glass-title">Redeem Voucher</div>
-                    <div className="hp-glass-desc">Enter your voucher code below</div>
+                    <div className="hp-glass-desc">Enter your phone number and voucher code</div>
                   </div>
                 </div>
                 <div className="hp-glass-body">
@@ -2841,20 +2855,35 @@ function HotspotLoginView({
                       <div className="hp-success-icon">
                         <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
                       </div>
-                      <h3>Voucher Activated!</h3>
+                      <h3>{voucherConnected ? "Voucher Activated!" : "Account Created"}</h3>
                       {voucherPlanName && (
                         <p>Plan: <strong style={{ color: "#fff" }}>{voucherPlanName}</strong></p>
+                      )}
+                      {voucherUsername && (
+                        <p>Hotspot username: <strong style={{ color: "#fff" }}>{voucherUsername}</strong></p>
                       )}
                       {voucherDuration && (
                         <p style={{ marginBottom: 16 }}>Duration: <strong style={{ color: "#fff" }}>{voucherDuration}</strong></p>
                       )}
-                      <div className="hp-connected-badge">
-                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399" }} />
-                        Connected
+                      <div className="hp-connected-badge" style={!voucherConnected ? { color: "#fbbf24" } : undefined}>
+                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: voucherConnected ? "#34d399" : "#fbbf24" }} />
+                        {voucherConnected ? "Connected" : "Connection pending"}
                       </div>
+                      {!voucherConnected && (
+                        <>
+                          <p style={{ marginTop: 12, color: "rgba(255,255,255,0.55)", fontSize: 13 }}>
+                            Keep this device on the hotspot and retry. Your voucher will not create a second account.
+                          </p>
+                          {voucherError && <div className="hp-error"><AlertCircle size={14} />{voucherError}</div>}
+                          <button type="button" className="hp-btn hp-btn-ghost" disabled={voucherLoading}
+                            onClick={() => void handleVoucher()}>
+                            {voucherLoading ? "Connecting…" : "Retry connection"}
+                          </button>
+                        </>
+                      )}
                       <br />
                       <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
-                        onClick={() => { setVoucherSuccess(false); setVoucherCode(""); setVoucherInfo(null); }}>
+                        onClick={() => { setVoucherSuccess(false); setVoucherCode(""); setVoucherPhone(""); setVoucherInfo(null); setVoucherError(""); }}>
                         Redeem Another
                       </button>
                     </div>
@@ -2863,7 +2892,7 @@ function HotspotLoginView({
                       <div className="hp-voucher-hint">
                         <Ticket size={20} color="#fbbf24" style={{ marginBottom: 6 }} />
                         <p style={{ fontSize: 13, color: "rgba(255,255,255,0.4)", fontWeight: 500 }}>
-                          Enter the code from your voucher card
+                          Enter the phone number for the account and the code from your voucher card
                         </p>
                       </div>
 
@@ -2875,9 +2904,14 @@ function HotspotLoginView({
                       )}
 
                       <div className="hp-input-group">
+                        <input className="hp-input" type="tel"
+                          placeholder="Phone number (07… or 2547…)" required
+                          value={voucherPhone} onChange={e => setVoucherPhone(e.target.value)} />
+                      </div>
+                      <div className="hp-input-group">
                         <input className="hp-input hp-voucher-input" type="text"
-                          placeholder="XXXX-XXXX-XXXX" required
-                          value={voucherCode} onChange={e => setVoucherCode(e.target.value.toUpperCase())} />
+                          placeholder="Voucher code (e.g. HYT46)" required minLength={3} maxLength={32}
+                          value={voucherCode} onChange={e => setVoucherCode(e.target.value.replace(/[^a-zA-Z0-9-]/g, "").toUpperCase())} />
                       </div>
 
                       <button type="submit" disabled={voucherLoading} className="hp-btn hp-btn-voucher">

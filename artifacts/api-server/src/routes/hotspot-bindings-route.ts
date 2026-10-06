@@ -14,13 +14,32 @@ interface DbCustomer {
   id: number;
   admin_id: number;
   name: string | null;
+  phone: string | null;
   username: string | null;
   pppoe_username: string | null;
   mac_address: string | null;
   ip_address: string | null;
   type: string | null;
+  plan_id: number | null;
+  router_id: number | null;
+  port_id: number | null;
   status: string;
   expires_at: string | null;
+  data_used_bytes: number | null;
+  service_online: boolean | null;
+  last_seen: string | null;
+}
+
+interface HotspotPlanLite {
+  id: number;
+  name: string;
+  router_id: number | null;
+  port_id: number | null;
+  speed_down: number | null;
+  speed_up: number | null;
+  speed_down_unit: string | null;
+  speed_up_unit: string | null;
+  data_limit_mb: number | null;
 }
 
 interface OwnedBypass {
@@ -155,10 +174,10 @@ router.get("/hotspot-bindings", requireAdmin(), async (req, res): Promise<void> 
   if (!adminId) return;
 
   try {
-    const [allCustomers, bypassRows, routers] = await Promise.all([
+    const [allCustomers, bypassRows, routers, plans] = await Promise.all([
       sbSelectStrict<DbCustomer>(
         "isp_customers",
-        `admin_id=eq.${adminId}&select=id,admin_id,name,username,pppoe_username,mac_address,ip_address,type,status,expires_at&order=name.asc&limit=10000`,
+        `admin_id=eq.${adminId}&select=id,admin_id,name,phone,username,pppoe_username,mac_address,ip_address,type,plan_id,router_id,port_id,status,expires_at,data_used_bytes,service_online,last_seen&order=name.asc&limit=10000`,
       ),
       sbSelectStrict<OwnedBypass>(
         "isp_hotspot_mac_bypasses",
@@ -168,11 +187,16 @@ router.get("/hotspot-bindings", requireAdmin(), async (req, res): Promise<void> 
         "isp_routers",
         `admin_id=eq.${adminId}&status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,name,host,status&order=name.asc`,
       ),
+      sbSelectStrict<HotspotPlanLite>(
+        "isp_plans",
+        `admin_id=eq.${adminId}&type=in.(hotspot,trials,trial)&is_active=is.true&port_id=is.null&select=id,name,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb&order=price.asc&limit=1000`,
+      ),
     ]);
 
     res.json({
       customers: allCustomers.filter(customer => Boolean(customer.mac_address)),
       allCustomers,
+      plans: plans.map(plan => ({ ...plan, id: Number(plan.id) })),
       bypasses: bypassRows.map(row => ({
         id: Number(row.id),
         username: row.username,
