@@ -18,9 +18,8 @@ import {
 import { RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
 import {
   consumeWhatsAppActionToken,
-  getWhatsAppSettings,
-  isWhatsAppFeatureEnabled,
 } from "../services/whatsapp/whatsapp-service.js";
+import { isWhatsAppOtpFeatureEnabled } from "../services/whatsapp/whatsapp-otp-delivery.js";
 import {
   consumeSmsActionToken,
   getSmsSettings,
@@ -263,11 +262,7 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
     process.env.WHATSAPP_REQUIRE_REGISTRATION_VERIFICATION === "true";
   let smsRegistrationVerificationRequired = false;
   try {
-    const whatsappSettings = await getWhatsAppSettings();
-    registrationVerificationRequired ||= isWhatsAppFeatureEnabled(
-      whatsappSettings,
-      "registrationVerification",
-    );
+    registrationVerificationRequired ||= await isWhatsAppOtpFeatureEnabled("registrationVerification");
   } catch (error) {
     logger.warn({ err: error }, "[registration] WhatsApp settings unavailable; using the configured registration policy");
     if (registrationVerificationRequired) {

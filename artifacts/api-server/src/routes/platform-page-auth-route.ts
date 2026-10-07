@@ -36,8 +36,13 @@ import {
   getWhatsAppSettings,
   isWhatsAppEnabled,
   normalizeWhatsAppPhone,
-  sendWhatsAppOtp,
 } from "../services/whatsapp/whatsapp-service.js";
+import {
+  getWhatsAppOtpProvider,
+  isWhatsAppOtpDeliveryReady,
+  isWhatsAppOtpFeatureEnabled,
+  sendConfiguredWhatsAppOtp,
+} from "../services/whatsapp/whatsapp-otp-delivery.js";
 import {
   getPlatformEmailSettings,
   isValidEmailAddress,
@@ -162,14 +167,22 @@ async function sendPageOtp(
   }
 
   const phone = normalizeWhatsAppPhone(storedPhone);
-  const [settings, secrets] = await Promise.all([getWhatsAppSettings(), getWhatsAppSecretsStatus()]);
+  const provider = await getWhatsAppOtpProvider();
   if (
-    !phone || !isWhatsAppEnabled(settings) ||
-    !secrets.accessTokenConfigured ||
-    !settings.phoneNumberId ||
-    !settings.templates.authentication
+    !phone ||
+    !await isWhatsAppOtpFeatureEnabled("pageVerification") ||
+    !await isWhatsAppOtpDeliveryReady("pageVerification", provider)
   ) throw new Error("WhatsApp delivery is not available.");
-  await sendWhatsAppOtp(phone, code);
+  if (provider === "whatsapp_cloud") {
+    const [settings, secrets] = await Promise.all([getWhatsAppSettings(), getWhatsAppSecretsStatus()]);
+    if (
+      !isWhatsAppEnabled(settings) ||
+      !secrets.accessTokenConfigured ||
+      !settings.phoneNumberId ||
+      !settings.templates.authentication
+    ) throw new Error("WhatsApp delivery is not available.");
+  }
+  await sendConfiguredWhatsAppOtp(phone, code, "pageVerification", provider);
   return maskPhone(phone);
 }
 

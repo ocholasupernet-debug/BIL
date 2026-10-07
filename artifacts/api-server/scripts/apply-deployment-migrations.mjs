@@ -108,6 +108,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_whatsapp_integration.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_whatsapp_secure_credentials.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_whatsapp_security_events.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_waha_gateway.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_sms_integration.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_registration_contact_reuse_limit.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_platform_auth_security_controls.sql", import.meta.url)),

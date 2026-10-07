@@ -11,8 +11,12 @@ import {
 } from "../../lib/supabase-client.js";
 import {
   generateWhatsAppOtp,
-  sendWhatsAppOtp,
 } from "./whatsapp-service.js";
+import {
+  isWhatsAppOtpDeliveryReady,
+  isWhatsAppOtpFeatureEnabled,
+  sendConfiguredWhatsAppOtp,
+} from "./whatsapp-otp-delivery.js";
 
 const OTP_TTL_SECONDS = 5 * 60;
 const GRANT_TTL_SECONDS = 10 * 60;
@@ -68,6 +72,12 @@ export async function issueWhatsAppGatewaySettingsOtp(input: {
       !input.sessionToken) {
     return { outcome: "invalid" };
   }
+  if (
+    !await isWhatsAppOtpFeatureEnabled("gatewaySettings") ||
+    !await isWhatsAppOtpDeliveryReady("gatewaySettings")
+  ) {
+    return { outcome: "unavailable" };
+  }
 
   const challengeId = randomUUID();
   const code = generateWhatsAppOtp();
@@ -86,7 +96,7 @@ export async function issueWhatsAppGatewaySettingsOtp(input: {
     return { outcome: issued[0]?.outcome ?? "unavailable" };
   }
 
-  await sendWhatsAppOtp(input.phone, code);
+  await sendConfiguredWhatsAppOtp(input.phone, code, "gatewaySettings");
   return { outcome: "issued", challengeId };
 }
 

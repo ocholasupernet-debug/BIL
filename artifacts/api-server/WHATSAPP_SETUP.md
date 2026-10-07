@@ -31,6 +31,10 @@ Set these variables in Replit Secrets for development. For the external VPS, add
 | `WHATSAPP_BUSINESS_PHONE` | No | Display-only sender phone override |
 | `WHATSAPP_API_VERSION` | No | Graph API version; defaults to `v23.0` |
 | `WHATSAPP_DEFAULT_COUNTRY_CODE` | No | Default calling code for local-format phone numbers; defaults to `254` |
+| `WAHA_BASE_URL` | No | WAHA server address; defaults to `http://localhost:3000` |
+| `WAHA_API_KEY` | No | Optional server-side fallback for the WAHA API key |
+| `WAHA_SESSION_ID` | No | WAHA session name; defaults to `default` |
+| `WAHA_DEFAULT_COUNTRY_CODE` | No | Default calling code for WAHA local-format numbers; defaults to `254` |
 | `WHATSAPP_AUTHENTICATION_TEMPLATE` | No | Overrides the configured OTP template name |
 | `WHATSAPP_PAYMENT_TEMPLATE` | No | Overrides the configured payment template name |
 | `WHATSAPP_RENEWAL_TEMPLATE` | No | Overrides the configured renewal template name |
@@ -39,13 +43,17 @@ Set these variables in Replit Secrets for development. For the external VPS, add
 | `WHATSAPP_RESELLER_TEMPLATE` | No | Reserved for reseller notices |
 | `WHATSAPP_TEST_TEMPLATE` | No | Overrides the configured test template name |
 
-Never put the access token, App Secret, or verify token in the settings form, database, source control, or chat.
+Never commit credentials to source control or paste them into chat. Use the encrypted credential fields on the Super Admin WhatsApp page, or use the documented server environment-secret flow.
 
 ## Super Admin configuration
 
-Add the GitHub Actions secrets `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, and `WHATSAPP_APP_SECRET`; optionally add `WHATSAPP_PHONE_NUMBER_ID`. After the database migration is applied, open **Super Admin → WhatsApp**. Configure the non-secret IDs, sender display number, language, and exact approved template names. The page reports whether the three server secrets are present and checks the Cloud API connection. Enable the main switch only after the connection and templates are ready; then turn on the individual features needed.
+Add the GitHub Actions secrets `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, and `WHATSAPP_APP_SECRET`; optionally add `WHATSAPP_PHONE_NUMBER_ID`. For WAHA environment fallback on the VPS, add `WAHA_BASE_URL`, `WAHA_API_KEY`, `WAHA_SESSION_ID`, and optionally `WAHA_DEFAULT_COUNTRY_CODE`. Alternatively, store the WAHA key in the page; it is encrypted separately from Meta credentials. After the database migrations are applied, open **Super Admin → WhatsApp**. Configure the Meta IDs, sender display number, language, and approved template names as needed. The page also has independent WAHA URL, session, key, OTP provider, and feature settings, plus a WAHA test-send control.
 
-The production migration runner applies `migrations/2026_whatsapp_integration.sql`. Do not apply the migration manually to the separate billing system.
+The production migration runner applies `migrations/2026_whatsapp_integration.sql` and `migrations/2026_waha_gateway.sql`. Do not apply these migrations manually to the separate billing system.
+
+WAHA is only selected for OTP and verification messages. Customer payment, renewal, and expiry notifications continue through Meta Cloud API. The OTP text is `Your OcholaSuperNet verification code is: {code}. Valid for 5 minutes.` WAHA challenges expire after five minutes and use the existing server-side hashed OTP storage and verification flow.
+
+WAHA delivery is server-to-server: the API server calls the configured WAHA host. Captive clients continue to call the public application API and never receive the WAHA key, so no direct MikroTik HotSpot walled-garden exception for WAHA is generated. If WAHA is on a private network, make that endpoint reachable from the API server/VPS and restrict it to that server.
 
 ## Template contract
 

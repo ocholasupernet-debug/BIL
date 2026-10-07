@@ -6,7 +6,19 @@ import path from "node:path";
 import test from "node:test";
 import { syncWhatsAppEnv } from "../sync-whatsapp-env.mjs";
 
-test("syncs provided WhatsApp secrets while preserving unrelated VPS settings", async t => {
+test("forwards optional WAHA settings and key to the VPS environment sync step", async () => {
+  const workflow = await readFile(
+    new URL("../../.github/workflows/deploy.yml", import.meta.url),
+    "utf8",
+  );
+  const sshActionEnvs = workflow.match(/^\s+envs: ([^\n]+)$/m)?.[1] ?? "";
+  for (const key of ["WAHA_BASE_URL", "WAHA_API_KEY", "WAHA_SESSION_ID", "WAHA_DEFAULT_COUNTRY_CODE"]) {
+    assert.ok(sshActionEnvs.split(",").includes(key), `${key} is forwarded to the VPS SSH session`);
+    assert.match(workflow, new RegExp(`${key}: \\$\\{\\{ secrets\\.${key} \\}\\}`));
+  }
+});
+
+test("syncs provided WhatsApp and WAHA secrets while preserving unrelated VPS settings", async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "whatsapp-env-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const envPath = path.join(directory, ".env");
@@ -19,6 +31,10 @@ test("syncs provided WhatsApp secrets while preserving unrelated VPS settings", 
       WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify-token",
       WHATSAPP_APP_SECRET: "",
       WHATSAPP_PHONE_NUMBER_ID: "123456789",
+      WAHA_BASE_URL: "http://localhost:3000",
+      WAHA_API_KEY: "waha-secret",
+      WAHA_SESSION_ID: "default",
+      WAHA_DEFAULT_COUNTRY_CODE: "254",
     },
   });
 
@@ -27,12 +43,20 @@ test("syncs provided WhatsApp secrets while preserving unrelated VPS settings", 
     "WHATSAPP_ACCESS_TOKEN",
     "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
     "WHATSAPP_PHONE_NUMBER_ID",
+    "WAHA_BASE_URL",
+    "WAHA_API_KEY",
+    "WAHA_SESSION_ID",
+    "WAHA_DEFAULT_COUNTRY_CODE",
   ]);
   assert.match(content, /^KEEP_EXISTING=value$/m);
   assert.doesNotMatch(content, /^WHATSAPP_ACCESS_TOKEN=old-token$/m);
   assert.match(content, /^WHATSAPP_ACCESS_TOKEN="new-token"$/m);
   assert.match(content, /^WHATSAPP_WEBHOOK_VERIFY_TOKEN="verify-token"$/m);
   assert.match(content, /^WHATSAPP_PHONE_NUMBER_ID="123456789"$/m);
+  assert.match(content, /^WAHA_BASE_URL="http:\/\/localhost:3000"$/m);
+  assert.match(content, /^WAHA_API_KEY="waha-secret"$/m);
+  assert.match(content, /^WAHA_SESSION_ID="default"$/m);
+  assert.match(content, /^WAHA_DEFAULT_COUNTRY_CODE="254"$/m);
   assert.equal((await stat(envPath)).mode & 0o777, 0o600);
 });
 

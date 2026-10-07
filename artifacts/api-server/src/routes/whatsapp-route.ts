@@ -43,13 +43,18 @@ import {
   noteWhatsAppDeliveryStatus,
   saveWhatsAppCredentials,
   saveWhatsAppSettings,
-  sendWhatsAppOtp,
   sendWhatsAppTemplate,
   sendWhatsAppText,
   type WhatsAppFeature,
   type WhatsAppSettings,
   WhatsAppProviderError,
 } from "../services/whatsapp/whatsapp-service.js";
+import {
+  getWhatsAppOtpProvider,
+  isWhatsAppOtpDeliveryReady,
+  isWhatsAppOtpFeatureEnabled,
+  sendConfiguredWhatsAppOtp,
+} from "../services/whatsapp/whatsapp-otp-delivery.js";
 import {
   createGatewaySettingsGrant,
   issueWhatsAppGatewaySettingsOtp,
@@ -61,6 +66,7 @@ const OTP_TTL_SECONDS = Math.max(
   60,
   Math.min(900, Number.parseInt(process.env.WHATSAPP_OTP_TTL_SECONDS ?? "600", 10) || 600),
 );
+const WAHA_OTP_TTL_SECONDS = 5 * 60;
 const MAX_OTP_ATTEMPTS = 5;
 const GATEWAY_PASSWORD_ATTEMPT_LIMIT = 5;
 const GATEWAY_PASSWORD_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
@@ -472,14 +478,22 @@ router.get("/super-admin/whatsapp/settings", async (req, res): Promise<void> => 
 
 router.get("/whatsapp/public-config", async (_req, res): Promise<void> => {
   try {
-    const [settings, globallyEnabled] = await Promise.all([
+    const [settings, globallyEnabled, provider] = await Promise.all([
       getWhatsAppSettings(),
       isOtpChannelEnabled("whatsapp"),
+      getWhatsAppOtpProvider(),
     ]);
+    const [loginFeatureEnabled, registrationFeatureEnabled, loginReady, registrationReady] =
+      await Promise.all([
+        isWhatsAppOtpFeatureEnabled("login"),
+        isWhatsAppOtpFeatureEnabled("registrationVerification"),
+        isWhatsAppOtpDeliveryReady("login", provider),
+        isWhatsAppOtpDeliveryReady("registrationVerification", provider),
+      ]);
     res.set("Cache-Control", "no-store").json({
       ok: true,
-      loginEnabled: globallyEnabled && isWhatsAppFeatureEnabled(settings, "login"),
-      registrationVerificationEnabled: globallyEnabled && isWhatsAppFeatureEnabled(settings, "registrationVerification"),
+      loginEnabled: globallyEnabled && loginFeatureEnabled && loginReady,
+      registrationVerificationEnabled: globallyEnabled && registrationFeatureEnabled && registrationReady,
       // Account password resets are intentionally restricted to Super Admin.
       passwordRecoveryEnabled: false,
       otpChannelEnabled: globallyEnabled,
@@ -602,10 +616,16 @@ router.post("/auth/whatsapp/request-otp", async (req, res): Promise<void> => {
 
   const settings = await getWhatsAppSettings();
   const feature: WhatsAppFeature = purpose === "login" ? "login" : "registrationVerification";
-  if (!isWhatsAppFeatureEnabled(settings, feature)) {
+  const otpFeature = feature === "login" ? "login" : "registrationVerification";
+  const provider = await getWhatsAppOtpProvider();
+  if (
+    !await isWhatsAppOtpFeatureEnabled(otpFeature) ||
+    !await isWhatsAppOtpDeliveryReady(otpFeature, provider)
+  ) {
     res.status(503).json({ ok: false, error: "WhatsApp verification is not enabled." });
     return;
   }
+  const otpTtlSeconds = provider === "waha" ? WAHA_OTP_TTL_SECONDS : OTP_TTL_SECONDS;
 
   const phone = typeof req.body?.phone === "string"
     ? normalizeWhatsAppPhone(req.body.phone, settings.defaultCountryCode)
@@ -639,7 +659,7 @@ router.post("/auth/whatsapp/request-otp", async (req, res): Promise<void> => {
 
   const code = generateWhatsAppOtp();
   const ipHash = secretHash(`whatsapp-otp-ip:${req.ip ?? req.socket.remoteAddress ?? "unknown"}`);
-  const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + otpTtlSeconds * 1000).toISOString();
   const issued = await sbRpc<{ outcome: string }>("issue_whatsapp_otp", {
     p_id: challengeId,
     p_phone_e164: phone,
@@ -652,7 +672,7 @@ router.post("/auth/whatsapp/request-otp", async (req, res): Promise<void> => {
   });
   if (sendCode && issued[0]?.outcome === "issued") {
     try {
-      await sendWhatsAppOtp(phone, code);
+      await sendConfiguredWhatsAppOtp(phone, code, otpFeature, provider);
     } catch (error) {
       logger.warn(
         {
@@ -668,7 +688,7 @@ router.post("/auth/whatsapp/request-otp", async (req, res): Promise<void> => {
   res.set("Cache-Control", "no-store").status(202).json({
     ok: true,
     challengeId,
-    expiresInSeconds: OTP_TTL_SECONDS,
+    expiresInSeconds: otpTtlSeconds,
     resendAfterSeconds: 60,
     message: "If this number is eligible, a verification code will be sent to WhatsApp.",
   });

@@ -10,7 +10,28 @@ test("WhatsApp database migration is included in the external VPS deployment run
   assert.match(runner, /2026_whatsapp_integration\.sql/);
   assert.match(runner, /2026_whatsapp_secure_credentials\.sql/);
   assert.match(runner, /2026_whatsapp_security_events\.sql/);
+  assert.match(runner, /2026_waha_gateway\.sql/);
   assert.match(runner, /2026_gateway_settings_credentials\.sql/);
+});
+
+test("WAHA OTP routing is separate from Meta notification delivery and stays server-side", async () => {
+  const [route, delivery, service, migration, metaService] = await Promise.all([
+    read("../src/routes/whatsapp-route.ts"),
+    read("../src/services/whatsapp/whatsapp-otp-delivery.ts"),
+    read("../src/services/whatsapp/waha-gateway-service.ts"),
+    read("../migrations/2026_waha_gateway.sql"),
+    read("../src/services/whatsapp/whatsapp-service.ts"),
+  ]);
+  assert.match(route, /WAHA_OTP_TTL_SECONDS\s*=\s*5\s*\*\s*60/);
+  assert.match(route, /sendConfiguredWhatsAppOtp\(phone,\s*code,\s*otpFeature,\s*provider\)/);
+  assert.match(delivery, /wahaGatewayService\.sendOTP/);
+  assert.match(service, /class WAHAGatewayService/);
+  assert.match(service, /"X-Api-Key":\s*config\.apiKey/);
+  assert.match(service, /chatId:\s*`\$\{chatNumber\}@c\.us`/);
+  assert.match(migration, /create table if not exists platform_waha_gateway_credentials/i);
+  assert.match(migration, /enable row level security/i);
+  assert.match(metaService, /export async function sendWhatsAppOtp/);
+  assert.doesNotMatch(metaService, /wahaGatewayService/);
 });
 
 test("payment notices remain isolated from payment settlement failures", async () => {

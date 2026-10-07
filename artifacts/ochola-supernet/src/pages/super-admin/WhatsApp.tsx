@@ -56,6 +56,43 @@ interface PageState {
   stats: Record<string, string | number | null>;
 }
 
+type WahaFeatureKey = "login" | "registrationVerification" | "pageVerification" | "gatewaySettings";
+
+interface WahaSettings {
+  enabled: boolean;
+  baseUrl: string;
+  sessionId: string;
+  otpProvider: "whatsapp_cloud" | "waha";
+  features: Record<WahaFeatureKey, boolean>;
+}
+
+interface WahaSecretsStatus {
+  apiKeyConfigured: boolean;
+  apiKeySource: "super-admin" | "environment" | "missing";
+}
+
+const WAHA_FEATURES: { key: WahaFeatureKey; label: string; description: string }[] = [
+  { key: "login", label: "Login codes", description: "Allow customers and ISP admins to request WhatsApp sign-in codes." },
+  { key: "registrationVerification", label: "Registration verification", description: "Require a phone verification code before account registration." },
+  { key: "pageVerification", label: "Protected-page verification", description: "Use WAHA when an admin page is configured for WhatsApp OTP." },
+  { key: "gatewaySettings", label: "Payment-settings verification", description: "Use WAHA for protected payment-gateway settings OTP." },
+];
+
+function emptyWahaSettings(): WahaSettings {
+  return {
+    enabled: false,
+    baseUrl: "http://localhost:3000",
+    sessionId: "default",
+    otpProvider: "whatsapp_cloud",
+    features: {
+      login: false,
+      registrationVerification: false,
+      pageVerification: false,
+      gatewaySettings: false,
+    },
+  };
+}
+
 const FEATURES: { key: FeatureKey; label: string; description: string }[] = [
   { key: "login", label: "WhatsApp login", description: "Allow eligible ISP admin and customer accounts to request a sign-in code." },
   { key: "registrationVerification", label: "Registration verification", description: "Verify a phone before creating an ISP or reseller registration." },
@@ -121,6 +158,14 @@ function countValue(stats: PageState["stats"], key: string): string {
 
 export default function SuperAdminWhatsApp() {
   const [settings, setSettings] = useState<WhatsAppSettings>(emptySettings);
+  const [wahaSettings, setWahaSettings] = useState<WahaSettings>(emptyWahaSettings);
+  const [wahaSecrets, setWahaSecrets] = useState<WahaSecretsStatus>({
+    apiKeyConfigured: false,
+    apiKeySource: "missing",
+  });
+  const [wahaReady, setWahaReady] = useState(false);
+  const [wahaApiKey, setWahaApiKey] = useState("");
+  const [wahaTestPhone, setWahaTestPhone] = useState("");
   const [secrets, setSecrets] = useState<PageState["secrets"]>({
     accessTokenConfigured: false,
     webhookVerifyTokenConfigured: false,
@@ -140,7 +185,10 @@ export default function SuperAdminWhatsApp() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingCredentials, setSavingCredentials] = useState(false);
+  const [savingWahaSettings, setSavingWahaSettings] = useState(false);
+  const [savingWahaCredentials, setSavingWahaCredentials] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [testingWaha, setTestingWaha] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
@@ -148,16 +196,30 @@ export default function SuperAdminWhatsApp() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/super-admin/whatsapp/settings", {
-        headers: authHeaders(),
-        cache: "no-store",
-      });
-      const data = await response.json();
+      const [response, wahaResponse] = await Promise.all([
+        fetch("/api/super-admin/whatsapp/settings", {
+          headers: authHeaders(),
+          cache: "no-store",
+        }),
+        fetch("/api/super-admin/waha/settings", {
+          headers: authHeaders(),
+          cache: "no-store",
+        }),
+      ]);
+      const [data, wahaData] = await Promise.all([response.json(), wahaResponse.json()]);
       if (!response.ok || !data.ok) throw new Error(data.error || "Could not load WhatsApp settings.");
+      if (!wahaResponse.ok || !wahaData.ok) throw new Error(wahaData.error || "Could not load WAHA settings.");
       setSettings({ ...emptySettings(), ...data.settings, features: { ...emptySettings().features, ...data.settings?.features }, templates: { ...emptySettings().templates, ...data.settings?.templates } });
       setSecrets(data.secrets ?? {});
       setConnection(data.connection ?? { status: "NOT CONFIGURED" });
       setStats(data.stats ?? {});
+      setWahaSettings({
+        ...emptyWahaSettings(),
+        ...wahaData.settings,
+        features: { ...emptyWahaSettings().features, ...wahaData.settings?.features },
+      });
+      setWahaSecrets(wahaData.secrets ?? { apiKeyConfigured: false, apiKeySource: "missing" });
+      setWahaReady(wahaData.ready === true);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load WhatsApp settings.");
     } finally {
@@ -263,6 +325,100 @@ export default function SuperAdminWhatsApp() {
     }
   };
 
+  const saveWahaSettingsForm = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSavingWahaSettings(true);
+    setNotice("");
+    setError("");
+    try {
+      const response = await fetch("/api/super-admin/waha/settings", {
+        method: "PUT",
+        headers: authHeaders(true),
+        body: JSON.stringify({ settings: wahaSettings }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save WAHA settings.");
+      setWahaSettings({
+        ...emptyWahaSettings(),
+        ...data.settings,
+        features: { ...emptyWahaSettings().features, ...data.settings?.features },
+      });
+      setWahaSecrets(data.secrets ?? wahaSecrets);
+      setWahaReady(data.ready === true);
+      setNotice("WAHA settings saved.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save WAHA settings.");
+    } finally {
+      setSavingWahaSettings(false);
+    }
+  };
+
+  const saveWahaCredentials = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSavingWahaCredentials(true);
+    setNotice("");
+    setError("");
+    try {
+      const response = await fetch("/api/super-admin/waha/credentials", {
+        method: "PUT",
+        headers: authHeaders(true),
+        body: JSON.stringify({ credentials: { apiKey: wahaApiKey } }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save the WAHA API key.");
+      setWahaApiKey("");
+      setWahaSecrets(data.secrets);
+      setWahaReady(data.ready === true);
+      setNotice("WAHA API key encrypted and saved. Its value is not returned to this page.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save the WAHA API key.");
+    } finally {
+      setSavingWahaCredentials(false);
+    }
+  };
+
+  const clearWahaCredentials = async () => {
+    if (!window.confirm("Clear the WAHA API key stored in Super Admin? An environment fallback, if configured, will remain active.")) return;
+    setSavingWahaCredentials(true);
+    setNotice("");
+    setError("");
+    try {
+      const response = await fetch("/api/super-admin/waha/credentials", {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not clear the WAHA API key.");
+      setWahaSecrets(data.secrets);
+      setWahaReady(data.ready === true);
+      setNotice("The Super Admin-stored WAHA API key was cleared.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not clear the WAHA API key.");
+    } finally {
+      setSavingWahaCredentials(false);
+    }
+  };
+
+  const sendWahaTest = async () => {
+    setTestingWaha(true);
+    setNotice("");
+    setError("");
+    try {
+      const response = await fetch("/api/super-admin/waha/test", {
+        method: "POST",
+        headers: authHeaders(true),
+        body: JSON.stringify({ phone: wahaTestPhone }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "WAHA test message could not be sent.");
+      setNotice(data.message || "WAHA test message accepted.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "WAHA test message could not be sent.");
+    } finally {
+      setTestingWaha(false);
+    }
+  };
+
   const fieldClass = "mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-white outline-none focus:border-emerald-500";
   const cardClass = "rounded-2xl border border-white/10 bg-slate-900/70 p-5 shadow-sm";
   const statusColor = connection.status === "CONNECTED" ? "text-emerald-400" : connection.status === "ERROR" ? "text-red-400" : "text-amber-300";
@@ -277,7 +433,7 @@ export default function SuperAdminWhatsApp() {
         <div>
           <div className="mb-2 flex items-center gap-2 text-emerald-400"><MessageCircle className="h-5 w-5" /><span className="text-xs font-bold uppercase tracking-[0.18em]">Platform integration</span></div>
           <h1 className="text-2xl font-bold text-white">WhatsApp Business</h1>
-          <p className="mt-1 max-w-2xl text-sm text-slate-400">Configure the Cloud API, approved templates, and independent OCHOLASUPERNET feature switches.</p>
+          <p className="mt-1 max-w-2xl text-sm text-slate-400">Configure Meta Cloud API messaging and the separate WAHA gateway used for OTP delivery.</p>
         </div>
         <div className={`rounded-xl border border-white/10 bg-slate-900 px-4 py-3 text-sm font-bold ${statusColor}`}>
           {connection.status}
@@ -389,6 +545,90 @@ export default function SuperAdminWhatsApp() {
           </button>
         </div>
       </form>
+
+      <section className={cardClass}>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-cyan-300"><MessageCircle className="h-5 w-5" /><span className="text-xs font-bold uppercase tracking-[0.18em]">Separate WhatsApp HTTP API</span></div>
+            <h2 className="font-semibold text-white">WAHA OTP gateway</h2>
+          </div>
+          <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${wahaReady ? "border-emerald-500/30 bg-emerald-950/30 text-emerald-300" : "border-amber-500/30 bg-amber-950/30 text-amber-200"}`}>
+            {!wahaSettings.enabled ? "Disabled" : wahaReady ? "Ready" : wahaSecrets.apiKeyConfigured ? "Not ready" : "Missing API key"}
+          </span>
+        </div>
+        <p className="mb-5 text-sm text-slate-400">WAHA sends login, registration, and protected-page verification codes only. Payment, renewal, and expiry notices continue through the existing Meta Cloud API. Hotspot devices contact this API server; the WAHA API key is never sent to captive clients.</p>
+
+        <form onSubmit={saveWahaSettingsForm} className="space-y-5">
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="text-sm text-slate-300">WAHA base URL
+              <input className={fieldClass} value={wahaSettings.baseUrl} onChange={event => setWahaSettings(current => ({ ...current, baseUrl: event.target.value }))} maxLength={512} placeholder="http://localhost:3000" />
+            </label>
+            <label className="text-sm text-slate-300">WAHA session ID
+              <input className={fieldClass} value={wahaSettings.sessionId} onChange={event => setWahaSettings(current => ({ ...current, sessionId: event.target.value }))} maxLength={64} placeholder="default" />
+            </label>
+            <label className="text-sm text-slate-300">OTP provider
+              <select className={fieldClass} value={wahaSettings.otpProvider} onChange={event => setWahaSettings(current => ({ ...current, otpProvider: event.target.value as WahaSettings["otpProvider"] }))}>
+                <option value="whatsapp_cloud">WhatsApp Cloud API</option>
+                <option value="waha">WAHA</option>
+              </select>
+            </label>
+            <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm font-medium text-white">
+              <input type="checkbox" checked={wahaSettings.enabled} onChange={event => setWahaSettings(current => ({ ...current, enabled: event.target.checked }))} className="h-4 w-4 accent-cyan-500" />
+              Enable WAHA gateway
+            </label>
+          </div>
+
+          <div>
+            <h3 className="mb-2 text-sm font-semibold text-white">WAHA OTP features</h3>
+            <div className="divide-y divide-white/5">
+              {WAHA_FEATURES.map(feature => (
+                <label key={feature.key} className="flex cursor-pointer items-start justify-between gap-4 py-3">
+                  <span><span className="block text-sm font-medium text-slate-200">{feature.label}</span><span className="mt-0.5 block text-xs text-slate-500">{feature.description}</span></span>
+                  <input type="checkbox" checked={wahaSettings.features[feature.key]} onChange={event => setWahaSettings(current => ({ ...current, features: { ...current.features, [feature.key]: event.target.checked } }))} className="mt-1 h-4 w-4 accent-cyan-500" />
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <button disabled={savingWahaSettings} className="inline-flex items-center gap-2 rounded-xl bg-cyan-700 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-60">
+              {savingWahaSettings ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{savingWahaSettings ? "Saving…" : "Save WAHA settings"}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className={cardClass}>
+        <div className="mb-2 flex items-center gap-2"><ShieldCheck className="h-5 w-5 text-cyan-300" /><h2 className="font-semibold text-white">WAHA server API key</h2></div>
+        <p className="mb-4 text-sm text-slate-400">The key is encrypted with a WAHA-specific key derived from SESSION_SECRET. It is never returned to the browser. WAHA_API_KEY remains an optional server-side fallback.</p>
+        <div className="mb-4 flex items-center justify-between rounded-xl border border-white/10 bg-slate-950/60 px-3 py-3 text-sm">
+          <span className="text-slate-300">Current key</span>
+          <span className={wahaSecrets.apiKeyConfigured ? "text-emerald-400" : "text-amber-300"}>
+            {wahaSecrets.apiKeyConfigured ? wahaSecrets.apiKeySource === "super-admin" ? "Encrypted in database" : "Environment fallback" : "Missing"}
+          </span>
+        </div>
+        <form onSubmit={saveWahaCredentials} className="space-y-3">
+          <label className="block text-sm text-slate-300">WAHA API key
+            <input type="password" autoComplete="new-password" className={fieldClass} value={wahaApiKey} onChange={event => setWahaApiKey(event.target.value)} maxLength={4096} />
+          </label>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={clearWahaCredentials} disabled={savingWahaCredentials} className="rounded-xl border border-white/15 px-4 py-2.5 text-sm text-slate-300 disabled:opacity-50">Clear stored key</button>
+            <button type="submit" disabled={savingWahaCredentials || !wahaApiKey.trim()} className="inline-flex items-center gap-2 rounded-xl bg-cyan-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
+              {savingWahaCredentials ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}Save API key
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className={cardClass}>
+        <h2 className="font-semibold text-white">Test WAHA delivery</h2>
+        <p className="mt-1 text-sm text-slate-400">Sends a one-time test message to the number you enter. Testing is available even while WAHA is disabled for OTP use.</p>
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+          <input className={fieldClass + " mt-0"} value={wahaTestPhone} onChange={event => setWahaTestPhone(event.target.value)} placeholder="+254712345678" aria-label="WAHA test recipient phone number" />
+          <button type="button" disabled={testingWaha || !wahaTestPhone.trim()} onClick={() => void sendWahaTest()} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-700/20 px-5 py-2.5 text-sm font-semibold text-cyan-200 hover:bg-cyan-700/30 disabled:opacity-50">
+            {testingWaha ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}{testingWaha ? "Sending…" : "Test WAHA"}
+          </button>
+        </div>
+      </section>
 
       <section className={cardClass}>
         <h2 className="mb-4 font-semibold text-white">Delivery overview</h2>
