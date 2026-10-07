@@ -3,6 +3,7 @@ import {
   sbUpsertStrict,
   supabaseServiceRoleConfigured,
 } from "../../lib/supabase-client.js";
+import { isIP } from "node:net";
 import {
   decryptWahaSecret,
   encryptWahaSecret,
@@ -46,6 +47,11 @@ export interface WahaSendResult {
   messageId: string | null;
 }
 
+export interface WahaSessionPairingState {
+  status: string;
+  qrDataUrl?: string;
+}
+
 export class WahaGatewayError extends Error {
   constructor(message: string, public readonly status?: number) {
     super(message);
@@ -65,7 +71,7 @@ const DEFAULT_SETTINGS: WahaGatewaySettings = {
   enabled: false,
   baseUrl: process.env.WAHA_BASE_URL?.trim() || "http://localhost:3000",
   sessionId: process.env.WAHA_SESSION_ID?.trim() || "default",
-  otpProvider: "whatsapp_cloud",
+  otpProvider: "waha",
   features: {
     login: false,
     registrationVerification: false,
@@ -73,6 +79,30 @@ const DEFAULT_SETTINGS: WahaGatewaySettings = {
     gatewaySettings: false,
   },
 };
+
+function isPrivateWahaHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "").replace(/^\[|\]$/g, "");
+  const ipVersion = isIP(host);
+
+  if (ipVersion === 4) {
+    const [first, second] = host.split(".").map(Number);
+    return first === 10 ||
+      first === 127 ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168);
+  }
+
+  if (ipVersion === 6) {
+    return host === "::1" || /^(fc|fd)/i.test(host);
+  }
+
+  if (host === "localhost" || host.endsWith(".localhost") || !host.includes(".")) {
+    return true;
+  }
+
+  return [".local", ".internal", ".lan", ".home.arpa", ".docker", ".test"]
+    .some(suffix => host.endsWith(suffix));
+}
 
 function cleanString(value: unknown, maxLength = 160): string {
   return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
@@ -103,6 +133,11 @@ export function validateWahaBaseUrl(value: unknown): string {
     hostname === "metadata.google.internal"
   ) {
     throw new Error("That host is reserved and cannot be used as a WAHA URL.");
+  }
+  if (!isPrivateWahaHost(hostname)) {
+    throw new Error(
+      "WAHA URL must use a private host such as localhost, a private IP address, or a private service name.",
+    );
   }
   return candidate.replace(/\/+$/, "");
 }
@@ -300,6 +335,146 @@ export class WAHAGatewayService {
     private readonly loadConfig: () => Promise<WahaGatewayRuntimeConfig> = getWahaGatewayRuntimeConfig,
     private readonly fetcher: typeof fetch = fetch,
   ) {}
+
+  private async sessionRequest(
+    config: WahaGatewayRuntimeConfig,
+    path: string,
+    options: { method?: "GET" | "POST"; body?: unknown; accept?: string } = {},
+  ): Promise<{ statusCode: number; body: unknown; qrDataUrl?: string }> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12_000);
+    try {
+      let response: Response;
+      try {
+        response = await this.fetcher(
+          `${config.baseUrl.replace(/\/+$/, "")}${path}`,
+          {
+            method: options.method ?? "GET",
+            headers: {
+              Accept: options.accept ?? "application/json",
+              "X-Api-Key": config.apiKey,
+              ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+            },
+            ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+            signal: controller.signal,
+            redirect: "error",
+          },
+        );
+      } catch {
+        throw new WahaGatewayError("Could not connect to the WAHA server.");
+      }
+
+      if (!response.ok) {
+        await response.arrayBuffer().catch(() => new ArrayBuffer(0));
+        return { statusCode: response.status, body: null };
+      }
+
+      const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
+      if (options.accept === "image/png" && contentType.startsWith("image/")) {
+        const image = Buffer.from(await response.arrayBuffer());
+        if (!image.length || image.length > 512 * 1024) {
+          throw new WahaGatewayError("WAHA returned an invalid QR image.");
+        }
+        return {
+          statusCode: response.status,
+          body: null,
+          qrDataUrl: `data:${contentType};base64,${image.toString("base64")}`,
+        };
+      }
+
+      const body: unknown = await response.json().catch(() => null);
+      return { statusCode: response.status, body };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private sessionStatus(body: unknown): string {
+    if (!body || typeof body !== "object" || Array.isArray(body)) return "UNKNOWN";
+    const status = (body as Record<string, unknown>).status;
+    return typeof status === "string" ? status.toUpperCase() : "UNKNOWN";
+  }
+
+  private async readSessionStatus(config: WahaGatewayRuntimeConfig): Promise<string> {
+    const session = encodeURIComponent(config.sessionId);
+    const result = await this.sessionRequest(config, `/api/sessions/${session}`);
+    if (result.statusCode === 404) return "NOT_FOUND";
+    if (result.statusCode < 200 || result.statusCode >= 300) {
+      throw new WahaGatewayError(
+        `WAHA could not read the session status (HTTP ${result.statusCode}).`,
+        result.statusCode,
+      );
+    }
+    return this.sessionStatus(result.body);
+  }
+
+  async getSessionPairingState(): Promise<WahaSessionPairingState> {
+    const config = await this.loadConfig();
+    const status = await this.readSessionStatus(config);
+    if (status !== "SCAN_QR_CODE") return { status };
+
+    const session = encodeURIComponent(config.sessionId);
+    const result = await this.sessionRequest(
+      config,
+      `/api/${session}/auth/qr`,
+      { accept: "image/png" },
+    );
+    if (result.statusCode < 200 || result.statusCode >= 300) {
+      throw new WahaGatewayError(
+        `WAHA could not retrieve the pairing QR (HTTP ${result.statusCode}).`,
+        result.statusCode,
+      );
+    }
+    if (!result.qrDataUrl) {
+      throw new WahaGatewayError("WAHA did not return a QR image for this session.");
+    }
+    return { status, qrDataUrl: result.qrDataUrl };
+  }
+
+  async startSessionPairing(): Promise<WahaSessionPairingState> {
+    const config = await this.loadConfig();
+    const session = encodeURIComponent(config.sessionId);
+    const status = await this.readSessionStatus(config);
+
+    if (status === "NOT_FOUND") {
+      const result = await this.sessionRequest(config, "/api/sessions", {
+        method: "POST",
+        body: { name: config.sessionId },
+      });
+      if (result.statusCode < 200 || result.statusCode >= 300) {
+        throw new WahaGatewayError(
+          `WAHA could not create the session (HTTP ${result.statusCode}).`,
+          result.statusCode,
+        );
+      }
+    } else if (status === "STOPPED") {
+      const result = await this.sessionRequest(config, `/api/sessions/${session}/start`, {
+        method: "POST",
+        body: {},
+      });
+      if (result.statusCode < 200 || result.statusCode >= 300) {
+        throw new WahaGatewayError(
+          `WAHA could not start the session (HTTP ${result.statusCode}).`,
+          result.statusCode,
+        );
+      }
+    } else if (status === "FAILED") {
+      const result = await this.sessionRequest(config, `/api/sessions/${session}/restart`, {
+        method: "POST",
+        body: {},
+      });
+      if (result.statusCode < 200 || result.statusCode >= 300) {
+        throw new WahaGatewayError(
+          `WAHA could not restart the session (HTTP ${result.statusCode}).`,
+          result.statusCode,
+        );
+      }
+    } else if (status === "UNKNOWN") {
+      throw new WahaGatewayError("WAHA returned an unrecognized session status.");
+    }
+
+    return this.getSessionPairingState();
+  }
 
   async sendOTP(phoneNumber: string, code: string): Promise<WahaSendResult> {
     if (!/^\d{6}$/.test(code)) {

@@ -55,6 +55,72 @@ test("sendOTP uses the WAHA sendText API with the five-minute OTP message", asyn
   });
 });
 
+test("session pairing returns a no-store-ready QR image only while scan is required", async () => {
+  const requests: { url: string; headers: Headers }[] = [];
+  const png = Buffer.from([137, 80, 78, 71]);
+  const service = new WAHAGatewayService(
+    async () => config(),
+    async (input, init) => {
+      requests.push({ url: String(input), headers: new Headers(init?.headers) });
+      if (String(input).endsWith("/api/sessions/default")) {
+        return new Response(JSON.stringify({ name: "default", status: "SCAN_QR_CODE" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(png, {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      });
+    },
+  );
+
+  const result = await service.getSessionPairingState();
+
+  assert.equal(result.status, "SCAN_QR_CODE");
+  assert.equal(result.qrDataUrl, `data:image/png;base64,${png.toString("base64")}`);
+  assert.equal(requests[0]?.url, "https://waha.example.test/api/sessions/default");
+  assert.equal(requests[1]?.url, "https://waha.example.test/api/default/auth/qr");
+  assert.equal(requests[1]?.headers.get("X-Api-Key"), "server-only-secret");
+  assert.equal(requests[1]?.headers.get("Accept"), "image/png");
+});
+
+test("session pairing creates a missing session without exposing the WAHA key", async () => {
+  const requests: { url: string; method: string; body: unknown }[] = [];
+  let statusReads = 0;
+  const service = new WAHAGatewayService(
+    async () => config(),
+    async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      const body = init?.body ? JSON.parse(String(init.body)) as unknown : null;
+      requests.push({ url, method, body });
+      if (method === "GET") {
+        statusReads += 1;
+        if (statusReads === 1) return new Response(null, { status: 404 });
+        return new Response(JSON.stringify({ name: "default", status: "STARTING" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ name: "default", status: "STARTING" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  );
+
+  const result = await service.startSessionPairing();
+
+  assert.equal(result.status, "STARTING");
+  assert.deepEqual(requests.map(request => [request.method, request.url]), [
+    ["GET", "https://waha.example.test/api/sessions/default"],
+    ["POST", "https://waha.example.test/api/sessions"],
+    ["GET", "https://waha.example.test/api/sessions/default"],
+  ]);
+  assert.deepEqual(requests[1]?.body, { name: "default" });
+});
+
 test("normalizes Kenyan local and international WhatsApp phone formats", () => {
   assert.equal(normalizeWahaPhone("0712 345 678"), "254712345678");
   assert.equal(normalizeWahaPhone("+254 712-345-678"), "254712345678");
@@ -123,6 +189,30 @@ test("rejects WAHA base URLs containing credentials or metadata-service targets"
   assert.throws(() => validateWahaBaseUrl("https://user:pass@waha.example.test"), /without credentials/);
   assert.throws(() => validateWahaBaseUrl("http://169.254.169.254"), /reserved/);
   assert.equal(validateWahaBaseUrl("http://localhost:3000/"), "http://localhost:3000");
+});
+
+test("accepts only loopback, private IP, or private service-name WAHA endpoints", () => {
+  for (const url of [
+    "http://127.0.0.1:3000",
+    "http://10.2.3.4:3000",
+    "http://172.31.255.1:3000",
+    "http://192.168.1.20:3000",
+    "http://[fd00::1]:3000",
+    "http://waha:3000",
+    "http://waha.internal:3000",
+  ]) {
+    assert.equal(validateWahaBaseUrl(url), url);
+  }
+
+  for (const url of [
+    "http://isplatty.org:3000",
+    "https://example.com",
+    "http://8.8.8.8:3000",
+    "http://0.0.0.0:3000",
+    "http://169.254.1.2:3000",
+  ]) {
+    assert.throws(() => validateWahaBaseUrl(url), /private host/);
+  }
 });
 
 test("encrypts the WAHA API key and rejects decryption with a different session secret", () => {

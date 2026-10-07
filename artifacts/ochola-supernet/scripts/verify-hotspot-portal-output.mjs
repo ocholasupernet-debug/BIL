@@ -88,12 +88,12 @@ assert.match(
 );
 assert.match(
   reactSource,
-  /setTroubleshootAction\("login"\);\s*void requestHotspotTroubleshoot\("login"\)/,
+  /setTroubleshootAction\("login"\);\s*try\s*\{\s*await requestHotspotTroubleshoot\("login"\)/,
   "opening the React connection-help dialog must attempt sign-in rather than only checking entitlement",
 );
 assert.match(
   reactSource,
-  /void requestHotspotTroubleshoot\("login"\)\.finally/,
+  /const runAutomaticReconnect\s*=\s*async\s*\(\)\s*=>\s*\{[\s\S]*?result\s*=\s*await requestHotspotTroubleshoot\("login"\);/,
   "the normal React hotspot sign-in page must automatically attempt login for this device",
 );
 

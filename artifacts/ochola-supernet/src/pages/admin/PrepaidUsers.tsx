@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 import { fetchAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
+import { mergeCustomerServiceIdentities } from "@/lib/customer-identities";
+import { getCustomerServiceStatus } from "@/lib/customer-service-status";
 import { SyncUserStatusList, type SyncUserStatus } from "@/components/ui/SyncUserStatusList";
 import { transactionDisplayId } from "@/lib/transaction-reference";
 
@@ -96,75 +98,6 @@ function fromDateTimeLocal(value: string) {
   if (!value) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
-}
-function normalizePhone(phone?: string | null) {
-  return (phone ?? "").replace(/\D/g, "");
-}
-function customerIdentityKey(user: Customer, planMap: Record<number, Plan>) {
-  const type = prepaidServiceType(user.type);
-  const plan = user.plan_id ? planMap[user.plan_id] : null;
-  const routerId = user.router_id ?? plan?.router_id ?? null;
-  const portId = user.port_id ?? plan?.port_id ?? null;
-  const scope = `${routerId ?? "unknown-router"}:${portId ?? "unknown-port"}`;
-
-  if (type === "hotspot") {
-    const mac = String(user.mac_address ?? "").toLowerCase().replace(/[^a-f0-9]/g, "");
-    const phone = normalizePhone(user.phone);
-    // A MAC by itself can be shared or reused, so only group Hotspot rows
-    // when both the device and its contact number match.
-    if (mac.length === 12 && phone) return `hotspot:${scope}:${mac}:${phone}`;
-  } else if (type === "pppoe") {
-    const username = normalizeLiveIdentity(user.pppoe_username || user.username);
-    if (username) return `pppoe:${scope}:${username}`;
-  } else if (type === "vlan" || type === "static") {
-    const address = normalizeLiveIdentity(user.ip_address);
-    if (address) return `${type}:${scope}:${address}`;
-  }
-
-  return `record:${user.id}`;
-}
-function customerRecordTime(user: Customer) {
-  const created = Date.parse(user.created_at ?? "");
-  const updated = Date.parse(user.updated_at ?? "");
-  return Number.isFinite(created) ? created : Number.isFinite(updated) ? updated : 0;
-}
-function isMissingCustomerValue(value: unknown) {
-  return value === null || value === undefined || (typeof value === "string" && value.trim() === "");
-}
-function mergeDuplicateCustomers(
-  customers: Customer[],
-  planMap: Record<number, Plan>,
-): DisplayCustomer[] {
-  const groups = new Map<string, Customer[]>();
-  for (const customer of customers) {
-    const key = customerIdentityKey(customer, planMap);
-    const group = groups.get(key) ?? [];
-    group.push(customer);
-    groups.set(key, group);
-  }
-
-  const primaryStateFields = new Set([
-    "id", "status", "created_at", "updated_at", "expires_at",
-    "last_seen", "service_online", "data_used_bytes", "data_used_mb",
-    "depletion_reason", "password", "username", "pppoe_username",
-  ]);
-
-  return Array.from(groups.values(), group => {
-    group.sort((a, b) => customerRecordTime(b) - customerRecordTime(a) || b.id - a.id);
-    const [primary, ...related] = group;
-    const merged = { ...primary } as DisplayCustomer;
-    const mergedFields = merged as unknown as Record<string, unknown>;
-
-    for (const relatedCustomer of related) {
-      for (const [field, value] of Object.entries(relatedCustomer)) {
-        if (primaryStateFields.has(field) || !isMissingCustomerValue(mergedFields[field])) continue;
-        if (!isMissingCustomerValue(value)) mergedFields[field] = value;
-      }
-    }
-
-    merged.mergedCustomerIds = group.map(customer => customer.id);
-    return merged;
-  });
 }
 function prepaidServiceType(value?: string | null) {
   const type = String(value ?? "").toLowerCase();
@@ -266,20 +199,10 @@ function isExpired(d?: string | null) {
   return Number.isFinite(expiry) && expiry <= Date.now();
 }
 function hasUnexpiredPaidAccess(user: Customer) {
-  const status = String(user.status ?? "").trim().toLowerCase();
-  if (status === "suspended" || user.depletion_reason === "data_limit") return false;
-  const allowedStatus = ["active", "payment_cleared_router_pending", "expired"].includes(status);
-  if (!allowedStatus) return false;
-  if (!user.expires_at) return status === "active";
-  const expiry = Date.parse(user.expires_at);
-  return Number.isFinite(expiry) && expiry > Date.now();
+  return getCustomerServiceStatus(user) === "active";
 }
 function isCustomerExpired(user: Customer) {
-  if (user.status === "suspended") return false;
-  if (user.depletion_reason === "data_limit") return true;
-  if (!user.expires_at) return user.status === "expired";
-  const expiry = Date.parse(user.expires_at);
-  return Number.isFinite(expiry) ? expiry <= Date.now() : user.status === "expired";
+  return getCustomerServiceStatus(user) === "expired";
 }
 
 const TYPE_META: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
@@ -892,6 +815,9 @@ function ExtendUserDialog({
 export default function PrepaidUsers() {
   const qc = useQueryClient();
   const reconnectMutation = useReconnectPrepaidHotspot();
+  const [autoReconnectEnabled, setAutoReconnectEnabled] = useState(false);
+  const autoReconnectEnabledRef = useRef(autoReconnectEnabled);
+  autoReconnectEnabledRef.current = autoReconnectEnabled;
 
   const { data: customers = [], isLoading } = useQuery<Customer[]>({
     queryKey: ["prepaid_customers", ADMIN_ID],
@@ -916,26 +842,10 @@ export default function PrepaidUsers() {
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
-  const liveQueries = useQueries({
-    queries: routers.map(router => ({
-      queryKey: ["prepaid_live", router.id],
-      queryFn: async () => {
-        const token = getAdminApiToken();
-        const response = await fetch(`/api/router/${router.id}/live`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (!response.ok) throw new Error(`Router ${router.name} is unavailable`);
-        return response.json() as Promise<LiveData & { routerId: number }>;
-      },
-      staleTime: 5_000,
-      refetchInterval: 15_000,
-    })),
-  });
-
   const planMap   = useMemo(() => Object.fromEntries(plans.map(p   => [p.id,   p  ])), [plans]);
   const routerMap = useMemo(() => Object.fromEntries(routers.map(r => [r.id,   r  ])), [routers]);
   const displayCustomers = useMemo(
-    () => mergeDuplicateCustomers(customers, planMap),
+    () => mergeCustomerServiceIdentities(customers, planMap),
     [customers, planMap],
   );
   const paymentsByCustomerId = useMemo(() => {
@@ -980,6 +890,47 @@ export default function PrepaidUsers() {
     () => displayCustomers.some(customer => customerPackageId(customer, paymentMap) === null),
     [displayCustomers, paymentMap],
   );
+  const reconnectMonitorUsers = useMemo(() => displayCustomers.filter(user => {
+    const plan = user.plan_id ? planMap[user.plan_id] : null;
+    const routerId = user.router_id ?? plan?.router_id ?? null;
+    const normalizedMac = String(user.mac_address ?? "").toLowerCase().replace(/[^a-f0-9]/g, "");
+    return prepaidServiceType(user.type) === "hotspot"
+      && hasUnexpiredPaidAccess(user)
+      && Boolean(user.plan_id && plan && routerId && routerMap[routerId])
+      && normalizedMac.length === 12;
+  }), [displayCustomers, planMap, routerMap]);
+  const reconnectMonitorRouterIds = useMemo(
+    () => new Set(reconnectMonitorUsers
+      .map(user => user.router_id ?? (user.plan_id ? planMap[user.plan_id]?.router_id ?? null : null))
+      .filter((routerId): routerId is number => routerId !== null)),
+    [reconnectMonitorUsers, planMap],
+  );
+  const liveQueries = useQueries({
+    queries: routers.map(router => ({
+      queryKey: ["prepaid_live", router.id],
+      queryFn: async () => {
+        const token = getAdminApiToken();
+        const response = await fetch(`/api/router/${router.id}/live`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!response.ok) throw new Error(`Router ${router.name} is unavailable`);
+        return response.json() as Promise<LiveData & { routerId: number }>;
+      },
+      staleTime: 5_000,
+      refetchInterval: autoReconnectEnabled && reconnectMonitorRouterIds.has(router.id) ? 3_000 : 15_000,
+    })),
+  });
+
+  const onlineUsers = useMemo(() => {
+    const keys = new Set<string>();
+    liveQueries.forEach(query => {
+      const live = query.data;
+      live?.hotspotUsers?.forEach(user => { if (user.user) keys.add(user.user.toLowerCase()); });
+      live?.pppoeUsers?.forEach(user => { if (user.name) keys.add(user.name.toLowerCase()); });
+    });
+    return keys;
+  }, [liveQueries]);
+
   const livePresenceByRouter = useMemo(() => {
     const presence = new Map<number, LiveRouterPresence>();
     routers.forEach((router, index) => {
@@ -1066,6 +1017,9 @@ export default function PrepaidUsers() {
     results: HotspotReconnectResult[];
     running: boolean;
   } | null>(null);
+  const reconnectBatchBusyRef = useRef(false);
+  const reconnectEligibleUsersRef = useRef(reconnectEligibleUsers);
+  reconnectEligibleUsersRef.current = reconnectEligibleUsers;
   const reconnectOutcomes = useMemo(() => {
     const results = reconnectProgress?.results ?? [];
     return {
@@ -1076,17 +1030,27 @@ export default function PrepaidUsers() {
     };
   }, [reconnectProgress]);
 
-  async function refreshReconnectData() {
+  function reconnectRouterId(user: DisplayCustomer): number | null {
+    const plan = user.plan_id ? planMap[user.plan_id] : null;
+    const routerId = user.router_id ?? plan?.router_id ?? null;
+    return routerId && routerMap[routerId] ? routerId : null;
+  }
+
+  async function refreshReconnectData(routerIds: number[]) {
     await Promise.all([
       qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] }),
-      qc.invalidateQueries({ queryKey: ["prepaid_live"] }),
+      ...[...new Set(routerIds)].map(routerId =>
+        qc.invalidateQueries({ queryKey: ["prepaid_live", routerId] }),
+      ),
     ]);
   }
 
   async function reconnectOne(user: DisplayCustomer) {
+    if (reconnectBatchBusyRef.current || autoReconnectEnabledRef.current) return;
     setActionError("");
     setReconnectProgress({ completed: 0, total: 1, results: [], running: true });
     setReconnectingIds(current => new Set(current).add(user.id));
+    reconnectBatchBusyRef.current = true;
     try {
       const result = await reconnectMutation.mutateAsync({ id: user.id });
       setReconnectProgress({ completed: 1, total: 1, results: [result], running: false });
@@ -1102,21 +1066,27 @@ export default function PrepaidUsers() {
         next.delete(user.id);
         return next;
       });
-      await refreshReconnectData();
+      reconnectBatchBusyRef.current = false;
+      const routerId = reconnectRouterId(user);
+      await refreshReconnectData(routerId ? [routerId] : []);
     }
   }
 
-  async function reconnectAllEligible() {
+  async function reconnectAllEligible(
+    eligibleQueue: DisplayCustomer[] = reconnectEligibleUsersRef.current,
+    shouldContinue: () => boolean = () => true,
+  ) {
     // This snapshot comes from the complete grouped dataset, not the current
     // search, status tab, router/package filter, or paginated rows.
-    const queue = [...reconnectEligibleUsers];
-    if (!queue.length) return;
+    const queue = [...eligibleQueue];
+    if (!queue.length || reconnectBatchBusyRef.current) return;
+    reconnectBatchBusyRef.current = true;
     setActionError("");
     setReconnectProgress({ completed: 0, total: queue.length, results: [], running: true });
     setReconnectingIds(new Set(queue.map(user => user.id)));
     let nextIndex = 0;
     const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
-      while (nextIndex < queue.length) {
+      while (nextIndex < queue.length && shouldContinue()) {
         const user = queue[nextIndex++];
         let result: HotspotReconnectResult;
         try {
@@ -1140,10 +1110,66 @@ export default function PrepaidUsers() {
         });
       }
     });
-    await Promise.all(workers);
-    setReconnectProgress(current => current ? { ...current, running: false } : current);
-    await refreshReconnectData();
+    try {
+      await Promise.all(workers);
+    } finally {
+      setReconnectProgress(current => current ? { ...current, running: false } : current);
+      setReconnectingIds(new Set());
+      reconnectBatchBusyRef.current = false;
+      const routerIds = queue
+        .map(reconnectRouterId)
+        .filter((routerId): routerId is number => routerId !== null);
+      await refreshReconnectData(routerIds);
+    }
   }
+
+  function toggleAutoReconnect() {
+    const enabled = !autoReconnectEnabledRef.current;
+    autoReconnectEnabledRef.current = enabled;
+    setAutoReconnectEnabled(enabled);
+  }
+
+  useEffect(() => {
+    if (!autoReconnectEnabled) {
+      autoReconnectEnabledRef.current = false;
+      return;
+    }
+
+    autoReconnectEnabledRef.current = true;
+    let cancelled = false;
+    let timer = 0;
+    const runReconnectSweep = async () => {
+      if (cancelled || !autoReconnectEnabledRef.current) return;
+      if (reconnectBatchBusyRef.current) {
+        timer = window.setTimeout(() => void runReconnectSweep(), 250);
+        return;
+      }
+      const queue = [...reconnectEligibleUsersRef.current];
+      if (queue.length) {
+        try {
+          await reconnectAllEligible(
+            queue,
+            () => !cancelled && autoReconnectEnabledRef.current,
+          );
+        } catch (error) {
+          setActionError(error instanceof Error ? error.message : "Automatic Hotspot reconnect could not refresh its status.");
+        }
+      }
+      if (!cancelled && autoReconnectEnabledRef.current) {
+        timer = window.setTimeout(() => void runReconnectSweep(), 3_000);
+      }
+    };
+
+    void runReconnectSweep();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [autoReconnectEnabled]);
+
+  useEffect(() => () => {
+    autoReconnectEnabledRef.current = false;
+  }, []);
 
   /* Sync state */
   const [showSyncPicker,  setShowSyncPicker]  = useState(false);
@@ -1487,20 +1513,37 @@ export default function PrepaidUsers() {
 
           <button
             type="button"
-            onClick={() => void reconnectAllEligible()}
-            disabled={reconnectEligibleUsers.length === 0 || Boolean(reconnectProgress?.running) || reconnectingIds.size > 0}
-            aria-label={`Reconnect all eligible offline Hotspot devices, ${reconnectEligibleUsers.length} available`}
-            title="Processes all eligible grouped Hotspot identities, regardless of the active filters or page."
+            onClick={toggleAutoReconnect}
+            disabled={!autoReconnectEnabled && (
+              reconnectMonitorUsers.length === 0
+              || Boolean(reconnectProgress?.running)
+              || reconnectingIds.size > 0
+            )}
+            aria-label={`${autoReconnectEnabled ? "Stop" : "Start"} automatic Hotspot reconnect; ${reconnectEligibleUsers.length} currently offline and ${reconnectMonitorUsers.length} active accounts monitored`}
+            title={autoReconnectEnabled
+              ? "Stop the repeating Hotspot connection checks."
+              : "Checks active Hotspot accounts and reconnects eligible offline devices every 3 seconds."}
             style={{
-              ...BTN(reconnectEligibleUsers.length ? "var(--isp-green)" : "var(--isp-border)", reconnectEligibleUsers.length ? "#fff" : "var(--isp-text-muted)"),
-              opacity: reconnectEligibleUsers.length && !reconnectProgress?.running && reconnectingIds.size === 0 ? 1 : 0.65,
-              cursor: reconnectEligibleUsers.length && !reconnectProgress?.running && reconnectingIds.size === 0 ? "pointer" : "not-allowed",
+              ...BTN(
+                autoReconnectEnabled
+                  ? "#b91c1c"
+                  : reconnectMonitorUsers.length
+                    ? "var(--isp-green)"
+                    : "var(--isp-border)",
+                autoReconnectEnabled || reconnectMonitorUsers.length ? "#fff" : "var(--isp-text-muted)",
+              ),
+              opacity: autoReconnectEnabled || (reconnectMonitorUsers.length && !reconnectProgress?.running && reconnectingIds.size === 0) ? 1 : 0.65,
+              cursor: autoReconnectEnabled || (reconnectMonitorUsers.length && !reconnectProgress?.running && reconnectingIds.size === 0) ? "pointer" : "not-allowed",
             }}
           >
-            {reconnectProgress?.running ? <Loader2 size={13} className="prepaid-spin" /> : <RotateCw size={13} />}
-            Reconnect offline Hotspots
+            {autoReconnectEnabled
+              ? reconnectProgress?.running
+                ? <Loader2 size={13} className="prepaid-spin" />
+                : <X size={13} />
+              : <RotateCw size={13} />}
+            {autoReconnectEnabled ? "Stop auto-reconnect" : "Auto-reconnect · 3s"}
             <span style={{ borderRadius: 999, padding: "1px 6px", background: "rgba(255,255,255,.18)", fontSize: ".65rem" }}>
-              {reconnectEligibleUsers.length}
+              {autoReconnectEnabled ? reconnectMonitorUsers.length : reconnectEligibleUsers.length}
             </span>
           </button>
 
@@ -1562,6 +1605,30 @@ export default function PrepaidUsers() {
           </button>
         </div>
 
+        {autoReconnectEnabled && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 9,
+              padding: "0.65rem 0.85rem",
+              borderRadius: 8,
+              color: "var(--isp-text)",
+              background: "color-mix(in srgb,var(--isp-green) 9%,var(--isp-card))",
+              border: "1px solid color-mix(in srgb,var(--isp-green) 38%,var(--isp-border))",
+              fontSize: "0.72rem",
+            }}
+          >
+            <Loader2 size={14} className="prepaid-spin" style={{ color: "var(--isp-green)", flexShrink: 0 }} />
+            <span>
+              Auto-reconnect checks {reconnectMonitorUsers.length} active Hotspot account{reconnectMonitorUsers.length === 1 ? "" : "s"} every 3 seconds; {reconnectEligibleUsers.length} currently need reconnection.
+              Keep this page open; press Stop auto-reconnect to end it.
+            </span>
+          </div>
+        )}
+
         {/* ── Stat cards ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: "0.625rem" }}>
           {[
@@ -1589,11 +1656,19 @@ export default function PrepaidUsers() {
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
               <div style={{ minWidth: 0 }}>
                 <h2 id="prepaid-reconnect-title" style={{ margin: 0, fontSize: ".82rem", fontWeight: 800, color: "var(--isp-text)" }}>
-                  {reconnectProgress.running ? "Reconnecting Hotspot devices" : "Reconnect operation complete"}
+                  {reconnectProgress.running
+                    ? "Reconnecting Hotspot devices"
+                    : autoReconnectEnabled
+                      ? "Automatic reconnect is monitoring"
+                      : "Reconnect operation complete"}
                 </h2>
                 <p style={{ margin: "3px 0 0", color: "var(--isp-text-muted)", fontSize: ".7rem" }}>
                   {reconnectProgress.completed} of {reconnectProgress.total} canonical account{reconnectProgress.total === 1 ? "" : "s"} processed
-                  {reconnectProgress.running ? " · up to 3 router operations at once" : ""}
+                  {reconnectProgress.running
+                    ? " · up to 3 router operations at once"
+                    : autoReconnectEnabled
+                      ? " · next pass in 3 seconds"
+                      : ""}
                 </p>
               </div>
               {!reconnectProgress.running && (
@@ -1877,7 +1952,7 @@ export default function PrepaidUsers() {
                               title="Reconnect this entitled Hotspot device"
                               aria-label={`Reconnect Hotspot device for ${username}`}
                               onClick={() => void reconnectOne(user)}
-                              disabled={reconnectingIds.has(user.id) || Boolean(reconnectProgress?.running) || actionBusy === user.id}
+                              disabled={reconnectingIds.has(user.id) || Boolean(reconnectProgress?.running) || autoReconnectEnabled || actionBusy === user.id}
                             >
                               {reconnectingIds.has(user.id) ? <Loader2 size={12} className="prepaid-spin" /> : <RotateCw size={12} />}
                               <span className="prepaid-reconnect-label">Reconnect</span>

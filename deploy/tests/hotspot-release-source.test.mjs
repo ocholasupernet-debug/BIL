@@ -25,6 +25,34 @@ test("deployments register both loyalty and voucher entitlement migrations", () 
   }
 });
 
+test("the default release source keeps WAHA and prepaid migrations without running unrelated RouterOS setup", () => {
+  const runner = api("scripts/apply-deployment-migrations.mjs");
+  for (const name of [
+    "2026_waha_gateway.sql",
+    "2026_prepaid_checkout_idempotency.sql",
+    "2026_prepaid_transaction_account_claim.sql",
+  ]) {
+    assert.ok(runner.includes(`../migrations/${name}`), `Migration not registered: ${name}`);
+    assert.ok(api(`migrations/${name}`).length > 0);
+  }
+
+  const gatewayRoute = api("src/routes/waha-gateway-route.ts");
+  const gatewayService = api("src/services/whatsapp/waha-gateway-service.ts");
+  const routeIndex = api("src/routes/index.ts");
+  assert.ok(gatewayRoute.includes("wahaGatewayService"));
+  assert.ok(gatewayService.includes("class WAHAGatewayService"));
+  assert.ok(routeIndex.includes("wahaGatewayRouter"));
+
+  const workflow = source(".github/workflows/deploy.yml");
+  assert.ok(workflow.includes(
+    "DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup }}",
+  ));
+  for (const name of ["WAHA_BASE_URL", "WAHA_API_KEY", "WAHA_SESSION_ID", "WAHA_DEFAULT_COUNTRY_CODE"]) {
+    assert.ok(workflow.includes(name + ": ${{ secrets." + name + " }}"), `${name} secret is not mapped`);
+  }
+  assert.equal(source("deploy/skip-live-router-oneshots-once"), "");
+});
+
 test("the shared schema retains tenant-scoped loyalty and voucher allowances", () => {
   const schema = api("migrations/supabase_schema.sql");
   for (const table of [

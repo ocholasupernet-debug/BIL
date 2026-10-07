@@ -9,6 +9,7 @@ import {
   saveWahaGatewayCredentials,
   saveWahaGatewaySettings,
   validateWahaBaseUrl,
+  WahaGatewayError,
   wahaGatewayService,
 } from "../services/whatsapp/waha-gateway-service.js";
 
@@ -159,6 +160,42 @@ router.post("/super-admin/waha/test", async (req, res): Promise<void> => {
       error: message.startsWith("Enter a valid") || message.startsWith("WAHA text")
         ? message
         : "The WAHA test message could not be sent. Check the server URL, session, API key, and WAHA status.",
+    });
+  }
+});
+
+router.get("/super-admin/waha/session", async (req, res): Promise<void> => {
+  if (!superAdminActor(req, res)) return;
+  try {
+    const session = await wahaGatewayService.getSessionPairingState();
+    res.set("Cache-Control", "no-store, private").set("Pragma", "no-cache").json({
+      ok: true,
+      session,
+    });
+  } catch (error) {
+    res.set("Cache-Control", "no-store, private").status(502).json({
+      ok: false,
+      error: error instanceof WahaGatewayError
+        ? error.message
+        : "Could not read WAHA session status.",
+    });
+  }
+});
+
+router.post("/super-admin/waha/session/start", async (req, res): Promise<void> => {
+  if (!superAdminActor(req, res)) return;
+  try {
+    const session = await wahaGatewayService.startSessionPairing();
+    res.set("Cache-Control", "no-store, private").set("Pragma", "no-cache").json({
+      ok: true,
+      session,
+    });
+  } catch (error) {
+    res.set("Cache-Control", "no-store, private").status(502).json({
+      ok: false,
+      error: error instanceof WahaGatewayError
+        ? error.message
+        : "Could not start WAHA session pairing.",
     });
   }
 });

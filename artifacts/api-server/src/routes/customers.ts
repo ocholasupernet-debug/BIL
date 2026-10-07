@@ -98,6 +98,11 @@ export const prepaidHotspotReconnectOperations = {
   connectHotspotUser,
 };
 
+export const hotspotTroubleshootOperations = {
+  fetchHotspotUsers,
+  resolveHotspotClientIpByMac,
+};
+
 type CustomerRow = {
   id: number;
   admin_id: number;
@@ -3124,6 +3129,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
   const capBytes = Number.isFinite(rawLimitMb) && rawLimitMb > 0
     ? dataLimitMegabytesToBytes(rawLimitMb)
     : null;
+  let retryable = lookup.status === "unavailable";
   const needsSharedUsageRead = Boolean(
     targetScope
     && customer
@@ -3185,6 +3191,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       logger.warn({ err: error, customerId: customer.id, targetRouterId: targetScope?.routerId }, "[customers/hotspot-troubleshoot] package quota check failed");
       lookup.status = "unavailable";
       lookup.error = "The router could not verify this package's remaining data. Please try again shortly.";
+      retryable = true;
     }
   }
   reconnectTimingOutcome = lookup.status;
@@ -3193,7 +3200,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
     found: lookup.found,
     status: lookup.status,
     connected: false,
-    retryable: false,
+    retryable,
     expiresAt: lookup.expiresAt,
     planName: lookup.planName,
     username: lookup.username,
@@ -3263,6 +3270,52 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
   }
 
   try {
+    const desiredHotspotServer = targetScope?.portId === null ? "all" : hotspotServer;
+    const activeUsersBeforeReconnect = await measureReconnectStage(
+      "preflight_active_session_read",
+      () => hotspotTroubleshootOperations.fetchHotspotUsers(creds),
+    );
+    const alreadyConnected = activeUsersBeforeReconnect.some(user =>
+      user.user === username
+      && normalisePortalMac(user.macAddress) === requestedMac
+      && (!desiredHotspotServer || desiredHotspotServer === "all" || user.server === desiredHotspotServer),
+    );
+    const requiresSharedUsageVerification = Boolean(
+      targetScope
+      && planServiceType !== "vlan"
+      && capBytes !== null
+      && plan.data_cap_mode !== "throttle",
+    );
+    if (alreadyConnected && !requiresSharedUsageVerification) {
+      reconnectTimingOutcome = "connected";
+      res.json({ ...response, connected: true });
+      return;
+    }
+
+    const preflightIp = await measureReconnectStage(
+      "preflight_device_visibility",
+      () => hotspotTroubleshootOperations.resolveHotspotClientIpByMac(creds, requestedMac),
+    );
+    if (!preflightIp) {
+      reconnectTimingOutcome = "device_not_found";
+      res.status(409).json({
+        ...response,
+        ok: false,
+        retryable: true,
+        error: "Your active package was found. The router is waiting to see this device on Wi-Fi and will retry automatically.",
+      });
+      return;
+    }
+    if (portalScope && customer.type === "vlan" && preflightIp !== customer.ip_address) {
+      reconnectTimingOutcome = "vlan_ip_mismatch";
+      res.status(409).json({
+        ...response,
+        ok: false,
+        error: "This device is not using the static IP assigned to its VLAN account.",
+      });
+      return;
+    }
+
     const loginResult = await measureReconnectStage(
       "customer_lock_and_reconnect",
       () => withCustomerEditLock(customer.admin_id, customer.id, async assertLock => {
@@ -3433,7 +3486,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
 
       const activeUsers = await measureReconnectStage(
         "router_active_session_read",
-        () => fetchHotspotUsers(creds),
+        () => hotspotTroubleshootOperations.fetchHotspotUsers(creds),
       );
       const connected = activeUsers.some(user =>
         user.user === username && normalisePortalMac(user.macAddress) === requestedMac,
@@ -3442,7 +3495,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
 
       const discoveredIp = await measureReconnectStage(
         "router_ip_discovery",
-        () => resolveHotspotClientIpByMac(creds, requestedMac),
+        () => hotspotTroubleshootOperations.resolveHotspotClientIpByMac(creds, requestedMac),
       );
       if (!discoveredIp) return { kind: "device-not-found" as const };
       if (portalScope && customer.type === "vlan" && discoveredIp !== customer.ip_address) {
@@ -3472,7 +3525,8 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       res.status(409).json({
         ...response,
         ok: false,
-        error: "The router cannot find this device on the hotspot Wi-Fi yet. Connect it to Wi-Fi and try again.",
+        retryable: true,
+        error: "The router has not found this device on the hotspot Wi-Fi yet. Keep it connected while automatic sign-in retries.",
       });
       return;
     }
@@ -3491,7 +3545,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
         ...response,
         ok: false,
         retryable: true,
-        error: "The router has not confirmed this device's login yet. Tap Login now to retry.",
+        error: "The router has not confirmed this device's login yet. Automatic sign-in will retry.",
       });
       return;
     }
@@ -3503,7 +3557,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
       ...response,
       ok: false,
       retryable: true,
-      error: "Your plan is active, but the hotspot router has not accepted the connection yet. Tap Login now to retry.",
+      error: "Your plan is active, but the hotspot router has not accepted the connection yet. Automatic sign-in will retry.",
     });
   }
 });
