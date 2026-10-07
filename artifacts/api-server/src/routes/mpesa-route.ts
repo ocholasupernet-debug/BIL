@@ -3143,14 +3143,13 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
   });
 
   if (transaction.payment_method === "mpesa") {
-    try {
-      await sbRpc("award_hotspot_loyalty_points_fractional", { p_transaction_id: transaction.id });
-    } catch (error) {
-      logger.warn(
-        { err: error, transactionId: transaction.id, customerId: customer.id },
-        "[mpesa/hotspot-mac-access] account saved; loyalty award will retry on the next checkout recovery",
-      );
-    }
+    void sbRpc("award_hotspot_loyalty_points_fractional", { p_transaction_id: transaction.id })
+      .catch(error => {
+        logger.warn(
+          { err: error, transactionId: transaction.id, customerId: customer.id },
+          "[mpesa/hotspot-mac-access] loyalty award deferred",
+        );
+      });
   }
 
   const routers = await sbSelect<{
