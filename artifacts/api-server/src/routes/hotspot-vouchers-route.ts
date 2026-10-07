@@ -56,11 +56,10 @@ interface StoredVoucher {
   expires_at: string | null;
   service_expires_at?: string | null;
   created_at: string;
-<<<<<<< /tmp/ours-hotspot-vouchers-route.ts
-  prepaid_customer_id?: number | string | null;
-  redeemed_at?: string | null;
-  redeemed_by_phone?: string | null;
+  redeemed_at: string | null;
+  redeemed_by_phone: string | null;
   redeemed_mac_address?: string | null;
+  prepaid_customer_id?: number | string | null;
 }
 
 function isMissingRadacctStartTime(error: unknown): boolean {
@@ -69,10 +68,6 @@ function isMissingRadacctStartTime(error: unknown): boolean {
   return normalized.includes("42703")
     && normalized.includes("acctstarttime")
     && normalized.includes("does not exist");
-=======
-  redeemed_at: string | null;
-  redeemed_by_phone: string | null;
->>>>>>> /tmp/live-hotspot-vouchers-route.ts
 }
 
 class RedeemedVoucherMutationError extends Error {
@@ -352,11 +347,7 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
   try {
     const vouchers = await sbSelectStrict<StoredVoucher>(
       "isp_radius_vouchers",
-<<<<<<< /tmp/ours-hotspot-vouchers-route.ts
       `admin_id=eq.${adminId}&select=id,admin_id,code,plan_id,plan_name,router_id,router_name,price,validity_mins,data_limit_mb,data_cap_mode,expires_at,service_expires_at,prepaid_customer_id,created_at,redeemed_at,redeemed_by_phone,redeemed_mac_address&order=created_at.desc&limit=10000`,
-=======
-      `admin_id=eq.${adminId}&select=id,admin_id,code,plan_id,plan_name,router_id,router_name,price,validity_mins,data_limit_mb,data_cap_mode,expires_at,created_at,redeemed_at,redeemed_by_phone&order=created_at.desc&limit=10000`
->>>>>>> /tmp/live-hotspot-vouchers-route.ts
     );
     const linkedCustomerIds = [...new Set(vouchers
       .map(voucher => Number(voucher.prepaid_customer_id))
