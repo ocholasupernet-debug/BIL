@@ -11,6 +11,28 @@ const source = (path) => readFileSync(
 const api = (path) => source(`artifacts/api-server/${path}`);
 const web = (path) => source(`artifacts/ochola-supernet/${path}`);
 
+test("the first ISP admin login uses the same fixed username and temporary password that registration creates", () => {
+  const registration = api("src/routes/registration-route.ts");
+  const credentials = web("src/lib/initial-admin-credentials.ts");
+  const login = web("src/pages/admin/AdminLogin.tsx");
+  const successPage = web("src/pages/admin/AdminRegister.tsx");
+  const setupPage = web("src/pages/admin/AdminSetPassword.tsx");
+  const backendPassword = registration.match(/const INITIAL_ADMIN_PASSWORD = "([^"]+)"/)?.[1];
+  const frontendUsername = credentials.match(/INITIAL_ADMIN_USERNAME = "([^"]+)"/)?.[1];
+  const frontendPassword = credentials.match(/INITIAL_ADMIN_PASSWORD = "([^"]+)"/)?.[1];
+
+  assert.equal(frontendUsername, "admin");
+  assert.ok(frontendPassword && frontendPassword.length >= 6, "temporary password must be at least six characters");
+  assert.equal(frontendPassword, backendPassword, "registration and first-login passwords must match");
+  assert.ok(login.includes("firstLogin ? INITIAL_ADMIN_USERNAME : \"\""));
+  assert.ok(login.includes("firstLogin ? INITIAL_ADMIN_PASSWORD : \"\""));
+  assert.ok(login.includes("readOnly={firstLogin}"));
+  assert.ok(successPage.includes("{INITIAL_ADMIN_PASSWORD}"));
+  assert.ok(setupPage.includes("minLength={6}"));
+  assert.ok(setupPage.includes("password.length < 6"));
+});
+
+
 test("deployments register both loyalty and voucher entitlement migrations", () => {
   const runner = api("scripts/apply-deployment-migrations.mjs");
   for (const name of [
