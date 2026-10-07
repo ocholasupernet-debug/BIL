@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { Building2, Phone, UserRound, Mail, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles, Copy, RefreshCw, WalletCards, Network, Plug } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { INITIAL_ADMIN_PASSWORD, INITIAL_ADMIN_USERNAME } from "@/lib/initial-admin-credentials";
 import { Logo } from "@/components/Logo";
 
 function extractMsg(err: unknown): string {
@@ -19,8 +20,6 @@ function slugify(str: string) {
 const COMPANY_NAME_PATTERN = /^[a-z]+$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const RESERVED_SUBDOMAINS = new Set(["www", "api", "vpn", "register", "latex", "proxyvpn", "mail", "admin"]);
-const INITIAL_ADMIN_USERNAME = "admin";
-
 interface RegistrationDestination {
   type: "bank" | "till" | "paybill";
   name: string;
@@ -395,7 +394,7 @@ export default function AdminRegister() {
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
                 <span style={{ fontSize: "0.8rem", color: "var(--isp-text-muted)" }}>Password</span>
-                <span style={{ fontSize: "0.8rem", fontFamily: "monospace", fontWeight: 700, color: "var(--isp-text)" }}>admin</span>
+                <span style={{ fontSize: "0.8rem", fontFamily: "monospace", fontWeight: 700, color: "var(--isp-text)" }}>{INITIAL_ADMIN_PASSWORD}</span>
               </div>
               <p style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", lineHeight: 1.45, margin: "0 0 12px" }}>
                 Sign in with these temporary details, then create your own password to access the workspace.

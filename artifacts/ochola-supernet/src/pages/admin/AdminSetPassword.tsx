@@ -82,8 +82,8 @@ export default function AdminSetPassword() {
       } catch {}
       setDone(true);
       setTimeout(() => setLocation("/admin/dashboard"), 1800);
-    } catch {
-      setError("Failed to update password. Please try again.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to update password. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -143,6 +143,7 @@ export default function AdminSetPassword() {
                   type={showPassword ? "text" : "password"}
                   value={password}
                   onChange={e => setPassword(e.target.value)}
+                  required
                   minLength={6}
                   placeholder="At least 6 characters"
                   style={inputStyle}
@@ -173,6 +174,8 @@ export default function AdminSetPassword() {
                   type={showConfirm ? "text" : "password"}
                   value={confirm}
                   onChange={e => setConfirm(e.target.value)}
+                  required
+                  minLength={6}
                   placeholder="Re-enter your password"
                   style={inputStyle}
                   onFocus={e => { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; }}

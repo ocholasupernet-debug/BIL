@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from "lucide-react";
 import { clearAdminAuth, clearPasswordSetupToken, setAdminAuth, setPasswordSetupToken, supabase } from "@/lib/supabase";
 import { getHostSubdomain } from "@/lib/subdomain";
+import { INITIAL_ADMIN_PASSWORD, INITIAL_ADMIN_USERNAME } from "@/lib/initial-admin-credentials";
 import { Logo } from "@/components/Logo";
 
 interface CompanyInfo {
@@ -18,8 +19,8 @@ export default function AdminLogin() {
     : "";
   const firstLogin = typeof window !== "undefined"
     && new URLSearchParams(window.location.search).get("first_login") === "1";
-  const [username, setUsername]         = useState(firstLogin ? "admin" : "");
-  const [password, setPassword]         = useState(firstLogin ? "admin" : "");
+  const [username, setUsername]         = useState(firstLogin ? INITIAL_ADMIN_USERNAME : "");
+  const [password, setPassword]         = useState(firstLogin ? INITIAL_ADMIN_PASSWORD : "");
   const [companySubdomain, setCompanySubdomain] = useState(loginSubdomain);
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading]       = useState(false);
@@ -207,7 +208,9 @@ export default function AdminLogin() {
     e.preventDefault();
     setError("");
      if (!username.trim() || !password.trim()) {
-       setError("Please enter your email or username and password.");
+       setError(firstLogin
+         ? "Enter the admin username and temporary password."
+         : "Please enter your email or username and password.");
       return;
     }
     setIsLoading(true);
@@ -444,7 +447,7 @@ export default function AdminLogin() {
                  display: "block", fontSize: "0.88rem", fontWeight: 600,
                 color: "var(--isp-text)", marginBottom: 7,
               }}>
-                 Email or username
+                  {firstLogin ? "Username" : "Email or username"}
               </label>
               <div style={{ position: "relative" }}>
                 <User size={15} style={{
@@ -455,7 +458,8 @@ export default function AdminLogin() {
                   type="text"
                   value={username}
                   onChange={e => setUsername(e.target.value)}
-                   placeholder="you@yourcompany.com"
+                  readOnly={firstLogin}
+                  placeholder={firstLogin ? INITIAL_ADMIN_USERNAME : "you@yourcompany.com"}
                   autoComplete="username"
                   style={inputStyle}
                   onFocus={e => { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; }}
