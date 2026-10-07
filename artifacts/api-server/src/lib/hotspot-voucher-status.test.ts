@@ -100,6 +100,22 @@ test("includes RADIUS gigawords when calculating a voucher's cumulative data use
   assert.equal(summary.dataUsedBytes, 4_294_969_296);
 });
 
+test("prefers the saved service expiry over a duration-derived expiry", () => {
+  const summary = summarizeHotspotVoucherStatus({
+    sessions: [],
+    validityMins: 60,
+    redeemBy: null,
+    redeemedAt: "2026-10-07T11:00:00.000Z",
+    serviceExpiresAt: "2026-10-07T14:00:00.000Z",
+    dataLimitMb: null,
+    dataCapMode: "disconnect",
+    now,
+  });
+
+  assert.equal(summary.expiry, "2026-10-07T14:00:00.000Z");
+  assert.equal(summary.serviceStatus, "active");
+});
+
 test("distinguishes an unused available voucher from an expired redemption window", () => {
   const available = summarizeHotspotVoucherStatus({
     sessions: [],

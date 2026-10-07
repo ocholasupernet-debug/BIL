@@ -2028,17 +2028,22 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   const portalScope = req.hotspotPortalContext;
   let customer: Record<string, unknown> | undefined;
   if (portalScope) {
-    const [vlanRows, resellerRows] = await Promise.all([
+    const usernameFilter = `username=eq.${encodeURIComponent(username)}&select=*&limit=2`;
+    const [vlanRows, resellerRows, ispVoucherRows] = await Promise.all([
       sbSelectStrict<Record<string, unknown>>(
         "isp_customers",
-        `admin_id=eq.${portalScope.adminId}&type=eq.vlan&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&username=eq.${encodeURIComponent(username)}&select=*&limit=2`,
+        `admin_id=eq.${portalScope.adminId}&type=eq.vlan&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&${usernameFilter}`,
       ),
       sbSelectStrict<Record<string, unknown>>(
         "isp_customers",
-        `admin_id=eq.${portalScope.resellerId}&type=eq.hotspot&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&username=eq.${encodeURIComponent(username)}&select=*&limit=2`,
+        `admin_id=eq.${portalScope.resellerId}&type=in.(hotspot,voucher)&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&${usernameFilter}`,
+      ),
+      sbSelectStrict<Record<string, unknown>>(
+        "isp_customers",
+        `admin_id=eq.${portalScope.adminId}&type=eq.voucher&router_id=eq.${portalScope.routerId}&port_id=eq.${portalScope.portId}&${usernameFilter}`,
       ),
     ]);
-    const scopedCustomers = [...vlanRows, ...resellerRows];
+    const scopedCustomers = [...vlanRows, ...resellerRows, ...ispVoucherRows];
     if (scopedCustomers.length > 1) {
       res.status(409).json({ error: "This username is ambiguous on the assigned Hotspot service. Contact support." });
       return;
@@ -2047,7 +2052,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   } else {
     const rows = await sbSelect<Record<string, unknown>>(
       "isp_customers",
-      `admin_id=eq.${adminId}&type=eq.hotspot&username=eq.${encodeURIComponent(username)}&select=*&limit=1`,
+      `admin_id=eq.${adminId}&type=in.(hotspot,voucher)&username=eq.${encodeURIComponent(username)}&select=*&limit=2`,
     );
     customer = rows[0];
   }
@@ -2103,7 +2108,10 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
       || (customerRow.admin_id !== portalScope.adminId && customerRow.admin_id !== portalScope.resellerId)
       || !plan
       || plan.router_id !== portalScope.routerId
-      || plan.port_id !== portalScope.portId
+      || (
+        plan.port_id !== portalScope.portId
+        && !(customerRow.type === "voucher" && plan.port_id == null && customerRow.port_id === portalScope.portId)
+      )
       || (plan.owner_reseller_id != null && plan.owner_reseller_id !== portalScope.resellerId)
       || (customerRow.admin_id === portalScope.resellerId && plan.owner_reseller_id !== portalScope.resellerId)
     )
