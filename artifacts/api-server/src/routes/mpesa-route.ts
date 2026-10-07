@@ -24,6 +24,7 @@ import { planBelongsToOwner } from "../lib/plan-ownership.js";
 import { isPrepaidCustomerEntitled } from "../lib/prepaid-entitlement.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { latestMpesaStkPushHealth, withMpesaStkPushHealth, type MpesaStkPushStatus } from "../lib/mpesa-health.js";
+import { createDarajaTokenProvider } from "../lib/daraja-oauth-token.js";
 import {
   addHotspotIpBinding,
   addHotspotUser,
@@ -80,6 +81,31 @@ import {
 } from "../lib/reseller-payment-gateway.js";
 
 const router: IRouter = Router();
+const darajaTokenFor = createDarajaTokenProvider();
+
+function startRequestTiming(res: Response, message: string): (stage: string, startedAt?: bigint) => void {
+  const startedAt = process.hrtime.bigint();
+  let lastAt = startedAt;
+  const stageMs: Record<string, number> = {};
+
+  if (typeof res.once === "function") {
+    res.once("finish", () => {
+      const finishedAt = process.hrtime.bigint();
+      stageMs.afterLastCheckpoint = Number(finishedAt - lastAt) / 1_000_000;
+      logger.info({
+        totalMs: Number(finishedAt - startedAt) / 1_000_000,
+        statusCode: res.statusCode,
+        stageMs,
+      }, message);
+    });
+  }
+
+  return (stage: string, stageStartedAt?: bigint) => {
+    const now = process.hrtime.bigint();
+    stageMs[stage] = Number(now - (stageStartedAt ?? lastAt)) / 1_000_000;
+    lastAt = now;
+  };
+}
 
 interface StkPushHealthAttempt {
   transactionId: number;
@@ -1014,14 +1040,10 @@ function darajaBase(settings: MpesaSettings): string {
 }
 
 async function getDarajaToken(settings: MpesaSettings): Promise<string> {
-  const { consumerKey, consumerSecret } = settings;
-  const creds = Buffer.from(`${consumerKey}:${consumerSecret}`).toString("base64");
-  const res = await fetch(`${darajaBase(settings)}/oauth/v1/generate?grant_type=client_credentials`, {
-    headers: { Authorization: `Basic ${creds}` },
-  });
-  if (!res.ok) throw new Error(`Daraja OAuth failed: ${res.status}`);
-  const data = await res.json() as { access_token: string };
-  return data.access_token;
+  return darajaTokenFor(
+    { consumerKey: settings.consumerKey, consumerSecret: settings.consumerSecret },
+    darajaBase(settings),
+  );
 }
 
 function callbackUrl(settings: MpesaSettings): string {
@@ -1097,6 +1119,7 @@ async function reconcileInitiatedStkRequest(
   checkoutId: string,
   merchantRequestId: string,
   notes: string,
+  paymentMetadata?: unknown,
 ): Promise<boolean> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const updated = await sbUpdate(
@@ -1108,6 +1131,7 @@ async function reconcileInitiatedStkRequest(
         merchant_request_id: merchantRequestId,
         status: "pending",
         notes,
+        ...(paymentMetadata === undefined ? {} : { payment_metadata: paymentMetadata }),
       },
     );
     if (updated[0]) return true;
@@ -1845,6 +1869,7 @@ router.get("/mpesa/token", (_req: Request, res: Response): void => {
 
 /* Public hotspot checkout gets a short-lived, plan-bound token before STK. */
 router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> => {
+  const timing = startRequestTiming(res, "[mpesa/intent] request timing");
   const adminId = await resolvePortalAdminId(req, req.body?.adminId);
   const planId = Number(req.body?.plan_id);
   const phone = typeof req.body?.phone === "string" ? normaliseKenyanPhone(req.body.phone) : "";
@@ -1872,6 +1897,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     res.status(404).json({ ok: false, error: "This ISP account is not available for payments." });
     return;
   }
+  timing("activeAdminCheck");
   const plans = await sbSelect<{
     id: number;
     price: number | string;
@@ -1883,6 +1909,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     "isp_plans",
     `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price,type,router_id,port_id,owner_reseller_id&limit=1`,
   );
+  timing("planLookup");
   const plan = plans[0];
   const serviceType = normalizePlanServiceType(plan?.type);
   if (plan && serviceType !== requestedService) {
@@ -2270,6 +2297,7 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
  * Body: { phone, amount, plan_id?, account_ref? }
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => {
+  const timing = startRequestTiming(res, "[mpesa/stk] request timing");
   const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address, service_type, customer_id, device_name, billing_invoice_id, router_id, port_id } = req.body as {
     phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string; service_type?: string; customer_id?: number; device_name?: string; billing_invoice_id?: number; router_id?: number; port_id?: number;
   };
@@ -2522,6 +2550,11 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
              accountReference: resellerRoute.accountReference,
            }
          : {};
+      const darajaOAuthStartedAt = process.hrtime.bigint();
+      const darajaTokenResultPromise = getDarajaToken(cfg).then(
+        token => ({ token }),
+        error => ({ error }),
+      );
       let initiatedTransactions: { id: number }[];
       try {
         initiatedTransactions = await sbInsertStrict<{ id: number }>("isp_transactions", {
@@ -2557,6 +2590,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        res.status(503).json({ ok: false, error: "Could not safely create the payment request. Please try again." });
        return;
      }
+      timing("preflightAndTransaction");
      if (!resellerRoute && !platformBillingInvoice) {
        stkHealthAttempt = {
          transactionId: initiatedTransaction.id,
@@ -2567,7 +2601,10 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
          healthRecorded: false,
        };
      }
-     const token = await getDarajaToken(cfg);
+      const darajaTokenResult = await darajaTokenResultPromise;
+      if ("error" in darajaTokenResult) throw darajaTokenResult.error;
+      const token = darajaTokenResult.token;
+      timing("darajaOAuth", darajaOAuthStartedAt);
      const { timestamp, password } = stkCredentials(businessShortcode, cfg.passkey);
 
     const body = {
@@ -2592,37 +2629,63 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
 
     const data = await stkRes.json() as Record<string, unknown>;
     logger.info({ phone: normalised, amount, data }, "[mpesa/stk] STK push response");
+      timing("darajaPromptResponse");
 
     if (!stkRes.ok || data["ResponseCode"] !== "0") {
-      if (stkHealthAttempt) {
-        await recordStkPushHealth(stkHealthAttempt, "down");
-      }
-      await sbUpdate("isp_transactions", `id=eq.${initiatedTransaction.id}&status=eq.initiating`, {
+        const providerError = data["errorMessage"] ?? data["ResponseDescription"] ?? "Unknown error";
+        const failedMetadata = stkHealthAttempt
+          ? withMpesaStkPushHealth(stkHealthAttempt.paymentMetadata, {
+              status: "down",
+              paymentGateway: stkHealthAttempt.paymentGateway,
+              checkedAt: new Date().toISOString(),
+            })
+          : undefined;
+        if (stkHealthAttempt) stkHealthAttempt.status = "down";
+      const failedUpdates = await sbUpdate("isp_transactions", `id=eq.${initiatedTransaction.id}&status=eq.initiating`, {
         status: "failed",
-        notes: `STK prompt request failed: ${String(data["errorMessage"] ?? data["ResponseDescription"] ?? "Unknown error")}`,
+        notes: `STK prompt request failed: ${String(providerError)}`,
+        ...(failedMetadata === undefined ? {} : { payment_metadata: failedMetadata }),
       });
+      if (stkHealthAttempt) {
+        stkHealthAttempt.healthRecorded = failedUpdates.length > 0;
+        if (!stkHealthAttempt.healthRecorded) await recordStkPushHealth(stkHealthAttempt, "down");
+      }
       res.status(400).json({ ok: false, error: (data["errorMessage"] ?? data["ResponseDescription"] ?? "STK push failed") as string });
       return;
     }
 
-    if (stkHealthAttempt) {
-      await recordStkPushHealth(stkHealthAttempt, "available");
-    }
+    const availableMetadata = stkHealthAttempt
+      ? withMpesaStkPushHealth(stkHealthAttempt.paymentMetadata, {
+          status: "available",
+          paymentGateway: stkHealthAttempt.paymentGateway,
+          checkedAt: new Date().toISOString(),
+        })
+      : undefined;
+    if (stkHealthAttempt) stkHealthAttempt.status = "available";
     const checkoutId = String(data["CheckoutRequestID"] ?? "");
     const reconciled = checkoutId && await reconcileInitiatedStkRequest(
       initiatedTransaction.id,
       checkoutId,
       String(data["MerchantRequestID"] ?? ""),
       `${paymentGatewayLabel(paymentGateway)} STK push to ${normalised}`,
+      availableMetadata,
     );
+    timing("checkoutReconciled");
+    if (reconciled && stkHealthAttempt) stkHealthAttempt.healthRecorded = true;
     if (!reconciled) {
+      if (stkHealthAttempt && !stkHealthAttempt.healthRecorded) {
+        await recordStkPushHealth(stkHealthAttempt, "available");
+      }
       logger.error({ checkoutId }, "[mpesa/stk] Could not reconcile initiated transaction");
       res.status(502).json({ ok: false, error: "The payment prompt was sent but could not be recorded safely. Do not retry; contact support." });
       return;
     }
-    await processDeferredMpesaCallbacks(checkoutId);
 
     res.json({ ok: true, CheckoutRequestID: data["CheckoutRequestID"], MerchantRequestID: data["MerchantRequestID"] });
+    timing("responseQueued");
+    void processDeferredMpesaCallbacks(checkoutId).catch(error => {
+      logger.error({ err: error }, "[mpesa/stk] Deferred callback processing failed");
+    });
   } catch (e) {
     if (stkHealthAttempt && !stkHealthAttempt.healthRecorded) {
       await recordStkPushHealth(stkHealthAttempt, stkHealthAttempt.status === "available" ? "available" : "down");
@@ -2710,6 +2773,7 @@ router.get("/mpesa/status", async (req: Request, res: Response): Promise<void> =
  * the signed intent has been recorded.
  */
 async function handleHotspotMacAccess(req: Request, res: Response): Promise<void> {
+  const timing = startRequestTiming(res, "[mpesa/hotspot-mac-access] request timing");
   const checkoutId = String(req.body?.checkout_id ?? "").trim();
   const forceRouterRetry = req.body?.retry === true;
   const portalLoginHandoff = req.body?.portal_login_handoff === true
@@ -2744,6 +2808,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     res.status(409).json({ ok: false, error: "Payment is not confirmed yet. Keep this page open while we verify it." });
     return;
   }
+  timing("paidTransactionLoaded");
   const transactionMac = normaliseMacAddress(transaction.mac_address);
   const mac = requestedMac.value || transactionMac;
   if (!mac || (requestedMac.value && transactionMac !== requestedMac.value)) {
@@ -2810,6 +2875,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     res.status(503).json({ ok: false, error: "The hotspot plan is not assigned to a MikroTik router yet." });
     return;
   }
+  timing("planValidated");
 
   const configuredValidity = Number(plan.validity ?? plan.validity_days ?? 0);
   const expiresInSeconds = planValiditySeconds(configuredValidity, plan.validity_unit);
@@ -3059,19 +3125,22 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     });
     return;
   }
+  timing("accountPersisted");
 
-  try {
-    await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
+  const transactionNotePersistence = sbUpdateStrict(
+    "isp_transactions",
+    `id=eq.${transaction.id}&admin_id=eq.${adminId}`,
+    {
       notes: transaction.payment_method === "loyalty_points"
         ? "Hotspot package redeemed with loyalty points; prepaid account saved and awaiting router access."
         : "M-Pesa payment verified; prepaid hotspot account saved and awaiting router access.",
-    });
-  } catch (error) {
+    },
+  ).catch(error => {
     logger.warn(
       { err: error, transactionId: transaction.id, customerId: customer.id },
       "[mpesa/hotspot-mac-access] prepaid account saved; transaction status note update failed",
     );
-  }
+  });
 
   if (transaction.payment_method === "mpesa") {
     try {
@@ -3136,23 +3205,36 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     });
     return;
   }
+  timing("routerCredentialsLoaded");
   const routerAddressPromise = hotspotPaymentOperations.resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
     logger.warn({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] target device address lookup failed");
     return null;
   });
   let hotspotServer: string | undefined;
   if (plan.port_id) {
-    let port: HotspotPortContext | null;
-    try {
-      port = await loadHotspotPortContext(adminId, plan.router_id, plan.port_id, portalScope?.resellerId);
-    } catch (error) {
-      logger.warn({ err: error, checkoutId, planId: plan.id, portId: plan.port_id }, "[mpesa/hotspot-mac-access] hotspot port unavailable");
+    const portResult = loadHotspotPortContext(
+      adminId,
+      plan.router_id,
+      plan.port_id,
+      portalScope?.resellerId,
+    ).then(
+      port => ({ ok: true as const, port }),
+      error => ({ ok: false as const, error }),
+    );
+    const companyNameResult = loadTenantCompanyName(adminId).then(
+      companyName => ({ ok: true as const, companyName }),
+      error => ({ ok: false as const, error }),
+    );
+    const portOutcome = await portResult;
+    if (!portOutcome.ok) {
+      logger.warn({ err: portOutcome.error, checkoutId, planId: plan.id, portId: plan.port_id }, "[mpesa/hotspot-mac-access] hotspot port unavailable");
       res.status(503).json({
         ok: false,
         error: "Payment is confirmed and the prepaid account is saved, but the package's Hotspot port is not available. Retry Account Setup after it is restored.",
       });
       return;
     }
+    const port = portOutcome.port;
     if (!port) {
       res.status(503).json({
         ok: false,
@@ -3160,18 +3242,10 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
       });
       return;
     }
-    const companyName = await loadTenantCompanyName(adminId);
-    const livePort = portalScope
-      ? await loadHotspotPortContext(adminId, plan.router_id, plan.port_id, portalScope.resellerId)
-      : port;
-    if (!livePort) {
-      res.status(503).json({
-        ok: false,
-        error: "Payment is confirmed and the prepaid account is saved, but the reseller Hotspot port assignment changed. Retry Account Setup after it is restored.",
-      });
-      return;
-    }
-    const resources = hotspotPortResources(livePort, {
+    const companyNameOutcome = await companyNameResult;
+    if (!companyNameOutcome.ok) throw companyNameOutcome.error;
+    const companyName = companyNameOutcome.companyName;
+    const resources = hotspotPortResources(port, {
       companyName,
       routerName: routerRow.name,
     });
@@ -3192,27 +3266,13 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
       return;
     }
   }
-  const routerAddress = (await routerAddressPromise) ?? "";
-  if (routerAddress && customer?.id) {
-    try {
-      const updatedCustomer = await sbUpdateStrict(
-        "isp_customers",
-        `id=eq.${customer.id}&admin_id=eq.${customerAdminId}`,
-        { ip_address: routerAddress },
-      );
-      if (!updatedCustomer.length) {
-        throw new Error("The paid Hotspot customer's IP address could not be updated.");
-      }
-    } catch (error) {
-      logger.warn({ err: error, checkoutId, customerId: customer.id }, "[mpesa/hotspot-mac-access] device IP persistence deferred");
-    }
-  }
+  timing("portServiceReady");
 
   try {
     const hotspotProfile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
     const rateLimit = hotspotRateLimit(plan.speed_down, plan.speed_up, plan.speed_down_unit, plan.speed_up_unit);
     const sharedUsers = Math.max(1, Math.floor(Number(plan.shared_users ?? 1)));
-    await Promise.all([
+    const accountPrerequisites = Promise.all([
       hotspotPaymentOperations.syncRadiusCustomer({
         username: hotspotUsername,
         password: hotspotPassword,
@@ -3231,6 +3291,20 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
       }),
       hotspotPaymentOperations.requireHotspotUserProfile(credentials, hotspotProfile),
     ]);
+    const [, resolvedRouterAddress] = await Promise.all([accountPrerequisites, routerAddressPromise]);
+    const routerAddress = resolvedRouterAddress ?? "";
+    timing("radiusProfileAndDeviceLookupReady");
+    if (routerAddress && customer?.id) {
+      void sbUpdateStrict(
+        "isp_customers",
+        `id=eq.${customer.id}&admin_id=eq.${customerAdminId}`,
+        { ip_address: routerAddress },
+      ).then(updatedCustomer => {
+        if (!updatedCustomer.length) throw new Error("The paid Hotspot customer's IP address could not be updated.");
+      }).catch(error => {
+        logger.warn({ err: error, checkoutId, customerId: customer.id }, "[mpesa/hotspot-mac-access] device IP persistence deferred");
+      });
+    }
     /* A reusable customer's existing RouterOS identity may own an unexpired
        session. Do not delete or disconnect it during paid account renewal. */
     await hotspotPaymentOperations.scheduleHotspotUserExpiry(credentials, {
@@ -3268,6 +3342,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     await Promise.all([
       fupSchedule,
     ]);
+    timing("routerUserProvisioned");
 
     let paidBindingApplied = false;
     try {
@@ -3302,9 +3377,19 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
       });
     }
 
-    await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
-      notes: `M-Pesa payment verified; hotspot credentials assigned on ${routerRow.name}${routerConnected ? " and the device session is active." : paidBindingApplied ? "; MAC access is set up and session activation is pending." : "; device binding is pending."}`,
+    void transactionNotePersistence.then(() => sbUpdateStrict(
+      "isp_transactions",
+      `id=eq.${transaction.id}&admin_id=eq.${adminId}`,
+      {
+        notes: `M-Pesa payment verified; hotspot credentials assigned on ${routerRow.name}${routerConnected ? " and the device session is active." : paidBindingApplied ? "; MAC access is set up and session activation is pending." : "; device binding is pending."}`,
+      },
+    )).catch(error => {
+      logger.warn(
+        { err: error, transactionId: transaction.id, customerId: customer.id },
+        "[mpesa/hotspot-mac-access] final transaction note update failed",
+      );
     });
+    timing("routerActivationReady");
     res.json({
       ok: true,
       access: routerConnected
