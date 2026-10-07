@@ -612,6 +612,8 @@ create table if not exists isp_transactions (
   mac_address     text,
   mpesa_receipt   text,
   merchant_request_id text,
+  payment_intent_id text,
+  provider_checkout_id text,
   reference       text,
   status          text not null default 'completed',  -- pending | completed | failed
   notes           text,
@@ -623,6 +625,18 @@ create index if not exists isp_transactions_reference_idx   on isp_transactions(
 create unique index if not exists isp_transactions_pending_mpesa_reference_idx
   on isp_transactions(reference)
   where reference is not null and status = 'pending' and payment_method like 'mpesa%';
+alter table isp_customers
+  add column if not exists hotspot_purchase_transaction_id bigint
+  references isp_transactions(id) on delete set null;
+create unique index if not exists isp_transactions_payment_intent_id_uidx
+  on isp_transactions(payment_intent_id)
+  where payment_intent_id is not null;
+create unique index if not exists isp_transactions_provider_checkout_id_uidx
+  on isp_transactions(provider_checkout_id)
+  where provider_checkout_id is not null;
+create unique index if not exists isp_customers_hotspot_purchase_transaction_id_uidx
+  on isp_customers(hotspot_purchase_transaction_id)
+  where hotspot_purchase_transaction_id is not null;
 
 -- Tenant-scoped loyalty balance, rules, and audit ledger. Loyalty redemption
 -- transactions carry a zero cash amount so they never increase reported sales.

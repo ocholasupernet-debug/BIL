@@ -95,6 +95,35 @@ begin
     return;
   end if;
 
+  select customer.id into existing_customer_id
+    from public.isp_customers as customer
+   where customer.hotspot_purchase_transaction_id = tx.id
+   for update;
+  if found then
+    if not exists (
+      select 1
+        from public.isp_customers as customer
+       where customer.id = existing_customer_id
+         and customer.admin_id = expected_customer_admin_id
+         and customer.type = 'hotspot'
+         and customer.router_id = p_router_id
+         and customer.port_id is not distinct from p_port_id
+    ) then
+      raise exception 'The payment is already linked to a different Hotspot account or service.';
+    end if;
+
+    update public.isp_transactions as payment
+       set customer_id = existing_customer_id
+     where payment.id = tx.id
+       and payment.customer_id is null;
+    if not found then
+      raise exception 'The paid Hotspot account could not be linked to its transaction.';
+    end if;
+
+    return query select existing_customer_id, false;
+    return;
+  end if;
+
   insert into public.isp_customers (
     admin_id,
     name,
@@ -104,6 +133,7 @@ begin
     plan_id,
     router_id,
     port_id,
+    hotspot_purchase_transaction_id,
     type,
     ip_address,
     mac_address,
@@ -121,6 +151,7 @@ begin
     p_plan_id,
     p_router_id,
     p_port_id,
+    tx.id,
     'hotspot',
     nullif(p_customer_fields ->> 'ip_address', ''),
     p_customer_fields ->> 'mac_address',

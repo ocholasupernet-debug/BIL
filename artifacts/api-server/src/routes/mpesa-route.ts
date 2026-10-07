@@ -11,7 +11,7 @@
 
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomUUID } from "crypto";
-import { sbDelete, sbInsert, sbInsertStrict, sbRpc, sbSelect, sbSelectStrict, sbUpdate, sbUpdateStrict, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
+import { sbDelete, sbInsert, sbInsertStrict, sbRpc, sbSelect, sbSelectStrict, sbUpdate, sbUpdateStrict, SupabaseHttpError, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import { billingSelect } from "../lib/platform-billing-store.js";
 import { logger } from "../lib/logger.js";
 import { sendRegistrationConfirmationEmail } from "../lib/platform-email.js";
@@ -1104,6 +1104,7 @@ async function reconcileInitiatedStkRequest(
       `id=eq.${transactionId}&status=eq.initiating`,
       {
         reference: checkoutId,
+        provider_checkout_id: checkoutId,
         merchant_request_id: merchantRequestId,
         status: "pending",
         notes,
@@ -1113,6 +1114,38 @@ async function reconcileInitiatedStkRequest(
     await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
   }
   return false;
+}
+
+async function respondToExistingStkIntent(res: Response, paymentIntentId: string): Promise<boolean> {
+  const rows = await sbSelectStrict<{
+    status: string;
+    provider_checkout_id: string | null;
+    merchant_request_id: string | null;
+  }>(
+    "isp_transactions",
+    `payment_intent_id=eq.${encodeURIComponent(paymentIntentId)}&select=status,provider_checkout_id,merchant_request_id&limit=1`,
+  );
+  const existing = rows[0];
+  if (!existing) return false;
+
+  if (
+    existing.provider_checkout_id
+    && ["pending", "completed", "paid", "success", "payment_cleared_router_pending"].includes(existing.status)
+  ) {
+    res.json({
+      ok: true,
+      CheckoutRequestID: existing.provider_checkout_id,
+      ...(existing.merchant_request_id ? { MerchantRequestID: existing.merchant_request_id } : {}),
+      reused: true,
+    });
+    return true;
+  }
+
+  const error = existing.status === "initiating"
+    ? "This M-Pesa prompt is already being created. Wait for the current request; do not start another prompt."
+    : "This checkout attempt has already finished. Start a new checkout only if you still need to pay.";
+  res.status(409).json({ ok: false, error });
+  return true;
 }
 
 export interface MpesaCallbackDependencies {
@@ -2268,6 +2301,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   const portalRouterId = positivePortalId(router_id);
   const portalPortId = positivePortalId(port_id);
   const intent = typeof paymentIntent === "string" ? validatePaymentIntent(paymentIntent) : null;
+  const paymentIntentId = intent?.nonce ?? null;
   const mac = requestedMac.value ? requestedMac : readMacAddress(intent?.macAddress);
   const adminAuth = validateToken(extractToken(req));
   const hasAdminSession = !!adminAuth && adminAuth.type === "a" &&
@@ -2400,6 +2434,8 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       return;
     }
   }
+  if (paymentIntentId && await respondToExistingStkIntent(res, paymentIntentId)) return;
+
   if (!allowStkRequest(req, scopedAdminId, normalised)) {
     res.status(429).json({ ok: false, error: "Too many payment prompts. Please wait before trying again." });
     return;
@@ -2486,22 +2522,36 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
              accountReference: resellerRoute.accountReference,
            }
          : {};
-     const initiatedTransactions = await sbInsert<{ id: number }>("isp_transactions", {
-       admin_id: scopedAdminId,
-       plan_id: plan_id ?? null,
-        customer_id: intent?.customerId ?? null,
-        reseller_id: resellerRoute?.resellerId ?? null,
-        reseller_port_id: resellerRoute?.portId ?? null,
-       amount: Math.ceil(Number(amount)),
-       payment_method: platformBillingInvoice ? "mpesa_platform_billing" : "mpesa",
-       payment_phone: normalised,
-        mac_address: mac.value || null,
-        payment_metadata: paymentMetadata,
-       reference: `initiating:${randomUUID()}`,
-       status: "initiating",
-       notes: `${paymentGatewayLabel(paymentGateway)} STK request is being created for ${normalised}`,
-       created_at: new Date().toISOString(),
-     });
+      let initiatedTransactions: { id: number }[];
+      try {
+        initiatedTransactions = await sbInsertStrict<{ id: number }>("isp_transactions", {
+          admin_id: scopedAdminId,
+          plan_id: plan_id ?? null,
+          customer_id: intent?.customerId ?? null,
+          reseller_id: resellerRoute?.resellerId ?? null,
+          reseller_port_id: resellerRoute?.portId ?? null,
+          amount: Math.ceil(Number(amount)),
+          payment_method: platformBillingInvoice ? "mpesa_platform_billing" : "mpesa",
+          payment_intent_id: paymentIntentId,
+          payment_phone: normalised,
+          mac_address: mac.value || null,
+          payment_metadata: paymentMetadata,
+          reference: `initiating:${randomUUID()}`,
+          status: "initiating",
+          notes: `${paymentGatewayLabel(paymentGateway)} STK request is being created for ${normalised}`,
+          created_at: new Date().toISOString(),
+        });
+      } catch (error) {
+        if (
+          paymentIntentId
+          && error instanceof SupabaseHttpError
+          && error.status === 409
+          && await respondToExistingStkIntent(res, paymentIntentId)
+        ) {
+          return;
+        }
+        throw error;
+      }
      const initiatedTransaction = initiatedTransactions[0];
      if (!initiatedTransaction) {
        res.status(503).json({ ok: false, error: "Could not safely create the payment request. Please try again." });

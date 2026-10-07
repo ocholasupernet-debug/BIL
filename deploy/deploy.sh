@@ -267,7 +267,7 @@ load_deploy_env
 echo "[3/7] Applying Supabase schema migration..."
 (
   cd "$PROJECT_DIR/artifacts/api-server"
-  node --test tests/prepaid-transaction-account-claim.test.mjs
+  node --test tests/prepaid-transaction-account-claim.test.mjs tests/mpesa-checkout-idempotency.test.mjs
 )
 apply_supabase_migration
 

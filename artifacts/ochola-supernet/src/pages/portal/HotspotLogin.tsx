@@ -539,6 +539,7 @@ function HotspotLoginView({
   const [tvDiagnosticLoading, setTvDiagnosticLoading] = useState(false);
   const [paymentFailed, setPaymentFailed] = useState(false);
   const [hotspotCredentials, setHotspotCredentials] = useState<HotspotCredentials | null>(null);
+  const paymentStartInFlight = useRef(false);
   const bindingInFlight = useRef(false);
   const statusPollInFlight = useRef(false);
   const [mpesaStatus, setMpesaStatus] = useState<{
@@ -984,6 +985,8 @@ function HotspotLoginView({
     targetDevice?: boolean;
     rememberDevice?: boolean;
   }) => {
+    if (paymentStartInFlight.current) return;
+    paymentStartInFlight.current = true;
     const {
       plan,
       phoneValue,
@@ -1050,7 +1053,10 @@ function HotspotLoginView({
         if (data.CheckoutRequestID) setCheckoutId(data.CheckoutRequestID);
       }
     } catch { setPayError("Could not reach the payment server. Please try again."); }
-    finally { setPayLoading(false); }
+    finally {
+      paymentStartInFlight.current = false;
+      setPayLoading(false);
+    }
   };
 
   const handlePay = async (e: React.FormEvent) => {
