@@ -5,6 +5,7 @@ import { preserveCumulativeUsage } from "./prepaid-usage";
 test("routine lower session observations cannot reduce stored cumulative usage", () => {
   assert.equal(preserveCumulativeUsage(300, 900, 0), 900);
   assert.equal(preserveCumulativeUsage(300, "900", 0), 900);
+  assert.equal(preserveCumulativeUsage(0, 50_000_000, 0), 50_000_000);
 });
 
 test("cumulative usage falls back to the stored megabyte value", () => {

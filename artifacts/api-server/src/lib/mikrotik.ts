@@ -2366,8 +2366,10 @@ export interface VlanCustomerQueueLiveData {
 
 export interface RouterLiveData {
   hotspotUsers: ActiveHotspotUser[];
+  hotspotUsersAvailable?: boolean;
   hotspotUserCounters: Array<{ name: string; bytesIn: number; bytesOut: number }> | null;
   pppoeUsers: ActivePPPoESession[];
+  pppoeUsersAvailable?: boolean;
   vlanCustomerQueues: VlanCustomerQueueLiveData[];
   vlanQueueStatsAvailable: boolean;
   interfaces: RouterInterface[];
@@ -4799,10 +4801,15 @@ export async function fetchRouterLiveData(
 
   try {
     /* Hotspot users */
+    let hotspotUsersAvailable = true;
     const hotspotRows = await withTimeout(
       conn.write(["/ip/hotspot/active/print"]),
       requestMs
-    ).catch(e => { logger.warn({ err: e.message }, "hotspot fetch failed"); return [] as Record<string, string>[]; });
+    ).catch(e => {
+      hotspotUsersAvailable = false;
+      logger.warn({ err: e.message }, "hotspot fetch failed");
+      return [] as Record<string, string>[];
+    });
 
     /* Hotspot active rows are per-session; user rows retain package totals
        across reconnects and are the quota/accounting source. */
@@ -4818,10 +4825,15 @@ export async function fetchRouterLiveData(
     });
 
     /* PPPoE sessions */
+    let pppoeUsersAvailable = true;
     const pppoeRows = await withTimeout(
       conn.write(["/ppp/active/print"]),
       requestMs
-    ).catch(e => { logger.warn({ err: e.message }, "pppoe fetch failed"); return [] as Record<string, string>[]; });
+    ).catch(e => {
+      pppoeUsersAvailable = false;
+      logger.warn({ err: e.message }, "pppoe fetch failed");
+      return [] as Record<string, string>[];
+    });
 
     /* Simple queues are the real accounting source for static-IP VLAN users. */
     let vlanQueueStatsAvailable = true;
@@ -4890,6 +4902,7 @@ export async function fetchRouterLiveData(
         bytesOut:   parseBytes(r["bytes-out"]),
         server:     r.server         ?? "",
       })),
+      hotspotUsersAvailable,
       hotspotUserCounters: Array.isArray(hotspotUserCounterRows)
         ? hotspotUserCounterRows.map(r => ({
           name: r.name ?? "",
@@ -4906,6 +4919,7 @@ export async function fetchRouterLiveData(
         bytesOut: parseBytes(r["bytes-out"]),
         service:  r.service       ?? "",
       })),
+      pppoeUsersAvailable,
       vlanCustomerQueues: (Array.isArray(vlanQueueRows) ? vlanQueueRows : [])
         .filter(row => isVlanCustomerQueueName(row.name))
         .map(row => {

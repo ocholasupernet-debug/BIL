@@ -3325,7 +3325,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
       const usageRows = await sbUpdateStrict(
         "isp_customers",
         `id=eq.${customer.id}&admin_id=eq.${customerAdminId}`,
-        { data_used_bytes: 0, data_used_mb: 0 },
+        { data_used_bytes: 0, data_used_mb: 0, updated_at: new Date().toISOString() },
       );
       if (!usageRows.length) {
         throw new Error("The new package usage baseline could not be saved.");

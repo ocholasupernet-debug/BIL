@@ -468,6 +468,7 @@ type PrepaidPresenceRow = {
   pppoe_username: string | null;
   ip_address: string | null;
   expires_at: string | null;
+  updated_at: string | null;
   last_seen: string | null;
   data_used_mb: number | string | null;
   data_used_bytes: number | string | null;
@@ -513,7 +514,7 @@ async function persistPrepaidLiveState(
     : `&router_id=eq.${routerId}`;
   const customers = await sbSelect<PrepaidPresenceRow>(
     "isp_customers",
-    `admin_id=eq.${adminId}${customerScope}&select=id,type,username,pppoe_username,ip_address,expires_at,last_seen,data_used_mb,data_used_bytes,service_online`,
+    `admin_id=eq.${adminId}${customerScope}&select=id,type,username,pppoe_username,ip_address,expires_at,updated_at,last_seen,data_used_mb,data_used_bytes,service_online`,
   );
   if (customers.length === 0) return data.vlanQueueStatsAvailable ? 0 : null;
 
@@ -546,18 +547,25 @@ async function persistPrepaidLiveState(
     const sessionBytes = prepaidIdentityKeys(customer)
       .map(identity => usage.get(identity))
       .find(value => value !== undefined);
-    const isHotspotCustomer = ["hotspot", "voucher"].includes(String(customer.type ?? "").toLowerCase());
+    const serviceType = String(customer.type ?? "").toLowerCase();
+    const isHotspotCustomer = ["hotspot", "voucher", "trial", "trials"].includes(serviceType);
     const hotspotAccountBytes = isHotspotCustomer
       ? prepaidIdentityKeys(customer)
         .map(identity => hotspotUsage?.get(identity))
         .find(value => value !== undefined)
       : undefined;
     let usageBytes = isHotspotCustomer
-      ? hotspotAccountBytes
+      ? [hotspotAccountBytes, sessionBytes].filter((value): value is number => value !== undefined)
+        .reduce<number | undefined>((max, value) => max === undefined ? value : Math.max(max, value), undefined)
       : sessionBytes;
     const expiresAtMs = customer.expires_at ? Date.parse(customer.expires_at) : Number.NaN;
     const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= observedAtMs;
     let online = sessionBytes !== undefined && !expired;
+    const presenceAvailable = ["hotspot", "voucher"].includes(serviceType)
+      ? data.hotspotUsersAvailable !== false
+      : serviceType === "pppoe"
+        ? data.pppoeUsersAvailable !== false
+        : true;
     if (vlanPresence) {
       const queue = vlanPresence.queue;
       usageBytes = queue?.statsAvailable && queue.bytesIn !== null && queue.bytesOut !== null
@@ -566,26 +574,21 @@ async function persistPrepaidLiveState(
       online = vlanPresence.online;
       if (online) onlineVlanUsers += 1;
     }
-    const payload: Record<string, unknown> = {
-      service_online: online,
-    };
+    const payload: Record<string, unknown> = {};
+    if (presenceAvailable) payload.service_online = online;
 
     if (usageBytes !== undefined) {
-      if (!isHotspotCustomer) {
-        usageBytes = preserveCumulativeUsage(
-          usageBytes,
-          customer.data_used_bytes,
-          customer.data_used_mb,
-        );
-      }
-      payload.data_used_bytes = Math.max(0, Math.floor(usageBytes));
-      payload.data_used_mb = Math.max(0, usageBytes / 1_000_000);
+      usageBytes = preserveCumulativeUsage(
+        usageBytes,
+        customer.data_used_bytes,
+        customer.data_used_mb,
+      );
     }
 
-    if (online) {
+    if (presenceAvailable && online) {
       /* last_seen is the most recent confirmed online observation. */
       payload.last_seen = observedAt;
-    } else if (customer.service_online) {
+    } else if (presenceAvailable && customer.service_online) {
       /* Record the transition once, rather than moving the offline timestamp
          every time the admin page polls an already-offline user. */
       payload.last_seen = expired && Number.isFinite(expiresAtMs)
@@ -593,11 +596,28 @@ async function persistPrepaidLiveState(
         : observedAt;
     }
 
-    await sbUpdate(
-      "isp_customers",
-      `id=eq.${customer.id}&admin_id=eq.${adminId}`,
-      payload,
-    );
+    const customerFilter = `id=eq.${customer.id}&admin_id=eq.${adminId}`;
+    if (usageBytes !== undefined) {
+      const persistedUsageBytes = Math.max(0, Math.floor(usageBytes));
+      const updatedAtFilter = customer.updated_at
+        ? `&updated_at=eq.${encodeURIComponent(customer.updated_at)}`
+        : "&updated_at=is.null";
+      // Conditional update prevents an older or reset RouterOS counter from
+      // replacing a newer saved usage total. The updated_at guard also stops a
+      // live poll started before a new paid package reset from restoring the
+      // previous package's counter.
+      await sbUpdate(
+        "isp_customers",
+        `${customerFilter}${updatedAtFilter}&or=(data_used_bytes.is.null,data_used_bytes.lte.${persistedUsageBytes})`,
+        {
+          data_used_bytes: persistedUsageBytes,
+          data_used_mb: persistedUsageBytes / 1_000_000,
+        },
+      );
+    }
+    if (Object.keys(payload).length > 0) {
+      await sbUpdate("isp_customers", customerFilter, payload);
+    }
   }
   return data.vlanQueueStatsAvailable ? onlineVlanUsers : null;
 }

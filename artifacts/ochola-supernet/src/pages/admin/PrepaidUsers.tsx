@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
@@ -52,8 +52,16 @@ interface Payment {
 }
 interface LiveData {
   hotspotUsers?: Array<{ user?: string; macAddress?: string; bytesIn?: number; bytesOut?: number }>;
+  hotspotUsersAvailable?: boolean;
   pppoeUsers?: Array<{ name?: string; bytesIn?: number; bytesOut?: number }>;
+  pppoeUsersAvailable?: boolean;
   fetchedAt?: string;
+}
+interface LiveRouterPresence {
+  authoritative: boolean;
+  hotspotUsersAvailable: boolean;
+  pppoeUsersAvailable: boolean;
+  onlineUsers: Set<string>;
 }
 
 type StatusFilter = "all" | "active" | "expired" | "suspended" | "online";
@@ -224,12 +232,35 @@ function customerUsageBytes(user: Customer, liveUsage: Map<string, number>) {
   if (Number.isFinite(mb)) return Math.max(0, mb * 1_000_000, live ?? 0);
   return live ?? null;
 }
-function customerIsOnline(user: Customer, onlineUsers: Set<string>) {
+function customerIsOnline(
+  user: Customer,
+  livePresenceByRouter: Map<number, LiveRouterPresence>,
+  planMap: Record<number, Plan>,
+) {
   if (!hasUnexpiredPaidAccess(user)) return false;
   if (String(user.type ?? "").toLowerCase() === "vlan") return user.status === "active" && user.service_online === true;
-  return [user.username, user.pppoe_username, purchaseUsername(user)]
-    .filter(Boolean)
-    .some(value => onlineUsers.has(String(value).toLowerCase()));
+  const routerId = user.router_id ?? (user.plan_id ? planMap[user.plan_id]?.router_id : null);
+  const routerPresence = routerId == null ? undefined : livePresenceByRouter.get(routerId);
+  const serviceType = prepaidServiceType(user.type);
+  const sessionListAvailable = serviceType === "hotspot"
+    ? Boolean(routerPresence?.authoritative && routerPresence.hotspotUsersAvailable)
+    : serviceType === "pppoe"
+      ? Boolean(routerPresence?.authoritative && routerPresence.pppoeUsersAvailable)
+      : Boolean(routerPresence?.authoritative);
+  if (sessionListAvailable && routerPresence) {
+    const identities = serviceType === "hotspot"
+      ? [user.username, purchaseUsername(user)]
+      : serviceType === "pppoe"
+        ? [user.pppoe_username, user.username, purchaseUsername(user)]
+        : [user.username, user.pppoe_username, purchaseUsername(user)];
+    return identities
+      .map(normalizeLiveIdentity)
+      .filter(Boolean)
+      .some(value => routerPresence.onlineUsers.has(value));
+  }
+  // While the router is loading or unavailable, keep the last state saved by
+  // the server instead of showing a false disconnect after a page refresh.
+  return user.service_online === true;
 }
 function isExpiringSoon(d?: string | null) {
   if (!d) return false;
@@ -956,15 +987,40 @@ export default function PrepaidUsers() {
     () => displayCustomers.some(customer => customerPackageId(customer, paymentMap) === null),
     [displayCustomers, paymentMap],
   );
-  const onlineUsers = useMemo(() => {
-    const keys = new Set<string>();
-    liveQueries.forEach(query => {
-      const live = query.data;
-      live?.hotspotUsers?.forEach(user => { if (user.user) keys.add(user.user.toLowerCase()); });
-      live?.pppoeUsers?.forEach(user => { if (user.name) keys.add(user.name.toLowerCase()); });
+  const livePresenceByRouter = useMemo(() => {
+    const presence = new Map<number, LiveRouterPresence>();
+    routers.forEach((router, index) => {
+      const query = liveQueries[index];
+      const live = query?.data;
+      const onlineUsers = new Set<string>();
+      live?.hotspotUsers?.forEach(user => {
+        const username = normalizeLiveIdentity(user.user);
+        if (username) onlineUsers.add(username);
+      });
+      live?.pppoeUsers?.forEach(user => {
+        const username = normalizeLiveIdentity(user.name);
+        if (username) onlineUsers.add(username);
+      });
+      presence.set(router.id, {
+        authoritative: Boolean(live?.fetchedAt && !query?.isError),
+        hotspotUsersAvailable: live?.hotspotUsersAvailable !== false,
+        pppoeUsersAvailable: live?.pppoeUsersAvailable !== false,
+        onlineUsers,
+      });
     });
-    return keys;
-  }, [liveQueries]);
+    return presence;
+  }, [routers, liveQueries]);
+  const liveSnapshotKey = liveQueries
+    .map(query => query.data?.fetchedAt ?? "")
+    .filter(Boolean)
+    .join("|");
+  useEffect(() => {
+    if (!liveSnapshotKey) return;
+    // The live endpoint persists router counters and connection state; reload
+    // the customer rows after each successful snapshot so the table reflects
+    // that durable state, including for users who are currently offline.
+    void qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
+  }, [qc, liveSnapshotKey]);
   const liveUsage = useMemo(() => {
     const usage = new Map<string, number>();
     const add = (identity?: string, bytesIn?: number, bytesOut?: number) => {
@@ -984,10 +1040,10 @@ export default function PrepaidUsers() {
     const normalizedMac = String(user.mac_address ?? "").toLowerCase().replace(/[^a-f0-9]/g, "");
     return prepaidServiceType(user.type) === "hotspot"
       && hasUnexpiredPaidAccess(user)
-      && !customerIsOnline(user, onlineUsers)
+      && !customerIsOnline(user, livePresenceByRouter, planMap)
       && Boolean(user.plan_id && plan && routerId && routerMap[routerId])
       && normalizedMac.length === 12;
-  }), [displayCustomers, planMap, routerMap, onlineUsers]);
+  }), [displayCustomers, planMap, routerMap, livePresenceByRouter]);
   const reconnectEligibleIds = useMemo(
     () => new Set(reconnectEligibleUsers.map(user => user.id)),
     [reconnectEligibleUsers],
@@ -1001,7 +1057,6 @@ export default function PrepaidUsers() {
   const [entries,     setEntries]     = useState(PAGE_SIZE);
   const [page,        setPage]        = useState(1);
   const [detailUser,  setDetailUser]  = useState<Customer | null>(null);
-  const [relatedAccountsUser, setRelatedAccountsUser] = useState<DisplayCustomer | null>(null);
   const [editingUser, setEditingUser] = useState<Customer | null>(null);
   const [extendingUser, setExtendingUser] = useState<Customer | null>(null);
   const [adjustingExpiryUser, setAdjustingExpiryUser] = useState<Customer | null>(null);
@@ -1011,16 +1066,6 @@ export default function PrepaidUsers() {
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
   const [actionBusy, setActionBusy] = useState<number | null>(null);
-  const relatedAccountRows = useMemo(() => {
-    if (!relatedAccountsUser) return [];
-    const ids = new Set(relatedAccountsUser.mergedCustomerIds);
-    return customers
-      .filter(customer => ids.has(customer.id))
-      .sort((a, b) => {
-        const dateDifference = Date.parse(b.created_at) - Date.parse(a.created_at);
-        return (Number.isFinite(dateDifference) ? dateDifference : 0) || b.id - a.id;
-      });
-  }, [relatedAccountsUser, customers]);
   const [reconnectingIds, setReconnectingIds] = useState<Set<number>>(() => new Set());
   const [reconnectProgress, setReconnectProgress] = useState<{
     completed: number;
@@ -1197,7 +1242,7 @@ export default function PrepaidUsers() {
   /* ── Filter ── */
   const filtered = useMemo(() => {
     let list = displayCustomers;
-    if (statusTab === "online") list = list.filter(c => customerIsOnline(c, onlineUsers));
+    if (statusTab === "online") list = list.filter(c => customerIsOnline(c, livePresenceByRouter, planMap));
     else if (statusTab === "active") list = list.filter(hasUnexpiredPaidAccess);
     else if (statusTab === "expired") list = list.filter(isCustomerExpired);
     else if (statusTab !== "all") list = list.filter(c => c.status === statusTab);
@@ -1226,7 +1271,7 @@ export default function PrepaidUsers() {
       );
     }
     return list;
-  }, [displayCustomers, statusTab, typeFilter, packageFilter, paymentMap, routerFilter, search, onlineUsers, planMap]);
+  }, [displayCustomers, statusTab, typeFilter, packageFilter, paymentMap, routerFilter, search, livePresenceByRouter, planMap]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / entries));
   const pageRows   = filtered.slice((page - 1) * entries, page * entries);
@@ -1303,7 +1348,7 @@ export default function PrepaidUsers() {
     { key: "active",    label: "Active",    count: stats.active,    color: "#4ade80" },
     { key: "expired",   label: "Expired",   count: stats.expired,   color: "#f87171" },
     { key: "suspended", label: "Suspended", count: stats.suspended, color: "#fbbf24" },
-    { key: "online",    label: "Online",    count: displayCustomers.filter(c => customerIsOnline(c, onlineUsers)).length, color: "#22c55e" },
+    { key: "online",    label: "Online",    count: displayCustomers.filter(c => customerIsOnline(c, livePresenceByRouter, planMap)).length, color: "#22c55e" },
   ];
 
   return (
@@ -1723,8 +1768,8 @@ export default function PrepaidUsers() {
                 <th style={TH}>Expires (date &amp; time)</th>
                  <th className="prepaid-col-optional" style={TH}>Method</th>
                 <th style={TH}>Router</th>
-                <th style={TH}>Service status</th>
-                <th style={TH}>Connection</th>
+                <th style={TH}>Plan status</th>
+                <th style={TH}>Internet connection</th>
                  <th className="prepaid-col-optional" style={TH}>Last seen</th>
                  <th className="prepaid-col-optional" style={TH}>Data used</th>
                  <th className="prepaid-col-optional" style={TH}>FUP</th>
@@ -1757,11 +1802,19 @@ export default function PrepaidUsers() {
                   const payment = paymentMap[user.id];
                   const displayedPlan = plan;
                   const username = purchaseUsername(user);
-                  const online = customerIsOnline(user, onlineUsers);
+                  const online = customerIsOnline(user, livePresenceByRouter, planMap);
                   const fup = user.fup_limit_mb ?? plan?.data_limit_mb ?? null;
                   const expiring = isExpiringSoon(user.expires_at);
-                   const expired  = isCustomerExpired(user);
-                   const serviceStatus = expired ? "expired" : online ? "online" : hasUnexpiredPaidAccess(user) ? "active" : user.status;
+                  const expired  = isCustomerExpired(user);
+                  const planStatus = expired
+                    ? "Expired"
+                    : user.status === "suspended"
+                      ? "Suspended"
+                      : hasUnexpiredPaidAccess(user)
+                        ? "Active"
+                        : user.status === "pending"
+                          ? "Pending"
+                          : "Inactive";
                   const usageBytes = customerUsageBytes(user, liveUsage);
                   return (
                     <tr key={user.id}
@@ -1772,17 +1825,6 @@ export default function PrepaidUsers() {
                         <button type="button" className="prepaid-username-link" onClick={() => setDetailUser(user)} title={`View ${username}`}>
                           {username}
                         </button>
-                        {user.mergedCustomerIds.length > 1 && (
-                          <button
-                            type="button"
-                            aria-label={`Inspect ${user.mergedCustomerIds.length} related account records for ${username}`}
-                            title="These records share a Hotspot identity; this count is not a count of accounts created by one M-Pesa payment."
-                            onClick={() => setRelatedAccountsUser(user)}
-                            style={{ marginTop: 2, padding: 0, border: 0, background: "none", color: "var(--isp-accent)", fontSize: "0.62rem", textAlign: "left", textDecoration: "underline", textUnderlineOffset: 2, cursor: "pointer", fontFamily: "inherit" }}
-                          >
-                            {user.mergedCustomerIds.length} related records · inspect payments
-                          </button>
-                        )}
                       </td>
                       <td style={TD}><span className="prepaid-plain-value">{TYPE_META[user.type ?? ""]?.label ?? user.type ?? "—"}</span></td>
                       <td style={TD}>
@@ -1813,8 +1855,15 @@ export default function PrepaidUsers() {
                           <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)" }}>Unassigned</span>
                         )}
                       </td>
-                      <td style={TD}><span className="prepaid-plain-status">{serviceStatus === "online" ? "Active" : serviceStatus === "suspended" ? "Suspended" : serviceStatus === "expired" || expired ? "Expired" : "Offline"}</span></td>
-                      <td style={TD}><span className={`prepaid-plain-status ${online ? "prepaid-plain-status--online" : "prepaid-plain-status--offline"}`}>{online ? "Online" : "Offline"}</span></td>
+                      <td style={TD}><span className="prepaid-plain-status">{planStatus}</span></td>
+                      <td style={TD}>
+                        <span
+                          className={`prepaid-plain-status ${online ? "prepaid-plain-status--online" : "prepaid-plain-status--offline"}`}
+                          title="Based on the latest RouterOS session; the last saved status is kept while the router is loading or unavailable."
+                        >
+                          {online ? "Connected" : "Not connected"}
+                        </span>
+                      </td>
                       <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.68rem" }}>{online ? "Online" : fmtDate(user.last_seen ?? (expired ? user.expires_at : null))}</td>
                       <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap" }}>
                          <span className="prepaid-plain-muted" title={usageBytes === null ? undefined : `${Math.floor(usageBytes).toLocaleString("en-US")} bytes`}>
@@ -1881,96 +1930,6 @@ export default function PrepaidUsers() {
         )}
 
       </div>
-
-      {/* Read-only audit view for records grouped by the same Hotspot identity. */}
-      {relatedAccountsUser && (
-        <div
-          role="presentation"
-          onClick={event => { if (event.target === event.currentTarget) setRelatedAccountsUser(null); }}
-          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.68)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="related-hotspot-records-title"
-            style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 14, width: "100%", maxWidth: 980, maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}
-          >
-            <header style={{ display: "flex", alignItems: "flex-start", gap: "0.75rem", padding: "1.1rem 1.25rem", borderBottom: "1px solid var(--isp-border)" }}>
-              <div style={{ flex: 1 }}>
-                <h2 id="related-hotspot-records-title" style={{ margin: 0, color: "var(--isp-text)", fontSize: "1rem", fontWeight: 800 }}>
-                  Related Hotspot records ({relatedAccountsUser.mergedCustomerIds.length})
-                </h2>
-                <p style={{ margin: "0.4rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.78rem", lineHeight: 1.5 }}>
-                  These accounts share the same service/device/contact grouping. Compare their account IDs, creation times, and linked payment receipts below. This view is read-only; it does not merge or change accounts.
-                </p>
-              </div>
-              <button type="button" aria-label="Close related Hotspot records" onClick={() => setRelatedAccountsUser(null)} style={{ background: "none", border: 0, cursor: "pointer", color: "var(--isp-text-muted)", padding: 4 }}>
-                <X size={18} />
-              </button>
-            </header>
-            <div style={{ padding: "1rem 1.25rem", overflowY: "auto", display: "grid", gap: "0.75rem" }}>
-              {relatedAccountRows.map(record => {
-                const recordPayments = paymentsByCustomerId.get(record.id) ?? [];
-                const expired = isCustomerExpired(record);
-                const online = customerIsOnline(record, onlineUsers);
-                const accessStatus = expired ? "Expired" : hasUnexpiredPaidAccess(record) ? "Active" : record.status;
-                return (
-                  <article key={record.id} style={{ border: "1px solid var(--isp-border)", borderRadius: 10, padding: "0.85rem", background: "rgba(255,255,255,0.025)" }}>
-                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
-                      <div>
-                        <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: "0.86rem" }}>
-                          Account #{record.id} · {purchaseUsername(record)}
-                        </div>
-                        <div style={{ marginTop: 4, color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
-                          Created {fmtDate(record.created_at)} · Expires {fmtDate(record.expires_at)}
-                          {record.hotspot_purchase_transaction_id
-                            ? ` · Source transaction #${record.hotspot_purchase_transaction_id}`
-                            : ""}
-                        </div>
-                        <div style={{ marginTop: 3, color: "var(--isp-text-muted)", fontSize: "0.7rem", overflowWrap: "anywhere" }}>
-                          Phone {record.phone || "—"} · MAC {record.mac_address || "—"}
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                        <span className="prepaid-plain-status">{accessStatus}</span>
-                        <span className={`prepaid-plain-status ${online ? "prepaid-plain-status--online" : "prepaid-plain-status--offline"}`}>{online ? "Online" : "Offline"}</span>
-                      </div>
-                    </div>
-                    <div style={{ marginTop: "0.7rem", borderTop: "1px solid var(--isp-border)", paddingTop: "0.6rem" }}>
-                      <div style={{ color: "var(--isp-text-muted)", fontSize: "0.65rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "0.4rem" }}>
-                        Successful linked payments ({recordPayments.length})
-                      </div>
-                      {recordPayments.length === 0 ? (
-                        <div style={{ color: "var(--isp-text-muted)", fontSize: "0.73rem" }}>No successful linked payment is available for this account.</div>
-                      ) : recordPayments.map(payment => (
-                        <div key={payment.id} style={{ padding: "0.45rem 0", borderTop: "1px solid rgba(255,255,255,0.05)", color: "var(--isp-text)", fontSize: "0.72rem", lineHeight: 1.5, overflowWrap: "anywhere" }}>
-                          <div style={{ fontWeight: 700 }}>
-                            Transaction #{payment.id} · KES {Number(payment.amount).toLocaleString("en-KE")} · {fmtDate(payment.created_at)}
-                          </div>
-                          <div style={{ color: "var(--isp-text-muted)" }}>
-                            M-Pesa receipt: {payment.mpesa_receipt || "not recorded"} · Checkout reference: {payment.reference || "—"}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </article>
-                );
-              })}
-              {relatedAccountRows.length === 0 && (
-                <div style={{ padding: "1rem", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
-                  The related account records could not be loaded. Refresh this page and try again.
-                </div>
-              )}
-            </div>
-            <footer style={{ display: "flex", justifyContent: "flex-end", padding: "0.75rem 1.25rem", borderTop: "1px solid var(--isp-border)" }}>
-              <button type="button" onClick={() => setRelatedAccountsUser(null)} style={{ padding: "0.45rem 0.9rem", borderRadius: 7, border: "1px solid var(--isp-border)", background: "rgba(255,255,255,0.04)", color: "var(--isp-text)", cursor: "pointer", fontFamily: "inherit" }}>
-                Close
-              </button>
-            </footer>
-          </section>
-        </div>
-      )}
-
 
       {/* ════════════════ Detail Modal ════════════════ */}
       {detailUser && (
