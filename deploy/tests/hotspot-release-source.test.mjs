@@ -51,7 +51,7 @@ test("loyalty remains reachable in the API, admin UI, and customer checkout", ()
   assert.ok(checkout.includes("/api/hotspot/loyalty/quote"));
   assert.ok(checkout.includes("/api/hotspot/loyalty/redeem"));
   const payments = api("src/routes/mpesa-route.ts");
-  assert.ok(payments.includes('sbRpc("award_hotspot_loyalty_points"'));
+  assert.ok(payments.includes('sbRpc("award_hotspot_loyalty_points_fractional"'));
   assert.ok(payments.includes("payment_method=in.(mpesa,loyalty_points)"));
 });
 

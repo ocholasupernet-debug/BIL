@@ -3025,7 +3025,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
 
   if (transaction.payment_method === "mpesa") {
     try {
-      await sbRpc("award_hotspot_loyalty_points", { p_transaction_id: transaction.id });
+      await sbRpc("award_hotspot_loyalty_points_fractional", { p_transaction_id: transaction.id });
     } catch (error) {
       logger.warn(
         { err: error, transactionId: transaction.id, customerId: customer.id },

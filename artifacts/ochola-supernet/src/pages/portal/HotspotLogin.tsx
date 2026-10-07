@@ -46,6 +46,7 @@ interface LoyaltyQuote {
   ok: true;
   balance: number;
   pointsRequired: number | null;
+  pointsAwarded: number;
   canRedeem: boolean;
 }
 
@@ -128,6 +129,10 @@ function tvPackageDiagnosticTitle(status: TvPackageDiagnosticStatus): string {
 function positivePortalId(value: unknown): number | null {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function formatLoyaltyPoints(value: number): string {
+  return new Intl.NumberFormat("en-KE", { maximumFractionDigits: 2 }).format(value);
 }
 
 function normalizeRuntimePlan(value: unknown): Plan | null {
@@ -548,6 +553,7 @@ function HotspotLoginView({
   const [loyaltyQuote, setLoyaltyQuote] = useState<LoyaltyQuote | null>(null);
   const [loyaltyQuoteLoading, setLoyaltyQuoteLoading] = useState(false);
   const [loyaltyQuoteError, setLoyaltyQuoteError] = useState("");
+  const [loyaltyRefreshRevision, setLoyaltyRefreshRevision] = useState(0);
   const [loyaltyPayment, setLoyaltyPayment] = useState<"mpesa" | "points">("mpesa");
   const [loyaltyRedeemLoading, setLoyaltyRedeemLoading] = useState(false);
   const [loyaltyPaidWithPoints, setLoyaltyPaidWithPoints] = useState(false);
@@ -696,13 +702,14 @@ function HotspotLoginView({
         }),
       }).then(async response => {
         const data = await response.json() as Partial<LoyaltyQuote> & { error?: string };
-        if (!response.ok || data.ok !== true || typeof data.balance !== "number") {
+        if (!response.ok || data.ok !== true || typeof data.balance !== "number" || typeof data.pointsAwarded !== "number") {
           throw new Error(data.error || "Points could not be checked.");
         }
         if (!cancelled) setLoyaltyQuote({
           ok: true,
           balance: data.balance,
           pointsRequired: typeof data.pointsRequired === "number" ? data.pointsRequired : null,
+          pointsAwarded: data.pointsAwarded,
           canRedeem: data.canRedeem === true,
         });
       }).catch(error => {
@@ -715,7 +722,7 @@ function HotspotLoginView({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [adminId, deviceMacAddress, phone, paymentMode, portalScope.portId, portalScope.routerId, selectedPlan?.id]);
+  }, [adminId, deviceMacAddress, phone, paymentMode, portalScope.portId, portalScope.routerId, selectedPlan?.id, loyaltyRefreshRevision]);
 
   useEffect(() => {
     if (!tvDialogOpen) return;
@@ -818,6 +825,9 @@ function HotspotLoginView({
     } finally {
       setAccessRetrying(false);
       bindingInFlight.current = false;
+      if (paymentMode === "data") {
+        setLoyaltyRefreshRevision(revision => revision + 1);
+      }
     }
   }, [
     adminId,
@@ -3486,6 +3496,57 @@ function HotspotLoginView({
                 </strong>
               </span>
             </div>
+          )}
+          {portalCards.packages && activeTab === "plans" && !troubleshootingOnly && (
+            <section
+              aria-labelledby="hp-loyalty-balance-title"
+              aria-live="polite"
+              style={{
+                margin: "8px 0 18px",
+                padding: "16px",
+                borderRadius: 12,
+                background: "#16453d",
+                border: "1px solid #85baa2",
+                color: "#f4faf7",
+              }}
+            >
+              <div style={{ color: "#c3f0d8", fontSize: 12, fontWeight: 800, letterSpacing: ".07em", textTransform: "uppercase" }}>
+                Your loyalty points
+              </div>
+              <h2 id="hp-loyalty-balance-title" style={{ margin: "6px 0", color: "#fff", fontSize: 18 }}>
+                {loyaltyQuote
+                  ? `${formatLoyaltyPoints(loyaltyQuote.balance)} points`
+                  : "Check your Hotspot rewards"}
+              </h2>
+              {loyaltyQuoteLoading ? (
+                <p role="status" style={{ margin: "6px 0 0", fontSize: 12 }}>Checking your points balance…</p>
+              ) : loyaltyQuote ? (
+                <>
+                  <p style={{ margin: "6px 0 0", fontSize: 12, lineHeight: 1.5 }}>
+                    {loyaltyPaidWithPoints || loyaltyPayment === "points"
+                      ? "Your balance is updated. Paying with loyalty points does not earn additional points."
+                      : loyaltyQuote.pointsAwarded > 0 && selectedPlan
+                        ? `This KSh ${selectedPlan.price} purchase earns ${formatLoyaltyPoints(loyaltyQuote.pointsAwarded)} points after M-Pesa confirms payment and the account is saved.`
+                        : selectedPlan
+                          ? "This package does not currently award loyalty points."
+                          : "Your earned points are ready to use on an eligible package."}
+                  </p>
+                  {loyaltyQuote.balance % 1 !== 0 && (
+                    <p style={{ margin: "5px 0 0", fontSize: 11, lineHeight: 1.45, color: "#dbece4" }}>
+                      Partial points stay in your balance; a package uses its configured whole-point redemption cost.
+                    </p>
+                  )}
+                </>
+              ) : loyaltyQuoteError ? (
+                <p role="status" style={{ margin: "6px 0 0", fontSize: 12, lineHeight: 1.5 }}>
+                  {loyaltyQuoteError} Choose a Hotspot package and enter the phone number linked to your account to check your points.
+                </p>
+              ) : (
+                <p style={{ margin: "6px 0 0", fontSize: 12, lineHeight: 1.5 }}>
+                  Choose a Hotspot package and enter the phone number linked to your account to see your balance and the points it can earn.
+                </p>
+              )}
+            </section>
           )}
           {portalCards.footer && (
             <div className="hp-footer">

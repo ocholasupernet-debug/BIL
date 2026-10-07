@@ -46,7 +46,7 @@ const cardStyle: React.CSSProperties = {
   border: "1px solid var(--isp-border)", borderRadius: 14, background: "var(--isp-card)",
   padding: "1.15rem", boxShadow: "var(--shadow-card)",
 };
-const fmt = (value: number) => new Intl.NumberFormat("en-KE").format(value);
+const fmt = (value: number) => new Intl.NumberFormat("en-KE", { maximumFractionDigits: 2 }).format(value);
 
 export default function LoyaltyPoints() {
   const client = useQueryClient();
@@ -125,7 +125,7 @@ export default function LoyaltyPoints() {
             <section className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1.1fr)_minmax(260px,.9fr)]" style={{ marginBottom: 18 }}>
               <div style={{ ...cardStyle, background: "linear-gradient(125deg, color-mix(in srgb, var(--isp-green) 11%, var(--isp-card)), var(--isp-card) 65%)" }}>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 15 }}><Coins size={19} color="var(--isp-green)" /><h2 style={{ fontSize: "1rem", margin: 0 }}>Spend-based earning</h2></div>
-                <p style={{ color: "var(--isp-text-muted)", fontSize: ".85rem", lineHeight: 1.55, margin: "0 0 15px" }}>One point is awarded for each configured amount spent on an eligible Hotspot purchase. A plan-specific award overrides this ratio.</p>
+                <p style={{ color: "var(--isp-text-muted)", fontSize: ".85rem", lineHeight: 1.55, margin: "0 0 15px" }}>One point is earned for each configured amount spent on an eligible Hotspot purchase. Partial points are kept and added to the customer’s balance. A plan-specific award overrides this ratio.</p>
                 <form onSubmit={event => { event.preventDefault(); const parsed = Number(ratioDraft); if (ratioDraft.trim() && (!Number.isFinite(parsed) || parsed < 0)) { setNotice("Enter a valid KSh amount, or leave the ratio disabled."); return; } saveRatio.mutate(ratioDraft.trim() && parsed > 0 ? parsed : null); }} style={{ display: "flex", alignItems: "end", gap: 10, flexWrap: "wrap" }}>
                   <label style={{ display: "grid", gap: 6, fontSize: ".77rem", fontWeight: 700, flex: "1 1 190px" }}>KSh spent per point
                     <input type="number" min="0.01" step="0.01" value={ratioEdited ? ratioDraft : ratio ? String(ratio) : ""} placeholder="Disabled" onChange={event => { setRatioDraft(event.target.value); setRatioEdited(true); }} style={inputStyle} />
@@ -133,7 +133,7 @@ export default function LoyaltyPoints() {
                   <button type="submit" disabled={saveRatio.isPending} className="btn btn-primary" style={{ minHeight: 42 }}>{saveRatio.isPending ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} Save ratio</button>
                   {ratio && <button type="button" className="btn btn-ghost" onClick={() => { setRatioDraft(""); setRatioEdited(false); saveRatio.mutate(null); }}>Disable</button>}
                 </form>
-                <div style={{ fontSize: ".75rem", color: "var(--isp-text-sub)", marginTop: 10 }}>{ratio ? `Current: KSh ${fmt(ratio)} spent earns 1 point.` : "Spend-based earning is currently disabled."} Zero or no value disables this earning method.</div>
+                <div style={{ fontSize: ".75rem", color: "var(--isp-text-sub)", marginTop: 10 }}>{ratio ? `Current: KSh ${fmt(ratio)} spent earns 1 point.` : "Spend-based earning is currently disabled."} For example, KSh 10 per point earns 0.5 points on a KSh 5 plan. Points are added after payment is confirmed and the Hotspot account is saved. Plan-specific awards override the ratio.</div>
               </div>
               <div style={{ ...cardStyle, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}><div style={{ width: 36, height: 36, borderRadius: 10, display: "grid", placeItems: "center", background: "color-mix(in srgb, var(--isp-accent) 12%, var(--isp-card))", color: "var(--isp-accent)" }}><Users size={18} /></div><span style={{ fontWeight: 750 }}>Customer balances</span></div>
@@ -144,7 +144,7 @@ export default function LoyaltyPoints() {
 
             <section style={{ ...cardStyle, marginBottom: 18 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}><Gift size={19} color="var(--isp-green)" /><h2 style={{ margin: 0, fontSize: "1rem" }}>Hotspot plan rules</h2></div>
-              <p style={{ color: "var(--isp-text-muted)", fontSize: ".82rem", margin: "0 0 16px", lineHeight: 1.5 }}>Leave award blank to use the spend ratio. Enter 0 to stop earning on that plan. Redemption is always the full fixed point cost.</p>
+              <p style={{ color: "var(--isp-text-muted)", fontSize: ".82rem", margin: "0 0 16px", lineHeight: 1.5 }}>Leave award blank to use the spend ratio. Plan awards may be fractional; enter 0 to stop earning. Full-plan redemption costs remain whole points.</p>
               {context.plans.length === 0 ? <div style={{ padding: "1.5rem", textAlign: "center", border: "1px dashed var(--isp-border)", borderRadius: 10, color: "var(--isp-text-muted)" }}>No Hotspot plans are available to configure.</div> : (
                 <div style={{ display: "grid", gap: 9 }}>
                   {context.plans.map(plan => <PlanRuleRow key={plan.id} plan={plan} busy={savePlan.isPending} onSave={(values) => savePlan.mutate({ id: plan.id, ...values })} />)}
@@ -165,7 +165,7 @@ export default function LoyaltyPoints() {
             </section>
           </>
         ) : null}
-        <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text-sub)", fontSize: ".74rem", marginTop: 14 }}><ShieldCheck size={14} /> Loyalty changes apply to this tenant’s Hotspot checkout.</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text-sub)", fontSize: ".74rem", marginTop: 14 }}><ShieldCheck size={14} /> Loyalty changes apply to this tenant’s Hotspot checkout. Fractional points carry forward until enough are earned to redeem a plan.</div>
       </main>
     </AdminLayout>
   );
@@ -177,12 +177,23 @@ function PlanRuleRow({ plan, busy, onSave }: { plan: LoyaltyPlan; busy: boolean;
   const changed = award !== (plan.pointsAwarded == null ? "" : String(plan.pointsAwarded)) || redemption !== (plan.redemptionPoints == null ? "" : String(plan.redemptionPoints));
   return <form onSubmit={event => {
     event.preventDefault();
-    const valid = [award, redemption].every(value => !value.trim() || (Number.isSafeInteger(Number(value)) && Number(value) >= 0));
+    const validAward = !award.trim() || (
+      Number.isFinite(Number(award))
+      && Number(award) >= 0
+      && Number(award) <= 2_147_483_647
+      && Math.abs(Number(award) * 100 - Math.round(Number(award) * 100)) <= 1e-7
+    );
+    const validRedemption = !redemption.trim() || (
+      Number.isSafeInteger(Number(redemption))
+      && Number(redemption) >= 0
+      && Number(redemption) <= 2_147_483_647
+    );
+    const valid = validAward && validRedemption;
     if (!valid) return;
     onSave({ pointsAwarded: award.trim() ? Number(award) : null, redemptionPoints: redemption.trim() ? Number(redemption) : null });
   }} className="loyalty-plan-rule" style={{ display: "grid", gridTemplateColumns: "minmax(150px,1fr) minmax(120px,.7fr) minmax(120px,.7fr) auto", alignItems: "center", gap: 10, padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 10 }}>
     <div style={{ minWidth: 0 }}><strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: ".86rem" }}>{plan.name}</strong><span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".74rem", marginTop: 3 }}>KSh {fmt(Number(plan.price) || 0)} · {plan.type}</span></div>
-    <label style={{ fontSize: ".69rem", fontWeight: 700, color: "var(--isp-text-muted)" }}>Award points<input type="number" min="0" step="1" value={award} onChange={event => setAward(event.target.value)} placeholder="Use ratio" style={{ ...inputStyle, marginTop: 5 }} /></label>
+    <label style={{ fontSize: ".69rem", fontWeight: 700, color: "var(--isp-text-muted)" }}>Award points<input type="number" min="0" max="2147483647" step="0.01" value={award} onChange={event => setAward(event.target.value)} placeholder="Use ratio" style={{ ...inputStyle, marginTop: 5 }} /></label>
     <label style={{ fontSize: ".69rem", fontWeight: 700, color: "var(--isp-text-muted)" }}>Full redemption cost<input type="number" min="0" step="1" value={redemption} onChange={event => setRedemption(event.target.value)} placeholder="Not redeemable" style={{ ...inputStyle, marginTop: 5 }} /></label>
     <button type="submit" disabled={busy || !changed} className="btn btn-ghost" style={{ minHeight: 40, justifyContent: "center", opacity: changed ? 1 : .55 }}>{busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Save</button>
   </form>;
