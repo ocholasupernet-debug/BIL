@@ -72,3 +72,11 @@ test("the deployment source check runs before migrations and API restart", () =>
   assert.ok(guard < deploy.indexOf("\napply_supabase_migration\n"));
   assert.ok(guard < deploy.indexOf("pm2 reload ecosystem.config.cjs"));
 });
+
+test("SSH transfer and deployment retain the verified VPS fingerprint", () => {
+  const workflow = source(".github/workflows/deploy.yml");
+  assert.equal(
+    workflow.split('fingerprint: "SHA256:XlSA4l6O/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"').length - 1,
+    2,
+  );
+});

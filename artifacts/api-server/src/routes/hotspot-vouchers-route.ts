@@ -426,7 +426,11 @@ router.post("/vouchers/hotspot/generate", requireAdmin(), async (req, res): Prom
   }
 });
 
-async function deleteOwnedVouchers(adminId: number, requestedCodes: unknown): Promise<number> {
+export async function deleteOwnedVouchers(
+  adminId: number,
+  requestedCodes: unknown,
+  dependencies = { select: sbSelectStrict, delete: sbDeleteStrict },
+): Promise<number> {
   if (!Array.isArray(requestedCodes) || requestedCodes.length < 1 || requestedCodes.length > MAX_VOUCHERS_PER_REQUEST) {
     throw new Error(`codes must contain between 1 and ${MAX_VOUCHERS_PER_REQUEST} voucher codes.`);
   }
@@ -435,24 +439,27 @@ async function deleteOwnedVouchers(adminId: number, requestedCodes: unknown): Pr
     throw new Error("One or more voucher codes are invalid.");
   }
 
-  const owned = await sbSelectStrict<{ code: string }>(
+  const owned = await dependencies.select<{ code: string; redeemed_at: string | null }>(
     "isp_radius_vouchers",
-    `admin_id=eq.${adminId}&${inFilter("code", codes)}&select=code`,
+    `admin_id=eq.${adminId}&${inFilter("code", codes)}&select=code,redeemed_at`,
   );
+  // A claim is already a redemption even before RouterOS/RADIUS reports its
+  // first session. Check all owned rows before deleting any access records.
+  if (owned.some(row => row.redeemed_at != null)) throw new RedeemedVoucherMutationError();
   const ownedCodes = owned.map(row => row.code);
   if (ownedCodes.length === 0) return 0;
 
   for (const batch of chunks(ownedCodes, QUERY_BATCH_SIZE)) {
-    const sessions = await sbSelectStrict<{ username: string }>(
+    const sessions = await dependencies.select<{ username: string }>(
       "radacct",
       `${inFilter("username", batch)}&select=username&limit=1`,
     );
     if (sessions.length > 0) throw new RedeemedVoucherMutationError();
   }
 
-  await sbDeleteStrict("radcheck", inFilter("username", ownedCodes));
-  await sbDeleteStrict("radusergroup", inFilter("username", ownedCodes));
-  await sbDeleteStrict(
+  await dependencies.delete("radcheck", inFilter("username", ownedCodes));
+  await dependencies.delete("radusergroup", inFilter("username", ownedCodes));
+  await dependencies.delete(
     "isp_radius_vouchers",
     `admin_id=eq.${adminId}&${inFilter("code", ownedCodes)}`,
   );

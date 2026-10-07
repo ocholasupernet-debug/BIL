@@ -25,6 +25,27 @@ voucher restoration release and files retained by earlier archive deployments.
   would break current type checks and portal validation. Keeping them outside
   those folders preserves the snapshot without reviving removed behavior.
 
+## Final recheck after the voucher diagnostics update
+
+While workflow authorization was being renewed, a separate release added
+voucher-list diagnostics to GitHub and the VPS. Those changes are retained.
+The original direct-release marker is now stale: four source files and eleven
+recorded artifacts differ from it. The marker was not rewritten or treated as
+proof of the newer release.
+
+The actual live-source inventory was compared again: 788 entries matched
+repository contents (including the 24 archived originals). The remaining
+differences are intentional additions to the workflow fingerprint checks,
+claimed-voucher deletion protection, this report, and the release-source guard.
+Repository-only tests and the consumed one-time skip marker are not live
+application regressions.
+
+The latest actual build-artifact inventory contains 300 files. Its SHA-256
+digest, calculated from the sorted-key JSON inventory with a trailing newline,
+is `142e7a124121bd899d85f2848713aa1b2b78c242c550852428e308d8b1a7c2f8`.
+This is an audit of the latest observed VPS files, not a claim that the
+repository-only deletion fix or workflow pins have been deployed.
+
 ## Release checks
 
 Run the source-wiring guard:
@@ -40,7 +61,8 @@ pnpm --filter @workspace/api-server exec tsx --test \
   src/lib/loyalty-points.test.ts \
   src/lib/hotspot-voucher-status.test.ts \
   src/lib/hotspot-voucher-restore.test.ts \
-  src/lib/hotspot-voucher-utils.test.ts
+  src/lib/hotspot-voucher-utils.test.ts \
+  src/routes/hotspot-voucher-deletion.test.ts
 pnpm --filter @workspace/api-server run test:tenant-vouchers
 ```
 
@@ -53,10 +75,13 @@ This reconciliation does not deploy the application or execute RouterOS
 actions. Repository reconciliation commits must use `[skip ci]` on `main`
 because a normal push triggers the VPS deployment workflow.
 
-The Actions workflow is retained exactly as found on the verified live source
-and GitHub main. Adding the separately prepared SSH host-fingerprint pins needs
-authorized workflow-write access; the current connection lacks that scope.
-Do not represent this reconciliation as delivery of that hardening.
+The Actions workflow must retain the prepared SSH host-fingerprint pins in both
+transfer and deployment steps. Publishing those pins needs authorized
+workflow-write access; do not remove them to work around a permission failure.
+
+The repository additionally protects claimed vouchers from deletion before
+their first RADIUS accounting session. Both deletion endpoints use the same
+guard, and the regression tests use injected storage without database writes.
 
 The VPS release marker remains a record of the direct release. Do not rewrite
 it to identify the repository reconciliation commit as already deployed.

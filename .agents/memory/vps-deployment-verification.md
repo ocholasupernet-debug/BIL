@@ -25,6 +25,12 @@ Preserve retired files left by archive deployments outside active build and test
 
 **How to apply:** Verify each retained file's hash, keep its original path traceable in a separate source archive, and compare live behavior through the active import graph and built artifacts. Do not register archived routes or migrations. Document the archive mapping as an intentional source-layout difference, not a loss of live behavior.
 
+Commit reconciliation imports and release guards in an ordinary commit, not only as merge-commit content.
+
+**Why:** Completion can rebase a task branch onto the shared project base. Merge-only snapshot additions were omitted by that rebase even though GitHub had the complete verified tree, leaving the task branch without its archive and deployment guard.
+
+**How to apply:** After incorporating the live repository head, ensure newly imported snapshot files and task-authored guards are represented in a non-merge commit. Recheck the local and GitHub release trees after completion feedback before editing or retrying completion.
+
 Build the application off the VPS and upload verified artifacts. Do not run a full frontend build alongside the production API on this memory-constrained server.
 
 **Why:** The server has roughly 1 GB RAM; a frontend staging build exhausted memory and swap and temporarily made the running API unresponsive. Package-manager execution in a copied workspace also triggered automatic installation and dependency pruning when production dependencies were linked into staging.
