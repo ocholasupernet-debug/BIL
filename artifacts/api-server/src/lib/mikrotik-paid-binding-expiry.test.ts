@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:net";
 import test from "node:test";
 import { RouterOSAPI } from "node-routeros";
-import { getPaidHotspotBindingSnapshot } from "./mikrotik.js";
+import { getPaidHotspotBindingSnapshot, hasPaidHotspotAccess } from "./mikrotik.js";
 
 type MockRows = Record<string, string>[];
 type MockCommand = string[];
@@ -63,7 +63,7 @@ function credentials(port: number) {
   };
 }
 
-test("only snapshots a customer binding with its app-owned expiry scheduler", async () => {
+test("snapshots an explicitly managed bypass binding with its expiry scheduler", async () => {
   await withMockRouterApi(command => {
     if (command[0] === "/ip/hotspot/ip-binding/print") {
       return [{
@@ -71,13 +71,14 @@ test("only snapshots a customer binding with its app-owned expiry scheduler", as
         "mac-address": "AA:BB:CC:DD:EE:FF",
         address: "192.168.10.25",
         comment: "user-123",
-        type: "regular",
+        type: "bypassed",
       }];
     }
     if (command[0] === "/system/scheduler/print") {
       return [{
         name: "ochola-paid-user-123",
         comment: "OcholaSupernet paid access expiry",
+        "on-event": ':foreach id in=[/ip hotspot ip-binding find where comment="user-123"] do={/ip hotspot ip-binding remove $id}; /ip hotspot active find where user="user-123"',
       }];
     }
     return [];
@@ -90,8 +91,31 @@ test("only snapshots a customer binding with its app-owned expiry scheduler", as
       macAddress: "AA:BB:CC:DD:EE:FF",
       ipAddress: "192.168.10.25",
       comment: "user-123",
-      bindingType: "regular",
+      bindingType: "bypassed",
     });
+  });
+});
+
+test("allows an exact regular paid binding to be edited when its expiry scheduler is missing", async () => {
+  await withMockRouterApi(command => {
+    if (command[0] === "/ip/hotspot/ip-binding/print") {
+      return [{
+        ".id": "*1",
+        "mac-address": "AA:BB:CC:DD:EE:FF",
+        address: "192.168.10.25",
+        comment: "user-123",
+        type: "regular",
+      }];
+    }
+    if (command[0] === "/system/scheduler/print") return [];
+    return [];
+  }, async port => {
+    const snapshot = await getPaidHotspotBindingSnapshot(credentials(port), {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    });
+    assert.equal(snapshot?.bindingType, "regular");
+    assert.equal(snapshot?.comment, "user-123");
   });
 });
 
@@ -107,6 +131,65 @@ test("does not claim an administrator binding without the managed expiry schedul
       }];
     }
     if (command[0] === "/system/scheduler/print") return [];
+    return [];
+  }, async port => {
+    const snapshot = await getPaidHotspotBindingSnapshot(credentials(port), {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    });
+    assert.equal(snapshot, null);
+    assert.equal(await hasPaidHotspotAccess(credentials(port), {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    }), false);
+  });
+});
+
+test("recovers a missing binding from a matching app-owned expiry scheduler", async () => {
+  await withMockRouterApi(command => {
+    if (command[0] === "/ip/hotspot/ip-binding/print") return [];
+    if (command[0] === "/system/scheduler/print") {
+      return [{
+        ".id": "*2",
+        name: "ochola-paid-user-123",
+        comment: "OcholaSupernet paid access expiry",
+        "on-event": ':foreach id in=[/ip hotspot ip-binding find where comment="user-123"] do={/ip hotspot ip-binding remove $id}; /ip hotspot active find where user="user-123"',
+      }];
+    }
+    return [];
+  }, async port => {
+    const snapshot = await getPaidHotspotBindingSnapshot(credentials(port), {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+      ipAddress: "192.168.10.25",
+    });
+    assert.deepEqual(snapshot, {
+      macAddress: "AA:BB:CC:DD:EE:FF",
+      ipAddress: null,
+      comment: "user-123",
+      bindingType: "regular",
+    });
+  });
+});
+
+test("does not synthesize a missing binding when another account binding uses the device MAC", async () => {
+  await withMockRouterApi(command => {
+    if (command[0] === "/ip/hotspot/ip-binding/print") {
+      return [{
+        ".id": "*1",
+        "mac-address": "AA:BB:CC:DD:EE:FF",
+        address: "192.168.10.25",
+        comment: "other-user",
+        type: "regular",
+      }];
+    }
+    if (command[0] === "/system/scheduler/print") {
+      return [{
+        name: "ochola-paid-user-123",
+        comment: "OcholaSupernet paid access expiry",
+        "on-event": ':foreach id in=[/ip hotspot ip-binding find where comment="user-123"] do={/ip hotspot ip-binding remove $id}; /ip hotspot active find where user="user-123"',
+      }];
+    }
     return [];
   }, async port => {
     const snapshot = await getPaidHotspotBindingSnapshot(credentials(port), {
