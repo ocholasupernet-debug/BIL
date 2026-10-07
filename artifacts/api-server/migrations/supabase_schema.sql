@@ -1110,10 +1110,15 @@ create table if not exists radacct (
   username         text not null,
   nasipaddress     text,
   framedipaddress  text,
+  acctstarttime    timestamptz,
   acctstoptime     timestamptz,
   acctsessiontime  bigint default 0,
   acctinputoctets  bigint default 0,
   acctoutputoctets bigint default 0,
+  acctinputgigawords bigint not null default 0,
+  acctoutputgigawords bigint not null default 0,
+  callingstationid text,
+  acctterminatecause text,
   created_at       timestamptz not null default now()
 );
 create index if not exists radacct_username_idx on radacct(username);

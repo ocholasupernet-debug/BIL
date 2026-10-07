@@ -18,6 +18,7 @@ test("deployments register both loyalty and voucher entitlement migrations", () 
     "2026_hotspot_voucher_account_activation.sql",
     "2026_hotspot_voucher_data_entitlements.sql",
     "2026_hotspot_loyalty_points.sql",
+    "2026_radacct_standard_accounting_columns.sql",
   ]) {
     assert.ok(runner.includes(`../migrations/${name}`), `Migration not registered: ${name}`);
     assert.ok(api(`migrations/${name}`).length > 0);
@@ -65,6 +66,21 @@ test("voucher status and remaining allowances stay wired into listing and sync",
   assert.ok(sync.includes("await restoreVoucherRadiusAccess("));
 });
 
+test("RADIUS accounting columns are migrated and verified before restart", () => {
+  const runner = api("scripts/apply-deployment-migrations.mjs");
+  const migration = api("migrations/2026_radacct_standard_accounting_columns.sql");
+  const schema = api("migrations/supabase_schema.sql");
+  const deploy = source("deploy/deploy.sh");
+  for (const column of ["acctstarttime", "callingstationid", "acctinputgigawords", "acctoutputgigawords", "acctterminatecause"]) {
+    assert.ok(migration.includes("ADD COLUMN IF NOT EXISTS " + column), column);
+    assert.ok(schema.includes(column), column);
+  }
+  assert.ok(runner.includes("2026_radacct_standard_accounting_columns.sql"));
+  assert.ok(deploy.includes("/rest/v1/radacct?select="));
+  const schemaGuard = deploy.indexOf("RADIUS accounting schema is not ready");
+  assert.ok(schemaGuard >= 0);
+  assert.ok(schemaGuard < deploy.indexOf("pm2 reload ecosystem.config.cjs"));
+});
 test("the deployment source check runs before migrations and API restart", () => {
   const deploy = source("deploy/deploy.sh");
   const guard = deploy.indexOf('node --test "$PROJECT_DIR/deploy/tests/hotspot-release-source.test.mjs"');

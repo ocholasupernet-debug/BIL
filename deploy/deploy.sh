@@ -206,6 +206,22 @@ apply_supabase_migration() {
       ;;
   esac
 
+  local radacct_schema_status
+  radacct_schema_status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --max-time 20 \
+    -H "apikey: $service_key" \
+    -H "Authorization: Bearer $service_key" \
+    "$supabase_url/rest/v1/radacct?select=radacctid,username,nasipaddress,framedipaddress,acctstarttime,acctstoptime,callingstationid,acctsessiontime,acctinputoctets,acctoutputoctets,acctinputgigawords,acctoutputgigawords,acctterminatecause&limit=0")
+  case "$radacct_schema_status" in
+    2??)
+      echo "      ✓ Required RADIUS accounting columns are queryable"
+      ;;
+    *)
+      echo "      ✗ RADIUS accounting schema is not ready (REST check returned HTTP $radacct_schema_status)"
+      echo "        Configure SUPABASE_DB_URL so deployment can apply the additive migration."
+      exit 1
+      ;;
+  esac
   # This deployment cannot start an API whose required RPCs are missing:
   # without a direct DB URL, verify the installed PostgREST schema.
   local openapi

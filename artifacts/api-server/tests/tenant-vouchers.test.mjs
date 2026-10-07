@@ -72,6 +72,37 @@ test("hotspot voucher list failures are logged and visible with a retry action",
   assert.match(page, /void refetch\(\)/);
 });
 
+test("RADIUS columns used by voucher queries are migrated and checked before deployment", async () => {
+  const [route, restoreRoute, migration, runner, schema, deploy] = await Promise.all([
+    read("../src/routes/hotspot-vouchers-route.ts"),
+    read("../src/routes/sync-route.ts"),
+    read("../migrations/2026_radacct_standard_accounting_columns.sql"),
+    read("../scripts/apply-deployment-migrations.mjs"),
+    read("../migrations/supabase_schema.sql"),
+    read("../../../deploy/deploy.sh"),
+  ]);
+
+  for (const column of [
+    "acctstarttime",
+    "callingstationid",
+    "acctinputgigawords",
+    "acctoutputgigawords",
+    "acctterminatecause",
+  ]) {
+    assert.match(migration, new RegExp(`ADD COLUMN IF NOT EXISTS ${column}`));
+    assert.match(schema, new RegExp(`\\b${column}\\b`));
+  }
+  assert.match(migration, /ALTER TABLE IF EXISTS public\.radacct/);
+  assert.match(runner, /2026_radacct_standard_accounting_columns\.sql/);
+  assert.match(route, /select=username,acctstarttime,acctstoptime,callingstationid/);
+  assert.match(restoreRoute, /select=acctstarttime,acctstoptime,callingstationid/);
+  assert.match(deploy, /rest\/v1\/radacct\?select=.*acctstarttime.*acctterminatecause/);
+  assert.ok(
+    deploy.indexOf("RADIUS accounting schema is not ready")
+      < deploy.indexOf("pm2 reload ecosystem.config.cjs"),
+    "the release must reject an unverified RADIUS schema before restarting the API",
+  );
+});
 test("the vouchers screen no longer queries shared RADIUS tables from the browser", async () => {
   const page = await read("../../ochola-supernet/src/pages/admin/Vouchers.tsx");
   assert.doesNotMatch(page, /supabase\.from\("(radcheck|radusergroup|radacct)"\)/);
