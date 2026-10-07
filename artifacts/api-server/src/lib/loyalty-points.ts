@@ -1,4 +1,16 @@
 const MAX_AWARD = 2_147_483_647;
+const POINT_PRECISION_TOLERANCE = 1e-7;
+
+function isPointAmount(value: number, maximum = MAX_AWARD): boolean {
+  return Number.isFinite(value)
+    && value >= 0
+    && value <= maximum
+    && Math.abs(value * 100 - Math.round(value * 100)) <= POINT_PRECISION_TOLERANCE;
+}
+
+function roundPoints(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
 
 export function calculateHotspotLoyaltyAward(
   purchaseAmountKes: number,
@@ -6,18 +18,17 @@ export function calculateHotspotLoyaltyAward(
   fixedPlanAward: number | null,
 ): number {
   if (fixedPlanAward !== null) {
-    return Number.isSafeInteger(fixedPlanAward)
-      ? Math.max(0, Math.min(MAX_AWARD, fixedPlanAward))
+    return isPointAmount(fixedPlanAward)
+      ? Math.max(0, Math.min(MAX_AWARD, roundPoints(fixedPlanAward)))
       : 0;
   }
   if (!Number.isFinite(purchaseAmountKes) || purchaseAmountKes <= 0) return 0;
   if (!Number.isFinite(kesPerPoint) || kesPerPoint <= 0) return 0;
-  return Math.max(0, Math.min(MAX_AWARD, Math.floor(purchaseAmountKes / kesPerPoint + 1e-9)));
+  return roundPoints(Math.max(0, Math.min(MAX_AWARD, purchaseAmountKes / kesPerPoint)));
 }
 
 export function canRedeemHotspotPlan(balance: number, pointsRequired: number | null): boolean {
-  return Number.isSafeInteger(balance)
-    && balance >= 0
+  return isPointAmount(balance, Number.MAX_SAFE_INTEGER)
     && Number.isSafeInteger(pointsRequired)
     && (pointsRequired ?? 0) > 0
     && balance >= (pointsRequired ?? Number.POSITIVE_INFINITY);

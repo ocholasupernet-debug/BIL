@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
-import { canRedeemHotspotPlan } from "../lib/loyalty-points.js";
+import { calculateHotspotLoyaltyAward, canRedeemHotspotPlan } from "../lib/loyalty-points.js";
 import {
   isKenyanMobileNumber,
   kenyanMobilePhoneVariants,
@@ -31,7 +31,7 @@ type LoyaltyPlan = {
 
 type LoyaltyRule = {
   plan_id: number;
-  points_awarded: number | null;
+  points_awarded: number | string | null;
   redemption_points: number | null;
 };
 
@@ -54,6 +54,22 @@ function nullableInteger(value: unknown, maximum = 2_147_483_647): number | null
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < 0 || number > maximum) return undefined;
   return number;
+}
+
+function nullablePoints(value: unknown, maximum = 2_147_483_647): number | null | undefined {
+  if (value === null || value === undefined || value === "") return null;
+  const points = Number(value);
+  const cents = Math.round(points * 100);
+  if (!Number.isFinite(points) || points < 0 || points > maximum
+      || Math.abs(points * 100 - cents) > 1e-7) return undefined;
+  return cents / 100;
+}
+
+function pointBalance(balanceValue: unknown, fractionalValue: unknown = 0): number {
+  const whole = Number(balanceValue ?? 0);
+  const fraction = Number(fractionalValue ?? 0);
+  if (!Number.isFinite(whole) || whole < 0 || !Number.isFinite(fraction) || fraction < 0 || fraction >= 1) return 0;
+  return Math.round((whole + fraction + Number.EPSILON) * 100) / 100;
 }
 
 function normalizeMac(value: unknown): string {
@@ -145,26 +161,35 @@ async function loyaltyQuote(
   phone: string,
   hasCustomer: boolean,
   hasDeviceMac: boolean,
-): Promise<{ balance: number; pointsRequired: number | null; canRedeem: boolean }> {
-  const [accounts, rules] = await Promise.all([
-    sbSelectStrict<{ points_balance: number | string }>(
+): Promise<{ balance: number; pointsRequired: number | null; pointsAwarded: number; canRedeem: boolean }> {
+  const [accounts, rules, settings] = await Promise.all([
+    sbSelectStrict<{ points_balance: number | string; fractional_balance: number | string }>(
       "isp_loyalty_accounts",
-      `admin_id=eq.${adminId}&phone=eq.${phone}&select=points_balance&limit=1`,
+      `admin_id=eq.${adminId}&phone=eq.${phone}&select=points_balance,fractional_balance&limit=1`,
     ),
     sbSelectStrict<LoyaltyRule>(
       "isp_loyalty_plan_rules",
       `admin_id=eq.${adminId}&plan_id=eq.${plan.id}&select=plan_id,points_awarded,redemption_points&limit=1`,
     ),
+    sbSelectStrict<{ kes_per_point: number | string }>(
+      "isp_loyalty_settings",
+      `admin_id=eq.${adminId}&select=kes_per_point&limit=1`,
+    ),
   ]);
-  const balanceValue = Number(accounts[0]?.points_balance ?? 0);
-  const balance = Number.isSafeInteger(balanceValue) && balanceValue >= 0 ? balanceValue : 0;
+  const balance = pointBalance(accounts[0]?.points_balance, accounts[0]?.fractional_balance);
   const pointsRequiredValue = Number(rules[0]?.redemption_points ?? 0);
   const pointsRequired = Number.isSafeInteger(pointsRequiredValue) && pointsRequiredValue > 0
     ? pointsRequiredValue
     : null;
+  const pointsAwarded = calculateHotspotLoyaltyAward(
+    Number(plan.price),
+    Number(settings[0]?.kes_per_point ?? 0),
+    rules[0]?.points_awarded == null ? null : Number(rules[0].points_awarded),
+  );
   return {
     balance,
     pointsRequired,
+    pointsAwarded,
     canRedeem: hasCustomer
       && hasDeviceMac
       && plan.is_active === true
@@ -220,9 +245,9 @@ router.get("/admin/loyalty/context", requireAdmin(), async (req, res): Promise<v
         "isp_admins",
         `parent_id=eq.${adminId}&select=id&order=id.asc`,
       ),
-      selectAllRows<{ phone: string; points_balance: number | string }>(
+      selectAllRows<{ phone: string; points_balance: number | string; fractional_balance: number | string }>(
         "isp_loyalty_accounts",
-        `admin_id=eq.${adminId}&select=phone,points_balance&order=phone.asc`,
+        `admin_id=eq.${adminId}&select=phone,points_balance,fractional_balance&order=phone.asc`,
       ),
     ]);
     const ownerIds = [...new Set([adminId, ...childAdmins.map(row => Number(row.id))].filter(
@@ -262,8 +287,7 @@ router.get("/admin/loyalty/context", requireAdmin(), async (req, res): Promise<v
     for (const account of accounts) {
       const phone = normaliseKenyanMobile(account.phone);
       if (!phone) continue;
-      const pointsValue = Number(account.points_balance);
-      const points = Number.isSafeInteger(pointsValue) && pointsValue >= 0 ? pointsValue : 0;
+      const points = pointBalance(account.points_balance, account.fractional_balance);
       const current = userByPhone.get(phone);
       if (current) current.points = points;
       else {
@@ -341,10 +365,10 @@ router.put("/admin/loyalty/plans/:planId", requireAdmin(), async (req, res): Pro
     res.status(400).json({ ok: false, error: "A valid Hotspot plan is required." });
     return;
   }
-  const pointsAwarded = nullableInteger(req.body?.pointsAwarded);
+  const pointsAwarded = nullablePoints(req.body?.pointsAwarded);
   const redemptionPoints = nullableInteger(req.body?.redemptionPoints);
   if (pointsAwarded === undefined || redemptionPoints === undefined) {
-    res.status(400).json({ ok: false, error: "Point values must be whole numbers between 0 and 2,147,483,647." });
+    res.status(400).json({ ok: false, error: "Award points may use up to two decimal places; redemption cost must be a whole number." });
     return;
   }
   try {
@@ -424,10 +448,17 @@ router.post("/hotspot/loyalty/redeem", async (req, res): Promise<void> => {
       res.status(503).json({ ok: false, error: "The loyalty redemption could not be confirmed. Your balance was not changed." });
       return;
     }
+    const accounts = await sbSelectStrict<{
+      points_balance: number | string;
+      fractional_balance: number | string;
+    }>(
+      "isp_loyalty_accounts",
+      `admin_id=eq.${context.adminId}&phone=eq.${context.phone}&select=points_balance,fractional_balance&limit=1`,
+    );
     res.json({
       ok: true,
       checkout_id: redemption.checkout_id,
-      pointsBalance: Number(redemption.points_balance ?? 0),
+      pointsBalance: pointBalance(accounts[0]?.points_balance ?? redemption.points_balance, accounts[0]?.fractional_balance),
       pointsSpent: Number(redemption.points_spent),
     });
   } catch (error) {

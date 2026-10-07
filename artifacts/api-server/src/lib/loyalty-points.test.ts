@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { calculateHotspotLoyaltyAward, canRedeemHotspotPlan } from "./loyalty-points.js";
 
-test("spend-based awards grant whole points and ignore a partial remainder", () => {
-  assert.equal(calculateHotspotLoyaltyAward(275, 100, null), 2);
+test("spend-based awards preserve fractional points to two decimal places", () => {
+  assert.equal(calculateHotspotLoyaltyAward(275, 100, null), 2.75);
+  assert.equal(calculateHotspotLoyaltyAward(5, 10, null), 0.5);
+  assert.equal(calculateHotspotLoyaltyAward(1, 3, null), 0.33);
 });
 
-test("a plan award overrides the global spend ratio, including an explicit zero", () => {
+test("a fractional plan award overrides the global spend ratio, including an explicit zero", () => {
   assert.equal(calculateHotspotLoyaltyAward(1_000, 100, 35), 35);
+  assert.equal(calculateHotspotLoyaltyAward(5, 10, 0.5), 0.5);
   assert.equal(calculateHotspotLoyaltyAward(1_000, 100, 0), 0);
+  assert.equal(calculateHotspotLoyaltyAward(1_000, 100, 0.255), 0);
 });
 
 test("spend awards stay disabled until an administrator sets a positive ratio", () => {
@@ -21,4 +25,9 @@ test("a plan is redeemable only when it has a positive point cost the user can c
   assert.equal(canRedeemHotspotPlan(39, 40), false);
   assert.equal(canRedeemHotspotPlan(100, null), false);
   assert.equal(canRedeemHotspotPlan(100, 0), false);
+  assert.equal(canRedeemHotspotPlan(0.5, 1), false);
+  assert.equal(canRedeemHotspotPlan(1.5, 1), true);
+  const halfPointPurchase = calculateHotspotLoyaltyAward(5, 10, null);
+  assert.equal(canRedeemHotspotPlan(halfPointPurchase, 1), false);
+  assert.equal(canRedeemHotspotPlan(halfPointPurchase + halfPointPurchase, 1), true);
 });
