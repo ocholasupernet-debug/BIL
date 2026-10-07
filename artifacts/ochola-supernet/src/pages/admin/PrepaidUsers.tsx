@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
 import { useReconnectPrepaidHotspot, type HotspotReconnectResult } from "@workspace/api-client-react";
@@ -14,6 +14,14 @@ import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 import { fetchAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
 import { mergeCustomerServiceIdentities } from "@/lib/customer-identities";
 import { getCustomerServiceStatus } from "@/lib/customer-service-status";
+import {
+  buildLivePresenceByRouter,
+  customerIsOnline,
+  normalizeLiveIdentity,
+  prepaidServiceType,
+  purchaseUsername,
+} from "@/lib/prepaid-live-presence";
+import { usePrepaidLiveQueries } from "@/lib/prepaid-live-queries";
 import { SyncUserStatusList, type SyncUserStatus } from "@/components/ui/SyncUserStatusList";
 import { transactionDisplayId } from "@/lib/transaction-reference";
 
@@ -52,20 +60,6 @@ interface Payment {
   status: string;
   created_at: string;
 }
-interface LiveData {
-  hotspotUsers?: Array<{ user?: string; macAddress?: string; bytesIn?: number; bytesOut?: number }>;
-  hotspotUsersAvailable?: boolean;
-  pppoeUsers?: Array<{ name?: string; bytesIn?: number; bytesOut?: number }>;
-  pppoeUsersAvailable?: boolean;
-  fetchedAt?: string;
-}
-interface LiveRouterPresence {
-  authoritative: boolean;
-  hotspotUsersAvailable: boolean;
-  pppoeUsersAvailable: boolean;
-  onlineUsers: Set<string>;
-}
-
 type StatusFilter = "all" | "active" | "expired" | "suspended" | "online";
 
 /* ══════════════════════════════ Helpers ══════════════════════════════ */
@@ -99,17 +93,6 @@ function fromDateTimeLocal(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
-function prepaidServiceType(value?: string | null) {
-  const type = String(value ?? "").toLowerCase();
-  return type === "trial" || type === "trials" ? "hotspot" : type;
-}
-function purchaseUsername(user: Customer) {
-  const type = String(user.type ?? "").toLowerCase();
-  if (type === "vlan") return user.ip_address || `VLAN customer #${user.id}`;
-  const actual = type === "hotspot" ? user.username : (user.pppoe_username || user.username);
-  if (actual) return actual;
-  return `prepaid-${user.id}`;
-}
 function paymentLabel(payment?: Payment) {
   if (!payment) return "—";
   const method = payment.payment_method.toLowerCase();
@@ -124,9 +107,6 @@ function paymentLabel(payment?: Payment) {
 }
 function customerPackageId(user: Customer, paymentMap: Record<number, Payment>) {
   return paymentMap[user.id]?.plan_id ?? user.plan_id ?? null;
-}
-function normalizeLiveIdentity(value?: string | null) {
-  return String(value ?? "").trim().toLowerCase();
 }
 function formatUsageBytes(bytes: number | null | undefined) {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return "—";
@@ -162,36 +142,6 @@ function customerUsageBytes(user: Customer, liveUsage: Map<string, number>) {
   const mb = Number.isFinite(user.data_used_mb) ? Number(user.data_used_mb) : Number.NaN;
   if (Number.isFinite(mb)) return Math.max(0, mb * 1_000_000, live ?? 0);
   return live ?? null;
-}
-function customerIsOnline(
-  user: Customer,
-  livePresenceByRouter: Map<number, LiveRouterPresence>,
-  planMap: Record<number, Plan>,
-) {
-  if (!hasUnexpiredPaidAccess(user)) return false;
-  if (String(user.type ?? "").toLowerCase() === "vlan") return user.status === "active" && user.service_online === true;
-  const routerId = user.router_id ?? (user.plan_id ? planMap[user.plan_id]?.router_id : null);
-  const routerPresence = routerId == null ? undefined : livePresenceByRouter.get(routerId);
-  const serviceType = prepaidServiceType(user.type);
-  const sessionListAvailable = serviceType === "hotspot"
-    ? Boolean(routerPresence?.authoritative && routerPresence.hotspotUsersAvailable)
-    : serviceType === "pppoe"
-      ? Boolean(routerPresence?.authoritative && routerPresence.pppoeUsersAvailable)
-      : Boolean(routerPresence?.authoritative);
-  if (sessionListAvailable && routerPresence) {
-    const identities = serviceType === "hotspot"
-      ? [user.username, purchaseUsername(user)]
-      : serviceType === "pppoe"
-        ? [user.pppoe_username, user.username, purchaseUsername(user)]
-        : [user.username, user.pppoe_username, purchaseUsername(user)];
-    return identities
-      .map(normalizeLiveIdentity)
-      .filter(Boolean)
-      .some(value => routerPresence.onlineUsers.has(value));
-  }
-  // While the router is loading or unavailable, keep the last state saved by
-  // the server instead of showing a false disconnect after a page refresh.
-  return user.service_online === true;
 }
 function isExpired(d?: string | null) {
   if (!d) return false;
@@ -887,54 +837,9 @@ export default function PrepaidUsers() {
     () => displayCustomers.some(customer => customerPackageId(customer, paymentMap) === null),
     [displayCustomers, paymentMap],
   );
-  const liveQueries = useQueries({
-    queries: routers.map(router => ({
-      queryKey: ["prepaid_live", router.id],
-      queryFn: async () => {
-        const token = getAdminApiToken();
-        const response = await fetch(`/api/router/${router.id}/live`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (!response.ok) throw new Error(`Router ${router.name} is unavailable`);
-        return response.json() as Promise<LiveData & { routerId: number }>;
-      },
-      staleTime: 5_000,
-      refetchInterval: 15_000,
-    })),
-  });
-
-  const onlineUsers = useMemo(() => {
-    const keys = new Set<string>();
-    liveQueries.forEach(query => {
-      const live = query.data;
-      live?.hotspotUsers?.forEach(user => { if (user.user) keys.add(user.user.toLowerCase()); });
-      live?.pppoeUsers?.forEach(user => { if (user.name) keys.add(user.name.toLowerCase()); });
-    });
-    return keys;
-  }, [liveQueries]);
-
+  const liveQueries = usePrepaidLiveQueries(routers);
   const livePresenceByRouter = useMemo(() => {
-    const presence = new Map<number, LiveRouterPresence>();
-    routers.forEach((router, index) => {
-      const query = liveQueries[index];
-      const live = query?.data;
-      const onlineUsers = new Set<string>();
-      live?.hotspotUsers?.forEach(user => {
-        const username = normalizeLiveIdentity(user.user);
-        if (username) onlineUsers.add(username);
-      });
-      live?.pppoeUsers?.forEach(user => {
-        const username = normalizeLiveIdentity(user.name);
-        if (username) onlineUsers.add(username);
-      });
-      presence.set(router.id, {
-        authoritative: Boolean(live?.fetchedAt && !query?.isError),
-        hotspotUsersAvailable: live?.hotspotUsersAvailable !== false,
-        pppoeUsersAvailable: live?.pppoeUsersAvailable !== false,
-        onlineUsers,
-      });
-    });
-    return presence;
+    return buildLivePresenceByRouter(routers, liveQueries);
   }, [routers, liveQueries]);
   const liveSnapshotKey = liveQueries
     .map(query => query.data?.fetchedAt ?? "")

@@ -4853,3 +4853,78 @@ table:not([role="grid"]) td [data-technical="true"] {
   .plans-page-header { flex-direction: column; }
   .settings-page-heading { padding: 12px 14px; }
 }
+
+/* Dashboard live metrics use a balanced, consistent tile grid at every width. */
+.dashboard-page .dashboard-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: minmax(92px, 1fr);
+  align-items: stretch;
+  gap: 12px;
+}
+.dashboard-page .dashboard-stat {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  min-height: 92px;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 14px 15px;
+  border-radius: 12px;
+}
+.dashboard-page .dashboard-stat-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 10px;
+}
+.dashboard-page .dashboard-stat-copy {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  width: auto;
+  min-width: 0;
+}
+.dashboard-page .dashboard-stat-label {
+  min-height: 2.5em;
+  line-height: 1.25;
+  letter-spacing: 0.055em;
+}
+.dashboard-page .dashboard-stat-value {
+  margin-top: 0;
+  font-size: clamp(1.05rem, 1.45vw, 1.35rem);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.dashboard-page .dashboard-stat-arrow {
+  position: static;
+  align-self: start;
+  margin-top: 2px;
+}
+@media (max-width: 1050px) {
+  .dashboard-page .dashboard-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) {
+  .dashboard-page .dashboard-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  .dashboard-page .dashboard-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+  }
+  .dashboard-page .dashboard-stat {
+    grid-template-columns: 30px minmax(0, 1fr) 12px;
+    gap: 8px;
+    min-height: 84px;
+    padding: 11px 10px;
+  }
+  .dashboard-page .dashboard-stat-icon { width: 30px; height: 30px; }
+  .dashboard-page .dashboard-stat-label { font-size: 0.58rem; }
+  .dashboard-page .dashboard-stat-value { font-size: 1rem; }
+  .dashboard-page .dashboard-stat-arrow { width: 12px; height: 12px; }
+}
