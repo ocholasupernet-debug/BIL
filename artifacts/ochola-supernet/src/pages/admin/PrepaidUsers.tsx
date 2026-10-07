@@ -76,19 +76,12 @@ function fmtDate(d?: string | null) {
     hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
   });
 }
-function fmtDateOnly(d?: string | null) {
+function fmtTableDateTime(d?: string | null) {
   if (!d) return "—";
   const date = new Date(d);
   if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleDateString("en-KE", {
+  return date.toLocaleString("en-KE", {
     day: "2-digit", month: "short", year: "numeric",
-  });
-}
-function fmtTimeOnly(d?: string | null) {
-  if (!d) return "No expiry time";
-  const date = new Date(d);
-  if (Number.isNaN(date.getTime())) return "Invalid time";
-  return date.toLocaleTimeString("en-KE", {
     hour: "2-digit", minute: "2-digit", hour12: false,
   });
 }
@@ -204,9 +197,14 @@ function normalizeLiveIdentity(value?: string | null) {
 }
 function formatUsageBytes(bytes: number | null | undefined) {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return "—";
-  const value = Math.max(0, bytes);
-  const mb = value / 1_000_000;
-  return `${mb.toLocaleString("en-KE", { minimumFractionDigits: 2, maximumFractionDigits: 6 })} MB`;
+  let value = Math.max(0, bytes) / 1_000_000;
+  const units = ["MB", "GB", "TB", "PB"];
+  let unitIndex = 0;
+  while (value >= 1_000 && unitIndex < units.length - 1) {
+    value /= 1_000;
+    unitIndex += 1;
+  }
+  return `${value.toLocaleString("en-KE", { maximumFractionDigits: 2 })} ${units[unitIndex]}`;
 }
 function customerUsageBytes(user: Customer, liveUsage: Map<string, number>) {
   const isVlan = String(user.type ?? "").toLowerCase() === "vlan";
@@ -261,11 +259,6 @@ function customerIsOnline(
   // While the router is loading or unavailable, keep the last state saved by
   // the server instead of showing a false disconnect after a page refresh.
   return user.service_online === true;
-}
-function isExpiringSoon(d?: string | null) {
-  if (!d) return false;
-  const diff = new Date(d).getTime() - Date.now();
-  return diff > 0 && diff < 3 * 24 * 60 * 60 * 1000; // 3 days
 }
 function isExpired(d?: string | null) {
   if (!d) return false;
@@ -1330,7 +1323,7 @@ export default function PrepaidUsers() {
     fontSize: "0.82rem", fontFamily: "inherit", outline: "none",
   };
   const TH: React.CSSProperties = {
-    padding: "0.62rem 0.8rem", fontSize: "0.68rem", fontWeight: 600,
+    padding: "0.5rem 0.58rem", fontSize: "0.68rem", fontWeight: 600,
     color: "var(--isp-text-muted)", textTransform: "uppercase",
     letterSpacing: "0.06em", textAlign: "left",
     background: "var(--isp-section)",
@@ -1338,7 +1331,7 @@ export default function PrepaidUsers() {
     borderRight: "1px solid var(--isp-border)",
   };
   const TD: React.CSSProperties = {
-    padding: "0.5rem 0.8rem", fontSize: "0.78rem",
+    padding: "0.32rem 0.58rem", fontSize: "0.74rem", lineHeight: 1.2,
     color: "var(--isp-text)", borderBottom: "1px solid var(--isp-border)",
     verticalAlign: "middle",
   };
@@ -1394,17 +1387,23 @@ export default function PrepaidUsers() {
         .prepaid-table-shell{background:var(--isp-card)!important;border:1px solid var(--isp-border)!important;border-radius:8px!important;box-shadow:var(--shadow-card)}
         .prepaid-table-shell tbody tr{background:var(--isp-card)}
         .prepaid-table-shell tbody tr:hover{background:var(--isp-hover)}
-        .prepaid-table-shell tbody tr.prepaid-row-expired{background:color-mix(in srgb,var(--isp-card) 92%,#c66b5f);box-shadow:inset 3px 0 0 #c66b5f}
-        .prepaid-table-shell tbody tr.prepaid-row-expired:hover{background:color-mix(in srgb,var(--isp-hover) 88%,#c66b5f)}
+        .prepaid-table-shell tbody tr.prepaid-row-expired{box-shadow:inset 5px 0 0 #ef4444}
+        .prepaid-table-shell tbody tr.prepaid-row-expired>td{background:color-mix(in srgb,var(--isp-card) 78%,#ef4444);border-bottom-color:rgba(239,68,68,.38)}
+        .prepaid-table-shell tbody tr.prepaid-row-expired:hover>td{background:color-mix(in srgb,var(--isp-hover) 70%,#ef4444)}
         .prepaid-table-shell tbody td{border-right:1px solid var(--isp-border)}
-        .prepaid-username-link{border:0;background:transparent;color:var(--isp-accent);padding:0;font:400 .78rem var(--font-mono);white-space:nowrap;cursor:pointer;text-align:left}
+        .prepaid-table-shell .prepaid-table th,.prepaid-table-shell .prepaid-table td{white-space:nowrap}
+        .prepaid-username-link{display:block;max-width:170px;overflow:hidden;text-overflow:ellipsis;border:0;background:transparent;color:var(--isp-accent);padding:0;font:400 .76rem var(--font-mono);white-space:nowrap;cursor:pointer;text-align:left}
         .prepaid-username-link:hover{text-decoration:underline;color:var(--isp-accent-strong)}
         .prepaid-plain-value{font-weight:400;color:var(--isp-text);white-space:nowrap}
         .prepaid-plain-muted{font-weight:400;color:var(--isp-text-muted);white-space:nowrap}
+        .prepaid-cell-ellipsis{display:block;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .prepaid-table-date{font-size:.69rem;font-variant-numeric:tabular-nums;white-space:nowrap}
         .prepaid-plain-status{font-weight:400;color:var(--isp-text);white-space:nowrap}
         .prepaid-plain-status::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;background:var(--isp-text-sub)}
         .prepaid-plain-status--online::before{background:var(--isp-green)}
         .prepaid-plain-status--offline::before{background:#c66b5f}
+        .prepaid-table-shell tbody tr.prepaid-row-expired .prepaid-plain-status{color:#ef4444}
+        .prepaid-table-shell tbody tr.prepaid-row-expired .prepaid-plain-status::before{background:#ef4444}
         .prepaid-table-shell th,.prepaid-table-shell td{border-right:1px solid var(--isp-border)}
         .prepaid-reconnect-report{border:1px solid var(--isp-accent-border);border-radius:10px;background:color-mix(in srgb,var(--isp-card) 94%,var(--isp-accent));padding:12px 14px}
         .prepaid-reconnect-counts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:10px}
@@ -1804,7 +1803,6 @@ export default function PrepaidUsers() {
                   const username = purchaseUsername(user);
                   const online = customerIsOnline(user, livePresenceByRouter, planMap);
                   const fup = user.fup_limit_mb ?? plan?.data_limit_mb ?? null;
-                  const expiring = isExpiringSoon(user.expires_at);
                   const expired  = isCustomerExpired(user);
                   const planStatus = expired
                     ? "Expired"
@@ -1828,29 +1826,26 @@ export default function PrepaidUsers() {
                       </td>
                       <td style={TD}><span className="prepaid-plain-value">{TYPE_META[user.type ?? ""]?.label ?? user.type ?? "—"}</span></td>
                       <td style={TD}>
-                        <div className="prepaid-plain-value">
+                        <div className="prepaid-plain-value prepaid-cell-ellipsis" title={displayedPlan?.name || (packageId ? `Plan #${packageId}` : "No plan")}>
                           {displayedPlan?.name || (packageId ? `Plan #${packageId}` : "No plan")}
                         </div>
                       </td>
-                      <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.72rem" }} title={fmtDate(user.created_at)}>
-                        <div>{fmtDateOnly(user.created_at)}</div>
-                        <div style={{ color: "var(--isp-text-sub)", fontSize: "0.64rem", marginTop: 2 }}>{fmtTimeOnly(user.created_at)}</div>
+                      <td className="prepaid-col-optional" style={{ ...TD, fontVariantNumeric: "tabular-nums" }} title={fmtDate(user.created_at)}>
+                        <span className="prepaid-table-date">{fmtTableDateTime(user.created_at)}</span>
                       </td>
-                      <td style={{ ...TD, whiteSpace: "nowrap" }}>
-                        <span title={fmtDate(user.expires_at)} style={{ fontSize: "0.72rem", fontWeight: 600, color: expiring ? "#fbbf24" : expired ? "#f87171" : "var(--isp-text-muted)" }}>
-                          <div>{fmtDateOnly(user.expires_at)}</div>
-                          <div style={{ color: "var(--isp-text-sub)", fontSize: "0.64rem", marginTop: 2 }}>{fmtTimeOnly(user.expires_at)}</div>
+                      <td style={TD}>
+                        <span title={fmtDate(user.expires_at)} className="prepaid-table-date" style={{ fontWeight: 600, color: expired ? "#ef4444" : "var(--isp-text-muted)" }}>
+                          {fmtTableDateTime(user.expires_at)}
                         </span>
-                        {expiring && !expired && <div style={{ fontSize: "0.6rem", color: "#fbbf24", fontWeight: 700 }}>Expiring soon</div>}
                       </td>
-                      <td className="prepaid-col-optional" style={{ ...TD, minWidth: 180, maxWidth: 260 }}>
-                        <span className="prepaid-plain-muted" title={paymentLabel(payment)} style={{ display: "block", whiteSpace: "normal", overflowWrap: "anywhere", fontSize: "0.7rem", lineHeight: 1.35 }}>
+                      <td className="prepaid-col-optional" style={{ ...TD, minWidth: 180, maxWidth: 220 }}>
+                        <span className="prepaid-plain-muted prepaid-cell-ellipsis" title={paymentLabel(payment)} style={{ fontSize: "0.7rem" }}>
                           {paymentLabel(payment)}
                         </span>
                       </td>
                       <td style={TD}>
                         {router ? (
-                           <span className="prepaid-plain-muted">{router.name}</span>
+                           <span className="prepaid-plain-muted prepaid-cell-ellipsis" title={router.name}>{router.name}</span>
                         ) : (
                           <span style={{ fontSize: "0.7rem", color: "var(--isp-text-muted)" }}>Unassigned</span>
                         )}
@@ -1864,7 +1859,7 @@ export default function PrepaidUsers() {
                           {online ? "Connected" : "Not connected"}
                         </span>
                       </td>
-                      <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap", fontSize: "0.68rem" }}>{online ? "Online" : fmtDate(user.last_seen ?? (expired ? user.expires_at : null))}</td>
+                      <td className="prepaid-col-optional" style={{ ...TD, fontSize: "0.68rem", fontVariantNumeric: "tabular-nums" }}>{online ? "Online" : fmtTableDateTime(user.last_seen ?? (expired ? user.expires_at : null))}</td>
                       <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap" }}>
                          <span className="prepaid-plain-muted" title={usageBytes === null ? undefined : `${Math.floor(usageBytes).toLocaleString("en-US")} bytes`}>
                            {formatUsageBytes(usageBytes)}
