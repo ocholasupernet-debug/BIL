@@ -492,6 +492,25 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   box-shadow: 0 0 0 1px var(--isp-accent), 0 4px 16px var(--isp-accent-glow);
 }
 
+.loyalty-plan-rule {
+  transition: border-color 0.16s ease, background-color 0.16s ease;
+}
+.loyalty-plan-rule:focus-within {
+  border-color: var(--isp-accent-border) !important;
+  background: var(--isp-hover);
+}
+@media (max-width: 680px) {
+  .loyalty-plan-rule {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+  }
+  .loyalty-plan-rule > div:first-child {
+    grid-column: 1 / -1;
+  }
+  .loyalty-plan-rule > button {
+    grid-column: 1 / -1;
+  }
+}
+
 @keyframes spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }

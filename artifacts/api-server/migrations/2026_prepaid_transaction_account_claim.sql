@@ -35,7 +35,7 @@ begin
    where id = p_transaction_id
      and admin_id = p_admin_id
      and plan_id = p_plan_id
-     and payment_method = 'mpesa'
+     and payment_method in ('mpesa', 'loyalty_points')
      and status in ('completed', 'paid', 'success')
    for update;
   if not found then

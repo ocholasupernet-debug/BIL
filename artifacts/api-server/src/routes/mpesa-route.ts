@@ -2683,9 +2683,10 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     payment_phone: string | null;
     mac_address: string | null;
     status: string;
+    payment_method: string;
   }>(
     "isp_transactions",
-    `${Number.isSafeInteger(Number(req.body?.recovery_transaction_id)) && Number(req.body?.recovery_transaction_id) > 0 ? `id=eq.${Number(req.body.recovery_transaction_id)}&` : ""}reference=eq.${encodeURIComponent(checkoutId)}&admin_id=eq.${adminId}&status=in.(completed,paid,success)&payment_method=eq.mpesa&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,status&limit=1`,
+    `${Number.isSafeInteger(Number(req.body?.recovery_transaction_id)) && Number(req.body?.recovery_transaction_id) > 0 ? `id=eq.${Number(req.body.recovery_transaction_id)}&` : ""}reference=eq.${encodeURIComponent(checkoutId)}&admin_id=eq.${adminId}&status=in.(completed,paid,success)&payment_method=in.(mpesa,loyalty_points)&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,status,payment_method&limit=1`,
   );
   const transaction = transactions[0];
 
@@ -3011,13 +3012,26 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
 
   try {
     await sbUpdateStrict("isp_transactions", `id=eq.${transaction.id}&admin_id=eq.${adminId}`, {
-      notes: "M-Pesa payment verified; prepaid hotspot account saved and awaiting router access.",
+      notes: transaction.payment_method === "loyalty_points"
+        ? "Hotspot package redeemed with loyalty points; prepaid account saved and awaiting router access."
+        : "M-Pesa payment verified; prepaid hotspot account saved and awaiting router access.",
     });
   } catch (error) {
     logger.warn(
       { err: error, transactionId: transaction.id, customerId: customer.id },
       "[mpesa/hotspot-mac-access] prepaid account saved; transaction status note update failed",
     );
+  }
+
+  if (transaction.payment_method === "mpesa") {
+    try {
+      await sbRpc("award_hotspot_loyalty_points", { p_transaction_id: transaction.id });
+    } catch (error) {
+      logger.warn(
+        { err: error, transactionId: transaction.id, customerId: customer.id },
+        "[mpesa/hotspot-mac-access] account saved; loyalty award will retry on the next checkout recovery",
+      );
+    }
   }
 
   const routers = await sbSelect<{

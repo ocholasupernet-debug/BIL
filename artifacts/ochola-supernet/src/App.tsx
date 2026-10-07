@@ -31,6 +31,7 @@ import Webhooks from "./pages/admin/Webhooks";
 import ActivityLogs from "./pages/admin/ActivityLogs";
 import AdminPlans from "./pages/admin/Plans";
 import AdminHotspotRoaming from "./pages/admin/HotspotRoaming";
+import LoyaltyPoints from "./pages/admin/LoyaltyPoints";
 import AdminTransactions from "./pages/admin/Transactions";
 import PaidHotspotRecovery from "./pages/admin/PaidHotspotRecovery";
 import TransactionGraphs from "./pages/admin/TransactionGraphs";
@@ -171,6 +172,7 @@ function Router() {
       <Route path="/admin/network/files" component={NetworkFiles} />
       <Route path="/admin/plans" component={AdminPlans} />
       <Route path="/admin/plans/roaming" component={AdminHotspotRoaming} />
+      <Route path="/admin/plans/loyalty" component={LoyaltyPoints} />
       <Route path="/admin/transactions/graphs" component={TransactionGraphs} />
       <Route path="/admin/transactions/hotspot-recovery" component={PaidHotspotRecovery} />
       <Route path="/admin/transactions" component={AdminTransactions} />

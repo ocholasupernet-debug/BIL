@@ -240,6 +240,11 @@ apply_supabase_migration() {
   echo "      ✓ Required Supabase RPCs verified"
 }
 
+# Refuse a release that drops either half of the verified live composite.
+# This is a source-only check: it never loads credentials or contacts routers.
+echo "Verifying Hotspot loyalty and voucher release source..."
+node --test "$PROJECT_DIR/deploy/tests/hotspot-release-source.test.mjs"
+
 load_deploy_env
 
 # 3. Apply the one-time schema migration before building or restarting the API.

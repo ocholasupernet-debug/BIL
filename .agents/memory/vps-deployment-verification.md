@@ -13,6 +13,24 @@ Direct SSH releases do not appear in GitHub Actions history. A direct release re
 
 **How to apply:** Compare actual deployed source files and build checksums with the marker before treating it as current. Preserve the verified live application changes when reconciling a later GitHub release. Keep a pre-release application backup, preserve runtime secrets, and suppress unrelated RouterOS actions for an application-only deployment.
 
+Scoped updates over differing live source must be identified as composite releases, not as an exact checkout of the prepared patch commit.
+
+**Why:** The live application can include unrelated fixes that are not in the prepared repository branch. Replacing the whole tree would remove those fixes, while labelling the composite as one commit would mislead the next release.
+
+**How to apply:** Stage from verified actual live source, overlay only the requested changes, and record both patch provenance and complete source/artifact hashes. Recheck the source snapshot immediately before promotion. If it changed, reconcile the latest live additions, including shared schema and migration registration changes, rather than relaxing the check or overwriting them.
+
+Preserve retired files left by archive deployments outside active build and test source directories when reconciling a verified VPS snapshot.
+
+**Why:** Presence on the VPS does not mean a file contributes to the running artifact. Reintroducing stale files into source directories can revive a removed public page or introduce imports/tests that rely on exports already removed from the active application.
+
+**How to apply:** Verify each retained file's hash, keep its original path traceable in a separate source archive, and compare live behavior through the active import graph and built artifacts. Do not register archived routes or migrations. Document the archive mapping as an intentional source-layout difference, not a loss of live behavior.
+
+Build the application off the VPS and upload verified artifacts. Do not run a full frontend build alongside the production API on this memory-constrained server.
+
+**Why:** The server has roughly 1 GB RAM; a frontend staging build exhausted memory and swap and temporarily made the running API unresponsive. Package-manager execution in a copied workspace also triggered automatic installation and dependency pruning when production dependencies were linked into staging.
+
+**How to apply:** Build the reconciled live-source composite in the workspace or CI, verify the frontend configuration matches production without exposing its values, and checksum the delivered artifacts. Keep production dependencies out of writable installation targets; use existing tool binaries directly or isolated build dependencies. All release paths should share a server-side deployment lock, since unrelated live source changes can arrive during staging.
+
 During branch reconciliation, pause preview processes that generate tracked files and recheck the branch head and working tree after switching. Automatic checkpoints can create a new commit between an earlier clean-status check and the merge.
 
 If the management VPN bootstrap reports `TUNSETIFF` with “Device or resource busy,” treat it as an interface ownership conflict. A healthy compatibility `openvpn@` unit may already own the management TUN while a duplicate `openvpn-server@` instance fails; verify its config, address, and listener before changing units.

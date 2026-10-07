@@ -624,6 +624,53 @@ create unique index if not exists isp_transactions_pending_mpesa_reference_idx
   on isp_transactions(reference)
   where reference is not null and status = 'pending' and payment_method like 'mpesa%';
 
+-- Tenant-scoped loyalty balance, rules, and audit ledger. Loyalty redemption
+-- transactions carry a zero cash amount so they never increase reported sales.
+create table if not exists public.isp_loyalty_settings (
+  admin_id bigint primary key references public.isp_admins(id) on delete cascade,
+  kes_per_point numeric(12,2) not null default 0 check (kes_per_point >= 0),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.isp_loyalty_plan_rules (
+  id bigserial primary key,
+  admin_id bigint not null references public.isp_admins(id) on delete cascade,
+  plan_id bigint not null references public.isp_plans(id) on delete cascade,
+  points_awarded integer check (points_awarded is null or points_awarded >= 0),
+  redemption_points integer check (redemption_points is null or redemption_points >= 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (admin_id, plan_id)
+);
+
+create table if not exists public.isp_loyalty_accounts (
+  admin_id bigint not null references public.isp_admins(id) on delete cascade,
+  phone text not null check (phone ~ '^254[17][0-9]{8}$'),
+  points_balance bigint not null default 0 check (points_balance >= 0),
+  updated_at timestamptz not null default now(),
+  primary key (admin_id, phone)
+);
+
+create table if not exists public.isp_loyalty_ledger (
+  id bigserial primary key,
+  admin_id bigint not null references public.isp_admins(id) on delete cascade,
+  phone text not null check (phone ~ '^254[17][0-9]{8}$'),
+  transaction_id bigint not null references public.isp_transactions(id) on delete restrict,
+  plan_id bigint not null references public.isp_plans(id) on delete restrict,
+  entry_type text not null check (entry_type in ('purchase_award', 'plan_redemption')),
+  source_reference text not null,
+  points_delta integer not null check (points_delta <> 0),
+  note text,
+  created_at timestamptz not null default now(),
+  unique (admin_id, source_reference)
+);
+
+create index if not exists isp_loyalty_ledger_account_idx
+  on public.isp_loyalty_ledger (admin_id, phone, created_at desc);
+create unique index if not exists isp_transactions_loyalty_reference_idx
+  on public.isp_transactions (admin_id, reference)
+  where payment_method = 'loyalty_points' and reference is not null;
+
 create or replace function public.settle_verified_mpesa_transaction(
   p_transaction_id bigint,
   p_status text,

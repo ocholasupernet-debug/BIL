@@ -42,6 +42,12 @@ interface Plan {
   description: string | null; type?: string;
   router_id?: number | null; port_id?: number | null;
 }
+interface LoyaltyQuote {
+  ok: true;
+  balance: number;
+  pointsRequired: number | null;
+  canRedeem: boolean;
+}
 
 interface HotspotRuntimeConfig {
   apiBase: string;
@@ -539,6 +545,13 @@ function HotspotLoginView({
     paymentGateway: string;
   } | null>(null);
   const [paymentStatusLoaded, setPaymentStatusLoaded] = useState(false);
+  const [loyaltyQuote, setLoyaltyQuote] = useState<LoyaltyQuote | null>(null);
+  const [loyaltyQuoteLoading, setLoyaltyQuoteLoading] = useState(false);
+  const [loyaltyQuoteError, setLoyaltyQuoteError] = useState("");
+  const [loyaltyPayment, setLoyaltyPayment] = useState<"mpesa" | "points">("mpesa");
+  const [loyaltyRedeemLoading, setLoyaltyRedeemLoading] = useState(false);
+  const [loyaltyPaidWithPoints, setLoyaltyPaidWithPoints] = useState(false);
+  const loyaltyRequestIdRef = useRef<string | null>(null);
   const loginCredentialsStorageKey = hotspotLoginStorageKey(adminId);
   const [loginSession, setLoginSession] = useState<HotspotSession | null>(null);
   const [troubleshootLoading, setTroubleshootLoading] = useState(false);
@@ -655,6 +668,54 @@ function HotspotLoginView({
       }
     })();
   }, [adminId, planScopeQuery, troubleshootingOnly]);
+
+  useEffect(() => {
+    setLoyaltyQuote(null);
+    setLoyaltyQuoteError("");
+    setLoyaltyPayment("mpesa");
+    loyaltyRequestIdRef.current = null;
+    const cleanPhone = phone.trim().replace(/[\s()-]/g, "");
+    const validPhone = /^(?:\+254|254|0)(?:7|1)\d{8}$/.test(cleanPhone);
+    if (!selectedPlan || !validPhone || paymentMode !== "data" || HOTSPOT_RUNTIME_CONFIG.previewOnly) {
+      setLoyaltyQuoteLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoyaltyQuoteLoading(true);
+    const timer = window.setTimeout(() => {
+      void hotspotPortalFetch(hotspotApiUrl("/api/hotspot/loyalty/quote"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plan_id: selectedPlan.id,
+          phone: cleanPhone,
+          mac_address: normalizeMacAddress(deviceMacAddress) || portalContext.mac,
+          ...(adminId ? { adminId } : {}),
+          ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
+          ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+        }),
+      }).then(async response => {
+        const data = await response.json() as Partial<LoyaltyQuote> & { error?: string };
+        if (!response.ok || data.ok !== true || typeof data.balance !== "number") {
+          throw new Error(data.error || "Points could not be checked.");
+        }
+        if (!cancelled) setLoyaltyQuote({
+          ok: true,
+          balance: data.balance,
+          pointsRequired: typeof data.pointsRequired === "number" ? data.pointsRequired : null,
+          canRedeem: data.canRedeem === true,
+        });
+      }).catch(error => {
+        if (!cancelled) setLoyaltyQuoteError(error instanceof Error ? error.message : "Points could not be checked.");
+      }).finally(() => {
+        if (!cancelled) setLoyaltyQuoteLoading(false);
+      });
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [adminId, deviceMacAddress, phone, paymentMode, portalScope.portId, portalScope.routerId, selectedPlan?.id]);
 
   useEffect(() => {
     if (!tvDialogOpen) return;
@@ -925,6 +986,7 @@ function HotspotLoginView({
     const macAddress = normalizeMacAddress(macValue);
     const normalizedDeviceName = deviceNameValue.trim().replace(/\s+/g, " ").slice(0, 64);
     setSelectedPlan(plan);
+    setLoyaltyPaidWithPoints(false);
     setPaymentMode(targetDevice ? "tv" : "data");
     setRememberTvDevice(rememberDevice);
     setTvDeviceSaveNotice("");
@@ -984,12 +1046,66 @@ function HotspotLoginView({
   const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPlan || !phone.trim()) return;
+    if (loyaltyPayment === "points" && loyaltyQuote?.canRedeem) {
+      await handleLoyaltyRedeem();
+      return;
+    }
     await startPayment({
       plan: selectedPlan,
       phoneValue: phone.trim(),
       macValue: deviceMacAddress,
       deviceNameValue: deviceName,
     });
+  };
+
+  const handleLoyaltyRedeem = async () => {
+    if (!selectedPlan || !loyaltyQuote?.canRedeem || !loyaltyQuote.pointsRequired || loyaltyRedeemLoading) return;
+    const cleanPhone = phone.trim().replace(/[\s()-]/g, "");
+    const macAddress = normalizeMacAddress(deviceMacAddress) || portalContext.mac;
+    if (!loyaltyRequestIdRef.current) {
+      loyaltyRequestIdRef.current = typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, character => {
+          const value = Math.floor(Math.random() * 16);
+          return (character === "x" ? value : (value & 0x3) | 0x8).toString(16);
+        });
+    }
+    setLoyaltyRedeemLoading(true);
+    setPayError(null);
+    try {
+      const response = await hotspotPortalFetch(hotspotApiUrl("/api/hotspot/loyalty/redeem"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plan_id: selectedPlan.id,
+          phone: cleanPhone,
+          mac_address: macAddress,
+          idempotency_key: loyaltyRequestIdRef.current,
+          ...(adminId ? { adminId } : {}),
+          ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
+          ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+        }),
+      });
+      const result = await response.json() as { ok?: boolean; checkout_id?: string; error?: string };
+      if (!response.ok || !result.ok || !result.checkout_id) {
+        throw new Error(result.error || "Points redemption could not be completed.");
+      }
+      setLoyaltyPaidWithPoints(true);
+      setPaymentMode("data");
+      setDeviceMacAddress(macAddress);
+      setCheckoutId(result.checkout_id);
+      setStkSent(true);
+      setPaymentConfirmed(true);
+      setPaymentFailed(false);
+      setAccessReady(false);
+      setPortalHandoffReady(false);
+      bindingInFlight.current = true;
+      await bindPaidHotspotAccess(result.checkout_id);
+    } catch (error) {
+      setPayError(error instanceof Error ? error.message : "Points redemption could not be completed.");
+    } finally {
+      setLoyaltyRedeemLoading(false);
+    }
   };
 
   const openTvDialog = () => {
@@ -1122,6 +1238,7 @@ function HotspotLoginView({
 
   const selectPlan = (plan: Plan) => {
     setSelectedPlan(plan);
+    setLoyaltyPaidWithPoints(false);
     setPaymentMode(activeTab === "tv" ? "tv" : "data");
     setPhone("");
     setPayError(null);
@@ -2472,8 +2589,10 @@ function HotspotLoginView({
                           <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
                         </div>
                           <h3>{accessReady ? (isTvMode ? "TV is ready to stream!" : "Device connected!") : portalHandoffReady ? "Connecting your device…" : "Payment Confirmed"}</h3>
-                         <p>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</p>
-                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? (isTvMode ? "Your TV session was confirmed by the hotspot." : "Your device has been authorized by the hotspot. Use the credentials below for the next sign-in.") : portalHandoffReady ? "Your package is ready. Finishing hotspot sign-in now." : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
+                          <p>{loyaltyPaidWithPoints
+                            ? <>Your full plan redemption used <strong style={{ color: "#fff" }}>{loyaltyQuote?.pointsRequired ?? "—"} points</strong>.</>
+                            : <>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</>}</p>
+                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? (isTvMode ? "Your TV session was confirmed by the hotspot." : "Your device has been authorized by the hotspot. Use the credentials below for the next sign-in.") : portalHandoffReady ? "Your package is ready. Finishing hotspot sign-in now." : loyaltyPaidWithPoints ? "Your points redemption is confirmed, but the hotspot still needs to be updated." : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
                           {hotspotCredentials && (
                             <div style={{ display: "grid", gap: 8, textAlign: "left", margin: "0 auto 16px", maxWidth: 320 }}>
                               <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)" }}>
@@ -2755,9 +2874,46 @@ function HotspotLoginView({
                                       <div className="hp-input-wrap">
                                         <input className="hp-input hp-input-phone" type="tel"
                                           inputMode="tel" placeholder="07XX XXX XXX or 01XX XXX XXX" required
-                                          value={phone} onChange={e => setPhone(e.target.value)} />
+                                          value={phone} onChange={e => {
+                                            setPhone(e.target.value);
+                                            setLoyaltyQuote(null);
+                                            setLoyaltyQuoteError("");
+                                            setLoyaltyPayment("mpesa");
+                                            loyaltyRequestIdRef.current = null;
+                                          }} />
                                       </div>
                                     </div>
+
+                                    {(loyaltyQuoteLoading || loyaltyQuote || loyaltyQuoteError) && (
+                                      <div style={{ margin: "0 0 12px", padding: "11px 12px", borderRadius: 10, background: "rgba(255,255,255,0.045)", border: "1px solid rgba(255,255,255,0.10)", color: "rgba(255,255,255,0.78)", fontSize: 12 }}>
+                                        {loyaltyQuoteLoading ? (
+                                          <div role="status" style={{ display: "flex", alignItems: "center", gap: 8 }}><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Checking loyalty balance…</div>
+                                        ) : loyaltyQuote ? (
+                                          <>
+                                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                                              <span>Your points balance</span><strong style={{ color: "#9fe0be" }}>{new Intl.NumberFormat("en-KE").format(loyaltyQuote.balance)} points</strong>
+                                            </div>
+                                            {loyaltyQuote.canRedeem && loyaltyQuote.pointsRequired && loyaltyQuote.pointsRequired > 0 && (
+                                              <div style={{ marginTop: 10, display: "grid", gap: 7 }}>
+                                                <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", padding: "9px 10px", borderRadius: 8, border: loyaltyPayment === "points" ? "1px solid rgba(117,220,169,.55)" : "1px solid rgba(255,255,255,.12)", background: loyaltyPayment === "points" ? "rgba(67,160,112,.12)" : "transparent" }}>
+                                                  <input type="radio" name="hotspot-payment-choice" value="points" checked={loyaltyPayment === "points"} onChange={() => setLoyaltyPayment("points")} />
+                                                  <span>Redeem <strong>{new Intl.NumberFormat("en-KE").format(loyaltyQuote.pointsRequired)} points</strong> for this full plan</span>
+                                                </label>
+                                                <label style={{ display: "flex", alignItems: "center", gap: 9, cursor: "pointer", padding: "9px 10px", borderRadius: 8, border: loyaltyPayment === "mpesa" ? "1px solid rgba(117,220,169,.55)" : "1px solid rgba(255,255,255,.12)", background: loyaltyPayment === "mpesa" ? "rgba(67,160,112,.12)" : "transparent" }}>
+                                                  <input type="radio" name="hotspot-payment-choice" value="mpesa" checked={loyaltyPayment === "mpesa"} onChange={() => setLoyaltyPayment("mpesa")} />
+                                                  <span>Pay KSh {plan.price} with M-Pesa</span>
+                                                </label>
+                                              </div>
+                                            )}
+                                          </>
+                                        ) : (
+                                          <div role="status" style={{ display: "flex", gap: 7, alignItems: "flex-start", lineHeight: 1.45 }}>
+                                            <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1, color: "#f5bf69" }} />
+                                            <span>Points could not be checked. You can still continue with the usual M-Pesa checkout.</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
 
                                     {payError && (
                                       <div className="hp-error">
@@ -2766,8 +2922,14 @@ function HotspotLoginView({
                                       </div>
                                     )}
 
-                                    <button type="submit" disabled={payLoading || !canAttemptHotspotCheckout(mpesaStatus, HOTSPOT_RUNTIME_CONFIG.previewOnly)} className="hp-btn hp-btn-mpesa">
-                                      {payLoading ? (
+                                    <button type="submit" disabled={loyaltyPayment === "points"
+                                      ? loyaltyRedeemLoading || !loyaltyQuote?.canRedeem || HOTSPOT_RUNTIME_CONFIG.previewOnly
+                                      : payLoading || !canAttemptHotspotCheckout(mpesaStatus, HOTSPOT_RUNTIME_CONFIG.previewOnly)} className="hp-btn hp-btn-mpesa">
+                                      {loyaltyPayment === "points" ? loyaltyRedeemLoading ? (
+                                        <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Redeeming points…</>
+                                      ) : (
+                                        <><CheckCircle2 size={16} /> Redeem {loyaltyQuote?.pointsRequired ?? 0} points</>
+                                      ) : payLoading ? (
                                         <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending STK Push...</>
                                       ) : (
                                         <><Phone size={16} /> Pay {getCurrencySymbol()} {plan.price}{isTvMode ? " for TV" : ""}</>
@@ -2792,7 +2954,7 @@ function HotspotLoginView({
                                             ? <>Payment service will verify checkout</>
                                             : <>Payment status checked at checkout</>}
                                     </div>
-                                      <button className="hp-plan-change" onClick={() => { setSelectedPlan(null); setPhone(""); setPayError(null); }}>
+                                      <button className="hp-plan-change" onClick={() => { loyaltyRequestIdRef.current = null; setSelectedPlan(null); setPhone(""); setPayError(null); }}>
                                       <ArrowRight size={12} style={{ transform: "rotate(180deg)" }} /> Change plan
                                     </button>
                                   </div>
