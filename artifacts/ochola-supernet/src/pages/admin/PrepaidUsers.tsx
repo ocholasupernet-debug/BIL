@@ -957,6 +957,73 @@ export default function PrepaidUsers() {
     }
   }
 
+  async function reconnectAllEligible() {
+    if (reconnectBatchBusyRef.current || reconnectEligibleUsers.length === 0) return;
+
+    const targets = reconnectEligibleUsers
+      .map(user => ({ user, routerId: reconnectRouterId(user) }))
+      .filter((target): target is { user: DisplayCustomer; routerId: number } => target.routerId !== null);
+    if (targets.length === 0) return;
+
+    const queuesByRouter = new Map<number, DisplayCustomer[]>();
+    for (const { user, routerId } of targets) {
+      const queue = queuesByRouter.get(routerId) ?? [];
+      queue.push(user);
+      queuesByRouter.set(routerId, queue);
+    }
+    const routerQueues = [...queuesByRouter.values()];
+    const targetIds = new Set(targets.map(({ user }) => user.id));
+    const routerIds = [...queuesByRouter.keys()];
+    const results: HotspotReconnectResult[] = [];
+    let completed = 0;
+    let nextQueueIndex = 0;
+
+    setActionError("");
+    setReconnectProgress({ completed: 0, total: targets.length, results: [], running: true });
+    setReconnectingIds(targetIds);
+    reconnectBatchBusyRef.current = true;
+
+    try {
+      // Run no more than one account per router at a time, with a small global
+      // cap so a manual batch cannot overload MikroTik API connections.
+      while (routerQueues.some(queue => queue.length > 0)) {
+        const batch: DisplayCustomer[] = [];
+        let queuesVisited = 0;
+        while (batch.length < 3 && queuesVisited < routerQueues.length) {
+          const queueIndex = nextQueueIndex % routerQueues.length;
+          nextQueueIndex = (queueIndex + 1) % routerQueues.length;
+          queuesVisited += 1;
+          const user = routerQueues[queueIndex].shift();
+          if (user) batch.push(user);
+        }
+        if (batch.length === 0) break;
+
+        const batchResults = await Promise.all(batch.map(async user => {
+          try {
+            return await reconnectMutation.mutateAsync({ id: user.id });
+          } catch (error) {
+            return {
+              status: "router_unavailable" as const,
+              message: error instanceof Error ? error.message : "The router could not be reached.",
+            };
+          }
+        }));
+        results.push(...batchResults);
+        completed += batch.length;
+        setReconnectProgress({
+          completed,
+          total: targets.length,
+          results: [...results],
+          running: completed < targets.length,
+        });
+      }
+    } finally {
+      setReconnectingIds(new Set());
+      reconnectBatchBusyRef.current = false;
+      await refreshReconnectData(routerIds);
+    }
+  }
+
   /* Sync state */
   const [showSyncPicker,  setShowSyncPicker]  = useState(false);
   const [pickedRouter,    setPickedRouter]     = useState("");
@@ -1308,6 +1375,24 @@ export default function PrepaidUsers() {
           >
             <RotateCw size={13} /> Server-managed reconnect
           </span>
+
+          <button
+            type="button"
+            onClick={() => void reconnectAllEligible()}
+            disabled={reconnectEligibleUsers.length === 0 || Boolean(reconnectProgress?.running)}
+            title="Manually retry all eligible disconnected Hotspot devices. The batch is limited to one device per router at a time."
+            aria-label={`Manually reconnect all ${reconnectEligibleUsers.length} eligible disconnected Hotspot devices`}
+            style={{
+              ...BTN(reconnectEligibleUsers.length > 0 && !reconnectProgress?.running ? "var(--isp-accent)" : "rgba(255,255,255,0.06)"),
+              opacity: reconnectEligibleUsers.length === 0 || reconnectProgress?.running ? 0.6 : 1,
+              cursor: reconnectEligibleUsers.length === 0 || reconnectProgress?.running ? "not-allowed" : "pointer",
+            }}
+          >
+            {reconnectProgress?.running
+              ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />
+              : <RotateCw size={13} />}
+            Reconnect all offline ({reconnectEligibleUsers.length})
+          </button>
 
           {/* Sync by Router */}
           <div style={{ position: "relative" }}>
