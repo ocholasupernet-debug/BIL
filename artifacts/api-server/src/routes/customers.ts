@@ -509,11 +509,16 @@ async function reconcileCustomerAccess(
         || address !== oldAddress
         || newMac !== oldMac;
       const paidHotspotAccess = Boolean(paidHotspotBindingSnapshot)
-        || (accessChanged && await hasPaidHotspotAccess(creds, { name: currentName, macAddress: current.mac_address }));
+        || (accessChanged && await hasPaidHotspotAccess(creds, {
+          name: currentName,
+          macAddress: current.mac_address,
+          ipAddress: current.ip_address,
+        }));
       if (paidHotspotAccess) {
         paidHotspotBindingSnapshot ??= await getPaidHotspotBindingSnapshot(creds, {
           name: currentName,
           macAddress: current.mac_address,
+          ipAddress: current.ip_address,
         });
         if (!paidHotspotBindingSnapshot) {
           throw new Error(
@@ -650,9 +655,6 @@ async function reconcileCustomerAccess(
         await removeHotspotUser(creds, currentName);
         await removeHotspotUserExpiry(creds, currentName);
         await removeHotspotUserRateQueue(creds, currentName);
-        if (current.mac_address) {
-          await removeHotspotIpBinding(creds, { macAddress: current.mac_address, comment: currentName });
-        }
       }
     }
     if (planType === "hotspot" && paidHotspotBindingSnapshot) {
@@ -660,10 +662,12 @@ async function reconcileCustomerAccess(
       await reconcilePaidHotspotBinding(creds, {
         snapshot: paidHotspotBindingSnapshot,
         currentName,
-        currentMacAddress: current.mac_address,
+        currentMacAddress: current.mac_address ?? paidHotspotBindingSnapshot.macAddress,
         nextName,
         nextMacAddress: String(
-          updates.mac_address === undefined ? current.mac_address ?? "" : updates.mac_address ?? "",
+          updates.mac_address === undefined
+            ? current.mac_address ?? paidHotspotBindingSnapshot.macAddress
+            : updates.mac_address ?? "",
         ).trim() || null,
         expiresAt: nextExpiry,
         enabled,

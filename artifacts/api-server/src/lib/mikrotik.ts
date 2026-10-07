@@ -2602,11 +2602,66 @@ function sameMacAddress(left: string | undefined, right: string): boolean {
   return normalize(left) === normalize(right);
 }
 
+function normalizeRouterBindingAddress(value: unknown): string {
+  return String(value ?? "").trim().split("/")[0]?.trim() ?? "";
+}
+
+function paidHotspotBindingRowsForCustomer(
+  rows: ReadonlyArray<Record<string, string>>,
+  opts: { name: string; macAddress?: string | null; ipAddress?: string | null },
+): Record<string, string>[] {
+  const name = String(opts.name ?? "").trim();
+  if (!name) return [];
+  const macAddress = validRouterMac(opts.macAddress);
+  const ipAddress = normalizeRouterBindingAddress(opts.ipAddress);
+  const exactByName = rows.filter((row) => String(row.comment ?? "").trim() === name);
+  if (macAddress) {
+    const exact = exactByName.filter((row) => validRouterMac(row["mac-address"]) === macAddress);
+    if (exact.length > 1 && new Set(exact.map((row) => row.type)).size === 1 && ipAddress) {
+      const ipMatches = exact.filter((row) => normalizeRouterBindingAddress(row.address) === ipAddress);
+      if (ipMatches.length) return ipMatches;
+    }
+    if (exact.length) return exact;
+  } else if (exactByName.length <= 1) {
+    return exactByName;
+  } else {
+    const sameDeviceAndType = new Set(exactByName.map((row) => JSON.stringify([
+      validRouterMac(row["mac-address"]),
+      row.type,
+    ]))).size === 1;
+    if (sameDeviceAndType && ipAddress) {
+      const ipMatches = exactByName.filter((row) => normalizeRouterBindingAddress(row.address) === ipAddress);
+      if (ipMatches.length) return ipMatches;
+    }
+    return exactByName;
+  }
+  if (!macAddress) return [];
+  return rows.filter((row) =>
+    validRouterMac(row["mac-address"]) === macAddress && isLegacyPaidHotspotBinding(row),
+  );
+}
+
+function isManagedPaidExpiryScheduler(
+  rows: ReadonlyArray<Record<string, string>>,
+  username: string,
+): boolean {
+  const name = String(username ?? "").trim();
+  if (!name) return false;
+  const schedulerName = hotspotPaidExpirySchedulerName(name);
+  return rows.some((row) => {
+    const event = String(row["on-event"] ?? "");
+    return row.name === schedulerName
+      && String(row.comment ?? "").trim().toLowerCase() === "ocholasupernet paid access expiry"
+      && event.includes(`comment="${name}"`)
+      && event.includes(`user="${name}"`);
+  });
+}
+
 export function paidHotspotBindingMatchesCustomer(
   row: Record<string, string>,
   opts: { name: string; macAddress?: string | null },
 ): boolean {
-  return row.comment === opts.name
+  return String(row.comment ?? "").trim() === String(opts.name ?? "").trim()
     || (Boolean(opts.macAddress) && sameMacAddress(row["mac-address"], opts.macAddress!) && isLegacyPaidHotspotBinding(row));
 }
 
@@ -2615,37 +2670,50 @@ export type PaidHotspotBindingSnapshot = {
   ipAddress: string | null;
   comment: string;
   bindingType: "regular" | "bypassed";
+  duplicateCount?: number;
 };
 
 export function paidHotspotBindingSnapshotForCustomer(
   rows: ReadonlyArray<Record<string, string>>,
-  opts: { name: string; macAddress?: string | null },
+  opts: { name: string; macAddress?: string | null; ipAddress?: string | null },
 ): PaidHotspotBindingSnapshot | null {
-  const macAddress = validRouterMac(opts.macAddress);
-  if (!macAddress) return null;
-  const matches = rows.filter((row) =>
-    sameMacAddress(row["mac-address"], macAddress)
-    && paidHotspotBindingMatchesCustomer(row, { name: opts.name, macAddress }),
-  );
-  if (matches.length !== 1) return null;
+  const matches = paidHotspotBindingRowsForCustomer(rows, opts);
+  if (!matches.length) return null;
+  const signatures = new Set(matches.map((row) => JSON.stringify([
+    validRouterMac(row["mac-address"]),
+    normalizeRouterBindingAddress(row.address),
+    String(row.comment ?? "").trim(),
+    row.type,
+  ])));
+  if (signatures.size !== 1) return null;
   const row = matches[0];
   if (row.type !== "regular" && row.type !== "bypassed") return null;
+  const macAddress = validRouterMac(row["mac-address"]);
+  if (!macAddress) return null;
   const comment = String(row.comment ?? "").trim();
   if (!comment) return null;
+  const identityRows = rows.filter((candidate) =>
+    validRouterMac(candidate["mac-address"]) === macAddress
+    && String(candidate.comment ?? "").trim() === comment,
+  );
+  if (new Set(identityRows.map((candidate) => candidate.type)).size !== 1) return null;
   return {
     macAddress,
-    ipAddress: String(row.address ?? "").trim() || null,
+    ipAddress: normalizeRouterBindingAddress(row.address) || null,
     comment,
     bindingType: row.type,
+    ...(identityRows.length > 1 ? { duplicateCount: identityRows.length } : {}),
   };
 }
 
 export async function getPaidHotspotBindingSnapshot(
   creds: RouterCredentials,
-  opts: { name: string; macAddress?: string | null },
+  opts: { name: string; macAddress?: string | null; ipAddress?: string | null },
 ): Promise<PaidHotspotBindingSnapshot | null> {
   const macAddress = validRouterMac(opts.macAddress);
-  if (!macAddress) return null;
+  const name = String(opts.name ?? "").trim();
+  const ipAddress = normalizeRouterBindingAddress(opts.ipAddress);
+  if (!name || (!macAddress && !ipAddress)) return null;
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const rows = await withTimeout(
@@ -2653,25 +2721,40 @@ export async function getPaidHotspotBindingSnapshot(
       ms,
     ) as Record<string, string>[];
     if (!Array.isArray(rows)) throw new Error("MikroTik did not return its paid Hotspot binding details.");
-    const snapshot = paidHotspotBindingSnapshotForCustomer(rows, { ...opts, macAddress });
-    if (!snapshot) return null;
-    const matchedRow = rows.find((row) =>
-      sameMacAddress(row["mac-address"], snapshot.macAddress)
-      && row.comment === snapshot.comment,
-    );
-    if (matchedRow && isLegacyPaidHotspotBinding(matchedRow)) return snapshot;
-    const schedulerName = hotspotPaidExpirySchedulerName(snapshot.comment);
+    const snapshot = paidHotspotBindingSnapshotForCustomer(rows, { ...opts, name, macAddress });
+    if (snapshot) {
+      const matchedRow = rows.find((row) =>
+        validRouterMac(row["mac-address"]) === snapshot.macAddress
+        && String(row.comment ?? "").trim() === snapshot.comment,
+      );
+      if (matchedRow && isLegacyPaidHotspotBinding(matchedRow)) return snapshot;
+      // Current paid checkouts create regular bindings. Their exact username +
+      // device identity is sufficient to repair an expiry scheduler that was
+      // missed by an earlier partial RouterOS write.
+      if (snapshot.bindingType === "regular" && snapshot.comment === name) return snapshot;
+    }
+
+    const schedulerName = hotspotPaidExpirySchedulerName(name);
     const schedulers = await withTimeout(
-      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`, "=.proplist=.id,name,comment,on-event"]),
       ms,
     ) as Record<string, string>[];
     if (!Array.isArray(schedulers)) {
       throw new Error("MikroTik did not return the paid Hotspot expiry scheduler details.");
     }
-    return schedulers.some((row) =>
-      row.name === schedulerName
-      && String(row.comment ?? "").trim().toLowerCase() === "ocholasupernet paid access expiry",
-    ) ? snapshot : null;
+    if (snapshot) return isManagedPaidExpiryScheduler(schedulers, snapshot.comment) ? snapshot : null;
+
+    // A verified app-owned scheduler can be left behind if a binding write
+    // failed. Recreate only when this MAC has no other RouterOS binding, so an
+    // administrator's or another account's binding is never guessed at.
+    if (!macAddress || rows.some((row) => validRouterMac(row["mac-address"]) === macAddress)) return null;
+    if (!isManagedPaidExpiryScheduler(schedulers, name)) return null;
+    return {
+      macAddress,
+      ipAddress: null,
+      comment: name,
+      bindingType: "regular",
+    };
   });
 }
 
@@ -2704,7 +2787,7 @@ export function paidHotspotBindingEditPlan(opts: {
   const desiredKey = ensure ? key(ensure) : null;
   const remove = new Map<string, PaidHotspotBindingEditIdentity>();
   for (const value of [original, current]) {
-    if (!value || key(value) === desiredKey) continue;
+    if (!value || (key(value) === desiredKey && !(opts.snapshot.duplicateCount && opts.snapshot.duplicateCount > 1))) continue;
     remove.set(key(value), value);
   }
   return { remove: Array.from(remove.values()), ensure };
@@ -2737,7 +2820,7 @@ export async function reconcilePaidHotspotBinding(
     }
   }
   for (const binding of plan.remove) {
-    await removeHotspotIpBinding(creds, binding);
+    await removeHotspotIpBinding(creds, { ...binding, includeLegacyPaidForMac: false });
   }
   if (!plan.ensure || expiryMs === null) return;
 
@@ -2757,30 +2840,35 @@ export async function reconcilePaidHotspotBinding(
 /** Detect paid bypasses and their expiry schedulers before an admin edit. */
 export async function hasPaidHotspotAccess(
   creds: RouterCredentials,
-  opts: { name: string; macAddress?: string | null },
+  opts: { name: string; macAddress?: string | null; ipAddress?: string | null },
 ): Promise<boolean> {
   return withConn(creds, async conn => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const rows = await withTimeout(
-      conn.write(["/ip/hotspot/ip-binding/print", "=.proplist=.id,mac-address,comment,type"]),
+      conn.write(["/ip/hotspot/ip-binding/print", "=.proplist=.id,mac-address,address,comment,type"]),
       ms,
     ) as Record<string, string>[];
     if (!Array.isArray(rows)) throw new Error("MikroTik did not return its Hotspot bindings.");
-    const bound = rows.some(row => paidHotspotBindingMatchesCustomer(row, opts));
-    if (bound) return true;
-    const schedulerName = hotspotPaidExpirySchedulerName(opts.name);
+    const candidates = paidHotspotBindingRowsForCustomer(rows, opts);
+    if (candidates.some(isLegacyPaidHotspotBinding)) return true;
+    if (candidates.some((row) =>
+      row.type === "regular" && String(row.comment ?? "").trim() === String(opts.name ?? "").trim(),
+    )) return true;
+    const name = String(opts.name ?? "").trim();
+    if (!name) return false;
+    const schedulerName = hotspotPaidExpirySchedulerName(name);
     const schedulers = await withTimeout(
-      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`, "=.proplist=.id,name,comment,on-event"]),
       ms,
     ) as Record<string, string>[];
     if (!Array.isArray(schedulers)) throw new Error("MikroTik did not return its paid Hotspot expiry schedulers.");
-    return schedulers.some(row => row.name === schedulerName);
+    return isManagedPaidExpiryScheduler(schedulers, name);
   });
 }
 
 export async function removeHotspotIpBinding(
   creds: RouterCredentials,
-  opts: { macAddress: string; comment: string },
+  opts: { macAddress: string; comment: string; includeLegacyPaidForMac?: boolean },
 ): Promise<void> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
@@ -2797,7 +2885,8 @@ export async function removeHotspotIpBinding(
     const bindings = (Array.isArray(rows) ? rows : [])
       .filter((row) =>
         sameMacAddress(row["mac-address"], opts.macAddress) &&
-        (row.comment === opts.comment || isLegacyPaidHotspotBinding(row)),
+        (String(row.comment ?? "").trim() === String(opts.comment ?? "").trim()
+          || (opts.includeLegacyPaidForMac !== false && isLegacyPaidHotspotBinding(row))),
       );
     for (const binding of bindings) {
       if (binding[".id"]) {
