@@ -6,7 +6,7 @@ import { adminApiHeaders } from "@/lib/admin-router-context";
 import {
   Plus, Search, Printer, Copy, Trash2, Loader2, CheckCircle2,
   Ticket, Wifi, X, Download, RefreshCw, Filter, Eye, EyeOff,
-  AlertTriangle, ChevronDown, UploadCloud,
+  AlertTriangle, ChevronDown, UploadCloud, RotateCcw,
 } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 import { getCurrencySymbol } from "@/lib/utils";
@@ -20,13 +20,25 @@ interface VoucherRow {
   price: number;
   validity_mins: number;
   expiry: string | null;
+  expiry_kind: "service" | "redeem_by" | null;
   used: boolean;
+  redeemed_at: string | null;
+  redeemed_by: string | null;
+  online: boolean;
+  service_status: "available" | "expired" | "active" | "inactive" | "unknown";
+  data_limit_mb: number | null;
+  data_cap_mode: "disconnect" | "throttle";
+  data_limit_bytes: number | null;
+  data_used_bytes: number;
   created_at: string;
 }
 
 interface DbPlanLite {
   id: number; name: string; type: string; price: number; validity: number;
+  validity_unit?: string | null;
   speed_down: number; speed_up: number; router_id: number | null;
+  data_limit_mb: number | null;
+  data_cap_mode: "disconnect" | "throttle";
 }
 interface DbRouterLite { id: number; name: string; host: string; status: string; }
 
@@ -41,6 +53,47 @@ function fmtValidity(mins: number): string {
 
 function fmtDate(d: string) {
   return new Date(d).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "2-digit" });
+}
+
+function fmtDateTime(d: string) {
+  return new Date(d).toLocaleString("en-KE", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Africa/Nairobi",
+  });
+}
+
+function fmtDataLimit(mb: number | null | undefined): string {
+  const value = Number(mb);
+  if (!Number.isFinite(value) || value <= 0) return "Unlimited";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toLocaleString("en-KE", { maximumFractionDigits: 2 })} TB`;
+  if (value >= 1_000) return `${(value / 1_000).toLocaleString("en-KE", { maximumFractionDigits: 2 })} GB`;
+  return `${value.toLocaleString("en-KE", { maximumFractionDigits: 2 })} MB`;
+}
+
+function fmtDataUsage(bytes: number): string {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return "0 MB";
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toLocaleString("en-KE", { maximumFractionDigits: 2 })} GB`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toLocaleString("en-KE", { maximumFractionDigits: 2 })} MB`;
+  return `${(value / 1_000).toLocaleString("en-KE", { maximumFractionDigits: 1 })} KB`;
+}
+
+function fmtPlanValidity(plan: Pick<DbPlanLite, "validity" | "validity_unit">): string {
+  const unit = String(plan.validity_unit ?? "days").toLowerCase();
+  const unitLabel = /^(m|min|mins|minute|minutes)$/.test(unit)
+    ? "minute"
+    : /^(h|hr|hrs|hour|hours)$/.test(unit)
+      ? "hour"
+      : /^(w|wk|wks|week|weeks)$/.test(unit)
+        ? "week"
+        : /^(mo|month|months)$/.test(unit)
+          ? "month"
+          : "day";
+  return `${plan.validity} ${unitLabel}${Number(plan.validity) === 1 ? "" : "s"}`;
 }
 
 function previewCode(prefix: string): string {
@@ -106,6 +159,26 @@ async function deleteVouchers(codes: string[]): Promise<{ deleted: number }> {
   });
 }
 
+interface VoucherRestoreInput {
+  code: string;
+  routerId: number;
+}
+
+interface VoucherRestoreResult {
+  voucher: string;
+  router: string;
+  remainingBytes: number | null;
+  expiry: string | null;
+}
+
+async function restoreVoucher(input: VoucherRestoreInput): Promise<VoucherRestoreResult> {
+  return voucherApi("/api/admin/sync/voucher-restore", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 /* ─────────────────────────── Print Component ─────────────────── */
 function PrintVoucherCard({ v, plan }: { v: VoucherRow; plan?: DbPlanLite }) {
   return (
@@ -119,6 +192,9 @@ function PrintVoucherCard({ v, plan }: { v: VoucherRow; plan?: DbPlanLite }) {
       <div style={{ borderTop: "1px dashed #94a3b8", paddingTop: "0.35rem", fontSize: "0.625rem", display: "flex", justifyContent: "space-between" }}>
         <span><strong>Plan:</strong> {v.plan_name}</span>
         <span><strong>{getCurrencySymbol()} {v.price}</strong></span>
+      </div>
+      <div style={{ fontSize: "0.6rem", color: "#64748b", marginTop: "0.2rem" }}>
+        Data: {fmtDataLimit(v.data_limit_mb)} · Time: {v.validity_mins > 0 ? fmtValidity(v.validity_mins) : "No time limit"}
       </div>
       {v.expiry && (
         <div style={{ fontSize: "0.6rem", color: "#64748b", marginTop: "0.2rem" }}>
@@ -207,7 +283,7 @@ function GenerateModal({
               onChange={e => setSelectedPlanId(Number(e.target.value))}
               style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%" }}>
               {plans.map(p => (
-                <option key={p.id} value={p.id}>{p.name} — {getCurrencySymbol()} {p.price} · {p.validity}d · {p.speed_down}/{p.speed_up} Mbps</option>
+                <option key={p.id} value={p.id}>{p.name} — {getCurrencySymbol()} {p.price} · {fmtPlanValidity(p)} · {fmtDataLimit(p.data_limit_mb)}</option>
               ))}
             </select>
           </label>
@@ -217,14 +293,22 @@ function GenerateModal({
             <div style={{ background: "rgba(37,99,235,0.07)", border: "1px solid rgba(37,99,235,0.2)", borderRadius: 8, padding: "0.75rem 1rem", display: "flex", gap: "1.5rem" }}>
               {[
                 ["Price",    `${getCurrencySymbol()} ${plan.price}`],
-                ["Validity", `${plan.validity} day${plan.validity !== 1 ? "s" : ""}`],
+                ["Validity", fmtPlanValidity(plan)],
                 ["Speed",    `${plan.speed_down}/${plan.speed_up} Mbps`],
+                ["Data",     plan.data_limit_mb && plan.data_limit_mb > 0
+                  ? `${fmtDataLimit(plan.data_limit_mb)} · ${plan.data_cap_mode === "throttle" ? "throttle" : "disconnect"} at cap`
+                  : "Unlimited"],
               ].map(([k, v]) => (
                 <div key={k}>
                   <div style={{ fontSize: "0.65rem", color: "var(--isp-accent)", fontWeight: 600, textTransform: "uppercase" }}>{k}</div>
                   <div style={{ fontSize: "0.875rem", fontWeight: 700, color: "var(--isp-text)" }}>{v}</div>
                 </div>
               ))}
+            </div>
+          )}
+          {plan && (
+            <div style={{ marginTop: "-0.5rem", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
+              Each voucher keeps this data allowance from the selected plan. Change the plan to set a different allowance for future vouchers.
             </div>
           )}
 
@@ -393,6 +477,16 @@ export default function Vouchers() {
     onError:   (e: Error) => showToast(`Error: ${e.message}`, false),
   });
 
+  /* ─── Restore an active redeemed voucher on RADIUS and its router ─── */
+  const restoreMutation = useMutation({
+    mutationFn: restoreVoucher,
+    onSuccess: result => {
+      qc.invalidateQueries({ queryKey: ["vouchers", ADMIN_ID] });
+      showToast(`Restored ${result.voucher} on ${result.router}; usage and expiry preserved`);
+    },
+    onError: (e: Error) => showToast(`Restore failed: ${e.message}`, false),
+  });
+
   /* ─── Copy ─── */
   const copyCode = useCallback((code: string) => {
     navigator.clipboard.writeText(code).then(() => {
@@ -418,12 +512,17 @@ export default function Vouchers() {
   const unusedCount = vouchers.filter(v => !v.used).length;
   const usedCount   = vouchers.filter(v =>  v.used).length;
 
-  const allSelected  = filtered.length > 0 && filtered.every(v => selected.has(v.code));
+  const selectableFiltered = filtered.filter(v => !v.used);
+  const selectedDeletableCodes = selectableFiltered
+    .filter(v => selected.has(v.code))
+    .map(v => v.code);
+  const allSelected  = selectableFiltered.length > 0 && selectableFiltered.every(v => selected.has(v.code));
   const toggleAll    = () => {
     if (allSelected) setSelected(new Set());
-    else setSelected(new Set(filtered.map(v => v.code)));
+    else setSelected(new Set(selectableFiltered.map(v => v.code)));
   };
   const toggleOne = (code: string) => {
+    if (vouchers.find(v => v.code === code)?.used) return;
     const s = new Set(selected);
     s.has(code) ? s.delete(code) : s.add(code);
     setSelected(s);
@@ -476,6 +575,9 @@ export default function Vouchers() {
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: "0.25rem 0 0" }}>
               {isLoading ? "Loading…" : `${vouchers.length} total · ${unusedCount} unused · ${usedCount} used`}
             </p>
+            <p style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", margin: "0.25rem 0 0" }}>
+              Redeemed vouchers are protected from deletion; their service status and expiry are based on first RADIUS use.
+            </p>
           </div>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             <button onClick={() => refetch()} style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.875rem", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
@@ -486,11 +588,13 @@ export default function Vouchers() {
                 <button onClick={() => setShowPrint(true)} style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.875rem", borderRadius: 8, background: "rgba(37,99,235,0.1)", border: "1px solid rgba(37,99,235,0.25)", color: "var(--isp-accent)", fontWeight: 600, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
                   <Printer size={13} /> Print {selected.size}
                 </button>
-                <button
-                  onClick={() => { if (confirm(`Delete ${selected.size} voucher(s)?`)) deleteBulkMutation.mutate([...selected]); }}
-                  style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.875rem", borderRadius: 8, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.25)", color: "#f87171", fontWeight: 600, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
-                  <Trash2 size={13} /> Delete {selected.size}
-                </button>
+                {selectedDeletableCodes.length > 0 && (
+                  <button
+                    onClick={() => { if (confirm(`Delete ${selectedDeletableCodes.length} unused voucher(s)?`)) deleteBulkMutation.mutate(selectedDeletableCodes); }}
+                    style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.875rem", borderRadius: 8, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.25)", color: "#f87171", fontWeight: 600, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+                    <Trash2 size={13} /> Delete {selectedDeletableCodes.length}
+                  </button>
+                )}
               </>
             )}
             <button onClick={() => { setShowPrint(true); }} style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.875rem", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
@@ -616,23 +720,23 @@ export default function Vouchers() {
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--isp-border-subtle)" }}>
                   <th style={{ padding: "0.75rem 1rem", textAlign: "center", width: 40 }}>
-                    <input type="checkbox" checked={allSelected} onChange={toggleAll}
+                    <input type="checkbox" checked={allSelected} disabled={selectableFiltered.length === 0} onChange={toggleAll}
                       style={{ accentColor: "var(--isp-accent)", width: 14, height: 14 }} />
                   </th>
-                  {["Code", "Plan", "Router", "Price", "Speed", "Expiry", "Status", "Actions"].map(h => (
+                  {["Code", "Plan", "Router", "Price", "Speed", "Data", "Redeemer", "Connection", "Service", "Expiry", "Status", "Actions"].map(h => (
                     <th key={h} style={{ textAlign: "left", padding: "0.75rem 1rem", color: "var(--isp-text-sub)", fontWeight: 600, fontSize: "0.6875rem", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {isLoading ? (
-                  <tr><td colSpan={9} style={{ textAlign: "center", padding: "4rem 1rem", color: "var(--isp-text-muted)" }}>
+                  <tr><td colSpan={13} style={{ textAlign: "center", padding: "4rem 1rem", color: "var(--isp-text-muted)" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                       <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Loading vouchers…
                     </div>
                   </td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td colSpan={9} style={{ textAlign: "center", padding: "4rem 1rem" }}>
+                  <tr><td colSpan={13} style={{ textAlign: "center", padding: "4rem 1rem" }}>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.75rem" }}>
                       <div style={{ width: 56, height: 56, borderRadius: 14, background: "rgba(37,99,235,0.08)", border: "1.5px dashed var(--isp-accent-border)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                         <Ticket size={24} style={{ color: "var(--isp-accent)", opacity: 0.6 }} />
@@ -656,13 +760,34 @@ export default function Vouchers() {
                   </td></tr>
                 ) : filtered.map(v => {
                   const planInfo = plans.find(p => p.name === v.plan_name);
+                  const restoreRouterId = v.router_id ?? planInfo?.router_id ?? null;
+                  const restoreRouterName = routers.find(router => router.id === restoreRouterId)?.name
+                    ?? v.router_name;
+                  const canRestore = v.used
+                    && v.service_status === "active"
+                    && restoreRouterId !== null;
+                  const isRestoring = restoreMutation.isPending
+                    && restoreMutation.variables?.code === v.code;
                   const isSelected = selected.has(v.code);
+                  const serviceStatusLabel = ({
+                    available: "Ready",
+                    expired: "Expired",
+                    active: "Active",
+                    inactive: "Inactive",
+                    unknown: "Unknown",
+                  } as const)[v.service_status];
+                  const serviceStatusColor = v.service_status === "active" || v.service_status === "available"
+                    ? "#22c55e"
+                    : v.service_status === "inactive" || v.service_status === "expired"
+                      ? "#f87171"
+                      : "#94a3b8";
                   return (
                     <tr key={v.code} className="vrow"
-                      style={{ borderBottom: "1px solid var(--isp-border-subtle)", background: isSelected ? "rgba(37,99,235,0.05)" : "transparent", cursor: "pointer" }}
-                      onClick={() => toggleOne(v.code)}>
-                      <td style={{ padding: "0.7rem 1rem", textAlign: "center" }} onClick={e => { e.stopPropagation(); toggleOne(v.code); }}>
-                        <input type="checkbox" checked={isSelected} onChange={() => toggleOne(v.code)}
+                      style={{ borderBottom: "1px solid var(--isp-border-subtle)", background: isSelected && !v.used ? "rgba(37,99,235,0.05)" : "transparent", cursor: v.used ? "default" : "pointer" }}
+                      onClick={() => { if (!v.used) toggleOne(v.code); }}>
+                      <td style={{ padding: "0.7rem 1rem", textAlign: "center" }} onClick={e => { e.stopPropagation(); if (!v.used) toggleOne(v.code); }}>
+                        <input type="checkbox" checked={isSelected && !v.used} disabled={v.used} onChange={() => toggleOne(v.code)}
+                          title={v.used ? "Redeemed vouchers cannot be selected for deletion." : "Select unused voucher"}
                           style={{ accentColor: "var(--isp-accent)", width: 14, height: 14 }} />
                       </td>
                       <td style={{ padding: "0.7rem 1rem" }}>
@@ -687,12 +812,58 @@ export default function Vouchers() {
                       <td style={{ padding: "0.7rem 1rem", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
                         {planInfo ? `${planInfo.speed_down}/${planInfo.speed_up} Mbps` : "—"}
                       </td>
-                      <td style={{ padding: "0.7rem 1rem", color: "var(--isp-text-muted)", fontSize: "0.75rem", fontFamily: "monospace" }}>
-                        {v.expiry ? v.expiry : "—"}
+                      <td style={{ padding: "0.7rem 1rem", color: "var(--isp-text-muted)", fontSize: "0.75rem", whiteSpace: "nowrap" }}>
+                        <div style={{ color: "var(--isp-text)", fontWeight: 600 }}>
+                          {v.data_limit_mb !== null ? fmtDataLimit(v.data_limit_mb) : "Unlimited"}
+                        </div>
+                        {v.used && v.data_limit_bytes !== null && (
+                          <div style={{ fontSize: "0.67rem", marginTop: "0.15rem" }}>
+                            {fmtDataUsage(v.data_used_bytes)} used
+                          </div>
+                        )}
+                        {v.data_limit_mb !== null && (
+                          <div style={{ fontSize: "0.64rem", marginTop: "0.15rem" }}>
+                            {v.data_cap_mode === "throttle" ? "Throttle at cap" : "Disconnect at cap"}
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ padding: "0.7rem 1rem", color: "var(--isp-text-muted)", fontSize: "0.75rem", minWidth: 130 }}>
+                        {v.used ? (
+                          <>
+                            <div style={{ color: "var(--isp-text)", fontWeight: 600, overflowWrap: "anywhere" }}>
+                              {v.redeemed_by ?? "Device not reported"}
+                            </div>
+                            {v.redeemed_at && (
+                              <div style={{ fontSize: "0.66rem", marginTop: "0.15rem" }}>First use {fmtDateTime(v.redeemed_at)}</div>
+                            )}
+                          </>
+                        ) : <span>Not redeemed</span>}
+                      </td>
+                      <td style={{ padding: "0.7rem 1rem" }}>
+                        {v.used ? (
+                          <span style={{ fontSize: "0.68rem", padding: "0.2rem 0.5rem", borderRadius: 20, fontWeight: 700, background: v.online ? "rgba(34,197,94,0.1)" : "rgba(148,163,184,0.1)", color: v.online ? "#22c55e" : "#94a3b8" }}>
+                            {v.online ? "Online" : "Offline"}
+                          </span>
+                        ) : <span style={{ color: "var(--isp-text-sub)" }}>—</span>}
+                      </td>
+                      <td style={{ padding: "0.7rem 1rem" }}>
+                        <span style={{ fontSize: "0.68rem", padding: "0.2rem 0.5rem", borderRadius: 20, fontWeight: 700, background: `${serviceStatusColor}1a`, color: serviceStatusColor, whiteSpace: "nowrap" }}>
+                          {serviceStatusLabel}
+                        </span>
+                      </td>
+                      <td style={{ padding: "0.7rem 1rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", minWidth: 150 }}>
+                        <div style={{ color: "var(--isp-text)", fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                          {v.expiry ? fmtDateTime(v.expiry) : v.used && v.validity_mins === 0 ? "No time expiry" : v.used ? "Expiry unavailable" : "No redeem-by date"}
+                        </div>
+                        {v.expiry && (
+                          <div style={{ fontSize: "0.65rem", marginTop: "0.15rem" }}>
+                            {v.expiry_kind === "service" ? "Actual service expiry" : "Voucher redeem-by date"}
+                          </div>
+                        )}
                       </td>
                       <td style={{ padding: "0.7rem 1rem" }}>
                         <span style={{ fontSize: "0.7rem", padding: "0.2rem 0.625rem", borderRadius: 20, fontWeight: 700, background: v.used ? "rgba(251,191,36,0.1)" : "rgba(34,197,94,0.1)", color: v.used ? "#fbbf24" : "#22c55e" }}>
-                          {v.used ? "Used" : "Unused"}
+                          {v.used ? "Redeemed" : "Unused"}
                         </span>
                       </td>
                       <td style={{ padding: "0.7rem 1rem" }} onClick={e => e.stopPropagation()}>
@@ -705,8 +876,34 @@ export default function Vouchers() {
                             style={{ padding: "0.35rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--isp-text-muted)", cursor: "pointer" }}>
                             <Printer size={13} />
                           </button>
-                          <button title="Delete" onClick={() => { if (confirm(`Delete voucher ${v.code}?`)) deleteMutation.mutate(v.code); }}
-                            style={{ padding: "0.35rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--isp-text-muted)", cursor: "pointer" }}>
+                          <button
+                            aria-label={`Restore active voucher ${v.code}`}
+                            title={canRestore
+                              ? "Restore this active voucher to RADIUS and its router without resetting usage or expiry."
+                              : !v.used
+                                ? "Only redeemed vouchers can be restored."
+                                : v.service_status !== "active"
+                                  ? "Only vouchers with a verifiably active package can be restored."
+                                  : "Assign this voucher to a router before restoring it."}
+                            disabled={!canRestore || restoreMutation.isPending}
+                            onClick={() => {
+                              if (
+                                canRestore
+                                && restoreRouterId !== null
+                                && confirm(`Restore ${v.code} to RADIUS and ${restoreRouterName}? Recorded data use and expiry will be preserved.`)
+                              ) {
+                                restoreMutation.mutate({ code: v.code, routerId: restoreRouterId });
+                              }
+                            }}
+                            style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem", padding: "0.35rem 0.45rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: canRestore ? "var(--isp-accent)" : "var(--isp-text-sub)", cursor: canRestore && !restoreMutation.isPending ? "pointer" : "not-allowed", opacity: canRestore ? 1 : 0.45, fontSize: "0.68rem", fontFamily: "inherit" }}>
+                            {isRestoring ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+                            Restore
+                          </button>
+                          <button
+                            title={v.used ? "Redeemed voucher is locked; it cannot be edited, disabled, or deleted." : "Delete unused voucher"}
+                            disabled={v.used || deleteMutation.isPending}
+                            onClick={() => { if (!v.used && confirm(`Delete unused voucher ${v.code}?`)) deleteMutation.mutate(v.code); }}
+                            style={{ padding: "0.35rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: v.used ? "var(--isp-text-sub)" : "var(--isp-text-muted)", cursor: v.used ? "not-allowed" : "pointer", opacity: v.used ? 0.45 : 1 }}>
                             <Trash2 size={13} />
                           </button>
                         </div>
@@ -721,12 +918,12 @@ export default function Vouchers() {
           {/* Footer */}
           {!isLoading && vouchers.length > 0 && (
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.75rem 1.25rem", borderTop: "1px solid var(--isp-border-subtle)", fontSize: "0.75rem", color: "var(--isp-text-muted)" }}>
-              <span>{selected.size > 0 ? `${selected.size} selected · ` : ""}{filtered.length} of {vouchers.length} vouchers</span>
+              <span>{selectedDeletableCodes.length > 0 ? `${selectedDeletableCodes.length} unused selected · ` : ""}{filtered.length} of {vouchers.length} vouchers</span>
               <div style={{ display: "flex", gap: "0.5rem" }}>
-                {selected.size === 0 && (
-                  <button onClick={() => setSelected(new Set(filtered.map(v => v.code)))}
+                {selectedDeletableCodes.length === 0 && selectableFiltered.length > 0 && (
+                  <button onClick={() => setSelected(new Set(selectableFiltered.map(v => v.code)))}
                     style={{ background: "none", border: "none", color: "var(--isp-accent)", fontSize: "0.75rem", cursor: "pointer", fontFamily: "inherit", padding: 0, fontWeight: 600 }}>
-                    Select all {filtered.length}
+                    Select all {selectableFiltered.length} unused
                   </button>
                 )}
               </div>

@@ -771,6 +771,9 @@ create table if not exists isp_radius_vouchers (
   router_name    text not null default 'Any',
   price          numeric(12,2) not null default 0,
   validity_mins  integer not null default 0,
+  data_limit_mb  numeric(14,2),
+  data_cap_mode  text not null default 'disconnect'
+    check (data_cap_mode in ('disconnect', 'throttle')),
   expires_at     timestamptz,
   created_at     timestamptz not null default now(),
   redeemed_at    timestamptz,

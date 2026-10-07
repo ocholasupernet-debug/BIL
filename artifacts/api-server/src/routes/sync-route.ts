@@ -2,7 +2,13 @@ import { Router, type IRouter } from "express";
 import { RouterOSAPI } from "node-routeros";
 import { readVpnClients, syncIppEntry, vpnIpFor, VPN_STATUS_PATHS } from "../lib/vpn-status";
 import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
-import { sbSelect, sbSelectStrict } from "../lib/supabase-client.js";
+import {
+  sbDeleteStrict,
+  sbInsertStrict,
+  sbSelect,
+  sbSelectStrict,
+  sbUpdateStrict,
+} from "../lib/supabase-client.js";
 import { syncRadiusHotspotSharingStrict } from "../lib/radius.js";
 import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
 import {
@@ -14,7 +20,9 @@ import { hotspotPlanProfileName } from "../lib/prepaid-identifiers.js";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
 import { planServicePoolName, portServiceResourceNames } from "../lib/port-service-resources.js";
 import {
+  removeHotspotUserExpiry,
   removeHotspotUserFup,
+  scheduleHotspotUserExpiry,
   scheduleHotspotUserFup,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
@@ -32,6 +40,8 @@ import {
 import { planBridgePortAddition } from "../lib/bridge-port-assignment.js";
 import { compareBridgePortMembership } from "../lib/bridge-port-membership.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
+import { summarizeHotspotVoucherStatus, type HotspotVoucherSession } from "../lib/hotspot-voucher-status.js";
+import { calculateHotspotVoucherRestoreLimits } from "../lib/hotspot-voucher-restore.js";
 
 const router: IRouter = Router();
 
@@ -1532,6 +1542,429 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
     log(`❌ ${msg}`);
     try { conn.close(); } catch { /* ignore */ }
     res.json({ ok: false, error: connErr(host || bridgeIp || "", msg), logs });
+  }
+});
+
+interface VoucherRestoreRecord {
+  admin_id: number;
+  code: string;
+  plan_id: number | null;
+  plan_name: string;
+  router_id: number | null;
+  router_name: string | null;
+  price: number | string;
+  validity_mins: number | string;
+  data_limit_mb: number | string | null;
+  data_cap_mode: string | null;
+  expires_at: string | null;
+  created_at: string;
+  redeemed_at?: string | null;
+  redeemed_by_phone?: string | null;
+}
+
+interface VoucherRestorePlan {
+  id: number;
+  name: string;
+  type: string;
+  router_id: number | null;
+  port_id: number | null;
+  owner_reseller_id: number | null;
+  validity: number | null;
+  validity_unit: string | null;
+  shared_users: number | null;
+  speed_down: number | null;
+  speed_up: number | null;
+  speed_down_unit: string | null;
+  speed_up_unit: string | null;
+  data_limit_mb: number | null;
+  data_cap_mode: string | null;
+  fup_speed_down: number | null;
+  fup_speed_up: number | null;
+  active_ip_pool: string | null;
+}
+
+async function upsertVoucherRadiusCheck(username: string, attribute: string, value: string): Promise<void> {
+  const filter = `username=eq.${encodeURIComponent(username)}&attribute=eq.${encodeURIComponent(attribute)}`;
+  const updated = await sbUpdateStrict<{ id: number }>("radcheck", filter, { op: ":=", value });
+  if (updated.length > 0) return;
+  const inserted = await sbInsertStrict<{ id: number }>("radcheck", {
+    username,
+    attribute,
+    op: ":=",
+    value,
+  });
+  if (inserted.length === 0) throw new Error(`RADIUS did not confirm the ${attribute} restore.`);
+}
+
+async function restoreVoucherRadiusAccess(
+  voucher: VoucherRestoreRecord,
+  routerId: number,
+  routerName: string,
+  dataLimitBytes: number | null,
+  serviceExpiry: string | null,
+): Promise<void> {
+  const username = voucher.code;
+  const expiryDate = serviceExpiry ? new Date(serviceExpiry) : null;
+  const expiryMs = expiryDate?.getTime() ?? Number.NaN;
+  if (serviceExpiry && (!Number.isFinite(expiryMs) || expiryMs <= Date.now())) {
+    throw new Error("The voucher's actual service expiry has passed.");
+  }
+  const checks: Array<[string, string]> = [
+    ["Cleartext-Password", voucher.code],
+    ["Isp-Price", String(Number(voucher.price) || 0)],
+    ["Isp-Router-Id", String(voucher.router_id ?? routerId)],
+    ["Isp-Router-Name", voucher.router_id == null ? routerName : (voucher.router_name || routerName)],
+    ["Isp-Plan-Name", voucher.plan_name],
+    ["Isp-Validity-Mins", String(Number(voucher.validity_mins) || 0)],
+    ["Isp-Created-At", voucher.created_at],
+  ];
+
+  for (const [attribute, value] of checks) {
+    await upsertVoucherRadiusCheck(username, attribute, value);
+  }
+
+  if (dataLimitBytes !== null && voucher.data_cap_mode === "disconnect") {
+    await upsertVoucherRadiusCheck(username, "Max-Data", String(dataLimitBytes));
+  } else {
+    await sbDeleteStrict(
+      "radcheck",
+      `username=eq.${encodeURIComponent(username)}&attribute=eq.Max-Data`,
+    );
+  }
+
+  for (const attribute of ["Max-All-Session", "Expiration", "WISPr-Session-Terminate-Time"]) {
+    await sbDeleteStrict(
+      "radcheck",
+      `username=eq.${encodeURIComponent(username)}&attribute=eq.${encodeURIComponent(attribute)}`,
+    );
+  }
+  if (expiryDate) {
+    const remainingSeconds = Math.max(1, Math.floor((expiryMs - Date.now()) / 1000));
+    await upsertVoucherRadiusCheck(username, "Max-All-Session", String(remainingSeconds));
+    await upsertVoucherRadiusCheck(
+      username,
+      "Expiration",
+      expiryDate.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
+        + " " + expiryDate.toTimeString().slice(0, 8),
+    );
+    const isoTerminate = expiryDate.toISOString().replace(/\.\d+Z$/, "+00:00").replace(/Z$/, "+00:00");
+    await upsertVoucherRadiusCheck(
+      username,
+      "WISPr-Session-Terminate-Time",
+      `${isoTerminate.slice(0, 10)}T${isoTerminate.slice(11, 19)}+00:00`,
+    );
+  }
+
+  const groups = await sbSelectStrict<{
+    id: number;
+    groupname: string;
+    priority: number;
+  }>(
+    "radusergroup",
+    `username=eq.${encodeURIComponent(username)}&select=id,groupname,priority&order=priority.asc&limit=20`,
+  );
+  if (!groups.some(group => group.groupname === voucher.plan_name)) {
+    const primaryGroup = groups[0];
+    if (primaryGroup?.id) {
+      const updated = await sbUpdateStrict<{ id: number }>(
+        "radusergroup",
+        `id=eq.${primaryGroup.id}`,
+        { groupname: voucher.plan_name, priority: 1 },
+      );
+      if (updated.length === 0) throw new Error("RADIUS did not confirm the voucher plan restore.");
+    } else {
+      const inserted = await sbInsertStrict<{ id: number }>("radusergroup", {
+        username,
+        groupname: voucher.plan_name,
+        priority: 1,
+      });
+      if (inserted.length === 0) throw new Error("RADIUS did not confirm the voucher plan restore.");
+    }
+  }
+
+  /* Do not touch radacct: its cumulative usage and first redemption time are
+     the source of truth for this voucher's remaining entitlement. */
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   POST /api/admin/sync/voucher-restore
+   Rebuilds a redeemed, still-entitled voucher on RADIUS and its assigned
+   MikroTik without resetting its accounting or granting a fresh data cap.
+   The browser supplies only a voucher code and optional router selection;
+   ownership, plan, credentials, quota and expiry are resolved server-side.
+═══════════════════════════════════════════════════════════════ */
+router.post("/admin/sync/voucher-restore", requireAdmin(), async (req, res): Promise<void> => {
+  const account = await authenticatedAccount(req);
+  if (!account) {
+    res.status(401).json({ ok: false, error: "Authentication required." });
+    return;
+  }
+
+  const code = String(req.body?.code ?? "").trim().toUpperCase();
+  if (!/^[A-Z0-9][A-Z0-9-]{1,63}$/.test(code)) {
+    res.status(400).json({ ok: false, error: "Enter a valid voucher code." });
+    return;
+  }
+  const requestedRouterId = req.body?.routerId == null ? null : Number(req.body.routerId);
+  if (requestedRouterId !== null && (!Number.isSafeInteger(requestedRouterId) || requestedRouterId <= 0)) {
+    res.status(400).json({ ok: false, error: "A valid router is required." });
+    return;
+  }
+
+  const tenantId = account.parent_id ?? account.id;
+  let radiusRestored = false;
+  let routerRestored = false;
+  let conn: RouterOSAPI | null = null;
+
+  try {
+    const voucherRows = await sbSelectStrict<VoucherRestoreRecord>(
+      "isp_radius_vouchers",
+      `admin_id=eq.${tenantId}&code=eq.${encodeURIComponent(code)}&select=admin_id,code,plan_id,plan_name,router_id,router_name,price,validity_mins,data_limit_mb,data_cap_mode,expires_at,created_at,redeemed_at,redeemed_by_phone&limit=1`,
+    );
+    const voucher = voucherRows[0];
+    if (!voucher) {
+      res.status(404).json({ ok: false, error: "Voucher not found for this ISP account." });
+      return;
+    }
+    if (!voucher.plan_id) {
+      res.status(409).json({ ok: false, error: "This voucher has no saved plan reference and cannot be safely restored." });
+      return;
+    }
+
+    const planRows = await sbSelectStrict<VoucherRestorePlan>(
+      "isp_plans",
+      `admin_id=eq.${tenantId}&id=eq.${voucher.plan_id}&select=id,name,type,router_id,port_id,owner_reseller_id,validity,validity_unit,shared_users,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,active_ip_pool&limit=1`,
+    );
+    const plan = planRows[0];
+    if (!plan || !["hotspot", "trial"].includes(String(plan.type).toLowerCase())) {
+      res.status(409).json({ ok: false, error: "The voucher's Hotspot plan is missing or unavailable." });
+      return;
+    }
+    if (String(plan.name).trim() !== String(voucher.plan_name).trim()) {
+      res.status(409).json({ ok: false, error: "The voucher's plan name has changed. Review the plan before restoring this voucher." });
+      return;
+    }
+
+    const voucherRouterId = voucher.router_id == null ? null : Number(voucher.router_id);
+    const planRouterId = plan.router_id == null ? null : Number(plan.router_id);
+    if (voucherRouterId && requestedRouterId && voucherRouterId !== requestedRouterId) {
+      res.status(409).json({ ok: false, error: "This voucher is assigned to a different router." });
+      return;
+    }
+    if (planRouterId && requestedRouterId && planRouterId !== requestedRouterId) {
+      res.status(409).json({ ok: false, error: "The voucher's plan is assigned to a different router." });
+      return;
+    }
+    const routerId = voucherRouterId ?? planRouterId ?? requestedRouterId;
+    if (!routerId) {
+      res.status(409).json({ ok: false, error: "Assign this voucher to a router before restoring it." });
+      return;
+    }
+    if (planRouterId && planRouterId !== routerId) {
+      res.status(409).json({ ok: false, error: "The voucher's plan is assigned to a different router." });
+      return;
+    }
+
+    const validityMins = Number(voucher.validity_mins);
+    const dataLimitMb = voucher.data_limit_mb == null ? null : Number(voucher.data_limit_mb);
+    const dataCapMode = String(voucher.data_cap_mode ?? "disconnect").toLowerCase();
+    if (!Number.isFinite(validityMins) || validityMins < 0
+      || (dataLimitMb !== null && (!Number.isFinite(dataLimitMb) || dataLimitMb < 0))
+      || !["disconnect", "throttle"].includes(dataCapMode)) {
+      res.status(409).json({ ok: false, error: "The voucher's saved plan limits are invalid; it was not changed." });
+      return;
+    }
+
+    const sessionRows = await sbSelectStrict<HotspotVoucherSession>(
+      "radacct",
+      `username=eq.${encodeURIComponent(code)}&select=acctstarttime,acctstoptime,callingstationid,framedipaddress,acctinputoctets,acctoutputoctets,acctinputgigawords,acctoutputgigawords&order=acctstarttime.asc&limit=10000`,
+    );
+    const summary = summarizeHotspotVoucherStatus({
+      sessions: sessionRows,
+      validityMins,
+      redeemBy: voucher.expires_at,
+      redeemedAt: voucher.redeemed_at,
+      redeemedBy: voucher.redeemed_by_phone,
+      dataLimitMb,
+      dataCapMode,
+    });
+    if (!summary.used) {
+      res.status(409).json({ ok: false, error: "Only a redeemed voucher can be restored." });
+      return;
+    }
+    if (summary.serviceStatus !== "active") {
+      res.status(409).json({ ok: false, error: "This voucher's package is expired, depleted, or cannot be verified, so it was not restored." });
+      return;
+    }
+
+    const capBytes = dataLimitMb !== null && dataLimitMb > 0
+      ? dataLimitMegabytesToBytes(dataLimitMb)
+      : null;
+    const fupPolicy = validateFupPolicy(
+      plan.type,
+      dataLimitMb,
+      dataCapMode,
+      plan.fup_speed_down,
+      plan.fup_speed_up,
+      plan.speed_down,
+      plan.speed_up,
+      plan.speed_down_unit,
+      plan.speed_up_unit,
+    );
+
+    const requestedOrAssignedRouterId = Number(routerId);
+    const routerRows = await sbSelectStrict<{
+      id: number;
+      name: string;
+      host: string | null;
+      vpn_ip: string | null;
+      router_username: string | null;
+      router_secret: string | null;
+    }>(
+      "isp_routers",
+      `id=eq.${requestedOrAssignedRouterId}&admin_id=eq.${tenantId}&select=id,name,host,vpn_ip,router_username,router_secret&limit=1`,
+    );
+    const routerRow = routerRows[0];
+    if (!routerRow) {
+      res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+      return;
+    }
+    if (account.role === "reseller") {
+      const assignedPorts = await sbSelectStrict<{ id: number }>(
+        "isp_reseller_ports",
+        `admin_id=eq.${tenantId}&assigned_reseller_id=eq.${account.id}&router_id=eq.${requestedOrAssignedRouterId}&handoff_mode=eq.vlan_services&status=neq.disabled&select=id&limit=1000`,
+      );
+      const assignedPortIds = new Set(assignedPorts.map(port => Number(port.id)));
+      if (Number(plan.owner_reseller_id) !== account.id
+        || !plan.port_id
+        || !assignedPortIds.has(Number(plan.port_id))) {
+        res.status(403).json({ ok: false, error: "This voucher is not assigned to your approved service port." });
+        return;
+      }
+    }
+
+    const host = routerRow.host || "";
+    const vpnIp = routerRow.vpn_ip || undefined;
+    const username = routerRow.router_username || "admin";
+    const password = routerRow.router_secret || "";
+    const routerCredentials: RouterCredentials = {
+      host: host || vpnIp || "",
+      bridgeIp: vpnIp,
+      port: 8728,
+      username,
+      password,
+    };
+    const connected = await connectWithFallback(host, vpnIp, username, password, () => {});
+    conn = connected.conn;
+
+    const profileName = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
+    const existingUsers = await readRouterRows(conn, "/ip/hotspot/user", `?name=${code}`);
+    const existingUser = existingUsers.find(row => row.name === code);
+    const parseCounter = (value: string | undefined): number => {
+      const parsed = Number(value ?? 0);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        throw new Error("MikroTik returned an invalid voucher usage counter.");
+      }
+      return Math.floor(parsed);
+    };
+    const routerUsedBytes = parseCounter(existingUser?.["bytes-in"])
+      + parseCounter(existingUser?.["bytes-out"]);
+    const limits = calculateHotspotVoucherRestoreLimits({
+      dataLimitBytes: capBytes,
+      dataCapMode: dataCapMode as "disconnect" | "throttle",
+      radiusUsedBytes: summary.dataUsedBytes,
+      routerUsedBytes,
+    });
+    if (dataCapMode === "disconnect" && limits.remainingBytes !== null && limits.remainingBytes <= 0) {
+      try { conn.close(); } catch { /* ignore */ }
+      conn = null;
+      res.status(409).json({ ok: false, error: "The voucher's recorded router usage has exhausted its data allowance; no new access was granted." });
+      return;
+    }
+
+    const profileCreated = await ensureSyncUserPlanProfile(
+      conn,
+      { ...plan, validity: validityMins, validity_unit: "Minutes" },
+      profileName,
+      String(plan.active_ip_pool ?? planServicePoolName(plan.type, undefined) ?? ""),
+    );
+    await restoreVoucherRadiusAccess(
+      voucher,
+      requestedOrAssignedRouterId,
+      routerRow.name,
+      capBytes,
+      summary.expiry,
+    );
+    radiusRestored = true;
+
+    const action = await upsertByFilter(conn, "/ip/hotspot/user", "name", code, {
+      name: code,
+      password: code,
+      profile: profileName,
+      comment: `voucher restore: ${voucher.plan_name}`.slice(0, 100),
+      disabled: "no",
+      "limit-bytes-total": String(limits.limitBytesTotal),
+    });
+
+    if (
+      dataCapMode === "throttle"
+      && limits.fupThresholdBytes !== null
+      && fupPolicy.fupSpeedDown !== null
+      && fupPolicy.fupSpeedUp !== null
+    ) {
+      await scheduleHotspotUserFup(routerCredentials, {
+        username: code,
+        thresholdBytes: limits.fupThresholdBytes,
+        speedDownMbps: fupPolicy.fupSpeedDown,
+        speedUpMbps: fupPolicy.fupSpeedUp,
+      });
+    } else {
+      await removeHotspotUserFup(routerCredentials, code);
+    }
+
+    if (summary.expiry) {
+      await scheduleHotspotUserExpiry(routerCredentials, {
+        name: code,
+        expiresInSeconds: Math.max(1, Math.ceil((Date.parse(summary.expiry) - Date.now()) / 1000)),
+      });
+    } else {
+      await removeHotspotUserExpiry(routerCredentials, code);
+    }
+
+    const verifiedUsers = await readRouterRows(conn, "/ip/hotspot/user", `?name=${code}`);
+    const confirmed = routerSyncAccountIsConfirmed(
+      verifiedUsers.find(row => row.name === code),
+      code,
+      profileName,
+    );
+    if (!confirmed) throw new Error("MikroTik did not confirm the voucher account with the expected profile.");
+    routerRestored = true;
+    conn.close();
+    conn = null;
+    res.json({
+      ok: true,
+      voucher: code,
+      router: routerRow.name,
+      radiusRestored,
+      routerRestored,
+      action,
+      profileCreated,
+      accountedBytes: limits.accountedBytes,
+      remainingBytes: limits.remainingBytes,
+      expiry: summary.expiry,
+      dataCapMode,
+    });
+  } catch (error) {
+    try { conn?.close(); } catch { /* ignore */ }
+    const detail = error instanceof Error ? error.message : String(error);
+    res.status(502).json({
+      ok: false,
+      radiusRestored,
+      routerRestored,
+      error: radiusRestored
+        ? `RADIUS access was restored, but MikroTik confirmation failed. Retry after checking the router: ${detail}`
+        : `The voucher was not fully restored. Check the router connection and retry: ${detail}`,
+    });
   }
 });
 

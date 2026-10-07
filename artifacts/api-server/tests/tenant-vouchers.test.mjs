@@ -26,6 +26,39 @@ test("hotspot voucher management is authenticated and account-scoped", async () 
   assert.match(route, /admin_id=eq\.\$\{adminId\}&\$\{inFilter\("code", ownedCodes\)\}/);
 });
 
+test("redeemed hotspot vouchers show their use and are protected from destructive actions", async () => {
+  const [route, page] = await Promise.all([
+    read("../src/routes/hotspot-vouchers-route.ts"),
+    read("../../ochola-supernet/src/pages/admin/Vouchers.tsx"),
+  ]);
+
+  assert.match(route, /RedeemedVoucherMutationError/);
+  assert.match(route, /"radacct"/);
+  assert.match(route, /serviceStatus/);
+  assert.match(page, /service_status/);
+  assert.match(page, /redeemed_by/);
+  assert.match(page, /v\.online \? "Online" : "Offline"/);
+  assert.match(page, /disabled=\{v\.used \|\| deleteMutation\.isPending\}/);
+  assert.match(page, /selectedDeletableCodes/);
+});
+
+test("hotspot voucher data allowances are snapshotted and honor throttle mode", async () => {
+  const [route, migration, runner, schema] = await Promise.all([
+    read("../src/routes/hotspot-vouchers-route.ts"),
+    read("../migrations/2026_hotspot_voucher_data_entitlements.sql"),
+    read("../scripts/apply-deployment-migrations.mjs"),
+    read("../migrations/supabase_schema.sql"),
+  ]);
+
+  assert.match(route, /data_limit_mb: dataLimitMb/);
+  assert.match(route, /data_cap_mode: dataCapMode/);
+  assert.match(route, /dataCapMode === "disconnect"/);
+  assert.match(migration, /ADD COLUMN IF NOT EXISTS data_limit_mb/);
+  assert.match(migration, /CHECK \(data_cap_mode IN \('disconnect', 'throttle'\)\)/);
+  assert.match(runner, /2026_hotspot_voucher_data_entitlements\.sql/);
+  assert.match(schema, /data_limit_mb\s+numeric\(14,2\)/);
+});
+
 test("the vouchers screen no longer queries shared RADIUS tables from the browser", async () => {
   const page = await read("../../ochola-supernet/src/pages/admin/Vouchers.tsx");
   assert.doesNotMatch(page, /supabase\.from\("(radcheck|radusergroup|radacct)"\)/);

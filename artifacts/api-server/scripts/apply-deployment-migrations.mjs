@@ -114,6 +114,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_platform_page_auth_otp.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_gateway_settings_credentials.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_account_scoped_hotspot_vouchers.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_hotspot_voucher_data_entitlements.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_account_scoped_hotspot_bindings.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_page_password.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_admin_page_passwords.sql", import.meta.url)),
