@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useEffect } from "react";
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import React, { useState, useMemo, useEffect, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
 import { useReconnectPrepaidHotspot, type HotspotReconnectResult } from "@workspace/api-client-react";
@@ -12,6 +12,16 @@ import {
 } from "lucide-react";
 import { apiUrl, parseJsonResponse } from "@/lib/api-client";
 import { fetchAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
+import { mergeCustomerServiceIdentities } from "@/lib/customer-identities";
+import { getCustomerServiceStatus } from "@/lib/customer-service-status";
+import {
+  buildLivePresenceByRouter,
+  customerIsOnline,
+  normalizeLiveIdentity,
+  prepaidServiceType,
+  purchaseUsername,
+} from "@/lib/prepaid-live-presence";
+import { usePrepaidLiveQueries } from "@/lib/prepaid-live-queries";
 import { SyncUserStatusList, type SyncUserStatus } from "@/components/ui/SyncUserStatusList";
 import { transactionDisplayId } from "@/lib/transaction-reference";
 
@@ -50,20 +60,6 @@ interface Payment {
   status: string;
   created_at: string;
 }
-interface LiveData {
-  hotspotUsers?: Array<{ user?: string; macAddress?: string; bytesIn?: number; bytesOut?: number }>;
-  hotspotUsersAvailable?: boolean;
-  pppoeUsers?: Array<{ name?: string; bytesIn?: number; bytesOut?: number }>;
-  pppoeUsersAvailable?: boolean;
-  fetchedAt?: string;
-}
-interface LiveRouterPresence {
-  authoritative: boolean;
-  hotspotUsersAvailable: boolean;
-  pppoeUsersAvailable: boolean;
-  onlineUsers: Set<string>;
-}
-
 type StatusFilter = "all" | "active" | "expired" | "suspended" | "online";
 
 /* ══════════════════════════════ Helpers ══════════════════════════════ */
@@ -97,86 +93,6 @@ function fromDateTimeLocal(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
-function normalizePhone(phone?: string | null) {
-  return (phone ?? "").replace(/\D/g, "");
-}
-function customerIdentityKey(user: Customer, planMap: Record<number, Plan>) {
-  const type = prepaidServiceType(user.type);
-  const plan = user.plan_id ? planMap[user.plan_id] : null;
-  const routerId = user.router_id ?? plan?.router_id ?? null;
-  const portId = user.port_id ?? plan?.port_id ?? null;
-  const scope = `${routerId ?? "unknown-router"}:${portId ?? "unknown-port"}`;
-
-  if (type === "hotspot") {
-    const mac = String(user.mac_address ?? "").toLowerCase().replace(/[^a-f0-9]/g, "");
-    const phone = normalizePhone(user.phone);
-    // A MAC by itself can be shared or reused, so only group Hotspot rows
-    // when both the device and its contact number match.
-    if (mac.length === 12 && phone) return `hotspot:${scope}:${mac}:${phone}`;
-  } else if (type === "pppoe") {
-    const username = normalizeLiveIdentity(user.pppoe_username || user.username);
-    if (username) return `pppoe:${scope}:${username}`;
-  } else if (type === "vlan" || type === "static") {
-    const address = normalizeLiveIdentity(user.ip_address);
-    if (address) return `${type}:${scope}:${address}`;
-  }
-
-  return `record:${user.id}`;
-}
-function customerRecordTime(user: Customer) {
-  const created = Date.parse(user.created_at ?? "");
-  const updated = Date.parse(user.updated_at ?? "");
-  return Number.isFinite(created) ? created : Number.isFinite(updated) ? updated : 0;
-}
-function isMissingCustomerValue(value: unknown) {
-  return value === null || value === undefined || (typeof value === "string" && value.trim() === "");
-}
-function mergeDuplicateCustomers(
-  customers: Customer[],
-  planMap: Record<number, Plan>,
-): DisplayCustomer[] {
-  const groups = new Map<string, Customer[]>();
-  for (const customer of customers) {
-    const key = customerIdentityKey(customer, planMap);
-    const group = groups.get(key) ?? [];
-    group.push(customer);
-    groups.set(key, group);
-  }
-
-  const primaryStateFields = new Set([
-    "id", "status", "created_at", "updated_at", "expires_at",
-    "last_seen", "service_online", "data_used_bytes", "data_used_mb",
-    "depletion_reason", "password", "username", "pppoe_username",
-  ]);
-
-  return Array.from(groups.values(), group => {
-    group.sort((a, b) => customerRecordTime(b) - customerRecordTime(a) || b.id - a.id);
-    const [primary, ...related] = group;
-    const merged = { ...primary } as DisplayCustomer;
-    const mergedFields = merged as unknown as Record<string, unknown>;
-
-    for (const relatedCustomer of related) {
-      for (const [field, value] of Object.entries(relatedCustomer)) {
-        if (primaryStateFields.has(field) || !isMissingCustomerValue(mergedFields[field])) continue;
-        if (!isMissingCustomerValue(value)) mergedFields[field] = value;
-      }
-    }
-
-    merged.mergedCustomerIds = group.map(customer => customer.id);
-    return merged;
-  });
-}
-function prepaidServiceType(value?: string | null) {
-  const type = String(value ?? "").toLowerCase();
-  return type === "trial" || type === "trials" ? "hotspot" : type;
-}
-function purchaseUsername(user: Customer) {
-  const type = String(user.type ?? "").toLowerCase();
-  if (type === "vlan") return user.ip_address || `VLAN customer #${user.id}`;
-  const actual = type === "hotspot" ? user.username : (user.pppoe_username || user.username);
-  if (actual) return actual;
-  return `prepaid-${user.id}`;
-}
 function paymentLabel(payment?: Payment) {
   if (!payment) return "—";
   const method = payment.payment_method.toLowerCase();
@@ -191,9 +107,6 @@ function paymentLabel(payment?: Payment) {
 }
 function customerPackageId(user: Customer, paymentMap: Record<number, Payment>) {
   return paymentMap[user.id]?.plan_id ?? user.plan_id ?? null;
-}
-function normalizeLiveIdentity(value?: string | null) {
-  return String(value ?? "").trim().toLowerCase();
 }
 function formatUsageBytes(bytes: number | null | undefined) {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return "—";
@@ -230,56 +143,16 @@ function customerUsageBytes(user: Customer, liveUsage: Map<string, number>) {
   if (Number.isFinite(mb)) return Math.max(0, mb * 1_000_000, live ?? 0);
   return live ?? null;
 }
-function customerIsOnline(
-  user: Customer,
-  livePresenceByRouter: Map<number, LiveRouterPresence>,
-  planMap: Record<number, Plan>,
-) {
-  if (!hasUnexpiredPaidAccess(user)) return false;
-  if (String(user.type ?? "").toLowerCase() === "vlan") return user.status === "active" && user.service_online === true;
-  const routerId = user.router_id ?? (user.plan_id ? planMap[user.plan_id]?.router_id : null);
-  const routerPresence = routerId == null ? undefined : livePresenceByRouter.get(routerId);
-  const serviceType = prepaidServiceType(user.type);
-  const sessionListAvailable = serviceType === "hotspot"
-    ? Boolean(routerPresence?.authoritative && routerPresence.hotspotUsersAvailable)
-    : serviceType === "pppoe"
-      ? Boolean(routerPresence?.authoritative && routerPresence.pppoeUsersAvailable)
-      : Boolean(routerPresence?.authoritative);
-  if (sessionListAvailable && routerPresence) {
-    const identities = serviceType === "hotspot"
-      ? [user.username, purchaseUsername(user)]
-      : serviceType === "pppoe"
-        ? [user.pppoe_username, user.username, purchaseUsername(user)]
-        : [user.username, user.pppoe_username, purchaseUsername(user)];
-    return identities
-      .map(normalizeLiveIdentity)
-      .filter(Boolean)
-      .some(value => routerPresence.onlineUsers.has(value));
-  }
-  // While the router is loading or unavailable, keep the last state saved by
-  // the server instead of showing a false disconnect after a page refresh.
-  return user.service_online === true;
-}
 function isExpired(d?: string | null) {
   if (!d) return false;
   const expiry = Date.parse(d);
   return Number.isFinite(expiry) && expiry <= Date.now();
 }
 function hasUnexpiredPaidAccess(user: Customer) {
-  const status = String(user.status ?? "").trim().toLowerCase();
-  if (status === "suspended" || user.depletion_reason === "data_limit") return false;
-  const allowedStatus = ["active", "payment_cleared_router_pending", "expired"].includes(status);
-  if (!allowedStatus) return false;
-  if (!user.expires_at) return status === "active";
-  const expiry = Date.parse(user.expires_at);
-  return Number.isFinite(expiry) && expiry > Date.now();
+  return getCustomerServiceStatus(user) === "active";
 }
 function isCustomerExpired(user: Customer) {
-  if (user.status === "suspended") return false;
-  if (user.depletion_reason === "data_limit") return true;
-  if (!user.expires_at) return user.status === "expired";
-  const expiry = Date.parse(user.expires_at);
-  return Number.isFinite(expiry) ? expiry <= Date.now() : user.status === "expired";
+  return getCustomerServiceStatus(user) === "expired";
 }
 
 const TYPE_META: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
@@ -916,26 +789,10 @@ export default function PrepaidUsers() {
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
-  const liveQueries = useQueries({
-    queries: routers.map(router => ({
-      queryKey: ["prepaid_live", router.id],
-      queryFn: async () => {
-        const token = getAdminApiToken();
-        const response = await fetch(`/api/router/${router.id}/live`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (!response.ok) throw new Error(`Router ${router.name} is unavailable`);
-        return response.json() as Promise<LiveData & { routerId: number }>;
-      },
-      staleTime: 5_000,
-      refetchInterval: 15_000,
-    })),
-  });
-
   const planMap   = useMemo(() => Object.fromEntries(plans.map(p   => [p.id,   p  ])), [plans]);
   const routerMap = useMemo(() => Object.fromEntries(routers.map(r => [r.id,   r  ])), [routers]);
   const displayCustomers = useMemo(
-    () => mergeDuplicateCustomers(customers, planMap),
+    () => mergeCustomerServiceIdentities(customers, planMap),
     [customers, planMap],
   );
   const paymentsByCustomerId = useMemo(() => {
@@ -980,28 +837,9 @@ export default function PrepaidUsers() {
     () => displayCustomers.some(customer => customerPackageId(customer, paymentMap) === null),
     [displayCustomers, paymentMap],
   );
+  const liveQueries = usePrepaidLiveQueries(routers);
   const livePresenceByRouter = useMemo(() => {
-    const presence = new Map<number, LiveRouterPresence>();
-    routers.forEach((router, index) => {
-      const query = liveQueries[index];
-      const live = query?.data;
-      const onlineUsers = new Set<string>();
-      live?.hotspotUsers?.forEach(user => {
-        const username = normalizeLiveIdentity(user.user);
-        if (username) onlineUsers.add(username);
-      });
-      live?.pppoeUsers?.forEach(user => {
-        const username = normalizeLiveIdentity(user.name);
-        if (username) onlineUsers.add(username);
-      });
-      presence.set(router.id, {
-        authoritative: Boolean(live?.fetchedAt && !query?.isError),
-        hotspotUsersAvailable: live?.hotspotUsersAvailable !== false,
-        pppoeUsersAvailable: live?.pppoeUsersAvailable !== false,
-        onlineUsers,
-      });
-    });
-    return presence;
+    return buildLivePresenceByRouter(routers, liveQueries);
   }, [routers, liveQueries]);
   const liveSnapshotKey = liveQueries
     .map(query => query.data?.fetchedAt ?? "")
@@ -1066,6 +904,7 @@ export default function PrepaidUsers() {
     results: HotspotReconnectResult[];
     running: boolean;
   } | null>(null);
+  const reconnectBatchBusyRef = useRef(false);
   const reconnectOutcomes = useMemo(() => {
     const results = reconnectProgress?.results ?? [];
     return {
@@ -1076,17 +915,27 @@ export default function PrepaidUsers() {
     };
   }, [reconnectProgress]);
 
-  async function refreshReconnectData() {
+  function reconnectRouterId(user: DisplayCustomer): number | null {
+    const plan = user.plan_id ? planMap[user.plan_id] : null;
+    const routerId = user.router_id ?? plan?.router_id ?? null;
+    return routerId && routerMap[routerId] ? routerId : null;
+  }
+
+  async function refreshReconnectData(routerIds: number[]) {
     await Promise.all([
       qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] }),
-      qc.invalidateQueries({ queryKey: ["prepaid_live"] }),
+      ...[...new Set(routerIds)].map(routerId =>
+        qc.invalidateQueries({ queryKey: ["prepaid_live", routerId] }),
+      ),
     ]);
   }
 
   async function reconnectOne(user: DisplayCustomer) {
+    if (reconnectBatchBusyRef.current) return;
     setActionError("");
     setReconnectProgress({ completed: 0, total: 1, results: [], running: true });
     setReconnectingIds(current => new Set(current).add(user.id));
+    reconnectBatchBusyRef.current = true;
     try {
       const result = await reconnectMutation.mutateAsync({ id: user.id });
       setReconnectProgress({ completed: 1, total: 1, results: [result], running: false });
@@ -1102,47 +951,10 @@ export default function PrepaidUsers() {
         next.delete(user.id);
         return next;
       });
-      await refreshReconnectData();
+      reconnectBatchBusyRef.current = false;
+      const routerId = reconnectRouterId(user);
+      await refreshReconnectData(routerId ? [routerId] : []);
     }
-  }
-
-  async function reconnectAllEligible() {
-    // This snapshot comes from the complete grouped dataset, not the current
-    // search, status tab, router/package filter, or paginated rows.
-    const queue = [...reconnectEligibleUsers];
-    if (!queue.length) return;
-    setActionError("");
-    setReconnectProgress({ completed: 0, total: queue.length, results: [], running: true });
-    setReconnectingIds(new Set(queue.map(user => user.id)));
-    let nextIndex = 0;
-    const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
-      while (nextIndex < queue.length) {
-        const user = queue[nextIndex++];
-        let result: HotspotReconnectResult;
-        try {
-          // Always send the newest canonical displayed customer id.
-          result = await reconnectMutation.mutateAsync({ id: user.id });
-        } catch (error) {
-          result = {
-            status: "router_unavailable",
-            message: error instanceof Error ? error.message : "The router could not be reached.",
-          };
-        }
-        setReconnectProgress(current => current ? ({
-          ...current,
-          completed: current.completed + 1,
-          results: [...current.results, result],
-        }) : current);
-        setReconnectingIds(current => {
-          const next = new Set(current);
-          next.delete(user.id);
-          return next;
-        });
-      }
-    });
-    await Promise.all(workers);
-    setReconnectProgress(current => current ? { ...current, running: false } : current);
-    await refreshReconnectData();
   }
 
   /* Sync state */
@@ -1485,24 +1297,17 @@ export default function PrepaidUsers() {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => void reconnectAllEligible()}
-            disabled={reconnectEligibleUsers.length === 0 || Boolean(reconnectProgress?.running) || reconnectingIds.size > 0}
-            aria-label={`Reconnect all eligible offline Hotspot devices, ${reconnectEligibleUsers.length} available`}
-            title="Processes all eligible grouped Hotspot identities, regardless of the active filters or page."
+          <span
+            role="status"
+            title="The production API checks eligible Hotspot accounts automatically; the Prepaid Users page does not need to stay open."
             style={{
-              ...BTN(reconnectEligibleUsers.length ? "var(--isp-green)" : "var(--isp-border)", reconnectEligibleUsers.length ? "#fff" : "var(--isp-text-muted)"),
-              opacity: reconnectEligibleUsers.length && !reconnectProgress?.running && reconnectingIds.size === 0 ? 1 : 0.65,
-              cursor: reconnectEligibleUsers.length && !reconnectProgress?.running && reconnectingIds.size === 0 ? "pointer" : "not-allowed",
+              ...BTN("color-mix(in srgb,var(--isp-green) 12%,var(--isp-card))", "var(--isp-green)"),
+              borderColor: "color-mix(in srgb,var(--isp-green) 42%,var(--isp-border))",
+              cursor: "default",
             }}
           >
-            {reconnectProgress?.running ? <Loader2 size={13} className="prepaid-spin" /> : <RotateCw size={13} />}
-            Reconnect offline Hotspots
-            <span style={{ borderRadius: 999, padding: "1px 6px", background: "rgba(255,255,255,.18)", fontSize: ".65rem" }}>
-              {reconnectEligibleUsers.length}
-            </span>
-          </button>
+            <RotateCw size={13} /> Server-managed reconnect
+          </span>
 
           {/* Sync by Router */}
           <div style={{ position: "relative" }}>
@@ -1589,11 +1394,13 @@ export default function PrepaidUsers() {
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
               <div style={{ minWidth: 0 }}>
                 <h2 id="prepaid-reconnect-title" style={{ margin: 0, fontSize: ".82rem", fontWeight: 800, color: "var(--isp-text)" }}>
-                  {reconnectProgress.running ? "Reconnecting Hotspot devices" : "Reconnect operation complete"}
+                  {reconnectProgress.running
+                    ? "Reconnecting Hotspot devices"
+                    : "Reconnect attempt complete"}
                 </h2>
                 <p style={{ margin: "3px 0 0", color: "var(--isp-text-muted)", fontSize: ".7rem" }}>
                   {reconnectProgress.completed} of {reconnectProgress.total} canonical account{reconnectProgress.total === 1 ? "" : "s"} processed
-                  {reconnectProgress.running ? " · up to 3 router operations at once" : ""}
+                  {reconnectProgress.running ? " · applying router access and connection" : ""}
                 </p>
               </div>
               {!reconnectProgress.running && (

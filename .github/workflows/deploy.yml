@@ -65,6 +65,9 @@ jobs:
       - name: Test WhatsApp environment sync
         run: node --test deploy/tests/sync-whatsapp-env.test.mjs
 
+      - name: Verify application release source contract
+        run: node --test deploy/tests/hotspot-release-source.test.mjs
+
       - name: Build release artifacts on the runner
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -339,7 +342,7 @@ jobs:
           RECONCILE_RESELLER_PORT: ${{ inputs.reconcile_reseller_port }}
           RECONCILE_RESELLER_INTERFACE: ${{ inputs.reconcile_reseller_interface }}
           INSPECT_RESELLER_PORT: ${{ inputs.inspect_reseller_port }}
-          DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ inputs.skip_router_management_setup }}
+          DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup }}
           DEPLOY_PORTAL_REFRESH_ONLY: ${{ inputs.portal_refresh_only }}
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
           WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN }}

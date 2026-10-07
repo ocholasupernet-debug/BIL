@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertCircle, CheckCircle2, Loader2, MessageCircle, Save, Send, ShieldCheck } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2, MessageCircle, QrCode, RefreshCw, Save, Send, ShieldCheck } from "lucide-react";
 
 type FeatureKey =
   | "login"
@@ -71,6 +71,11 @@ interface WahaSecretsStatus {
   apiKeySource: "super-admin" | "environment" | "missing";
 }
 
+interface WahaSessionPairingState {
+  status: string;
+  qrDataUrl?: string;
+}
+
 const WAHA_FEATURES: { key: WahaFeatureKey; label: string; description: string }[] = [
   { key: "login", label: "Login codes", description: "Allow customers and ISP admins to request WhatsApp sign-in codes." },
   { key: "registrationVerification", label: "Registration verification", description: "Require a phone verification code before account registration." },
@@ -83,7 +88,7 @@ function emptyWahaSettings(): WahaSettings {
     enabled: false,
     baseUrl: "http://localhost:3000",
     sessionId: "default",
-    otpProvider: "whatsapp_cloud",
+    otpProvider: "waha",
     features: {
       login: false,
       registrationVerification: false,
@@ -164,6 +169,9 @@ export default function SuperAdminWhatsApp() {
     apiKeySource: "missing",
   });
   const [wahaReady, setWahaReady] = useState(false);
+  const [wahaSession, setWahaSession] = useState<WahaSessionPairingState>({ status: "NOT_CHECKED" });
+  const [startingWahaSession, setStartingWahaSession] = useState(false);
+  const [checkingWahaSession, setCheckingWahaSession] = useState(false);
   const [wahaApiKey, setWahaApiKey] = useState("");
   const [wahaTestPhone, setWahaTestPhone] = useState("");
   const [secrets, setSecrets] = useState<PageState["secrets"]>({
@@ -419,6 +427,61 @@ export default function SuperAdminWhatsApp() {
     }
   };
 
+  const readWahaSession = async (quiet = false) => {
+    if (!quiet) {
+      setCheckingWahaSession(true);
+      setError("");
+      setNotice("");
+    }
+    try {
+      const response = await fetch("/api/super-admin/waha/session", {
+        headers: authHeaders(),
+        cache: "no-store",
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not read WAHA session status.");
+      setWahaSession(data.session);
+      if (!quiet && data.session?.status === "WORKING") setNotice("WhatsApp is linked to the WAHA session.");
+      return true;
+    } catch (cause) {
+      if (!quiet) setError(cause instanceof Error ? cause.message : "Could not read WAHA session status.");
+      return false;
+    } finally {
+      if (!quiet) setCheckingWahaSession(false);
+    }
+  };
+
+  const startWahaPairing = async () => {
+    setStartingWahaSession(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/super-admin/waha/session/start", {
+        method: "POST",
+        headers: authHeaders(true),
+        body: JSON.stringify({}),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not start WAHA pairing.");
+      setWahaSession(data.session);
+      setNotice(data.session?.status === "WORKING"
+        ? "WhatsApp is already linked to the WAHA session."
+        : "WAHA session started. Scan the QR code with WhatsApp → Linked devices.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not start WAHA pairing.");
+    } finally {
+      setStartingWahaSession(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!["STARTING", "SCAN_QR_CODE"].includes(wahaSession.status)) return;
+    const timer = window.setInterval(() => {
+      void readWahaSession(true);
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [wahaSession.status, wahaSettings.sessionId]);
+
   const fieldClass = "mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-white outline-none focus:border-emerald-500";
   const cardClass = "rounded-2xl border border-white/10 bg-slate-900/70 p-5 shadow-sm";
   const statusColor = connection.status === "CONNECTED" ? "text-emerald-400" : connection.status === "ERROR" ? "text-red-400" : "text-amber-300";
@@ -556,7 +619,7 @@ export default function SuperAdminWhatsApp() {
             {!wahaSettings.enabled ? "Disabled" : wahaReady ? "Ready" : wahaSecrets.apiKeyConfigured ? "Not ready" : "Missing API key"}
           </span>
         </div>
-        <p className="mb-5 text-sm text-slate-400">WAHA sends login, registration, and protected-page verification codes only. Payment, renewal, and expiry notices continue through the existing Meta Cloud API. Hotspot devices contact this API server; the WAHA API key is never sent to captive clients.</p>
+        <p className="mb-5 text-sm text-slate-400">WAHA sends login and verification codes only. Payment, renewal, and expiry notices stay on Meta Cloud API. Hotspot devices contact this API server; the WAHA API key is never sent to captive clients.</p>
 
         <form onSubmit={saveWahaSettingsForm} className="space-y-5">
           <div className="grid gap-4 md:grid-cols-2">
@@ -577,6 +640,7 @@ export default function SuperAdminWhatsApp() {
               Enable WAHA gateway
             </label>
           </div>
+          <p className="text-xs text-slate-500">Keep WAHA private: use a loopback URL such as http://127.0.0.1:3000 only if both services can reach it, or the private service name when they use separate containers. Public hostnames and IP addresses are rejected. Keep the gateway disabled until this private address has been verified from the API server.</p>
 
           <div>
             <h3 className="mb-2 text-sm font-semibold text-white">WAHA OTP features</h3>
@@ -595,6 +659,60 @@ export default function SuperAdminWhatsApp() {
             </button>
           </div>
         </form>
+      </section>
+
+      <section className={cardClass}>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="mb-2 flex items-center gap-2 text-cyan-300"><QrCode className="h-5 w-5" /><span className="text-xs font-bold uppercase tracking-[0.18em]">WhatsApp device pairing</span></div>
+            <h2 className="font-semibold text-white">Link the WAHA session with a QR code</h2>
+          </div>
+          <span className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs font-semibold text-slate-300">
+            {wahaSession.status === "NOT_CHECKED" ? "Not checked" : wahaSession.status}
+          </span>
+        </div>
+        <p className="mb-4 text-sm text-slate-400">
+          Start the configured WAHA session, then scan with WhatsApp on your phone under <strong className="text-slate-200">Linked devices → Link a device</strong>.
+          The temporary QR is visible only in this Super Admin page and refreshes while pairing is pending.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void startWahaPairing()}
+            disabled={startingWahaSession || !wahaSecrets.apiKeyConfigured}
+            className="inline-flex items-center gap-2 rounded-xl bg-cyan-700 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {startingWahaSession ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />}
+            {startingWahaSession ? "Starting…" : "Start / reconnect session"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void readWahaSession()}
+            disabled={checkingWahaSession || !wahaSecrets.apiKeyConfigured}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/15 px-4 py-2.5 text-sm text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {checkingWahaSession ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Refresh status / QR
+          </button>
+        </div>
+        {!wahaSecrets.apiKeyConfigured && (
+          <p className="mt-3 text-sm text-amber-200">Save the WAHA server API key below before starting the session. Do not send the key in chat.</p>
+        )}
+        {wahaSession.qrDataUrl && wahaSession.status === "SCAN_QR_CODE" && (
+          <div className="mt-5 inline-flex rounded-xl bg-white p-3">
+            <img src={wahaSession.qrDataUrl} alt="Temporary WhatsApp linking QR code" className="h-64 w-64" />
+          </div>
+        )}
+        {wahaSession.status === "WORKING" && (
+          <p className="mt-4 text-sm text-emerald-300">WhatsApp is linked. Enable the WAHA gateway and the login/registration verification features you want, then save the settings above.</p>
+        )}
+        {wahaSession.status === "SCAN_QR_CODE" && !wahaSession.qrDataUrl && (
+          <p className="mt-4 text-sm text-amber-200">WAHA is waiting for a scan but has not returned an image yet. Refresh the status to request the current QR.</p>
+        )}
+        <p className="mt-4 text-xs text-slate-500">
+          WAHA uses WhatsApp Web and is not Meta’s official API; WhatsApp may restrict linked accounts. Keep the WAHA API private and reachable from this server only.
+          QR codes expire quickly, so scan promptly.
+        </p>
       </section>
 
       <section className={cardClass}>

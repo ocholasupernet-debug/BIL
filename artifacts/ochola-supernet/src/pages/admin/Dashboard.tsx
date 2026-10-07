@@ -1,5 +1,5 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
   Activity,
@@ -19,6 +19,7 @@ import {
   Minus,
   Plus,
   ReceiptText,
+  RefreshCw,
   Router,
   Server,
   Signal,
@@ -42,9 +43,15 @@ import {
 import { fmtMoney, getCurrencySymbol } from "@/lib/utils";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 import { transactionDisplayId } from "@/lib/transaction-reference";
+import { mergeCustomerServiceIdentities } from "@/lib/customer-identities";
 import { getCustomerServiceStatus } from "@/lib/customer-service-status";
+import {
+  buildLivePresenceByRouter,
+  customerIsOnline,
+  prepaidServiceType,
+} from "@/lib/prepaid-live-presence";
+import { usePrepaidLiveQueries } from "@/lib/prepaid-live-queries";
 
-type LiveCounts = { hotspot: number; pppoe: number; vlan: number | null };
 type RevenueSummary = {
   incomeToday: number;
   incomeMonth: number;
@@ -114,26 +121,6 @@ type TelemetryResponse = {
   fetchedAt: string;
 };
 
-async function fetchLiveCount(routerId: number): Promise<LiveCounts> {
-  const token = getAdminApiToken();
-  const res = await fetch(`/api/router/${routerId}/live`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
-  if (!res.ok) return { hotspot: 0, pppoe: 0, vlan: null };
-  const data = await res.json() as {
-    hotspotUsers?: unknown[];
-    pppoeUsers?: unknown[];
-    onlineVlanUsers?: unknown;
-  };
-  return {
-    hotspot: Array.isArray(data.hotspotUsers) ? data.hotspotUsers.length : 0,
-    pppoe: Array.isArray(data.pppoeUsers) ? data.pppoeUsers.length : 0,
-    vlan: typeof data.onlineVlanUsers === "number" && Number.isFinite(data.onlineVlanUsers) && data.onlineVlanUsers >= 0
-      ? data.onlineVlanUsers
-      : null,
-  };
-}
-
 async function fetchNetworkTelemetry(routerId: number | "all", portId: number | "all", resellerId: number | "all"): Promise<TelemetryResponse> {
   const params = new URLSearchParams();
   if (routerId !== "all") params.set("routerId", String(routerId));
@@ -184,15 +171,36 @@ type CustomerBasic = {
   type: string | null;
   status: string;
   created_at: string;
+  updated_at: string;
   expires_at: string | null;
   depletion_reason: string | null;
+  plan_id: number | null;
+  router_id: number | null;
+  port_id: number | null;
+  mac_address: string | null;
+  phone: string | null;
+  pppoe_username: string | null;
+  username: string | null;
+  ip_address: string | null;
+  service_online: boolean | null;
 };
+type CustomerPlanScope = { id: number; router_id: number | null; port_id: number | null };
 
 async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
   const { data, error } = await supabase
     .from("isp_customers")
-    .select("id, type, status, created_at, expires_at, depletion_reason")
+    .select("id,type,status,created_at,updated_at,expires_at,depletion_reason,plan_id,router_id,port_id,mac_address,phone,pppoe_username,username,ip_address,service_online")
     .eq("admin_id", ADMIN_ID);
+  if (error) throw error;
+  return data ?? [];
+}
+
+async function fetchCustomerPlanScopes(): Promise<CustomerPlanScope[]> {
+  const { data, error } = await supabase
+    .from("isp_plans")
+    .select("id,router_id,port_id")
+    .eq("admin_id", ADMIN_ID)
+    .is("owner_reseller_id", null);
   if (error) throw error;
   return data ?? [];
 }
@@ -479,6 +487,7 @@ export default function Dashboard() {
   const {
     data: routers = [],
     isLoading: routersLoading,
+    isFetching: routersFetching,
     isError: routersError,
     refetch: refetchRouters,
   } = useQuery({
@@ -492,9 +501,20 @@ export default function Dashboard() {
     isError: customersError,
     refetch: refetchCustomers,
   } = useQuery({
-    queryKey: ["isp_customers_basic", ADMIN_ID],
+    queryKey: ["isp_customers_dashboard", ADMIN_ID],
     queryFn: fetchCustomersBasic,
     refetchInterval: 60_000,
+  });
+  const {
+    data: customerPlanScopes = [],
+    isLoading: customerPlanScopesLoading,
+    isError: customerPlanScopesError,
+    refetch: refetchCustomerPlanScopes,
+  } = useQuery({
+    queryKey: ["dashboard_customer_plan_scopes", ADMIN_ID],
+    queryFn: fetchCustomerPlanScopes,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 
   const customerIds = useMemo(() => customers.map((customer) => customer.id), [customers]);
@@ -515,37 +535,61 @@ export default function Dashboard() {
 
   const onlineRouters = routers.filter(routerOnline).length;
   const offlineRouters = routers.length - onlineRouters;
-  const onlineRouterIds = useMemo(() => routers.filter(routerOnline).map((router) => router.id), [routers]);
-  const liveCountResults = useQueries({
-    queries: onlineRouterIds.map((id) => ({
-      queryKey: ["router-live-count", id],
-      queryFn: () => fetchLiveCount(id),
-      refetchInterval: 15_000,
-      staleTime: 0,
-      retry: false,
-    })),
-  });
-  const onlineHotspotUsers = liveCountResults.reduce((sum, result) => sum + (result.data?.hotspot ?? 0), 0);
-  const onlinePppoeUsers = liveCountResults.reduce((sum, result) => sum + (result.data?.pppoe ?? 0), 0);
-  const onlineVlanUsers = liveCountResults.reduce((sum, result) => sum + (result.data?.vlan ?? 0), 0);
-  const vlanCountUnavailable = liveCountResults.some(result =>
-    result.isError || (result.data !== undefined && result.data.vlan === null),
+  const liveQueries = usePrepaidLiveQueries(routers);
+  const livePresenceByRouter = useMemo(
+    () => buildLivePresenceByRouter(routers, liveQueries),
+    [routers, liveQueries],
   );
-  const onlineStaticUsers = customers.filter((customer) => customer.type === "static" && customer.status === "active").length;
-  const activeUsers = customers.filter((customer) => getCustomerServiceStatus(customer) === "active").length;
-  const expiredUsers = customers.filter((customer) => getCustomerServiceStatus(customer) === "expired").length;
-  const totalOnlineNow = onlineHotspotUsers + onlinePppoeUsers + onlineVlanUsers + onlineStaticUsers;
-  const liveCountLoading = liveCountResults.some((result) => result.isLoading);
-  const totalOnlineValue = vlanCountUnavailable
-    ? "—"
-    : liveCountLoading && totalOnlineNow === 0
-      ? "…"
-      : String(totalOnlineNow);
-  const onlineVlanValue = vlanCountUnavailable
-    ? "—"
-    : liveCountLoading && onlineVlanUsers === 0
-      ? "…"
-      : String(onlineVlanUsers);
+  const liveCountUnavailable = liveQueries.some(result => result.isError);
+  const liveCountRefreshing = liveQueries.some(result => result.isFetching);
+  const customerPlanScopeMap = useMemo(
+    () => Object.fromEntries(customerPlanScopes.map(plan => [plan.id, plan])),
+    [customerPlanScopes],
+  );
+  const uniqueServiceCustomers = useMemo(
+    () => mergeCustomerServiceIdentities(customers, customerPlanScopeMap),
+    [customers, customerPlanScopeMap],
+  );
+  const onlineServiceCustomers = useMemo(
+    () => uniqueServiceCustomers.filter(customer =>
+      customerIsOnline(customer, livePresenceByRouter, customerPlanScopeMap),
+    ),
+    [uniqueServiceCustomers, livePresenceByRouter, customerPlanScopeMap],
+  );
+  const onlineHotspotUsers = onlineServiceCustomers.filter(
+    customer => prepaidServiceType(customer.type) === "hotspot",
+  ).length;
+  const onlinePppoeUsers = onlineServiceCustomers.filter(
+    customer => prepaidServiceType(customer.type) === "pppoe",
+  ).length;
+  const onlineVlanUsers = onlineServiceCustomers.filter(
+    customer => prepaidServiceType(customer.type) === "vlan",
+  ).length;
+  const onlineStaticUsers = onlineServiceCustomers.filter(
+    customer => prepaidServiceType(customer.type) === "static",
+  ).length;
+  const activeUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "active").length;
+  const expiredUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "expired").length;
+  const serviceCountsLoading = customersLoading || customerPlanScopesLoading;
+  const serviceCountsUnavailable = (customersError && customers.length === 0)
+    || (customerPlanScopesError && customerPlanScopes.length === 0);
+  const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredUsers}`;
+  const onlineCountValue = (count: number) => serviceCountsLoading
+    ? "…"
+    : serviceCountsUnavailable
+      ? "—"
+      : String(count);
+  const totalOnlineValue = onlineCountValue(onlineServiceCustomers.length);
+  const onlineHotspotValue = onlineCountValue(onlineHotspotUsers);
+  const onlinePppoeValue = onlineCountValue(onlinePppoeUsers);
+  const onlineVlanValue = onlineCountValue(onlineVlanUsers);
+  const onlineStaticValue = onlineCountValue(onlineStaticUsers);
+  const refreshOnlineUsers = async () => {
+    await Promise.all([
+      refetchRouters(),
+      ...liveQueries.map(result => result.refetch()),
+    ]);
+  };
 
   const monthlyData = useMemo(() => MONTHS.map((month, index) => ({
     month,
@@ -578,7 +622,7 @@ export default function Dashboard() {
   const completedRevenue = revenueSummary?.totalRevenue ?? 0;
   const greeting = now.getHours() < 12 ? "Good morning" : now.getHours() < 17 ? "Good afternoon" : "Good evening";
   const displayName = getAdminDisplayName();
-  const hasError = routersError || customersError || txError || revenueError || resellerSummaryError;
+  const hasError = routersError || customersError || customerPlanScopesError || txError || revenueError || resellerSummaryError || liveCountUnavailable;
   const dashboardStyle = {
     "--dashboard-accent": preferences.accentColor,
     "--dashboard-accent-glow": `${preferences.accentColor}1a`,
@@ -604,9 +648,22 @@ export default function Dashboard() {
              <h1>{displayName ? `${greeting}, ${displayName}` : greeting}</h1>
             <p>Network pulse, customer activity, and cashflow in one view.</p>
           </div>
-          <div className="dashboard-date">
-            <CalendarDays size={15} />
-            {now.toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Nairobi" })}
+          <div className="dashboard-header-actions">
+            <button
+              type="button"
+              className="dashboard-refresh-button"
+              onClick={() => void refreshOnlineUsers()}
+              disabled={liveCountRefreshing || routersFetching}
+              aria-label="Refresh online user counts"
+              title="Refresh router list and online session counts now"
+            >
+              <RefreshCw size={13} className={liveCountRefreshing || routersFetching ? "animate-spin" : ""} />
+              Refresh online users
+            </button>
+            <div className="dashboard-date">
+              <CalendarDays size={15} />
+              {now.toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Nairobi" })}
+            </div>
           </div>
         </header>
 
@@ -617,7 +674,7 @@ export default function Dashboard() {
             <button
               type="button"
               className="dashboard-error-retry"
-               onClick={() => { void refetchRouters(); void refetchCustomers(); void refetchTransactions(); void refetchRevenue(); }}
+               onClick={() => { void refetchRouters(); void refetchCustomers(); void refetchCustomerPlanScopes(); void refetchTransactions(); void refetchRevenue(); }}
             >
               Retry
             </button>
@@ -649,11 +706,11 @@ export default function Dashboard() {
 
         <section className="dashboard-stat-grid" aria-label="Network quick stats">
           <StatMiniCard label="Total online users" value={totalOnlineValue} href="/admin/customers" icon={<Users size={16} />} tone="teal" />
-          <StatMiniCard label="PPPoE online" value={liveCountLoading && onlinePppoeUsers === 0 ? "…" : String(onlinePppoeUsers)} href="/admin/customers?type=pppoe" icon={<Wifi size={16} />} tone="plum" />
-          <StatMiniCard label="Hotspot online" value={liveCountLoading && onlineHotspotUsers === 0 ? "…" : String(onlineHotspotUsers)} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="deep-teal" />
-          <StatMiniCard label="VLAN users online" value={liveCountLoading && onlineVlanUsers === 0 && !vlanCountUnavailable ? "…" : onlineVlanValue} href="/admin/customers?type=vlan" icon={<Wifi size={16} />} tone="indigo" />
-          <StatMiniCard label="Static online" value={customersLoading ? "…" : String(onlineStaticUsers)} href="/admin/customers?type=static" icon={<Server size={16} />} tone="green" />
-          <StatMiniCard label="Active / expired accounts" value={customersLoading ? "…" : `${activeUsers}/${expiredUsers}`} href="/admin/customers" icon={<CircleCheck size={16} />} tone="amber" />
+          <StatMiniCard label="PPPoE online" value={onlinePppoeValue} href="/admin/customers?type=pppoe" icon={<Wifi size={16} />} tone="plum" />
+          <StatMiniCard label="Hotspot online" value={onlineHotspotValue} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="deep-teal" />
+          <StatMiniCard label="VLAN users online" value={onlineVlanValue} href="/admin/customers?type=vlan" icon={<Wifi size={16} />} tone="indigo" />
+          <StatMiniCard label="Static online" value={onlineStaticValue} href="/admin/customers?type=static" icon={<Server size={16} />} tone="green" />
+           <StatMiniCard label="Active / expired accounts" value={activeExpiredValue} href="/admin/customers" icon={<CircleCheck size={16} />} tone="amber" />
            <StatMiniCard label="Active resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.activeResellers ?? 0)} href="/admin/network/resellers" icon={<Users size={16} />} tone="accent" />
            <StatMiniCard label="Online resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.onlineResellers ?? 0)} href="/admin/network/resellers" icon={<Wifi size={16} />} tone="teal" />
         </section>
@@ -688,12 +745,25 @@ export default function Dashboard() {
                 <p>Online only after a recent RouterOS API heartbeat</p>
               </div>
             </div>
-            {!routersLoading && (
-              <div className="panel-heading-meta">
+            <div className="panel-heading-meta">
+              {!routersLoading && (
+                <>
                 <span className="isp-badge isp-badge-green"><span className="status-dot status-dot--green" />{onlineRouters} online</span>
                 <span className="isp-badge isp-badge-red"><span className="status-dot status-dot--red" />{offlineRouters} offline</span>
-              </div>
-            )}
+                </>
+              )}
+              <button
+                type="button"
+                className="dashboard-refresh-button"
+                onClick={() => { void Promise.all([refetchRouters(), telemetryQuery.refetch()]); }}
+                disabled={routersFetching || telemetryQuery.isFetching}
+                aria-label="Refresh router status"
+                title="Refresh router status and live telemetry"
+              >
+                <RefreshCw size={13} className={routersFetching || telemetryQuery.isFetching ? "animate-spin" : ""} />
+                Refresh routers
+              </button>
+            </div>
           </div>
           <div className="router-card-grid">
             {routersLoading ? (

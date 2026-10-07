@@ -195,7 +195,7 @@ function matches(row: Record<string, unknown>, query: URLSearchParams): boolean 
 test("signed reseller portal requests stay within their assigned service", async (t) => {
   const [
     { generateAdminSessionToken, generatePaymentIntent, resolveVlanHotspotPortalRequest },
-    { default: customersRouter },
+    { default: customersRouter, hotspotTroubleshootOperations },
     {
       default: mpesaRouter,
       loadHotspotPortContext,
@@ -242,12 +242,22 @@ test("signed reseller portal requests stay within their assigned service", async
   let accountClaimBarrier: Promise<void> = Promise.resolve();
   let accountClaimQueue: Promise<void> = Promise.resolve();
   let resolvedPortalClientMac = "AA:BB:CC:DD:EE:FF";
+  let visibleHotspotClientIp: string | null = "10.43.0.10";
   const routerOperations: Array<{ name: string; [key: string]: unknown }> = [];
   const recordRouterOperation = (name: string, details: Record<string, unknown> = {}) => {
     routerOperations.push({ name, ...details });
   };
   const originalHotspotOperations = { ...hotspotPaymentOperations };
+  const originalHotspotTroubleshootOperations = { ...hotspotTroubleshootOperations };
 
+  hotspotTroubleshootOperations.fetchHotspotUsers = async () => {
+    recordRouterOperation("readActiveUsers");
+    return [];
+  };
+  hotspotTroubleshootOperations.resolveHotspotClientIpByMac = async (_credentials, mac) => {
+    recordRouterOperation("resolveClientIp", { mac });
+    return visibleHotspotClientIp;
+  };
   hotspotPaymentOperations.ensureHotspotServerAddressPool = async (_credentials, options) => {
     recordRouterOperation("ensurePool", { server: options.serverName, pool: options.poolName });
   };
@@ -528,6 +538,10 @@ test("signed reseller portal requests stay within their assigned service", async
         return row.query.get("id") === `eq.${assignedTransaction.id}`
           && row.query.get("admin_id") === "eq.7";
       }
+      if (row.table === "award_hotspot_loyalty_points_fractional") {
+        return row.method === "POST"
+          && Number(row.body?.p_transaction_id) === assignedTransaction.id;
+      }
       return false;
     }), `only the assigned transaction/customer may be written: ${JSON.stringify(writes)}`);
   };
@@ -535,6 +549,7 @@ test("signed reseller portal requests stay within their assigned service", async
   t.after(async () => {
     globalThis.fetch = originalFetch;
     Object.assign(hotspotPaymentOperations, originalHotspotOperations);
+    Object.assign(hotspotTroubleshootOperations, originalHotspotTroubleshootOperations);
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   });
 
@@ -1398,6 +1413,39 @@ test("signed reseller portal requests stay within their assigned service", async
       assert.equal(dbRequests.some(row => row.table === "isp_routers"), false);
     } finally {
       assignedPlan.data_cap_mode = originalDataCapMode;
+      includeRouterFixture = false;
+    }
+  });
+
+  await t.test("automatic sign-in waits for the device to appear before router-side changes", async () => {
+    transactions = [{ ...assignedTransaction }];
+    customers = [{ ...assignedCustomer }];
+    includeRouterFixture = true;
+    visibleHotspotClientIp = null;
+    routerOperations.length = 0;
+    clearRequests();
+    try {
+      const login = await request("/api/customers/hotspot-troubleshoot", {
+        method: "POST",
+        body: {
+          action: "login",
+          adminId: 7,
+          mac_address: assignedCustomer.mac_address,
+        },
+      });
+      assert.equal(login.status, 409, await login.clone().text());
+      const result = await login.json() as {
+        status: string;
+        connected: boolean;
+        retryable: boolean;
+      };
+      assert.equal(result.status, "active");
+      assert.equal(result.connected, false);
+      assert.equal(result.retryable, true);
+      assert.deepEqual(routerOperations.map(row => row.name), ["readActiveUsers", "resolveClientIp"]);
+      assert.equal(dbRequests.some(row => row.method !== "GET"), false, "a not-yet-visible device must not trigger account or transaction writes");
+    } finally {
+      visibleHotspotClientIp = "10.43.0.10";
       includeRouterFixture = false;
     }
   });

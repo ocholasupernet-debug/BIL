@@ -565,6 +565,7 @@ function HotspotLoginView({
   const [troubleshootMessage, setTroubleshootMessage] = useState("");
   const [troubleshootError, setTroubleshootError] = useState("");
   const [troubleshootAction, setTroubleshootAction] = useState<"check" | "login" | null>(null);
+  const [autoReconnectInProgress, setAutoReconnectInProgress] = useState(false);
   const troubleshootInFlight = useRef(false);
   const autoTroubleshootKey = useRef("");
   const [troubleshootDialogOpen, setTroubleshootDialogOpen] = useState(() => (
@@ -1264,6 +1265,7 @@ function HotspotLoginView({
     found: boolean;
     status: "active" | "depleted" | "expired" | "not_found" | "unavailable";
     connected: boolean;
+    retryable: boolean;
     expiresAt: string | null;
     planName: string | null;
     username: string | null;
@@ -1294,18 +1296,31 @@ function HotspotLoginView({
         found?: boolean;
         status?: "active" | "depleted" | "expired" | "not_found" | "unavailable";
         connected?: boolean;
+        retryable?: boolean;
         expiresAt?: string | null;
         planName?: string | null;
         username?: string | null;
         error?: string;
       };
       if (!res.ok && !data.status) {
-        setTroubleshootError(data.error ?? "Could not verify the latest hotspot purchase.");
-        return null;
+        const error = data.error ?? "Could not verify the latest hotspot purchase.";
+        const retryable = res.status === 408 || res.status === 425 || res.status === 429 || res.status >= 500;
+        setTroubleshootError(error);
+        return {
+          found: false,
+          status: "unavailable",
+          connected: false,
+          retryable,
+          expiresAt: null,
+          planName: null,
+          username: null,
+          error,
+        };
       }
       const result: TroubleshootResult = {
         found: data.found === true,
         connected: data.connected === true,
+        retryable: data.retryable === true,
         status: data.status === "active" || data.status === "depleted" || data.status === "expired" || data.status === "not_found"
           ? data.status
           : "unavailable",
@@ -1333,8 +1348,18 @@ function HotspotLoginView({
       }
       return result;
     } catch {
-      setTroubleshootError("Could not reach the server. Please try again.");
-      return null;
+      const error = "Could not reach the server. Automatic sign-in will keep trying.";
+      setTroubleshootError(error);
+      return {
+        found: false,
+        status: "unavailable",
+        connected: false,
+        retryable: true,
+        expiresAt: null,
+        planName: null,
+        username: null,
+        error,
+      };
     }
   }, [adminId, portalContext.ip, portalContext.mac]);
 
@@ -1408,57 +1433,65 @@ function HotspotLoginView({
   };
 
   useEffect(() => {
-    if (!troubleshootingOnly && (HOTSPOT_RUNTIME_CONFIG.previewOnly || !adminId || !portalContext.mac)) return;
-    const lookupKey = `${adminId ?? "missing"}:${portalContext.mac || "missing"}`;
+    if (HOTSPOT_RUNTIME_CONFIG.previewOnly || !adminId || !portalContext.mac) return;
+    const lookupKey = `${adminId}:${portalContext.mac}`;
     if (autoTroubleshootKey.current === lookupKey) return;
     autoTroubleshootKey.current = lookupKey;
-    troubleshootInFlight.current = true;
-    if (troubleshootingOnly) {
-      setTroubleshootLoading(true);
-      setTroubleshootAction("login");
-    }
-    void requestHotspotTroubleshoot("login").finally(() => {
-      troubleshootInFlight.current = false;
-      if (troubleshootingOnly) {
-        setTroubleshootLoading(false);
-        setTroubleshootAction(null);
+    let cancelled = false;
+    let retryTimer = 0;
+    let attempts = 0;
+    const runAutomaticReconnect = async () => {
+      if (cancelled) return;
+      if (troubleshootInFlight.current) {
+        retryTimer = window.setTimeout(() => void runAutomaticReconnect(), 150);
+        return;
       }
-    });
+
+      troubleshootInFlight.current = true;
+      if (troubleshootingOnly) {
+        setTroubleshootLoading(true);
+        setTroubleshootAction("login");
+      }
+      let result: TroubleshootResult | null = null;
+      try {
+        result = await requestHotspotTroubleshoot("login");
+      } finally {
+        troubleshootInFlight.current = false;
+        if (troubleshootingOnly) {
+          setTroubleshootLoading(false);
+          setTroubleshootAction(null);
+        }
+      }
+      if (cancelled) return;
+
+      if (result?.retryable) {
+        attempts += 1;
+        setAutoReconnectInProgress(true);
+        const delayMs = Math.min(1_000 * 2 ** Math.min(attempts - 1, 5), 30_000);
+        retryTimer = window.setTimeout(() => void runAutomaticReconnect(), delayMs);
+        return;
+      }
+
+      setAutoReconnectInProgress(false);
+    };
+
+    const startTimer = window.setTimeout(() => void runAutomaticReconnect(), 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(startTimer);
+      if (retryTimer) window.clearTimeout(retryTimer);
+      if (autoTroubleshootKey.current === lookupKey) autoTroubleshootKey.current = "";
+    };
   }, [troubleshootingOnly, adminId, portalContext.mac, requestHotspotTroubleshoot]);
 
   useEffect(() => {
     if (!troubleshootDialogOpen) return;
-    let retryTimer = 0;
-    const runReconnect = () => {
-      if (HOTSPOT_RUNTIME_CONFIG.previewOnly) {
-        setTroubleshootError("Connection checks are available when this page is opened from an active hotspot device.");
-        return;
-      }
-      if (!adminId || !portalContext.mac) {
-        setTroubleshootError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
-        return;
-      }
-      if (troubleshootInFlight.current) {
-        retryTimer = window.setTimeout(runReconnect, 150);
-        return;
-      }
-      troubleshootInFlight.current = true;
-      setLoginSession(null);
-      setTroubleshootLoading(true);
-      setTroubleshootError("");
-      setTroubleshootMessage("");
-      setTroubleshootAction("login");
-      void requestHotspotTroubleshoot("login").finally(() => {
-        troubleshootInFlight.current = false;
-        setTroubleshootLoading(false);
-        setTroubleshootAction(null);
-      });
-    };
-    runReconnect();
-    return () => {
-      if (retryTimer) window.clearTimeout(retryTimer);
-    };
-  }, [troubleshootDialogOpen, adminId, portalContext.mac, requestHotspotTroubleshoot]);
+    if (HOTSPOT_RUNTIME_CONFIG.previewOnly) {
+      setTroubleshootError("Connection checks are available when this page is opened from an active hotspot device.");
+    } else if (!adminId || !portalContext.mac) {
+      setTroubleshootError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
+    }
+  }, [troubleshootDialogOpen, adminId, portalContext.mac]);
 
   const handlePlanLogin = async () => {
     if (troubleshootInFlight.current) return;
@@ -1469,7 +1502,7 @@ function HotspotLoginView({
     try {
       const result = await requestHotspotTroubleshoot("login");
       if (result && result.status === "active" && !result.connected && !result.error) {
-        setTroubleshootMessage("Your package is active, but the router has not confirmed sign-in. Keep this device connected to Wi-Fi and tap Retry sign-in.");
+        setTroubleshootMessage("Your package is active. Automatic sign-in will keep retrying while this device stays connected to Wi-Fi.");
       }
     } finally {
       troubleshootInFlight.current = false;
@@ -1611,7 +1644,9 @@ function HotspotLoginView({
             ? loginSession.expiresAt
               ? `Your plan is active and expires ${formatSessionExpiry(loginSession.expiresAt)}.`
               : "Your plan is active. No expiry time is recorded."
-            : "Your package is active, but the router has not confirmed sign-in for this device. Keep it connected to Wi-Fi and retry sign-in.",
+            : autoReconnectInProgress
+              ? "Your package is active. We are retrying sign-in automatically while this page is open and the device stays connected to Wi-Fi."
+              : "Your package is active, but the router has not confirmed sign-in for this device. Keep it connected to Wi-Fi and retry sign-in.",
         },
         expired: {
           label: "Plan expired",
@@ -2426,6 +2461,35 @@ function HotspotLoginView({
                 <span className="hp-badge"><Shield size={12} /> Secure</span>
                 <span className="hp-badge"><Zap size={12} /> Instant</span>
                 <span className="hp-badge"><Clock size={12} /> 24/7</span>
+              </div>
+            </div>
+          )}
+
+          {!troubleshootingOnly && autoReconnectInProgress && (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 12,
+                maxWidth: 840,
+                margin: "0 auto 20px",
+                padding: "14px 18px",
+                borderRadius: 14,
+                background: "rgba(59,130,246,0.12)",
+                border: "1px solid rgba(96,165,250,0.38)",
+                color: "rgba(255,255,255,0.92)",
+              }}
+            >
+              <Loader2 size={19} color="#93c5fd" style={{ flexShrink: 0, marginTop: 1, animation: "spin 1s linear infinite" }} />
+              <div>
+                <strong style={{ display: "block", color: "#bfdbfe", marginBottom: 4 }}>
+                  Connecting your active package
+                </strong>
+                <p style={{ color: "rgba(255,255,255,0.76)", fontSize: 13, lineHeight: 1.5 }}>
+                  Sign-in retries automatically while this page is open and the device stays on hotspot Wi-Fi. You do not need to tap reconnect.
+                </p>
               </div>
             </div>
           )}
