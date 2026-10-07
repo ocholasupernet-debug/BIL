@@ -96,6 +96,26 @@ assert.match(
   /const runAutomaticReconnect\s*=\s*async\s*\(\)\s*=>\s*\{[\s\S]*?result\s*=\s*await requestHotspotTroubleshoot\("login"\);/,
   "the normal React hotspot sign-in page must automatically attempt login for this device",
 );
+assert.match(
+  reactSource,
+  /addEventListener\("beforeunload",\s*keepAssignmentOnPage\)/,
+  "paid Hotspot assignment must warn before the customer closes or leaves the page",
+);
+assert.match(
+  reactSource,
+  /addEventListener\("popstate",\s*keepAssignmentRoute,\s*true\)/,
+  "paid Hotspot assignment must keep browser Back from leaving the page",
+);
+assert.match(
+  reactSource,
+  /hotspot-mac-access[\s\S]*?keepalive:\s*true/,
+  "the RouterOS assignment request must continue if the customer confirms navigation away",
+);
+assert.match(
+  reactSource,
+  /server will keep retrying once your paid account has been saved/,
+  "customers must be told that server-managed reconnect continues after account persistence",
+);
 
 try {
   await access(removedFallbackPath, constants.F_OK);

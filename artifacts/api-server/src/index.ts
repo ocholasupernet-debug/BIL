@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { sweepAllRouters } from "./routes/routers-route";
 import { getRouterCreds } from "./routes/mikrotik-route.js";
 import { processDueRouterUserSnapshots } from "./services/router-user-snapshot-service.js";
+import { runPrepaidHotspotReconnectSweep } from "./services/prepaid-hotspot-reconnect-worker.js";
 import {
   enqueueWhatsAppExpiryNotifications,
   processWhatsAppOutboxBatch,
@@ -121,6 +122,21 @@ const server = app.listen(port, (err) => {
       setInterval(() => void runRouterUserSnapshotWorker(), 60_000);
     }, 20_000);
     logger.info({ intervalSeconds: 60 }, "[user-snapshots] scheduled refresh worker started");
+  }
+  if (
+    process.env.NODE_ENV === "production"
+    && process.env.PREPAID_HOTSPOT_RECONNECT_WORKER_ENABLED !== "false"
+  ) {
+    const runReconnectWorker = () => {
+      void runPrepaidHotspotReconnectSweep().catch(error => {
+        logger.warn({ err: error }, "[prepaid-hotspot-reconnect] background sweep failed");
+      });
+    };
+    setTimeout(() => {
+      runReconnectWorker();
+      setInterval(runReconnectWorker, 3_000);
+    }, 20_000);
+    logger.info({ intervalSeconds: 3 }, "[prepaid-hotspot-reconnect] background worker started");
   }
 });
 

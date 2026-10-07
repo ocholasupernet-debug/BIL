@@ -749,12 +749,49 @@ function HotspotLoginView({
 
   const [pollTimedOut, setPollTimedOut] = useState(false);
 
+  useEffect(() => {
+    const keepAssignmentOnPage = (event: BeforeUnloadEvent) => {
+      if (!bindingInFlight.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", keepAssignmentOnPage);
+    return () => window.removeEventListener("beforeunload", keepAssignmentOnPage);
+  }, []);
+
+  useEffect(() => {
+    if (!accessRetrying) return;
+    const guardToken = `hotspot-assignment-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const currentState = window.history.state;
+    const preservedState = currentState && typeof currentState === "object" && !Array.isArray(currentState)
+      ? currentState as Record<string, unknown>
+      : {};
+    const lockedUrl = window.location.href;
+    window.history.pushState({ ...preservedState, __hotspotAssignmentGuard: guardToken }, "", lockedUrl);
+
+    const keepAssignmentRoute = (event: PopStateEvent) => {
+      if (!bindingInFlight.current || event.state?.__hotspotAssignmentGuard === guardToken) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      window.history.go(1);
+    };
+    window.addEventListener("popstate", keepAssignmentRoute, true);
+    return () => {
+      window.removeEventListener("popstate", keepAssignmentRoute, true);
+      if (window.history.state?.__hotspotAssignmentGuard === guardToken) {
+        window.history.back();
+      }
+    };
+  }, [accessRetrying]);
+
   const bindPaidHotspotAccess = useCallback(async (activeCheckoutId: string, retryRouter = false): Promise<boolean> => {
+    bindingInFlight.current = true;
     setAccessRetrying(true);
     try {
       const accessResponse = await hotspotPortalFetch(hotspotApiUrl("/api/mpesa/hotspot-mac-access"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        keepalive: true,
         body: JSON.stringify({
           checkout_id: activeCheckoutId,
           ...(retryRouter ? { retry: true } : {}),
@@ -2737,13 +2774,20 @@ function HotspotLoginView({
                     {paymentConfirmed ? (
                       <>
                         <div className="hp-success-icon">
-                          <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
+                          {accessRetrying
+                            ? <Loader2 size={30} color="var(--isp-accent)" style={{ animation: "spin 1.2s linear infinite" }} />
+                            : <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />}
                         </div>
-                          <h3>{accessReady ? (isTvMode ? "TV is ready to stream!" : "Device connected!") : portalHandoffReady ? "Connecting your device…" : "Payment Confirmed"}</h3>
+                          <h3>{accessReady ? (isTvMode ? "TV is ready to stream!" : "Device connected!") : accessRetrying ? "Connecting your hotspot…" : portalHandoffReady ? "Connecting your device…" : "Payment Confirmed"}</h3>
                           <p>{loyaltyPaidWithPoints
                             ? <>Your full plan redemption used <strong style={{ color: "#fff" }}>{loyaltyQuote?.pointsRequired ?? "—"} points</strong>.</>
                             : <>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</>}</p>
-                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? (isTvMode ? "Your TV session was confirmed by the hotspot." : "Your device has been authorized by the hotspot. Use the credentials below for the next sign-in.") : portalHandoffReady ? "Your package is ready. Finishing hotspot sign-in now." : loyaltyPaidWithPoints ? "Your points redemption is confirmed, but the hotspot still needs to be updated." : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
+                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? (isTvMode ? "Your TV session was confirmed by the hotspot." : "Your device has been authorized by the hotspot. Use the credentials below for the next sign-in.") : accessRetrying ? "Your payment is confirmed. We’re applying your access to the router now." : portalHandoffReady ? "Your package is ready. Finishing hotspot sign-in now." : loyaltyPaidWithPoints ? "Your points redemption is confirmed, but the hotspot still needs to be updated." : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
+                          {accessRetrying && (
+                            <p role="status" aria-live="polite" style={{ fontSize: 12, margin: "0 auto 14px", maxWidth: 380, color: "rgba(255,255,255,0.68)" }}>
+                              Setting up router access now. You can switch apps while this runs; avoid Back, refresh, or closing this page until connected. If you leave after setup starts, the server will keep retrying once your paid account has been saved.
+                            </p>
+                          )}
                           {hotspotCredentials && (
                             <div style={{ display: "grid", gap: 8, textAlign: "left", margin: "0 auto 16px", maxWidth: 320 }}>
                               <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)" }}>
@@ -2758,7 +2802,7 @@ function HotspotLoginView({
                           )}
                         <div className="hp-connected-badge" style={{ marginTop: 16, marginBottom: 24 }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399" }} />
-                            {accessReady ? "Connected" : portalHandoffReady ? "Connecting" : "Payment received"}
+                            {accessReady ? "Connected" : accessRetrying || portalHandoffReady ? "Connecting" : "Payment received"}
                         </div>
                           {!accessReady && payError && (
                             <p style={{ fontSize: 12, color: "#fbbf24", marginBottom: 16 }}>{payError}</p>
@@ -3171,9 +3215,6 @@ function HotspotLoginView({
                       <h3>Voucher activated successfully</h3>
                       {voucherPlanName && (
                         <p>Plan: <strong style={{ color: "#fff" }}>{voucherPlanName}</strong></p>
-                      )}
-                      {voucherUsername && (
-                        <p>Hotspot username: <strong style={{ color: "#fff" }}>{voucherUsername}</strong></p>
                       )}
                       {voucherDuration && (
                         <p style={{ marginBottom: 16 }}>Duration: <strong style={{ color: "#fff" }}>{voucherDuration}</strong></p>

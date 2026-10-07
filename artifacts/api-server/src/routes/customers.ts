@@ -724,30 +724,18 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
   res.json(rows);
 });
 
-router.post("/customers/:id/hotspot-reconnect", requireAdmin(), async (req, res): Promise<void> => {
-  const sessionAdminId = authenticatedAdminId(req);
-  const customerId = positivePortalId(req.params.id);
-  if (!sessionAdminId || !customerId) {
-    res.status(400).json({ error: "A valid signed-in account and customer ID are required." });
-    return;
-  }
-  const account = await authenticatedAccount(req);
-  if (!account) {
-    res.status(401).json({ error: "A valid signed-in account is required." });
-    return;
-  }
-
+export async function reconnectPrepaidHotspotCustomer(
+  account: NonNullable<Awaited<ReturnType<typeof authenticatedAccount>>>,
+  customerId: number,
+) {
+  const sessionAdminId = account.id;
   const customerFilter =
     `id=eq.${customerId}&admin_id=eq.${sessionAdminId}&select=id,admin_id,name,mac_address,username,password,type,plan_id,router_id,port_id,ip_address,status,expires_at,fup_limit_mb,depletion_reason&limit=1`;
   const initialRows = await sbSelectStrict<CustomerRow>("isp_customers", customerFilter);
   const initial = initialRows[0];
-  if (!initial) {
-    res.status(404).json({ error: "Prepaid Hotspot account not found." });
-    return;
-  }
+  if (!initial) return null;
 
-  try {
-    const result = await prepaidHotspotReconnectOperations.withCustomerEditLock(
+  return prepaidHotspotReconnectOperations.withCustomerEditLock(
       initial.admin_id,
       customerId,
       async assertLock => {
@@ -966,6 +954,27 @@ router.post("/customers/:id/hotspot-reconnect", requireAdmin(), async (req, res)
           };
       },
     );
+}
+
+router.post("/customers/:id/hotspot-reconnect", requireAdmin(), async (req, res): Promise<void> => {
+  const sessionAdminId = authenticatedAdminId(req);
+  const customerId = positivePortalId(req.params.id);
+  if (!sessionAdminId || !customerId) {
+    res.status(400).json({ error: "A valid signed-in account and customer ID are required." });
+    return;
+  }
+  const account = await authenticatedAccount(req);
+  if (!account || account.id !== sessionAdminId) {
+    res.status(401).json({ error: "A valid signed-in account is required." });
+    return;
+  }
+
+  try {
+    const result = await reconnectPrepaidHotspotCustomer(account, customerId);
+    if (!result) {
+      res.status(404).json({ error: "Prepaid Hotspot account not found." });
+      return;
+    }
     res.json(result);
   } catch (error) {
     logger.warn({ err: error, adminId: sessionAdminId, customerId }, "[customers/hotspot-reconnect] failed");
