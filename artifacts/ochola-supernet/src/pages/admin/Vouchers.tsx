@@ -6,7 +6,7 @@ import { adminApiHeaders } from "@/lib/admin-router-context";
 import {
   Plus, Search, Printer, Copy, Trash2, Loader2, CheckCircle2,
   Ticket, Wifi, X, Download, RefreshCw, Filter, Eye, EyeOff,
-  AlertTriangle, ChevronDown, UploadCloud, RotateCcw,
+  AlertTriangle, ChevronDown, UploadCloud, RotateCcw, Pencil,
 } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 import { getCurrencySymbol } from "@/lib/utils";
@@ -21,6 +21,7 @@ interface VoucherRow {
   validity_mins: number;
   expiry: string | null;
   expiry_kind: "service" | "redeem_by" | null;
+  service_expires_at?: string | null;
   used: boolean;
   redeemed_at: string | null;
   redeemed_by: string | null;
@@ -64,6 +65,18 @@ function fmtDateTime(d: string) {
     minute: "2-digit",
     timeZone: "Africa/Nairobi",
   });
+}
+
+function toLocalDateTimeInput(value: string | null | undefined): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function toLocalDateInput(value: string | null | undefined): string {
+  return toLocalDateTimeInput(value).slice(0, 10);
 }
 
 function fmtDataLimit(mb: number | null | undefined): string {
@@ -159,6 +172,23 @@ async function deleteVouchers(codes: string[]): Promise<{ deleted: number }> {
   });
 }
 
+interface VoucherUpdateInput {
+  code: string;
+  expiryAt?: string | null;
+  dataLimitMb?: number | null;
+}
+
+async function updateVoucher(input: VoucherUpdateInput): Promise<{ ok: boolean }> {
+  const body: Record<string, unknown> = {};
+  if (input.expiryAt !== undefined) body.expiryAt = input.expiryAt;
+  if (input.dataLimitMb !== undefined) body.dataLimitMb = input.dataLimitMb;
+  return voucherApi(`/api/vouchers/hotspot/${encodeURIComponent(input.code)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 interface VoucherRestoreInput {
   code: string;
   routerId: number;
@@ -201,6 +231,117 @@ function PrintVoucherCard({ v, plan }: { v: VoucherRow; plan?: DbPlanLite }) {
           Expires: {v.expiry}
         </div>
       )}
+    </div>
+  );
+}
+
+function EditVoucherModal({
+  voucher,
+  saving,
+  onClose,
+  onSave,
+}: {
+  voucher: VoucherRow;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (input: VoucherUpdateInput) => void;
+}) {
+  const [expiry, setExpiry] = useState(
+    voucher.used ? toLocalDateTimeInput(voucher.expiry) : toLocalDateInput(voucher.expiry),
+  );
+  const [expiryTouched, setExpiryTouched] = useState(false);
+  const [limited, setLimited] = useState(voucher.data_limit_mb != null && voucher.data_limit_mb > 0);
+  const [dataLimitMb, setDataLimitMb] = useState(
+    voucher.data_limit_mb != null && voucher.data_limit_mb > 0 ? String(voucher.data_limit_mb) : "",
+  );
+  const isUsed = voucher.used;
+  const proposedCap = limited ? Number(dataLimitMb) * 1_000_000 : Number.POSITIVE_INFINITY;
+  const wouldExceedRecordedUsage = limited
+    && Number.isFinite(proposedCap)
+    && proposedCap > 0
+    && voucher.data_used_bytes >= proposedCap
+    && voucher.data_cap_mode === "disconnect";
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (limited && (!Number.isFinite(Number(dataLimitMb)) || Number(dataLimitMb) <= 0)) return;
+    onSave({
+      code: voucher.code,
+      ...(expiryTouched ? {
+        expiryAt: expiry
+          ? new Date(isUsed ? expiry : `${expiry}T00:00:00.000Z`).toISOString()
+          : null,
+      } : {}),
+      dataLimitMb: limited ? Number(dataLimitMb) : null,
+    });
+  };
+
+  const inputStyle: React.CSSProperties = {
+    width: "100%",
+    boxSizing: "border-box",
+    background: "var(--isp-inner-card)",
+    border: "1px solid var(--isp-border)",
+    borderRadius: 8,
+    padding: "0.65rem 0.75rem",
+    color: "var(--isp-text)",
+    fontSize: "0.85rem",
+    fontFamily: "inherit",
+  };
+
+  return (
+    <div role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}
+      style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(2,6,23,0.72)", display: "grid", placeItems: "center", padding: "1rem" }}>
+      <form onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="edit-voucher-title"
+        style={{ width: "min(100%, 480px)", background: "var(--isp-card, #101827)", border: "1px solid var(--isp-border)", borderRadius: 14, padding: "1.25rem", boxShadow: "0 24px 80px rgba(0,0,0,0.4)", display: "grid", gap: "1rem" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem" }}>
+          <div>
+            <h2 id="edit-voucher-title" style={{ margin: 0, color: "var(--isp-text)", fontSize: "1.05rem" }}>Edit voucher</h2>
+            <div style={{ marginTop: "0.25rem", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>{voucher.code} · {isUsed ? "Redeemed" : "Unused"}</div>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close edit voucher"
+            style={{ border: 0, background: "transparent", color: "var(--isp-text-muted)", cursor: "pointer" }}><X size={18} /></button>
+        </div>
+
+        <label style={{ display: "grid", gap: "0.4rem", color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 600 }}>
+          {isUsed ? "Service expiry" : "Redeem-by deadline"}
+          <input type={isUsed ? "datetime-local" : "date"} value={expiry} onChange={event => { setExpiry(event.target.value); setExpiryTouched(true); }} style={inputStyle} />
+          <span style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem", fontWeight: 400 }}>
+            {isUsed
+              ? "Leave blank for no time expiry. This time is shown in your local timezone."
+              : "Leave blank for no redemption deadline. The deadline applies to unused vouchers."}
+          </span>
+        </label>
+
+        <div style={{ display: "grid", gap: "0.55rem" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.55rem", color: "var(--isp-text)", fontSize: "0.82rem", fontWeight: 600 }}>
+            <input type="checkbox" checked={limited} onChange={event => setLimited(event.target.checked)} />
+            Limit this voucher’s total data
+          </label>
+          {limited && (
+            <div style={{ display: "grid", gap: "0.45rem" }}>
+              <input aria-label="Voucher data cap in MB" type="number" min="0.01" step="0.01" required value={dataLimitMb}
+                onChange={event => setDataLimitMb(event.target.value)} placeholder="Data cap in MB" style={inputStyle} />
+              <span style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem" }}>
+                Current package behavior: {voucher.data_cap_mode === "throttle" ? "throttle at cap" : "disconnect at cap"}.
+              </span>
+            </div>
+          )}
+          {isUsed && (
+            <div style={{ color: wouldExceedRecordedUsage ? "#fbbf24" : "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.45 }}>
+              Recorded usage ({fmtDataUsage(voucher.data_used_bytes)}) is preserved. A disconnect cap at or below that amount will make the voucher inactive.
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", paddingTop: "0.25rem" }}>
+          <button type="button" onClick={onClose} disabled={saving}
+            style={{ background: "transparent", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.9rem", color: "var(--isp-text-muted)", cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
+          <button type="submit" disabled={saving || (limited && (!Number.isFinite(Number(dataLimitMb)) || Number(dataLimitMb) <= 0))}
+            style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", background: "var(--isp-accent)", border: 0, borderRadius: 8, padding: "0.6rem 0.9rem", color: "#fff", fontWeight: 700, cursor: saving ? "wait" : "pointer", fontFamily: "inherit" }}>
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Save changes
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -425,6 +566,7 @@ export default function Vouchers() {
   const autoGenerate = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("action") === "generate";
   const [showGenerate,   setShowGenerate]   = useState(autoGenerate);
   const [showPrint,      setShowPrint]      = useState(false);
+  const [editingVoucher, setEditingVoucher] = useState<VoucherRow | null>(null);
   const [showCodes,      setShowCodes]      = useState(true);
   const [search,         setSearch]         = useState("");
   const [filterRouter,   setFilterRouter]   = useState("all");
@@ -491,6 +633,16 @@ export default function Vouchers() {
       showToast(`Restored ${result.voucher} on ${result.router}; usage and expiry preserved`);
     },
     onError: (e: Error) => showToast(`Restore failed: ${e.message}`, false),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: updateVoucher,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["vouchers", ADMIN_ID] });
+      setEditingVoucher(null);
+      showToast("Voucher expiry and data allowance updated; recorded usage was preserved");
+    },
+    onError: (e: Error) => showToast(`Voucher update failed: ${e.message}`, false),
   });
 
   /* ─── Copy ─── */
@@ -570,6 +722,15 @@ export default function Vouchers() {
       {/* Print Modal */}
       {showPrint && (
         <PrintModal vouchers={printTarget} onClose={() => setShowPrint(false)} />
+      )}
+
+      {editingVoucher && (
+        <EditVoucherModal
+          voucher={editingVoucher}
+          saving={updateMutation.isPending}
+          onClose={() => { if (!updateMutation.isPending) setEditingVoucher(null); }}
+          onSave={input => updateMutation.mutate(input)}
+        />
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
@@ -898,6 +1059,13 @@ export default function Vouchers() {
                             <Printer size={13} />
                           </button>
                           <button
+                            aria-label={`Edit voucher ${v.code}`}
+                            title="Edit expiry or data cap without resetting recorded usage."
+                            onClick={() => setEditingVoucher(v)}
+                            style={{ padding: "0.35rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--isp-accent)", cursor: "pointer" }}>
+                            <Pencil size={13} />
+                          </button>
+                          <button
                             aria-label={`Restore active voucher ${v.code}`}
                             title={canRestore
                               ? "Restore this active voucher to RADIUS and its router without resetting usage or expiry."
@@ -921,7 +1089,7 @@ export default function Vouchers() {
                             Restore
                           </button>
                           <button
-                            title={v.used ? "Redeemed voucher is locked; it cannot be edited, disabled, or deleted." : "Delete unused voucher"}
+                            title={v.used ? "Redeemed vouchers cannot be deleted. You can still edit expiry and data allowance." : "Delete unused voucher"}
                             disabled={v.used || deleteMutation.isPending}
                             onClick={() => { if (!v.used && confirm(`Delete unused voucher ${v.code}?`)) deleteMutation.mutate(v.code); }}
                             style={{ padding: "0.35rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: v.used ? "var(--isp-text-sub)" : "var(--isp-text-muted)", cursor: v.used ? "not-allowed" : "pointer", opacity: v.used ? 0.45 : 1 }}>

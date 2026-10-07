@@ -124,6 +124,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_prepaid_checkout_idempotency.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_prepaid_transaction_account_claim.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_hotspot_voucher_account_activation.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_hotspot_voucher_activation.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_hotspot_loyalty_points.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_hotspot_fractional_loyalty_points.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_radacct_standard_accounting_columns.sql", import.meta.url)),

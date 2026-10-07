@@ -46,6 +46,7 @@ export function summarizeHotspotVoucherStatus(input: {
   redeemBy: string | null;
   redeemedAt?: string | null;
   redeemedBy?: string | null;
+  serviceExpiresAt?: string | null;
   dataLimitMb: number | null;
   dataCapMode: string | null;
   now?: number;
@@ -74,10 +75,13 @@ export function summarizeHotspotVoucherStatus(input: {
   const validityMins = Number.isFinite(input.validityMins)
     ? Math.max(0, input.validityMins)
     : 0;
+  const savedServiceExpiry = Date.parse(input.serviceExpiresAt ?? "");
   const expiry = used
-    ? redeemedAt && validityMins > 0
-      ? new Date(Date.parse(redeemedAt) + validityMins * 60_000).toISOString()
-      : null
+    ? Number.isFinite(savedServiceExpiry)
+      ? new Date(savedServiceExpiry).toISOString()
+      : redeemedAt && validityMins > 0
+        ? new Date(Date.parse(redeemedAt) + validityMins * 60_000).toISOString()
+        : null
     : input.redeemBy;
   const expiryKind = expiry ? (used ? "service" : "redeem_by") : null;
   const dataLimitMb = Number(input.dataLimitMb);
@@ -101,7 +105,7 @@ export function summarizeHotspotVoucherStatus(input: {
     serviceStatus = Number.isFinite(redeemByTime) && redeemByTime <= now
       ? "expired"
       : "available";
-  } else if (validityMins > 0 && !redeemedAt) {
+  } else if (validityMins > 0 && !redeemedAt && !Number.isFinite(savedServiceExpiry)) {
     serviceStatus = "unknown";
   } else if (expiry && Date.parse(expiry) <= now) {
     serviceStatus = "inactive";
