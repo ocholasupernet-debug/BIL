@@ -1342,6 +1342,14 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   color: var(--isp-text-muted);
   font-size: 0.95rem;
 }
+.dashboard-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
 .dashboard-date {
   display: inline-flex;
   align-items: center;
@@ -1405,13 +1413,6 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
 .dashboard-live-counts-heading span {
   color: var(--isp-text-muted);
   font-size: 0.68rem;
-}
-.dashboard-live-counts-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 .dashboard-live-counts-warning { color: var(--isp-text-muted); }
 .dashboard-refresh-button {
@@ -2158,7 +2159,8 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   .settings-sidebar { display: none; }
   .settings-mobile-nav { display: block; margin: -4px 0 16px; }
   .dashboard-hero { align-items: flex-start; flex-direction: column; gap: 12px; }
-  .dashboard-date { align-self: stretch; justify-content: center; }
+  .dashboard-header-actions { align-self: stretch; justify-content: space-between; }
+  .dashboard-date { justify-content: center; }
   .dashboard-kpi-grid,
   .dashboard-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
   .dashboard-side-stack { grid-template-columns: minmax(0, 1fr); }

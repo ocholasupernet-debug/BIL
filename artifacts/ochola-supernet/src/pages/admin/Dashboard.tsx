@@ -653,9 +653,22 @@ export default function Dashboard() {
              <h1>{displayName ? `${greeting}, ${displayName}` : greeting}</h1>
             <p>Network pulse, customer activity, and cashflow in one view.</p>
           </div>
-          <div className="dashboard-date">
-            <CalendarDays size={15} />
-            {now.toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Nairobi" })}
+          <div className="dashboard-header-actions">
+            <button
+              type="button"
+              className="dashboard-refresh-button"
+              onClick={() => void refreshOnlineUsers()}
+              disabled={liveCountRefreshing || routersFetching}
+              aria-label="Refresh online user counts"
+              title="Refresh router list and online session counts now"
+            >
+              <RefreshCw size={13} className={liveCountRefreshing || routersFetching ? "animate-spin" : ""} />
+              Refresh online users
+            </button>
+            <div className="dashboard-date">
+              <CalendarDays size={15} />
+              {now.toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long", timeZone: "Africa/Nairobi" })}
+            </div>
           </div>
         </header>
 
@@ -700,24 +713,11 @@ export default function Dashboard() {
           <div>
             <strong>Live user counts</strong>
             <span>Router sessions refresh every 5 seconds</span>
-          </div>
-          <div className="dashboard-live-counts-actions">
             {liveCountUnavailable && (
               <span className="dashboard-live-counts-warning" role="status">
                 Some routers are unavailable; last readings are retained.
               </span>
             )}
-            <button
-              type="button"
-              className="dashboard-refresh-button"
-              onClick={() => void refreshOnlineUsers()}
-              disabled={liveCountRefreshing || routersFetching}
-              aria-label="Refresh online user counts"
-              title="Refresh router list and online session counts now"
-            >
-              <RefreshCw size={13} className={liveCountRefreshing || routersFetching ? "animate-spin" : ""} />
-              Refresh online users
-            </button>
           </div>
         </div>
         <section className="dashboard-stat-grid" aria-label="Network quick stats">
