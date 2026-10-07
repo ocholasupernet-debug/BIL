@@ -265,6 +265,10 @@ load_deploy_env
 
 # 3. Apply the one-time schema migration before building or restarting the API.
 echo "[3/7] Applying Supabase schema migration..."
+(
+  cd "$PROJECT_DIR/artifacts/api-server"
+  node --test tests/prepaid-transaction-account-claim.test.mjs
+)
 apply_supabase_migration
 
 # 4. Build the frontend (VPS config — no Replit plugins)

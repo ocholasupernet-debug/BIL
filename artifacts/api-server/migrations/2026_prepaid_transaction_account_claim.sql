@@ -132,10 +132,10 @@ begin
   )
   returning id into new_customer_id;
 
-  update public.isp_transactions
+  update public.isp_transactions as payment
      set customer_id = new_customer_id
-   where id = tx.id
-     and customer_id is null;
+   where payment.id = tx.id
+     and payment.customer_id is null;
   if not found then
     raise exception 'The paid Hotspot account could not be linked to its transaction.';
   end if;
