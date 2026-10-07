@@ -914,22 +914,25 @@ export default function PrepaidUsers() {
     () => mergeDuplicateCustomers(customers, planMap),
     [customers, planMap],
   );
-  const paymentMap = useMemo(() => {
-    const latestByCustomerId = new Map<number, Payment>();
+  const paymentsByCustomerId = useMemo(() => {
+    const grouped = new Map<number, Payment[]>();
     const latestFirst = [...payments].sort((a, b) => {
       const dateDifference = Date.parse(b.created_at) - Date.parse(a.created_at);
       return (Number.isFinite(dateDifference) ? dateDifference : 0) || b.id - a.id;
     });
     latestFirst.forEach(payment => {
-      if (payment.customer_id !== null && !latestByCustomerId.has(payment.customer_id)) {
-        latestByCustomerId.set(payment.customer_id, payment);
-      }
+      if (payment.customer_id === null) return;
+      const customerPayments = grouped.get(payment.customer_id) ?? [];
+      customerPayments.push(payment);
+      grouped.set(payment.customer_id, customerPayments);
     });
-
+    return grouped;
+  }, [payments]);
+  const paymentMap = useMemo(() => {
     const grouped: Record<number, Payment> = {};
     displayCustomers.forEach(customer => {
       const payment = customer.mergedCustomerIds
-        .map(customerId => latestByCustomerId.get(customerId))
+        .map(customerId => paymentsByCustomerId.get(customerId)?.[0])
         .filter((value): value is Payment => Boolean(value))
         .sort((a, b) => {
           const dateDifference = Date.parse(b.created_at) - Date.parse(a.created_at);
@@ -938,7 +941,7 @@ export default function PrepaidUsers() {
       if (payment) grouped[customer.id] = payment;
     });
     return grouped;
-  }, [payments, displayCustomers]);
+  }, [paymentsByCustomerId, displayCustomers]);
   const packageOptions = useMemo(() => {
     const ids = new Set<number>(plans.map(plan => plan.id));
     displayCustomers.forEach(customer => {
@@ -998,6 +1001,7 @@ export default function PrepaidUsers() {
   const [entries,     setEntries]     = useState(PAGE_SIZE);
   const [page,        setPage]        = useState(1);
   const [detailUser,  setDetailUser]  = useState<Customer | null>(null);
+  const [relatedAccountsUser, setRelatedAccountsUser] = useState<DisplayCustomer | null>(null);
   const [editingUser, setEditingUser] = useState<Customer | null>(null);
   const [extendingUser, setExtendingUser] = useState<Customer | null>(null);
   const [adjustingExpiryUser, setAdjustingExpiryUser] = useState<Customer | null>(null);
@@ -1007,6 +1011,16 @@ export default function PrepaidUsers() {
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
   const [actionBusy, setActionBusy] = useState<number | null>(null);
+  const relatedAccountRows = useMemo(() => {
+    if (!relatedAccountsUser) return [];
+    const ids = new Set(relatedAccountsUser.mergedCustomerIds);
+    return customers
+      .filter(customer => ids.has(customer.id))
+      .sort((a, b) => {
+        const dateDifference = Date.parse(b.created_at) - Date.parse(a.created_at);
+        return (Number.isFinite(dateDifference) ? dateDifference : 0) || b.id - a.id;
+      });
+  }, [relatedAccountsUser, customers]);
   const [reconnectingIds, setReconnectingIds] = useState<Set<number>>(() => new Set());
   const [reconnectProgress, setReconnectProgress] = useState<{
     completed: number;
@@ -1759,12 +1773,15 @@ export default function PrepaidUsers() {
                           {username}
                         </button>
                         {user.mergedCustomerIds.length > 1 && (
-                          <div
-                            title="Grouped by shared device, contact, or service identity—not by M-Pesa transaction. The payment shown is the newest linked purchase."
-                            style={{ marginTop: 2, color: "var(--isp-text-muted)", fontSize: "0.62rem" }}
+                          <button
+                            type="button"
+                            aria-label={`Inspect ${user.mergedCustomerIds.length} related account records for ${username}`}
+                            title="These records share a Hotspot identity; this count is not a count of accounts created by one M-Pesa payment."
+                            onClick={() => setRelatedAccountsUser(user)}
+                            style={{ marginTop: 2, padding: 0, border: 0, background: "none", color: "var(--isp-accent)", fontSize: "0.62rem", textAlign: "left", textDecoration: "underline", textUnderlineOffset: 2, cursor: "pointer", fontFamily: "inherit" }}
                           >
-                            {user.mergedCustomerIds.length} matching accounts · newest shown
-                          </div>
+                            {user.mergedCustomerIds.length} related records · inspect payments
+                          </button>
                         )}
                       </td>
                       <td style={TD}><span className="prepaid-plain-value">{TYPE_META[user.type ?? ""]?.label ?? user.type ?? "—"}</span></td>
@@ -1864,6 +1881,96 @@ export default function PrepaidUsers() {
         )}
 
       </div>
+
+      {/* Read-only audit view for records grouped by the same Hotspot identity. */}
+      {relatedAccountsUser && (
+        <div
+          role="presentation"
+          onClick={event => { if (event.target === event.currentTarget) setRelatedAccountsUser(null); }}
+          style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.68)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="related-hotspot-records-title"
+            style={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 14, width: "100%", maxWidth: 980, maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.5)" }}
+          >
+            <header style={{ display: "flex", alignItems: "flex-start", gap: "0.75rem", padding: "1.1rem 1.25rem", borderBottom: "1px solid var(--isp-border)" }}>
+              <div style={{ flex: 1 }}>
+                <h2 id="related-hotspot-records-title" style={{ margin: 0, color: "var(--isp-text)", fontSize: "1rem", fontWeight: 800 }}>
+                  Related Hotspot records ({relatedAccountsUser.mergedCustomerIds.length})
+                </h2>
+                <p style={{ margin: "0.4rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.78rem", lineHeight: 1.5 }}>
+                  These accounts share the same service/device/contact grouping. Compare their account IDs, creation times, and linked payment receipts below. This view is read-only; it does not merge or change accounts.
+                </p>
+              </div>
+              <button type="button" aria-label="Close related Hotspot records" onClick={() => setRelatedAccountsUser(null)} style={{ background: "none", border: 0, cursor: "pointer", color: "var(--isp-text-muted)", padding: 4 }}>
+                <X size={18} />
+              </button>
+            </header>
+            <div style={{ padding: "1rem 1.25rem", overflowY: "auto", display: "grid", gap: "0.75rem" }}>
+              {relatedAccountRows.map(record => {
+                const recordPayments = paymentsByCustomerId.get(record.id) ?? [];
+                const expired = isCustomerExpired(record);
+                const online = customerIsOnline(record, onlineUsers);
+                const accessStatus = expired ? "Expired" : hasUnexpiredPaidAccess(record) ? "Active" : record.status;
+                return (
+                  <article key={record.id} style={{ border: "1px solid var(--isp-border)", borderRadius: 10, padding: "0.85rem", background: "rgba(255,255,255,0.025)" }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
+                      <div>
+                        <div style={{ color: "var(--isp-text)", fontWeight: 800, fontSize: "0.86rem" }}>
+                          Account #{record.id} · {purchaseUsername(record)}
+                        </div>
+                        <div style={{ marginTop: 4, color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
+                          Created {fmtDate(record.created_at)} · Expires {fmtDate(record.expires_at)}
+                          {record.hotspot_purchase_transaction_id
+                            ? ` · Source transaction #${record.hotspot_purchase_transaction_id}`
+                            : ""}
+                        </div>
+                        <div style={{ marginTop: 3, color: "var(--isp-text-muted)", fontSize: "0.7rem", overflowWrap: "anywhere" }}>
+                          Phone {record.phone || "—"} · MAC {record.mac_address || "—"}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                        <span className="prepaid-plain-status">{accessStatus}</span>
+                        <span className={`prepaid-plain-status ${online ? "prepaid-plain-status--online" : "prepaid-plain-status--offline"}`}>{online ? "Online" : "Offline"}</span>
+                      </div>
+                    </div>
+                    <div style={{ marginTop: "0.7rem", borderTop: "1px solid var(--isp-border)", paddingTop: "0.6rem" }}>
+                      <div style={{ color: "var(--isp-text-muted)", fontSize: "0.65rem", fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "0.4rem" }}>
+                        Successful linked payments ({recordPayments.length})
+                      </div>
+                      {recordPayments.length === 0 ? (
+                        <div style={{ color: "var(--isp-text-muted)", fontSize: "0.73rem" }}>No successful linked payment is available for this account.</div>
+                      ) : recordPayments.map(payment => (
+                        <div key={payment.id} style={{ padding: "0.45rem 0", borderTop: "1px solid rgba(255,255,255,0.05)", color: "var(--isp-text)", fontSize: "0.72rem", lineHeight: 1.5, overflowWrap: "anywhere" }}>
+                          <div style={{ fontWeight: 700 }}>
+                            Transaction #{payment.id} · KES {Number(payment.amount).toLocaleString("en-KE")} · {fmtDate(payment.created_at)}
+                          </div>
+                          <div style={{ color: "var(--isp-text-muted)" }}>
+                            M-Pesa receipt: {payment.mpesa_receipt || "not recorded"} · Checkout reference: {payment.reference || "—"}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                );
+              })}
+              {relatedAccountRows.length === 0 && (
+                <div style={{ padding: "1rem", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>
+                  The related account records could not be loaded. Refresh this page and try again.
+                </div>
+              )}
+            </div>
+            <footer style={{ display: "flex", justifyContent: "flex-end", padding: "0.75rem 1.25rem", borderTop: "1px solid var(--isp-border)" }}>
+              <button type="button" onClick={() => setRelatedAccountsUser(null)} style={{ padding: "0.45rem 0.9rem", borderRadius: 7, border: "1px solid var(--isp-border)", background: "rgba(255,255,255,0.04)", color: "var(--isp-text)", cursor: "pointer", fontFamily: "inherit" }}>
+                Close
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
 
       {/* ════════════════ Detail Modal ════════════════ */}
       {detailUser && (

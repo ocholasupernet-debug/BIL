@@ -275,6 +275,7 @@ export interface DbCustomer {
   service_online?: boolean | null;
   last_seen?: string | null;
   expires_at: string | null;
+  hotspot_purchase_transaction_id?: number | null;
   depletion_reason?: string | null;
   created_at: string;
   updated_at: string;
