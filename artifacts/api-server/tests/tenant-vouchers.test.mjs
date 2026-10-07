@@ -59,6 +59,19 @@ test("hotspot voucher data allowances are snapshotted and honor throttle mode", 
   assert.match(schema, /data_limit_mb\s+numeric\(14,2\)/);
 });
 
+test("hotspot voucher list failures are logged and visible with a retry action", async () => {
+  const [route, page] = await Promise.all([
+    read("../src/routes/hotspot-vouchers-route.ts"),
+    read("../../ochola-supernet/src/pages/admin/Vouchers.tsx"),
+  ]);
+
+  assert.match(route, /catch \(err\)/);
+  assert.match(route, /logger\.error\(\{ err, adminId \}, "\[hotspot-vouchers\] list request failed"\)/);
+  assert.match(page, /voucherListFailed/);
+  assert.match(page, /Voucher list could not be loaded/);
+  assert.match(page, /void refetch\(\)/);
+});
+
 test("the vouchers screen no longer queries shared RADIUS tables from the browser", async () => {
   const page = await read("../../ochola-supernet/src/pages/admin/Vouchers.tsx");
   assert.doesNotMatch(page, /supabase\.from\("(radcheck|radusergroup|radacct)"\)/);

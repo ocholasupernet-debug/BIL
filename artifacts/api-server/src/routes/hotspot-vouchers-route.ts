@@ -6,6 +6,7 @@ import {
   sbInsertStrict,
   sbSelectStrict,
 } from "../lib/supabase-client.js";
+import { logger } from "../lib/logger.js";
 import { normalizeFixedHotspotVoucherCode } from "../lib/hotspot-voucher-utils.js";
 import {
   summarizeHotspotVoucherStatus,
@@ -262,7 +263,8 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
         created_at: voucher.created_at,
       };
     }));
-  } catch {
+  } catch (err) {
+    logger.error({ err, adminId }, "[hotspot-vouchers] list request failed");
     res.status(500).json({ error: "Vouchers could not be loaded for this account." });
   }
 });

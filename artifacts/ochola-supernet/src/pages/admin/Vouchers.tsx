@@ -446,7 +446,13 @@ export default function Vouchers() {
   const plans = voucherConfig?.plans ?? [];
   const routers = voucherConfig?.routers ?? [];
   const companyName = voucherConfig?.companyName ?? "ISP";
-  const { data: vouchers = [], isLoading: vouchersLoading, refetch } = useQuery({
+  const {
+    data: vouchers = [],
+    isLoading: vouchersLoading,
+    isError: voucherListFailed,
+    error: voucherListError,
+    refetch,
+  } = useQuery({
     queryKey: ["vouchers", ADMIN_ID],
     queryFn: fetchVouchers,
     refetchOnWindowFocus: false,
@@ -573,7 +579,7 @@ export default function Vouchers() {
           <div>
             <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>Hotspot Vouchers</h1>
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: "0.25rem 0 0" }}>
-              {isLoading ? "Loading…" : `${vouchers.length} total · ${unusedCount} unused · ${usedCount} used`}
+              {isLoading ? "Loading…" : voucherListFailed ? "Voucher list could not be loaded" : `${vouchers.length} total · ${unusedCount} unused · ${usedCount} used`}
             </p>
             <p style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", margin: "0.25rem 0 0" }}>
               Redeemed vouchers are protected from deletion; their service status and expiry are based on first RADIUS use.
@@ -617,7 +623,7 @@ export default function Vouchers() {
             <div key={k.label} style={{ borderRadius: 12, background: k.grad, padding: "1.125rem 1.25rem", display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 90, overflow: "hidden", position: "relative" }}>
               <div>
                 <div style={{ fontSize: "2rem", fontWeight: 900, color: "white", lineHeight: 1, letterSpacing: "-0.02em" }}>
-                  {isLoading ? "—" : k.value}
+                  {isLoading || voucherListFailed ? "—" : k.value}
                 </div>
                 <div style={{ fontSize: "0.75rem", color: "rgba(255,255,255,0.85)", fontWeight: 600, marginTop: "0.25rem" }}>{k.label}</div>
               </div>
@@ -733,6 +739,21 @@ export default function Vouchers() {
                   <tr><td colSpan={13} style={{ textAlign: "center", padding: "4rem 1rem", color: "var(--isp-text-muted)" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                       <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Loading vouchers…
+                    </div>
+                  </td></tr>
+                ) : voucherListFailed ? (
+                  <tr><td colSpan={13} style={{ textAlign: "center", padding: "3rem 1rem", color: "var(--isp-text-muted)" }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "0.75rem" }}>
+                      <AlertTriangle size={24} style={{ color: "#f87171" }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: "var(--isp-text)", marginBottom: "0.25rem" }}>Voucher list could not be loaded</div>
+                        <div style={{ fontSize: "0.8rem" }}>
+                          {voucherListError instanceof Error ? voucherListError.message : "Check your connection and try again."}
+                        </div>
+                      </div>
+                      <button onClick={() => { void refetch(); }} style={{ marginTop: "0.25rem", display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 1rem", borderRadius: 8, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
+                        <RefreshCw size={13} /> Retry
+                      </button>
                     </div>
                   </td></tr>
                 ) : filtered.length === 0 ? (
