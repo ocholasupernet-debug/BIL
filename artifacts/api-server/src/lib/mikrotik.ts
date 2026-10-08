@@ -33,6 +33,10 @@ import {
   vlanCustomerQueueIdentity,
 } from "./vlan-customer-queue.js";
 import { fupRateLimitFromMbps } from "./fup-policy.js";
+import {
+  buildCaptivePortalApiUrl,
+  routerOsDhcpOptionUriValue,
+} from "./captive-portal-discovery.js";
 
 /* ─── Credential types ───────────────────────────────────────────────────── */
 
@@ -7331,6 +7335,8 @@ export interface RouterServiceSetupOptions {
   maxPortSpeedMbps?: number;
   /** HTTPS hostnames that unauthenticated Hotspot clients must reach. */
   portalHostnames?: string[];
+  /** Public origin that serves the application/captive+json discovery endpoint. */
+  captivePortalApiOrigin?: string;
   /** Payment provider hostnames that unauthenticated Hotspot clients must reach. */
   paymentHostnames?: string[];
   /** One-time HTTPS sources for the default RouterOS Hotspot files. */
@@ -7743,6 +7749,45 @@ export function generateServiceSetupScript(
   const takeoverHotspotDnsName = options.installationMode === "takeover"
     ? portalHostnames[0]
     : undefined;
+  const hotspotGateway = "192.168.180.1";
+  const hotspotNetwork = "192.168.180.0/22";
+  const captivePortalApiUrl = takeoverHotspotDnsName && options.captivePortalApiOrigin
+    ? buildCaptivePortalApiUrl(options.captivePortalApiOrigin, takeoverHotspotDnsName)
+    : null;
+  const captivePortalOptionName = captivePortalApiUrl
+    ? `${tag}_captive_portal`
+    : null;
+  const captivePortalOptionSetup = captivePortalApiUrl && captivePortalOptionName
+    ? `:if ([:len [/ip dhcp-server option find where name=${routerOsString(captivePortalOptionName)}]] = 0) do={
+        /ip dhcp-server option add name=${routerOsString(captivePortalOptionName)} code=114 value=${routerOsString(routerOsDhcpOptionUriValue(captivePortalApiUrl))}
+    } else={
+        /ip dhcp-server option set [find where name=${routerOsString(captivePortalOptionName)}] code=114 value=${routerOsString(routerOsDhcpOptionUriValue(captivePortalApiUrl))}
+    }`
+    : "";
+  const hotspotDhcpDnsServers = takeoverHotspotDnsName
+    ? hotspotGateway
+    : `${hotspotGateway},8.8.8.8`;
+  const captivePortalNetworkBlock = captivePortalOptionName
+    ? `:local captivePortalDhcpNetworkIds [/ip dhcp-server network find where address=${routerOsString(hotspotNetwork)}]
+:if ([:len $captivePortalDhcpNetworkIds] = 0) do={
+    /ip dhcp-server network add address=${routerOsString(hotspotNetwork)} gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(hotspotDhcpDnsServers)} dhcp-option=${routerOsString(captivePortalOptionName)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
+} else={
+    :local captivePortalDhcpNetworkId [:pick $captivePortalDhcpNetworkIds 0]
+    :local captivePortalDhcpOptions [/ip dhcp-server network get $captivePortalDhcpNetworkId dhcp-option]
+    :if ([:find $captivePortalDhcpOptions ${routerOsString(captivePortalOptionName)}] = nil) do={
+        :if ([:len $captivePortalDhcpOptions] > 0) do={
+            :set captivePortalDhcpOptions ($captivePortalDhcpOptions . "," . ${routerOsString(captivePortalOptionName)})
+        } else={
+            :set captivePortalDhcpOptions ${routerOsString(captivePortalOptionName)}
+        }
+    }
+    /ip dhcp-server network set $captivePortalDhcpNetworkId gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(hotspotDhcpDnsServers)} dhcp-option=$captivePortalDhcpOptions comment=${routerOsString(`${tag} Hotspot DHCP network`)}
+}`
+    : `:if ([:len [/ip dhcp-server network find where address=${routerOsString(hotspotNetwork)}]] = 0) do={
+    /ip dhcp-server network add address=${routerOsString(hotspotNetwork)} gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(hotspotDhcpDnsServers)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
+} else={
+    /ip dhcp-server network set [find where address=${routerOsString(hotspotNetwork)}] gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(hotspotDhcpDnsServers)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
+}`;
   const hotspotDnsSetting = takeoverHotspotDnsName
     ? ` dns-name=${routerOsString(takeoverHotspotDnsName)}`
     : "";
@@ -7773,9 +7818,7 @@ export function generateServiceSetupScript(
   const hotspotServer = SHARED_HOTSPOT_SERVER_NAME;
   const legacyHotspot = legacySharedHotspotResourceNames(routerTag);
   const dhcpServer = `${tag}-dhcp`;
-  const hotspotGateway = "192.168.180.1";
   const hotspotAddress = `${hotspotGateway}/22`;
-  const hotspotNetwork = "192.168.180.0/22";
   const hotspotPoolRange = "192.168.180.10-192.168.183.254";
   const pppoeGateway = "192.168.99.1";
   const pppoeAddress = `${pppoeGateway}/24`;
@@ -7974,6 +8017,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name=($hsdir . "/login.html")]]
 :set serviceStepFailed false
 :put "${tag}: SERVICE STEP 4/7 - Hotspot DHCP, profile, and server starting."
 :do {
+    ${captivePortalOptionSetup}
     # Migrate the previous router-scoped names before applying the canonical
     # shared service names. Only rename a legacy resource when its canonical
     # name is not already occupied.
@@ -7998,11 +8042,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name=($hsdir . "/login.html")]]
     :if ([:len [/ip pool find where name=${routerOsString(hotspotPool)}]] > 0) do={
         /ip pool set [find where name=${routerOsString(hotspotPool)}] ranges=${routerOsString(hotspotPoolRange)} comment=${routerOsString(`${tag} Hotspot pool`)}
     }
-    :if ([:len [/ip dhcp-server network find where address=${routerOsString(hotspotNetwork)}]] = 0) do={
-        /ip dhcp-server network add address=${routerOsString(hotspotNetwork)} gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
-    } else={
-        /ip dhcp-server network set [find where address=${routerOsString(hotspotNetwork)}] gateway=${routerOsString(hotspotGateway)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} comment=${routerOsString(`${tag} Hotspot DHCP network`)}
-    }
+    ${captivePortalNetworkBlock}
     :if ([:len [/ip dhcp-server find where name=${routerOsString(dhcpServer)}]] = 0) do={
         /ip dhcp-server add name=${routerOsString(dhcpServer)} interface=${routerOsString(bridgeName)} address-pool=${routerOsString(hotspotPool)} disabled=no
     } else={

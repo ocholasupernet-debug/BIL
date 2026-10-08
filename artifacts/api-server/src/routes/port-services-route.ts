@@ -26,6 +26,11 @@ import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js
 import { buildHotspotChatWalledGardenCommands } from "../lib/hotspot-chat-walled-garden.js";
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
 import {
+  buildCaptivePortalApiUrl,
+  mergeRouterDhcpOptionNames,
+  routerOsDhcpOptionUriValue,
+} from "../lib/captive-portal-discovery.js";
+import {
   portServiceResourceNames,
   vlanServicePoolRanges,
   type PortServiceResourceNames,
@@ -81,6 +86,7 @@ const routerIdentityPropertyByAddPath: Record<string, string> = {
   "/ip/address/add": "address",
   "/ip/pool/add": "name",
   "/ip/dhcp-server/network/add": "address",
+  "/ip/dhcp-server/option/add": "name",
   "/ip/dhcp-server/add": "name",
   "/ip/dns/static/add": "name",
   "/ppp/profile/add": "name",
@@ -441,6 +447,7 @@ export function buildDualServiceCommands(
     portalHostname?: string;
     portalHostnames?: string[];
     hotspotDnsName?: string | null;
+    captivePortalApiOrigin?: string;
     pppoeDnsName?: string | null;
     companyName?: string | null;
     routerName?: string | null;
@@ -468,6 +475,12 @@ export function buildDualServiceCommands(
   const cap = port.reseller_bandwidth_cap ?? port.bandwidth_cap_mbps;
   const hotspotDnsName = validPortalHostname(options.hotspotDnsName ?? undefined)
     ?? resources.defaultDnsName;
+  const captivePortalApiUrl = options.captivePortalApiOrigin
+    ? buildCaptivePortalApiUrl(options.captivePortalApiOrigin, hotspotDnsName)
+    : null;
+  const captivePortalOptionName = captivePortalApiUrl
+    ? `${resources.commentPrefix}_captive_portal`
+    : null;
   const pppoeDnsName = validPortalHostname(options.pppoeDnsName ?? undefined)
     ?? resources.defaultDnsName;
   const comment = (suffix: string) => `${resources.commentPrefix}_${suffix}`;
@@ -485,7 +498,13 @@ export function buildDualServiceCommands(
     commands.push(
       ["/ip/address/add", `=address=${network.gateway}/24`, `=interface=${network.bridgeName}`, `=comment=${comment("hotspot_gateway")}`],
       ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${network.poolRange}`, `=comment=${comment("hotspot_pool")}`],
-      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway}`, `=comment=${comment("hotspot_network")}`],
+      ...(captivePortalApiUrl && captivePortalOptionName ? [[
+        "/ip/dhcp-server/option/add",
+        `=name=${captivePortalOptionName}`,
+        "=code=114",
+        `=value=${routerOsDhcpOptionUriValue(captivePortalApiUrl)}`,
+      ]] : []),
+      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway}`, ...(captivePortalOptionName ? [`=dhcp-option=${captivePortalOptionName}`] : []), `=comment=${comment("hotspot_network")}`],
       ["/ip/dhcp-server/add", `=name=${resources.hotspotDhcp}`, `=interface=${network.bridgeName}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
       ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap", `=dns-name=${hotspotDnsName}`],
       ["/ip/hotspot/add", `=name=${resources.hotspotServer}`, `=interface=${network.bridgeName}`, `=profile=${hotspotProfile}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
@@ -594,6 +613,7 @@ function buildVlanServiceCommands(
     portalHostname?: string;
     portalHostnames?: string[];
     hotspotDnsName?: string | null;
+    captivePortalApiOrigin?: string;
     pppoeDnsName?: string | null;
     paymentHostnames?: string[];
     hotspotPoolRange?: string;
@@ -617,6 +637,12 @@ function buildVlanServiceCommands(
   const hotspotPoolRange = options.hotspotPoolRange || defaultPoolRanges.hotspot;
   const pppoePoolRange = options.pppoePoolRange || defaultPoolRanges.pppoe;
   const hotspotDnsName = validPortalHostname(options.hotspotDnsName ?? undefined) ?? resources.defaultDnsName;
+  const captivePortalApiUrl = options.captivePortalApiOrigin
+    ? buildCaptivePortalApiUrl(options.captivePortalApiOrigin, hotspotDnsName)
+    : null;
+  const captivePortalOptionName = captivePortalApiUrl
+    ? `${resources.commentPrefix}_captive_portal`
+    : null;
   const pppoeDnsName = validPortalHostname(options.pppoeDnsName ?? undefined) ?? resources.defaultDnsName;
   const comment = (suffix: string) => `${resources.commentPrefix}_${suffix}`;
   const commands: string[][] = [
@@ -626,7 +652,13 @@ function buildVlanServiceCommands(
     commands.push(
       ["/ip/address/add", `=address=${network.gateway}/24`, `=interface=${vlanInterface}`, `=comment=${comment("hotspot_gateway")}`],
       ["/ip/pool/add", `=name=${resources.hotspotPool}`, `=ranges=${hotspotPoolRange}`, `=comment=${comment("hotspot_pool")}`],
-      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway}`, `=comment=${comment("hotspot_network")}`],
+      ...(captivePortalApiUrl && captivePortalOptionName ? [[
+        "/ip/dhcp-server/option/add",
+        `=name=${captivePortalOptionName}`,
+        "=code=114",
+        `=value=${routerOsDhcpOptionUriValue(captivePortalApiUrl)}`,
+      ]] : []),
+      ["/ip/dhcp-server/network/add", `=address=${network.network}`, `=gateway=${network.gateway}`, `=dns-server=${network.gateway}`, ...(captivePortalOptionName ? [`=dhcp-option=${captivePortalOptionName}`] : []), `=comment=${comment("hotspot_network")}`],
       ["/ip/dhcp-server/add", `=name=${resources.hotspotDhcp}`, `=interface=${vlanInterface}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
       ["/ip/hotspot/profile/add", `=name=${resources.hotspotProfile}`, `=hotspot-address=${network.gateway}`, `=html-directory=${hotspotPath}`, "=login-by=http-chap,http-pap,cookie", `=dns-name=${hotspotDnsName}`],
       ["/ip/hotspot/add", `=name=${resources.hotspotServer}`, `=interface=${vlanInterface}`, `=profile=${resources.hotspotProfile}`, `=address-pool=${resources.hotspotPool}`, "=disabled=no"],
@@ -803,6 +835,8 @@ async function executeIdempotentRouterCommand(
     ? "=.proplist=.id,address,interface"
     : addPath === "/ip/dns/static/add"
       ? "=.proplist=.id,name,address,dynamic"
+    : addPath === "/ip/dhcp-server/network/add"
+      ? "=.proplist=.id,address,dhcp-option"
     : `=.proplist=.id,${property}`;
   const rows = await runRouterCommand(creds, [printPath, proplist]).catch(() => []);
   const existing = rows.find((row) => row[property] === propertyArg.slice(property.length + 2));
@@ -823,10 +857,20 @@ async function executeIdempotentRouterCommand(
     ) {
       throw new Error(`Address ${propertyArg.slice(property.length + 2)} is already assigned to foreign interface ${existing.interface}.`);
     }
+    let setArguments = routerSetArguments(command, property);
+    if (addPath === "/ip/dhcp-server/network/add") {
+      const requestedOptions = command.find((arg) => arg.startsWith("=dhcp-option="))?.slice("=dhcp-option=".length);
+      if (requestedOptions) {
+        const mergedOptions = mergeRouterDhcpOptionNames(existing["dhcp-option"], requestedOptions);
+        setArguments = setArguments.map((arg) =>
+          arg.startsWith("=dhcp-option=") ? `=dhcp-option=${mergedOptions}` : arg,
+        );
+      }
+    }
     await runRouterCommand(creds, [
       addPath.replace(/\/add$/, "/set"),
       `=.id=${existing[".id"]}`,
-      ...routerSetArguments(command, property),
+      ...setArguments,
     ]);
     return;
   }
@@ -1707,6 +1751,7 @@ async function executePortServiceDeployment(
       portalHostname,
       portalHostnames: customPortalHostname ? [customPortalHostname] : [],
       hotspotDnsName: deploymentPort.hotspot_dns_name,
+      captivePortalApiOrigin: sourceOrigin,
       pppoeDnsName: deploymentPort.pppoe_dns_name,
       companyName: identity.companyName,
       routerName: identity.routerName,

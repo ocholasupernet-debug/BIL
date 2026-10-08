@@ -2555,6 +2555,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       portalHostnames: [...new Set(
         [portalHostname, customPortalHostname].filter((hostname): hostname is string => Boolean(hostname)),
       )],
+      captivePortalApiOrigin: sourceOrigin,
       paymentHostnames: [...PAYMENT_WALLED_GARDEN_HOSTNAMES],
       portalFileUrls,
     });

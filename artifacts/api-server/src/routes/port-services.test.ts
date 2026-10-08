@@ -8,6 +8,7 @@ import {
   routerSetArguments,
   shouldReuseRouterDnsEntry,
 } from "./port-services-route.js";
+import { mergeRouterDhcpOptionNames } from "../lib/captive-portal-discovery.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
 
 const port = {
@@ -46,7 +47,11 @@ test("a port service gets isolated Hotspot and PPPoE resources", () => {
     "flash/hotspot/hs_ether2",
     "flash/hotspot/pppoe_ether2",
     "10.8.5.2",
-    { portalHostname: "come.isplatty.org" },
+    {
+      portalHostname: "come.isplatty.org",
+      hotspotDnsName: "come.isplatty.org",
+      captivePortalApiOrigin: "https://come.isplatty.org",
+    },
   );
   const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
 
@@ -56,6 +61,8 @@ test("a port service gets isolated Hotspot and PPPoE resources", () => {
   assert.match(script, /html-directory=flash\/hotspot\/hs_ether2/);
   assert.match(script, /\/interface\/pppoe-server\/server\/add =service-name=PPPoE_router-3-ether2 =interface=router-3-ether2-bridge/);
   assert.match(script, /dst-host=come\.isplatty\.org/);
+  assert.match(script, /\/ip\/dhcp-server\/option\/add =name=[^ ]+_captive_portal =code=114 =value='https:\/\/come\.isplatty\.org\/api\/captive-portal\?portal=come\.isplatty\.org'/);
+  assert.match(script, /\/ip\/dhcp-server\/network\/add =address=192\.168\.30\.0\/24 =gateway=192\.168\.30\.1 =dns-server=192\.168\.30\.1 =dhcp-option=[^ ]+_captive_portal/);
   assert.match(script, /dst-host=api\.safaricom\.co\.ke/);
   assert.match(script, /comment=[^ \n]*payment_walled_garden/);
   assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=\*\.tawk\.to =action=allow =comment=Allow tawk\.to Chat Engine/);
@@ -77,18 +84,28 @@ test("custom portal hostnames are included in both physical-port and VLAN walled
     "flash/hotspot/hs_ether2",
     null,
     "10.8.5.2",
-    { portalHostnames: ["ocholasupernet.com"] },
+    {
+      portalHostnames: ["ocholasupernet.com"],
+      hotspotDnsName: "ocholasupernet.com",
+      captivePortalApiOrigin: "https://api.ocholasupernet.org",
+    },
   );
   const vlanCommands = buildDualServiceCommands(
     { ...port, handoff_mode: "vlan_services", vlan_tag: "210", bridge_name: "isp-bridge" },
     "flash/hotspot/ochola_RS9_VLAN210",
     null,
     "10.8.5.2",
-    { portalHostnames: ["ocholasupernet.com"] },
+    {
+      portalHostnames: ["ocholasupernet.com"],
+      hotspotDnsName: "ocholasupernet.com",
+      captivePortalApiOrigin: "https://api.ocholasupernet.org",
+    },
   );
   for (const commands of [physicalCommands, vlanCommands]) {
     const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
     assert.match(script, /dst-host=ocholasupernet\.com/);
+    assert.match(script, /dhcp-server\/option\/add =name=[^ ]+_captive_portal =code=114 =value='https:\/\/api\.ocholasupernet\.org\/api\/captive-portal\?portal=ocholasupernet\.com'/);
+    assert.match(script, /dhcp-server\/network\/add[^\n]*=dhcp-option=[^ ]+_captive_portal/);
     assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=\*\.tawk\.to =action=allow =comment=Allow tawk\.to Chat Engine/);
     assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=\*\.tawk\.link =action=allow =comment=Allow tawk\.to Calling Assets/);
     assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=ocholasupernet\.isplatty\.org =action=allow =comment=Allow OcholaSupernet Portal Domain/);
@@ -243,6 +260,18 @@ test("RouterOS updates omit add-only firewall placement arguments", () => {
   );
 });
 
+test("RouterOS DHCP option reconciliation preserves options already assigned to the network", () => {
+  assert.equal(
+    mergeRouterDhcpOptionNames("legacy_option,captive_other_service", "captive_portal"),
+    "legacy_option,captive_other_service,captive_portal",
+  );
+  assert.equal(
+    mergeRouterDhcpOptionNames("captive_portal,legacy_option", "captive_portal"),
+    "captive_portal,legacy_option",
+  );
+});
+
 test("PPP profiles use their stable name for idempotent reconciliation", () => {
   assert.equal(routerIdentityProperty("/ppp/profile/add"), "name");
+  assert.equal(routerIdentityProperty("/ip/dhcp-server/option/add"), "name");
 });

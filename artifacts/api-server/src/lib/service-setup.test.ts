@@ -174,6 +174,22 @@ test("Takeover service setup keeps shared Hotspot/PPPoE defaults with fresh targ
   assert.doesNotMatch(script, /legacy\.invalid|proxy\.invalid/);
 });
 
+test("Takeover service setup advertises the captive portal API through DHCP option 114", () => {
+  const script = generateServiceSetupScript({
+    installationMode: "takeover",
+    routerId: 104,
+    bridgeName: "hotspot-bridge",
+    portalHostnames: ["come.isplatty.org"],
+    captivePortalApiOrigin: "https://isplatty.org",
+  });
+
+  assert.match(script, /dhcp-server option add name="ochola-services-104_captive_portal" code=114 value="'https:\/\/isplatty\.org\/api\/captive-portal\?portal=come\.isplatty\.org'"/);
+  assert.match(script, /dhcp-server option set \[find where name="ochola-services-104_captive_portal"\] code=114/);
+  assert.match(script, /dhcp-server network add address="192\.168\.180\.0\/22" gateway="192\.168\.180\.1" dns-server="192\.168\.180\.1" dhcp-option="ochola-services-104_captive_portal"/);
+  assert.match(script, /captivePortalDhcpOptions \. "," \. "ochola-services-104_captive_portal"/);
+  assert.match(script, /dhcp-server network set \$captivePortalDhcpNetworkId gateway="192\.168\.180\.1" dns-server="192\.168\.180\.1" dhcp-option=\$captivePortalDhcpOptions/);
+});
+
 test("service setup adds the optional shared-wire queue tree without changing the walled garden", () => {
   const script = generateServiceSetupScript({
     routerId: 104,
