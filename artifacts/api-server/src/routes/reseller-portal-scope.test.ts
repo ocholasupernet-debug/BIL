@@ -258,6 +258,17 @@ test("signed reseller portal requests stay within their assigned service", async
     recordRouterOperation("resolveClientIp", { mac });
     return visibleHotspotClientIp;
   };
+  hotspotTroubleshootOperations.reconnectHotspotUserByMac = async (_credentials, options) => {
+    recordRouterOperation(options.verifyOnly ? "preflightReconnect" : "reconnectUser", {
+      username: options.user,
+      expectedServer: options.expectedServer,
+    });
+    if (!visibleHotspotClientIp) return { kind: "device-not-found", stageDurationsMs: {} };
+    if (options.expectedIp && visibleHotspotClientIp !== options.expectedIp) {
+      return { kind: "ip-mismatch", stageDurationsMs: {} };
+    }
+    return { kind: options.verifyOnly ? "device-ready" : "connected", stageDurationsMs: {} };
+  };
   hotspotPaymentOperations.ensureHotspotServerAddressPool = async (_credentials, options) => {
     recordRouterOperation("ensurePool", { server: options.serverName, pool: options.poolName });
   };
@@ -1442,7 +1453,7 @@ test("signed reseller portal requests stay within their assigned service", async
       assert.equal(result.status, "active");
       assert.equal(result.connected, false);
       assert.equal(result.retryable, true);
-      assert.deepEqual(routerOperations.map(row => row.name), ["readActiveUsers", "resolveClientIp"]);
+      assert.deepEqual(routerOperations.map(row => row.name), ["preflightReconnect"]);
       assert.equal(dbRequests.some(row => row.method !== "GET"), false, "a not-yet-visible device must not trigger account or transaction writes");
     } finally {
       visibleHotspotClientIp = "10.43.0.10";

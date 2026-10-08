@@ -5,6 +5,7 @@ import { RouterOSAPI } from "node-routeros";
 import {
   buildManagedResetPlan,
   connectHotspotUser,
+  reconnectHotspotUserByMac,
   ensureHotspotServerAddressPool,
   ensureRouterFileDirectory,
   upsertHotspotUser,
@@ -194,6 +195,98 @@ test("hotspot login uses the selected device IP and confirms its MAC session", a
       `=mac-address=${targetMac}`,
     ]);
     assert.equal(commands.some(({ command }) => command[0] === "/ip/hotspot/active/remove"), false);
+  });
+});
+
+test("paid Hotspot reconnect discovers and confirms a device over one RouterOS connection", async () => {
+  let loginSeen = false;
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/login") {
+      loginSeen = true;
+      return [];
+    }
+    if (command[0] === "/ip/hotspot/active/print") {
+      const userScoped = command.some(value => String(value).startsWith("?user="));
+      if (loginSeen && userScoped) return [{ user: "tv-package", address: "10.0.0.88", "mac-address": targetMac }];
+      return [];
+    }
+    if (command[0] === "/ip/dhcp-server/lease/print") {
+      return [{ status: "bound", address: "10.0.0.88", "mac-address": targetMac, "host-name": "customer-device" }];
+    }
+    return [];
+  }, async ({ port, connectedUsers, commands }) => {
+    const result = await reconnectHotspotUserByMac(routerCredentials(port), {
+      user: "tv-package",
+      password: "test-password",
+      macAddress: targetMac,
+    });
+    assert.equal(result.kind, "connected");
+    assert.equal(connectedUsers.length, 1);
+    assert.equal(typeof result.stageDurationsMs.router_connection_setup, "number");
+    assert.deepEqual(commands.map(({ command }) => command[0]), [
+      "/ip/hotspot/active/print",
+      "/ip/dhcp-server/lease/print",
+      "/ip/hotspot/active/print",
+      "/ip/hotspot/active/login",
+      "/ip/hotspot/active/print",
+    ]);
+    const loginCommand = commands.find(({ command }) => command[0] === "/ip/hotspot/active/login")?.command;
+    assert.deepEqual(loginCommand, [
+      "/ip/hotspot/active/login",
+      "=user=tv-package",
+      "=password=test-password",
+      "=ip=10.0.0.88",
+      "=mac-address=" + targetMac,
+    ]);
+  });
+});
+
+test("paid Hotspot reconnect stops before login when a VLAN device IP does not match", async () => {
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/print") return [];
+    if (command[0] === "/ip/dhcp-server/lease/print") {
+      return [{ address: "10.0.0.89", "mac-address": targetMac, status: "bound" }];
+    }
+    return [];
+  }, async ({ port, connectedUsers, commands }) => {
+    const result = await reconnectHotspotUserByMac(routerCredentials(port), {
+      user: "tv-package",
+      password: "test-password",
+      macAddress: targetMac,
+      expectedIp: "10.0.0.88",
+      loginIp: "10.0.0.88",
+    });
+    assert.equal(result.kind, "ip-mismatch");
+    assert.equal(connectedUsers.length, 1);
+    assert.equal(commands.some(({ command }) => command[0] === "/ip/hotspot/active/login"), false);
+  });
+});
+
+test("paid Hotspot reconnect preflight verifies the device without logging in", async () => {
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/print") return [];
+    if (command[0] === "/ip/dhcp-server/lease/print") {
+      return [{ address: "10.0.0.88", "mac-address": targetMac, status: "bound" }];
+    }
+    return [];
+  }, async ({ port, connectedUsers, commands }) => {
+    const result = await reconnectHotspotUserByMac(routerCredentials(port), {
+      user: "tv-package",
+      password: "test-password",
+      macAddress: targetMac,
+      expectedIp: "10.0.0.88",
+      expectedServer: "HS_PORT_43",
+      verifyOnly: true,
+    });
+    assert.equal(result.kind, "device-ready");
+    assert.deepEqual(connectedUsers, [savedAccount]);
+    assert.deepEqual(commands.map(({ command }) => command[0]), [
+      "/ip/hotspot/active/print",
+      "/ip/dhcp-server/lease/print",
+    ]);
   });
 });
 

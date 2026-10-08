@@ -3566,6 +3566,139 @@ export function hotspotActiveSessionMatchesDevice(
   );
 }
 
+async function resolveHotspotClientIpByMacOnConnection(
+  conn: RouterOSAPI,
+  creds: RouterCredentials,
+  macAddress: string,
+  initialActiveRows: Record<string, string>[],
+): Promise<string | null> {
+  const targetMac = validRouterMac(macAddress);
+  if (!targetMac) return null;
+  const addressForTarget = (rows: Record<string, string>[]): string | null => {
+    const row = rows.find(candidate => validRouterMac(candidate["mac-address"]) === targetMac
+      && String(candidate.address ?? "").trim());
+    return row ? String(row.address).trim() : null;
+  };
+  const activeAddress = addressForTarget(initialActiveRows);
+  if (activeAddress) return activeAddress;
+
+  const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+  const fallbackCommands = [
+    ["/ip/dhcp-server/lease/print", "?status=bound", "=.proplist=host-name,address,mac-address,comment"],
+    ["/ip/hotspot/host/print", "=.proplist=address,mac-address,host-name,comment"],
+    ["/ip/arp/print", "=.proplist=address,mac-address,interface,complete"],
+  ];
+  for (const command of fallbackCommands) {
+    try {
+      const rows = await withTimeout(conn.write(command), ms) as Record<string, string>[];
+      const address = addressForTarget(Array.isArray(rows) ? rows : []);
+      if (address) return address;
+    } catch {
+      // These tables are optional on some RouterOS hotspot installations.
+    }
+  }
+  return null;
+}
+
+export type HotspotMacReconnectKind =
+  | "connected"
+  | "device-ready"
+  | "device-not-found"
+  | "ip-mismatch"
+  | "login-pending";
+
+export interface HotspotMacReconnectResult {
+  kind: HotspotMacReconnectKind;
+  stageDurationsMs: Record<string, number>;
+}
+
+/**
+ * Verify a paid Hotspot device and, unless verifyOnly is set, log it in using
+ * one RouterOS connection for the session read, device-IP lookup, login, and
+ * confirmation. The verify-only mode is read-only for the route's safe preflight.
+ */
+export async function reconnectHotspotUserByMac(
+  creds: RouterCredentials,
+  opts: {
+    user: string;
+    password: string;
+    macAddress: string;
+    expectedIp?: string;
+    expectedServer?: string;
+    loginIp?: string;
+    verifyOnly?: boolean;
+  },
+): Promise<HotspotMacReconnectResult> {
+  const stageDurationsMs: Record<string, number> = {};
+  const result = (kind: HotspotMacReconnectKind): HotspotMacReconnectResult => ({ kind, stageDurationsMs });
+  const targetMac = validRouterMac(opts.macAddress);
+  if (!targetMac) return result("device-not-found");
+
+  const startedAt = process.hrtime.bigint();
+  const measure = async <T>(stage: string, operation: () => Promise<T>): Promise<T> => {
+    const stageStartedAt = process.hrtime.bigint();
+    try {
+      return await operation();
+    } finally {
+      stageDurationsMs[stage] = Number(process.hrtime.bigint() - stageStartedAt) / 1e6;
+    }
+  };
+
+  return withConn(creds, async conn => {
+    stageDurationsMs.router_connection_setup = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const activeRows = await measure("router_active_session_read", async () => {
+      const rows = await withTimeout(conn.write([
+        "/ip/hotspot/active/print",
+        "=.proplist=user,address,mac-address,server,comment,host-name",
+      ]), ms);
+      return Array.isArray(rows) ? rows as Record<string, string>[] : [];
+    });
+    const sessionMatchesTarget = (rows: Record<string, string>[], ip?: string): boolean =>
+      rows.some(session =>
+        hotspotActiveSessionMatchesDevice([session], { user: opts.user, macAddress: targetMac, ip })
+        && (!opts.expectedServer || opts.expectedServer === "all" || session.server === opts.expectedServer),
+      );
+
+    if (sessionMatchesTarget(activeRows, opts.expectedIp)) return result("connected");
+
+    const discoveredIp = await measure("router_ip_discovery", () =>
+      resolveHotspotClientIpByMacOnConnection(conn, creds, targetMac, activeRows),
+    );
+    if (!discoveredIp) return result("device-not-found");
+    if (opts.expectedIp && discoveredIp !== opts.expectedIp) return result("ip-mismatch");
+    if (opts.verifyOnly) return result("device-ready");
+
+    const loginIp = opts.loginIp?.trim() || discoveredIp;
+    const loginAccepted = await measure("routeros_login_and_confirmation", async () => {
+      const readActiveForUser = async (): Promise<Record<string, string>[]> => {
+        const rows = await withTimeout(conn.write([
+          "/ip/hotspot/active/print",
+          "?user=" + opts.user,
+          "=.proplist=user,address,mac-address,server",
+        ]), ms);
+        return Array.isArray(rows) ? rows as Record<string, string>[] : [];
+      };
+      if (sessionMatchesTarget(await readActiveForUser(), loginIp)) return true;
+
+      await withTimeout(conn.write([
+        "/ip/hotspot/active/login",
+        "=user=" + opts.user,
+        "=password=" + opts.password,
+        "=ip=" + loginIp,
+        "=mac-address=" + targetMac,
+      ]), ms);
+
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        if (sessionMatchesTarget(await readActiveForUser(), loginIp)) return true;
+        if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 120));
+      }
+      return false;
+    });
+    return result(loginAccepted ? "connected" : "login-pending");
+  });
+}
+
 /**
  * Allow a paid hotspot device through the captive portal without exposing
  * RouterOS credentials to the browser. RouterOS keeps this binding until it

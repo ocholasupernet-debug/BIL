@@ -34,6 +34,7 @@ import {
   fetchHotspotUserList,
   resolveHotspotClientIpByMac,
   connectHotspotUser,
+  reconnectHotspotUserByMac,
   ensureHotspotUserProfile,
   removeHotspotIpBinding,
   removeHotspotUserExpiry,
@@ -101,6 +102,7 @@ export const prepaidHotspotReconnectOperations = {
 export const hotspotTroubleshootOperations = {
   fetchHotspotUsers,
   resolveHotspotClientIpByMac,
+  reconnectHotspotUserByMac,
 };
 
 type CustomerRow = {
@@ -3287,48 +3289,51 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
 
   try {
     const desiredHotspotServer = targetScope?.portId === null ? "all" : hotspotServer;
-    const activeUsersBeforeReconnect = await measureReconnectStage(
-      "preflight_active_session_read",
-      () => hotspotTroubleshootOperations.fetchHotspotUsers(creds),
-    );
-    const alreadyConnected = activeUsersBeforeReconnect.some(user =>
-      user.user === username
-      && normalisePortalMac(user.macAddress) === requestedMac
-      && (!desiredHotspotServer || desiredHotspotServer === "all" || user.server === desiredHotspotServer),
-    );
     const requiresSharedUsageVerification = Boolean(
       targetScope
       && planServiceType !== "vlan"
       && capBytes !== null
       && plan.data_cap_mode !== "throttle",
     );
-    if (alreadyConnected && !requiresSharedUsageVerification) {
-      reconnectTimingOutcome = "connected";
-      res.json({ ...response, connected: true });
-      return;
-    }
-
-    const preflightIp = await measureReconnectStage(
-      "preflight_device_visibility",
-      () => hotspotTroubleshootOperations.resolveHotspotClientIpByMac(creds, requestedMac),
+    const preflightAttempt = await measureReconnectStage(
+      "router_single_connection_preflight",
+      () => hotspotTroubleshootOperations.reconnectHotspotUserByMac(creds, {
+        user: username,
+        password,
+        macAddress: requestedMac,
+        verifyOnly: true,
+        ...(desiredHotspotServer ? { expectedServer: desiredHotspotServer } : {}),
+        ...(portalScope && customer.type === "vlan"
+          ? { expectedIp: String(customer.ip_address) }
+          : {}),
+        ...(customer.type === "vlan" ? { loginIp: String(customer.ip_address) } : {}),
+      }),
     );
-    if (!preflightIp) {
+    for (const [stage, duration] of Object.entries(preflightAttempt.stageDurationsMs)) {
+      reconnectStageDurationsMs["preflight_" + stage] = duration;
+    }
+    if (preflightAttempt.kind === "device-not-found") {
       reconnectTimingOutcome = "device_not_found";
       res.status(409).json({
         ...response,
         ok: false,
         retryable: true,
-        error: "Your active package was found. The router is waiting to see this device on Wi-Fi and will retry automatically.",
+        error: "The router has not found this device on the hotspot Wi-Fi yet. Keep it connected while automatic sign-in retries.",
       });
       return;
     }
-    if (portalScope && customer.type === "vlan" && preflightIp !== customer.ip_address) {
+    if (preflightAttempt.kind === "ip-mismatch") {
       reconnectTimingOutcome = "vlan_ip_mismatch";
       res.status(409).json({
         ...response,
         ok: false,
         error: "This device is not using the static IP assigned to its VLAN account.",
       });
+      return;
+    }
+    if (preflightAttempt.kind === "connected" && !requiresSharedUsageVerification) {
+      reconnectTimingOutcome = "connected";
+      res.json({ ...response, connected: true });
       return;
     }
 
@@ -3500,36 +3505,28 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
         );
       }
 
-      const activeUsers = await measureReconnectStage(
-        "router_active_session_read",
-        () => hotspotTroubleshootOperations.fetchHotspotUsers(creds),
-      );
-      const connected = activeUsers.some(user =>
-        user.user === username && normalisePortalMac(user.macAddress) === requestedMac,
-      );
-      if (connected) return { kind: "connected" as const };
-
-      const discoveredIp = await measureReconnectStage(
-        "router_ip_discovery",
-        () => hotspotTroubleshootOperations.resolveHotspotClientIpByMac(creds, requestedMac),
-      );
-      if (!discoveredIp) return { kind: "device-not-found" as const };
-      if (portalScope && customer.type === "vlan" && discoveredIp !== customer.ip_address) {
-        return { kind: "vlan-ip-mismatch" as const };
-      }
-
       await assertLock();
-      const loginAccepted = await measureReconnectStage(
-        "routeros_login_and_confirmation",
-        () => connectHotspotUser(creds, {
+      const reconnectAttempt = await measureReconnectStage(
+        "router_single_connection_reconnect",
+        () => hotspotTroubleshootOperations.reconnectHotspotUserByMac(creds, {
           user: username,
           password,
-          ip: customer.type === "vlan" ? String(customer.ip_address) : discoveredIp,
           macAddress: requestedMac,
-          ...(targetScope ? { server: hotspotServer ?? "all" } : {}),
+          ...(portalScope && customer.type === "vlan"
+            ? { expectedIp: String(customer.ip_address) }
+            : {}),
+          ...(targetScope?.portId === null ? { expectedServer: "all" } : hotspotServer ? { expectedServer: hotspotServer } : {}),
+          ...(customer.type === "vlan" ? { loginIp: String(customer.ip_address) } : {}),
         }),
       );
-      return loginAccepted ? { kind: "connected" as const } : { kind: "login-pending" as const };
+      for (const [stage, duration] of Object.entries(reconnectAttempt.stageDurationsMs)) {
+        reconnectStageDurationsMs[stage] = duration;
+      }
+      if (reconnectAttempt.kind === "device-not-found") return { kind: "device-not-found" as const };
+      if (reconnectAttempt.kind === "ip-mismatch") return { kind: "vlan-ip-mismatch" as const };
+      return reconnectAttempt.kind === "connected"
+        ? { kind: "connected" as const }
+        : { kind: "login-pending" as const };
     }),
     );
     reconnectTimingOutcome = loginResult.kind;
