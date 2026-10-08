@@ -188,6 +188,7 @@ test("Takeover service setup advertises the captive portal API through DHCP opti
   assert.match(script, /dhcp-server network add address="192\.168\.180\.0\/22" gateway="192\.168\.180\.1" dns-server="192\.168\.180\.1" dhcp-option="ochola-services-104_captive_portal"/);
   assert.match(script, /captivePortalDhcpOptions \. "," \. "ochola-services-104_captive_portal"/);
   assert.match(script, /dhcp-server network set \$captivePortalDhcpNetworkId gateway="192\.168\.180\.1" dns-server="192\.168\.180\.1" dhcp-option=\$captivePortalDhcpOptions/);
+  assert.match(script, /walled-garden ip add dst-host="isplatty\.org" action=accept comment="ochola-services-104 captive portal API walled garden"/);
 });
 
 test("service setup adds the optional shared-wire queue tree without changing the walled garden", () => {

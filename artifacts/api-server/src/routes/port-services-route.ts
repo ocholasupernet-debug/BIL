@@ -478,6 +478,9 @@ export function buildDualServiceCommands(
   const captivePortalApiUrl = options.captivePortalApiOrigin
     ? buildCaptivePortalApiUrl(options.captivePortalApiOrigin, hotspotDnsName)
     : null;
+  const captivePortalApiHostname = captivePortalApiUrl
+    ? validPortalHostname(new URL(captivePortalApiUrl).hostname)
+    : null;
   const captivePortalOptionName = captivePortalApiUrl
     ? `${resources.commentPrefix}_captive_portal`
     : null;
@@ -518,6 +521,7 @@ export function buildDualServiceCommands(
       validPortalHostname(options.portalHostname),
       ...(options.portalHostnames ?? []).map(validPortalHostname).filter((hostname): hostname is string => Boolean(hostname)),
       hotspotDnsName,
+      captivePortalApiHostname,
       ...(options.paymentHostnames ?? PAYMENT_WALLED_GARDEN_HOSTNAMES)
         .map(hostname => validPortalHostname(hostname))
         .filter((hostname): hostname is string => Boolean(hostname)),
@@ -640,6 +644,9 @@ function buildVlanServiceCommands(
   const captivePortalApiUrl = options.captivePortalApiOrigin
     ? buildCaptivePortalApiUrl(options.captivePortalApiOrigin, hotspotDnsName)
     : null;
+  const captivePortalApiHostname = captivePortalApiUrl
+    ? validPortalHostname(new URL(captivePortalApiUrl).hostname)
+    : null;
   const captivePortalOptionName = captivePortalApiUrl
     ? `${resources.commentPrefix}_captive_portal`
     : null;
@@ -675,6 +682,7 @@ function buildVlanServiceCommands(
       validPortalHostname(options.portalHostname),
       ...(options.portalHostnames ?? []).map(validPortalHostname).filter((value): value is string => Boolean(value)),
       hotspotDnsName,
+      captivePortalApiHostname,
       ...(options.paymentHostnames ?? PAYMENT_WALLED_GARDEN_HOSTNAMES).map(validPortalHostname).filter((value): value is string => Boolean(value)),
     ].filter((value): value is string => Boolean(value)))]) {
       commands.push(["/ip/hotspot/walled-garden/ip/add", `=dst-host=${hostname}`, "=action=accept", `=comment=${comment("walled_garden")}`]);

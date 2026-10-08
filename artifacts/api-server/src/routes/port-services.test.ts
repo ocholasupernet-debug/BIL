@@ -104,8 +104,10 @@ test("custom portal hostnames are included in both physical-port and VLAN walled
   for (const commands of [physicalCommands, vlanCommands]) {
     const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
     assert.match(script, /dst-host=ocholasupernet\.com/);
+    assert.match(script, /dst-host=api\.ocholasupernet\.org/);
     assert.match(script, /dhcp-server\/option\/add =name=[^ ]+_captive_portal =code=114 =value='https:\/\/api\.ocholasupernet\.org\/api\/captive-portal\?portal=ocholasupernet\.com'/);
     assert.match(script, /dhcp-server\/network\/add[^\n]*=dhcp-option=[^ ]+_captive_portal/);
+    assert.doesNotMatch(script, /dst-host=.*msftconnecttest/);
     assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=\*\.tawk\.to =action=allow =comment=Allow tawk\.to Chat Engine/);
     assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=\*\.tawk\.link =action=allow =comment=Allow tawk\.to Calling Assets/);
     assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=ocholasupernet\.isplatty\.org =action=allow =comment=Allow OcholaSupernet Portal Domain/);

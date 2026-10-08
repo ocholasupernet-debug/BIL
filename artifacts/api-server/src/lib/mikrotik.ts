@@ -7754,6 +7754,9 @@ export function generateServiceSetupScript(
   const captivePortalApiUrl = takeoverHotspotDnsName && options.captivePortalApiOrigin
     ? buildCaptivePortalApiUrl(options.captivePortalApiOrigin, takeoverHotspotDnsName)
     : null;
+  const captivePortalApiHostname = captivePortalApiUrl
+    ? new URL(captivePortalApiUrl).hostname.toLowerCase()
+    : null;
   const captivePortalOptionName = captivePortalApiUrl
     ? `${tag}_captive_portal`
     : null;
@@ -7852,6 +7855,12 @@ export function generateServiceSetupScript(
       hostname,
       comment: `${tag} walled garden ${hostname}`,
     })),
+    ...(captivePortalApiHostname && !portalHostnames.includes(captivePortalApiHostname)
+      ? [{
+          hostname: captivePortalApiHostname,
+          comment: `${tag} captive portal API walled garden`,
+        }]
+      : []),
     ...paymentHostnames.map(hostname => ({
       hostname,
       comment: `${tag} payment walled garden ${hostname}`,
