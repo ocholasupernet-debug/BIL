@@ -146,7 +146,7 @@ test("collects every exact-username device binding for managed-account validatio
   });
 });
 
-test("collects normalized RouterOS binding types but rejects conflicting types per device", () => {
+test("preserves consistent managed binding types and normalizes conflicts to regular", () => {
   const row = {
     "mac-address": "AA:BB:CC:DD:EE:FF",
     address: "192.168.10.25",
@@ -157,13 +157,55 @@ test("collects normalized RouterOS binding types but rejects conflicting types p
     paidHotspotBindingSnapshotForCustomer([row], customer, true)?.bindingType,
     "regular",
   );
-  assert.equal(
+  assert.deepEqual(
     paidHotspotBindingSnapshotForCustomer([
       { ...row, type: "regular" },
       { ...row, type: "bypassed" },
     ], customer, true),
-    null,
+    {
+      macAddress: "AA:BB:CC:DD:EE:FF",
+      ipAddress: "192.168.10.25",
+      comment: "user-123",
+      bindingType: "regular",
+      duplicateCount: 2,
+    },
   );
+});
+
+test("normalizes blocked or missing types only for a managed paid account", () => {
+  const blocked = {
+    "mac-address": "AA:BB:CC:DD:EE:FF",
+    address: "192.168.10.25",
+    comment: "user-123",
+    type: "blocked",
+  };
+  assert.equal(paidHotspotBindingSnapshotForCustomer([blocked], customer), null);
+  assert.equal(paidHotspotBindingSnapshotForCustomer([blocked], customer, true)?.bindingType, "regular");
+  assert.equal(
+    paidHotspotBindingSnapshotForCustomer([{ ...blocked, type: "" }], customer, true)?.bindingType,
+    "regular",
+  );
+});
+
+test("uses the saved device MAC to recover a missing managed binding MAC", () => {
+  const snapshot = paidHotspotBindingSnapshotForCustomer([
+    {
+      "mac-address": "",
+      address: "192.168.10.25",
+      comment: "user-123",
+      type: "regular",
+    },
+    {
+      "mac-address": "22:33:44:55:66:77",
+      address: "192.168.10.26",
+      comment: "user-123",
+      type: "regular",
+    },
+  ], { ...customer, ipAddress: "192.168.10.25" }, true);
+  assert.deepEqual(snapshot?.bindings?.map((binding) => binding.macAddress), [
+    "22:33:44:55:66:77",
+    "AA:BB:CC:DD:EE:FF",
+  ]);
 });
 
 test("still fails closed when duplicate rows disagree about the binding", () => {

@@ -306,6 +306,57 @@ test("accepts every device binding for a username only with its managed expiry s
   });
 });
 
+test("repairs a blocked binding only after verifying its paid expiry scheduler", async () => {
+  const commands: string[][] = [];
+  await withMockRouterApi(command => {
+    commands.push([...command]);
+    if (command[0] === "/ip/hotspot/ip-binding/print") {
+      return [{
+        ".id": "*1",
+        "mac-address": "AA:BB:CC:DD:EE:FF",
+        address: "192.168.10.25",
+        comment: "user-123",
+        type: "blocked",
+      }];
+    }
+    if (command[0] === "/system/scheduler/print") {
+      return [{
+        ".id": "*2",
+        name: "ochola-paid-user-123",
+        comment: "OcholaSupernet paid access expiry",
+        "on-event": ':foreach id in=[/ip hotspot ip-binding find where comment="user-123"] do={/ip hotspot ip-binding remove $id}; /ip hotspot active find where user="user-123"',
+      }];
+    }
+    if (command[0] === "/system/clock/print") {
+      return [{ date: "oct/07/2026", time: "12:00:00" }];
+    }
+    return [];
+  }, async port => {
+    const router = credentials(port);
+    const snapshot = await getPaidHotspotBindingSnapshot(router, {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    });
+    assert.equal(snapshot?.bindingType, "regular");
+    assert.equal(snapshot?.macAddress, "AA:BB:CC:DD:EE:FF");
+
+    await reconcilePaidHotspotBinding(router, {
+      snapshot: snapshot!,
+      currentName: "user-123",
+      currentMacAddress: snapshot!.macAddress,
+      nextName: "user-123",
+      nextMacAddress: snapshot!.macAddress,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      enabled: true,
+    });
+  });
+  assert.ok(commands.some(command =>
+    command[0] === "/ip/hotspot/ip-binding/set"
+    && command.includes("=.id=*1")
+    && command.includes("=type=regular"),
+  ));
+});
+
 test("keeps multiple username bindings ambiguous when no managed expiry scheduler exists", async () => {
   await withMockRouterApi(command => {
     if (command[0] === "/ip/hotspot/ip-binding/print") {

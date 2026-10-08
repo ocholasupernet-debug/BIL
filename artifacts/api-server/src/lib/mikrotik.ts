@@ -2727,22 +2727,37 @@ export function paidHotspotBindingSnapshotForCustomer(
     bindingType: "regular" | "bypassed";
     rowCount: number;
   }>();
+  let savedMacFallbackUsed = Boolean(
+    savedMac && exactCommentMatches.some((row) => validRouterMac(row["mac-address"]) === savedMac),
+  );
   for (const row of matches) {
     const comment = String(row.comment ?? "").trim();
-    const bindingType = String(row.type ?? "").trim().toLowerCase();
-    if (!comment || (bindingType !== "regular" && bindingType !== "bypassed")) return null;
-
-    // Only use a database MAC to fill a missing RouterOS MAC when the username
-    // comment identifies exactly one row. A multi-row account must identify
-    // every device independently.
-    const macAddress = validRouterMac(row["mac-address"])
-      || (exactCommentMatches.length === 1 ? savedMac : "");
-    if (!macAddress) return null;
-    const key = `${macAddress.replace(/[:-]/g, "").toUpperCase()}:${bindingType}:${comment}`;
+    const rawBindingType = String(row.type ?? "").trim().toLowerCase();
+    if (!comment) return null;
+    if (!useAllExactAccountRows && rawBindingType !== "regular" && rawBindingType !== "bypassed") {
+      return null;
+    }
+    // In the managed-account path the scheduler is checked before this
+    // snapshot is returned. Preserve an existing bypass, but normalize blocked,
+    // missing, or unsupported types to regular Hotspot access.
+    const bindingType = rawBindingType === "bypassed" ? "bypassed" : "regular";
     const address = normalizeRouterBindingAddress(row.address);
+    let macAddress = validRouterMac(row["mac-address"])
+      || (exactCommentMatches.length === 1 ? savedMac : "")
+      || (useAllExactAccountRows && savedMac && savedIp && address === savedIp ? savedMac : "");
+    if (!macAddress && useAllExactAccountRows && savedMac && !savedMacFallbackUsed) {
+      macAddress = savedMac;
+    }
+    if (!macAddress) {
+      if (useAllExactAccountRows) continue;
+      return null;
+    }
+    if (savedMac && sameMacAddress(macAddress, savedMac)) savedMacFallbackUsed = true;
+    const key = `${macAddress.replace(/[:-]/g, "").toUpperCase()}:${useAllExactAccountRows ? "managed" : bindingType}:${comment}`;
     const existing = identities.get(key);
     if (existing) {
       if (address) existing.ipAddresses.add(address);
+      if (existing.bindingType !== bindingType) existing.bindingType = "regular";
       existing.rowCount += 1;
     } else {
       identities.set(key, {
@@ -2768,6 +2783,7 @@ export function paidHotspotBindingSnapshotForCustomer(
       && String(candidate.comment ?? "").trim() === identity.comment,
     );
     if (
+      !useAllExactAccountRows &&
       allIdentityRows.some((candidate) =>
         String(candidate.type ?? "").trim().toLowerCase() !== identity.bindingType,
       )
@@ -2816,7 +2832,7 @@ export async function getPaidHotspotBindingSnapshot(
       (row) => String(row.comment ?? "").trim() === name,
     );
     const snapshot = paidHotspotBindingSnapshotForCustomer(rows, { ...opts, name, macAddress });
-    const accountSnapshot = exactCommentMatches.length > 1
+    const accountSnapshot = exactCommentMatches.length > 0
       ? paidHotspotBindingSnapshotForCustomer(
           rows,
           { ...opts, name, macAddress },
@@ -2838,10 +2854,14 @@ export async function getPaidHotspotBindingSnapshot(
       return managedExpiry;
     };
 
-    // A customer can legitimately have more than one device binding under the
-    // same paid username. Accept the complete set only when the app-owned
-    // expiry scheduler proves that those rows belong to this paid account.
-    if (accountSnapshot && await hasManagedExpiry()) return accountSnapshot;
+    // A customer can have multiple device bindings or stale RouterOS rows
+    // under one paid username. Only normalize that complete account set after
+    // the app-owned expiry scheduler proves ownership.
+    if (
+      accountSnapshot
+      && (!snapshot || exactCommentMatches.length > 1)
+      && await hasManagedExpiry()
+    ) return accountSnapshot;
 
     if (snapshot) {
       const matchedRow = rows.find((row) =>
