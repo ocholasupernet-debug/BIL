@@ -9,7 +9,10 @@ import {
   shouldReuseRouterDnsEntry,
 } from "./port-services-route.js";
 import { mergeRouterDhcpOptionNames } from "../lib/captive-portal-discovery.js";
+import { getCaptivePortalApiOrigin } from "../lib/captive-portal-discovery.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
+
+process.env.TOKEN_SIGNING_SECRET ??= "test-captive-portal-signing-secret";
 
 const port = {
   id: 12,
@@ -61,7 +64,7 @@ test("a port service gets isolated Hotspot and PPPoE resources", () => {
   assert.match(script, /html-directory=flash\/hotspot\/hs_ether2/);
   assert.match(script, /\/interface\/pppoe-server\/server\/add =service-name=PPPoE_router-3-ether2 =interface=router-3-ether2-bridge/);
   assert.match(script, /dst-host=come\.isplatty\.org/);
-  assert.match(script, /\/ip\/dhcp-server\/option\/add =name=[^ ]+_captive_portal =code=114 =value='https:\/\/come\.isplatty\.org\/api\/captive-portal\?portal=come\.isplatty\.org'/);
+  assert.match(script, new RegExp(`/ip/dhcp-server/option/add =name=[^ ]+_captive_portal =code=114 =value='${getCaptivePortalApiOrigin().replaceAll(".", "\\.")}/api/captive-portal\\?portal=come\\.isplatty\\.org&sig=[A-Za-z0-9_-]+'`));
   assert.match(script, /\/ip\/dhcp-server\/network\/add =address=192\.168\.30\.0\/24 =gateway=192\.168\.30\.1 =dns-server=192\.168\.30\.1 =dhcp-option=[^ ]+_captive_portal/);
   assert.match(script, /dst-host=api\.safaricom\.co\.ke/);
   assert.match(script, /comment=[^ \n]*payment_walled_garden/);
@@ -104,8 +107,8 @@ test("custom portal hostnames are included in both physical-port and VLAN walled
   for (const commands of [physicalCommands, vlanCommands]) {
     const script = commands.map(([path, ...args]) => `${path} ${args.join(" ")}`).join("\n");
     assert.match(script, /dst-host=ocholasupernet\.com/);
-    assert.match(script, /dst-host=api\.ocholasupernet\.org/);
-    assert.match(script, /dhcp-server\/option\/add =name=[^ ]+_captive_portal =code=114 =value='https:\/\/api\.ocholasupernet\.org\/api\/captive-portal\?portal=ocholasupernet\.com'/);
+    assert.match(script, /dst-host=api\.isplatty\.org/);
+    assert.match(script, /dhcp-server\/option\/add =name=[^ ]+_captive_portal =code=114 =value='https:\/\/api\.isplatty\.org\/api\/captive-portal\?portal=ocholasupernet\.com&sig=[A-Za-z0-9_-]+'/);
     assert.match(script, /dhcp-server\/network\/add[^\n]*=dhcp-option=[^ ]+_captive_portal/);
     assert.doesNotMatch(script, /dst-host=.*msftconnecttest/);
     assert.match(script, /\/ip\/hotspot\/walled-garden\/add =server=[^ ]+ =dst-host=\*\.tawk\.to =action=allow =comment=Allow tawk\.to Chat Engine/);

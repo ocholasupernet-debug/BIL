@@ -35,6 +35,7 @@ import {
 import { fupRateLimitFromMbps } from "./fup-policy.js";
 import {
   buildCaptivePortalApiUrl,
+  getCaptivePortalApiOrigin,
   routerOsDhcpOptionUriValue,
 } from "./captive-portal-discovery.js";
 
@@ -7752,7 +7753,7 @@ export function generateServiceSetupScript(
   const hotspotGateway = "192.168.180.1";
   const hotspotNetwork = "192.168.180.0/22";
   const captivePortalApiUrl = takeoverHotspotDnsName && options.captivePortalApiOrigin
-    ? buildCaptivePortalApiUrl(options.captivePortalApiOrigin, takeoverHotspotDnsName)
+    ? buildCaptivePortalApiUrl(getCaptivePortalApiOrigin(), takeoverHotspotDnsName)
     : null;
   const captivePortalApiHostname = captivePortalApiUrl
     ? new URL(captivePortalApiUrl).hostname.toLowerCase()

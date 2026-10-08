@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { getCaptivePortalApiOrigin } from "./captive-portal-discovery.js";
+
+process.env.TOKEN_SIGNING_SECRET ??= "test-captive-portal-signing-secret";
 import { generateNetworkSetupScript, generateServiceSetupScript } from "./mikrotik.js";
 
 test("network setup preflights RouterOS before changing firewall rules", () => {
@@ -183,12 +186,12 @@ test("Takeover service setup advertises the captive portal API through DHCP opti
     captivePortalApiOrigin: "https://isplatty.org",
   });
 
-  assert.match(script, /dhcp-server option add name="ochola-services-104_captive_portal" code=114 value="'https:\/\/isplatty\.org\/api\/captive-portal\?portal=come\.isplatty\.org'"/);
+  assert.match(script, new RegExp(`dhcp-server option add name="ochola-services-104_captive_portal" code=114 value="'${getCaptivePortalApiOrigin().replaceAll(".", "\\.")}/api/captive-portal\\?portal=come\\.isplatty\\.org&sig=[A-Za-z0-9_-]+'"`));
   assert.match(script, /dhcp-server option set \[find where name="ochola-services-104_captive_portal"\] code=114/);
   assert.match(script, /dhcp-server network add address="192\.168\.180\.0\/22" gateway="192\.168\.180\.1" dns-server="192\.168\.180\.1" dhcp-option="ochola-services-104_captive_portal"/);
   assert.match(script, /captivePortalDhcpOptions \. "," \. "ochola-services-104_captive_portal"/);
   assert.match(script, /dhcp-server network set \$captivePortalDhcpNetworkId gateway="192\.168\.180\.1" dns-server="192\.168\.180\.1" dhcp-option=\$captivePortalDhcpOptions/);
-  assert.match(script, /walled-garden ip add dst-host="isplatty\.org" action=accept comment="ochola-services-104 captive portal API walled garden"/);
+  assert.match(script, /walled-garden ip add dst-host="api\.isplatty\.org" action=accept comment="ochola-services-104 captive portal API walled garden"/);
 });
 
 test("service setup adds the optional shared-wire queue tree without changing the walled garden", () => {

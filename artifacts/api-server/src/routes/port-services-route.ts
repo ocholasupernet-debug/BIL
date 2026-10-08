@@ -27,6 +27,7 @@ import { buildHotspotChatWalledGardenCommands } from "../lib/hotspot-chat-walled
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
 import {
   buildCaptivePortalApiUrl,
+  getCaptivePortalApiOrigin,
   mergeRouterDhcpOptionNames,
   routerOsDhcpOptionUriValue,
 } from "../lib/captive-portal-discovery.js";
@@ -476,7 +477,7 @@ export function buildDualServiceCommands(
   const hotspotDnsName = validPortalHostname(options.hotspotDnsName ?? undefined)
     ?? resources.defaultDnsName;
   const captivePortalApiUrl = options.captivePortalApiOrigin
-    ? buildCaptivePortalApiUrl(options.captivePortalApiOrigin, hotspotDnsName)
+    ? buildCaptivePortalApiUrl(getCaptivePortalApiOrigin(), hotspotDnsName)
     : null;
   const captivePortalApiHostname = captivePortalApiUrl
     ? validPortalHostname(new URL(captivePortalApiUrl).hostname)
@@ -642,7 +643,7 @@ function buildVlanServiceCommands(
   const pppoePoolRange = options.pppoePoolRange || defaultPoolRanges.pppoe;
   const hotspotDnsName = validPortalHostname(options.hotspotDnsName ?? undefined) ?? resources.defaultDnsName;
   const captivePortalApiUrl = options.captivePortalApiOrigin
-    ? buildCaptivePortalApiUrl(options.captivePortalApiOrigin, hotspotDnsName)
+    ? buildCaptivePortalApiUrl(getCaptivePortalApiOrigin(), hotspotDnsName)
     : null;
   const captivePortalApiHostname = captivePortalApiUrl
     ? validPortalHostname(new URL(captivePortalApiUrl).hostname)
@@ -1759,7 +1760,7 @@ async function executePortServiceDeployment(
       portalHostname,
       portalHostnames: customPortalHostname ? [customPortalHostname] : [],
       hotspotDnsName: deploymentPort.hotspot_dns_name,
-      captivePortalApiOrigin: sourceOrigin,
+      captivePortalApiOrigin: getCaptivePortalApiOrigin(),
       pppoeDnsName: deploymentPort.pppoe_dns_name,
       companyName: identity.companyName,
       routerName: identity.routerName,

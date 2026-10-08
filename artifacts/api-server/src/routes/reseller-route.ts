@@ -59,6 +59,12 @@ import { buildVlanHotspotServerConfig } from "../lib/vlan-hotspot-server.js";
 import { RESERVED_SUBDOMAINS, TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 import { resellerTenantHostname, resellerTenantOrigin } from "../lib/reseller-portal-hostname.js";
 import {
+  buildCaptivePortalContinueUrl,
+  buildCaptivePortalApiUrl,
+  getCaptivePortalApiOrigin,
+  isAuthorizedCaptivePortalHostname,
+} from "../lib/captive-portal-discovery.js";
+import {
   cleanGatewayConfig,
   decryptGatewayConfig,
   encryptGatewayConfig,
@@ -454,15 +460,33 @@ router.get("/reseller-portal-source/:token", (req, res): void => {
 
 router.get("/captive-portal", (req, res): void => {
   const portalHostname = validPortalHostname(req.query.portal) ?? null;
-  if (!portalHostname) {
+  const signature = typeof req.query.sig === "string" ? req.query.sig : null;
+  if (!portalHostname || !isAuthorizedCaptivePortalHostname(portalHostname, signature)) {
     res.status(400).json({ error: "A valid captive portal hostname is required." });
     return;
   }
+  const apiOrigin = getCaptivePortalApiOrigin();
   res.setHeader("Cache-Control", "no-store");
   res.type("application/captive+json").json({
     captive: true,
-    "user-portal-url": `http://${portalHostname}/`,
+    "user-portal-url": buildCaptivePortalContinueUrl(apiOrigin, portalHostname),
   });
+});
+
+router.get("/captive-portal/continue", (req, res): void => {
+  const portalHostname = validPortalHostname(req.query.portal) ?? null;
+  const signature = typeof req.query.sig === "string" ? req.query.sig : null;
+  if (!portalHostname || !isAuthorizedCaptivePortalHostname(portalHostname, signature)) {
+    res.status(400).type("text").send("This captive portal link is invalid.");
+    return;
+  }
+
+  // The TLS landing URL is on the public API host. Hand the client back to the
+  // local RouterOS Hotspot URL so login.html receives RouterOS's MAC/IP macros
+  // and existing payment/activation flow remains unchanged.
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.redirect(302, `http://${portalHostname}/`);
 });
 
 async function provisionVlanResellerServices(
@@ -777,8 +801,9 @@ async function provisionVlanResellerServices(
     comment: `${commentPrefix}_pppoe_pool`,
   });
   const captivePortalOption = `${commentPrefix}_captive_portal`;
-  const captivePortalApiHostname = validPortalHostname(new URL(apiOrigin).hostname);
-  const captivePortalUrl = `${apiOrigin}/api/captive-portal?portal=${encodeURIComponent(hotspotDnsName)}`;
+  const captivePortalApiOrigin = getCaptivePortalApiOrigin();
+  const captivePortalApiHostname = validPortalHostname(new URL(captivePortalApiOrigin).hostname);
+  const captivePortalUrl = buildCaptivePortalApiUrl(captivePortalApiOrigin, hotspotDnsName);
   const dhcpOptionRows = await runRouterCommand(creds, [
     "/ip/dhcp-server/option/print",
     "=.proplist=.id,name,code,value",
