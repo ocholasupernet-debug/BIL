@@ -3,7 +3,7 @@
  * Daraja credentials and configuration are encrypted and stored in Supabase.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync } from "fs";
 import path from "path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "crypto";
 import { logger } from "./logger.js";
@@ -29,7 +29,9 @@ export interface MpesaSettings {
 
 interface SettingsFile {
   mpesa?: MpesaSettings;
-  paymentDestinations?: PaymentDestinationSettings;
+  paymentDestinations?: PaymentDestinationSettings & {
+    registrationFeeDefaultVersion?: number;
+  };
 }
 
 function readFile(): SettingsFile {
@@ -41,12 +43,25 @@ function readFile(): SettingsFile {
   }
 }
 
-function writeFile(data: SettingsFile): void {
+function writeFile(data: SettingsFile): boolean {
+  let temporaryFile: string | undefined;
   try {
     if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-    writeFileSync(STORE_FILE, JSON.stringify(data, null, 2), "utf8");
+    temporaryFile = path.join(DATA_DIR, `settings.${process.pid}.${randomUUID()}.tmp`);
+    writeFileSync(temporaryFile, JSON.stringify(data, null, 2), { encoding: "utf8", mode: 0o600 });
+    renameSync(temporaryFile, STORE_FILE);
+    temporaryFile = undefined;
+    return true;
   } catch (e) {
     logger.error({ err: e }, "[settings-store] failed to write settings file");
+    if (temporaryFile) {
+      try {
+        unlinkSync(temporaryFile);
+      } catch {
+        // Preserve and report the original write error.
+      }
+    }
+    return false;
   }
 }
 
@@ -241,9 +256,12 @@ export interface PaymentDestinationSettings {
 }
 
 export const DEFAULT_REGISTRATION_WHATSAPP_NUMBER = "+254798088650";
+export const DEFAULT_REGISTRATION_FEE = 700;
+const REGISTRATION_FEE_DEFAULT_VERSION = 1;
+const LEGACY_STUCK_REGISTRATION_FEE = 10;
 
 const EMPTY_DESTINATIONS: PaymentDestinationSettings = {
-  registrationFee: 500,
+  registrationFee: DEFAULT_REGISTRATION_FEE,
   registrationDestinationId: "",
   renewalDestinationId: "",
   registrationWhatsappNumber: DEFAULT_REGISTRATION_WHATSAPP_NUMBER,
@@ -259,6 +277,15 @@ export function normaliseRegistrationFee(value: unknown): number {
     value <= MAX_REGISTRATION_FEE
     ? value
     : EMPTY_DESTINATIONS.registrationFee;
+}
+
+export function resolveStoredRegistrationFee(value: unknown, defaultVersion: unknown): number {
+  // The prior live default was saved as 10. Upgrade that legacy default once,
+  // while allowing Super Admin to intentionally set KSh 10 after this version.
+  if (defaultVersion !== REGISTRATION_FEE_DEFAULT_VERSION && value === LEGACY_STUCK_REGISTRATION_FEE) {
+    return DEFAULT_REGISTRATION_FEE;
+  }
+  return normaliseRegistrationFee(value);
 }
 
 export function normaliseRegistrationWhatsappNumber(value: unknown): string | null {
@@ -297,7 +324,10 @@ export function getPaymentDestinations(): PaymentDestinationSettings {
     : [];
   const validIds = new Set(destinations.map(row => row.id));
   return {
-    registrationFee: normaliseRegistrationFee(stored.registrationFee),
+    registrationFee: resolveStoredRegistrationFee(
+      stored.registrationFee,
+      stored.registrationFeeDefaultVersion,
+    ),
     registrationDestinationId: validIds.has(stored.registrationDestinationId) ? stored.registrationDestinationId : "",
     renewalDestinationId: validIds.has(stored.renewalDestinationId) ? stored.renewalDestinationId : "",
     registrationWhatsappNumber:
@@ -308,13 +338,24 @@ export function getPaymentDestinations(): PaymentDestinationSettings {
 
 export function savePaymentDestinations(settings: PaymentDestinationSettings): void {
   const data = readFile();
-  data.paymentDestinations = {
+  const storedSettings = {
     ...settings,
     registrationFee: normaliseRegistrationFee(settings.registrationFee),
     registrationWhatsappNumber:
       normaliseRegistrationWhatsappNumber(settings.registrationWhatsappNumber) ?? DEFAULT_REGISTRATION_WHATSAPP_NUMBER,
+    registrationFeeDefaultVersion: REGISTRATION_FEE_DEFAULT_VERSION,
   };
-  writeFile(data);
+  data.paymentDestinations = storedSettings;
+  if (!writeFile(data)) {
+    throw new Error("Payment settings could not be persisted.");
+  }
+  const persisted = readFile().paymentDestinations;
+  if (
+    persisted?.registrationFee !== storedSettings.registrationFee ||
+    persisted.registrationFeeDefaultVersion !== REGISTRATION_FEE_DEFAULT_VERSION
+  ) {
+    throw new Error("Payment settings could not be verified after saving.");
+  }
   logger.info("[settings-store] payment destinations saved");
 }
 

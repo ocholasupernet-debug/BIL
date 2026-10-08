@@ -80,7 +80,7 @@ export default function AdminRegister() {
   const [paymentReady, setPaymentReady] = useState(false);
   const [paymentMode, setPaymentMode] = useState<"stk" | "paybill">("stk");
   const [manualPaybillAvailable, setManualPaybillAvailable] = useState(false);
-  const [registrationFee, setRegistrationFee] = useState({ amount: 500, currency: "KES" });
+  const [registrationFee, setRegistrationFee] = useState({ amount: 700, currency: "KES" });
   const [registrationWhatsappNumber, setRegistrationWhatsappNumber] = useState("+254798088650");
   const [registrationDestination, setRegistrationDestination] = useState<RegistrationDestination | null>(null);
   const [manualPayment, setManualPayment] = useState<RegistrationDestination | null>(null);

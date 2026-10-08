@@ -165,7 +165,7 @@ export default function SuperAdminPaymentGateways() {
   const [mpesaError, setMpesaError] = useState("");
   const [mpesaSaving, setMpesaSaving] = useState(false);
   const [destinations, setDestinations] = useState<PaymentDestination[]>([]);
-  const [registrationFee, setRegistrationFee] = useState("500");
+  const [registrationFee, setRegistrationFee] = useState("700");
   const [registrationWhatsappNumber, setRegistrationWhatsappNumber] = useState("+254798088650");
   const [registrationDestinationId, setRegistrationDestinationId] = useState("");
   const [renewalDestinationId, setRenewalDestinationId] = useState("");
@@ -202,7 +202,7 @@ export default function SuperAdminPaymentGateways() {
     renewalDestinationId?: string;
   }) => {
     setDestinations(data.destinations ?? []);
-    setRegistrationFee(String(data.registrationFee?.amount ?? 500));
+    setRegistrationFee(String(data.registrationFee?.amount ?? 700));
     setRegistrationWhatsappNumber(data.registrationWhatsappNumber ?? "+254798088650");
     setRegistrationDestinationId(data.registrationDestinationId ?? "");
     setRenewalDestinationId(data.renewalDestinationId ?? "");
@@ -439,6 +439,42 @@ export default function SuperAdminPaymentGateways() {
     }
   };
 
+  const saveRegistrationFee = async () => {
+    setDestinationError("");
+    setDestinationSaved(false);
+    const amount = Number(registrationFee);
+    if (!Number.isSafeInteger(amount) || amount < 1 || amount > 1_000_000) {
+      setDestinationError("Registration fee must be a whole KSh amount between 1 and 1,000,000.");
+      return;
+    }
+    if (!registrationReplacePassword.trim()) {
+      setDestinationError("Enter the Super Admin replacement passcode before saving the registration fee.");
+      return;
+    }
+
+    setDestinationSaving(true);
+    try {
+      const response = await fetch("/api/super-admin/payment-destinations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-sa-token": token },
+        body: JSON.stringify({
+          action: "set-registration-fee",
+          registrationFee: amount,
+          replacePassword: registrationReplacePassword.trim(),
+        }),
+      });
+      const data = await response.json() as { ok: boolean; error?: string } & Parameters<typeof applyDestinationData>[0];
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not save the registration fee.");
+      applyDestinationData(data);
+      setRegistrationReplacePassword("");
+      setDestinationSaved(true);
+    } catch (error) {
+      setDestinationError(error instanceof Error ? error.message : "Could not save the registration fee.");
+    } finally {
+      setDestinationSaving(false);
+    }
+  };
+
   const saveRenewalFees = async () => {
     setRenewalFeeError("");
     setRenewalFeeSaved(false);
@@ -599,7 +635,7 @@ export default function SuperAdminPaymentGateways() {
           )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px", marginBottom: 6 }}>
-            <Field label="ISP registration fee (KES)" hint="Whole Kenyan shilling amount, from KSh 1 to KSh 1,000,000">
+            <Field label="ISP registration fee (KES)" hint="Default KSh 700. Enter a whole KSh amount, then save it using the button below.">
               <input
                 style={inp}
                 type="number"
@@ -707,10 +743,19 @@ export default function SuperAdminPaymentGateways() {
           <div style={{ maxWidth: 380 }}>
             <SecretField
               label="Replacement passcode"
-              hint="Required to update registration payment settings or the registration support number."
+              hint="Required to update payment settings. For a fee-only change, use Save registration fee below."
               value={registrationReplacePassword}
               onChange={value => setRegistrationReplacePassword(value)}
             />
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 18 }}>
+            <button
+              onClick={saveRegistrationFee}
+              disabled={destinationSaving}
+              style={{ border: 0, borderRadius: 8, background: C.accent, color: "white", padding: "9px 13px", fontWeight: 700, fontSize: "0.76rem", cursor: "pointer", opacity: destinationSaving ? 0.6 : 1 }}
+            >
+              {destinationSaving ? "Saving registration fee…" : "Save registration fee"}
+            </button>
           </div>
           {destinationForm.type === "paybill" && (
             <div style={{ margin: "2px 0 16px", padding: "11px 13px", borderRadius: 9, border: "1px solid rgba(74,222,128,0.22)", background: "rgba(74,222,128,0.06)", color: C.sub, fontSize: "0.72rem", lineHeight: 1.55 }}>
@@ -758,13 +803,6 @@ export default function SuperAdminPaymentGateways() {
                 ))}
               </div>
             </>
-          )}
-          {destinations.length === 0 && (
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <button onClick={savePurposes} disabled={destinationSaving} style={{ border: 0, borderRadius: 8, background: "rgba(255,255,255,0.12)", color: "white", padding: "9px 12px", fontWeight: 700, fontSize: "0.76rem", cursor: "pointer" }}>
-                Save registration fee
-              </button>
-            </div>
           )}
           {manualRegistrations.length > 0 && (
             <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${C.border}` }}>

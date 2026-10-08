@@ -217,7 +217,16 @@ router.post("/registration/payment", async (req: Request, res: Response): Promis
   let destination = settings.destinations.find(row => row.id === settings.registrationDestinationId && row.active);
   const config = destination?.type === "bank" ? null : await getMpesaSettings();
   if (config && isMpesaConfigured(config)) {
-    settings = ensureMpesaRegistrationDestination(config);
+    try {
+      settings = ensureMpesaRegistrationDestination(config);
+    } catch (error) {
+      logger.error({ err: error }, "[registration] payment destination settings could not be persisted");
+      res.status(503).json({
+        ok: false,
+        error: "Registration payment settings could not be saved. Please try again shortly.",
+      });
+      return;
+    }
     destination = settings.destinations.find(row => row.id === settings.registrationDestinationId && row.active);
   }
   if (!destination) {

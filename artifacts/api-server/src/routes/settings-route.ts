@@ -151,6 +151,13 @@ function requireSuperAdminReplacementPasscode(req: Request, res: Response): bool
   return true;
 }
 
+function sendPaymentSettingsWriteFailure(res: Response): void {
+  res.status(503).json({
+    ok: false,
+    error: "Payment settings could not be saved to persistent storage. No change was confirmed; please retry.",
+  });
+}
+
 function isValidCollectionNumber(type: PaymentDestinationType, value: string): boolean {
   if (type === "bank") return /^[A-Za-z0-9][A-Za-z0-9 -]{2,33}$/.test(value);
   return /^\d{5,10}$/.test(value);
@@ -917,6 +924,27 @@ router.post("/super-admin/payment-destinations", async (req: Request, res: Respo
   }
   if (!requireSuperAdminReplacementPasscode(req, res)) return;
 
+  if (req.body?.action === "set-registration-fee") {
+    const registrationFee = normaliseRegistrationFee(req.body?.registrationFee);
+    if (req.body?.registrationFee !== registrationFee) {
+      res.status(400).json({ ok: false, error: "Registration fee must be a whole KSh amount between 1 and 1,000,000." });
+      return;
+    }
+    const next = { ...getPaymentDestinations(), registrationFee };
+    try {
+      savePaymentDestinations(next);
+    } catch {
+      sendPaymentSettingsWriteFailure(res);
+      return;
+    }
+    void sendPlatformSecurityNotice(
+      "Platform registration fee changed",
+      "The Super Admin changed the platform registration fee.",
+    );
+    res.json({ ok: true, ...next, registrationFee: { amount: next.registrationFee, currency: "KES" } });
+    return;
+  }
+
   if (req.body?.action === "select") {
     const current = getPaymentDestinations();
     const registrationDestinationId = typeof req.body?.registrationDestinationId === "string"
@@ -961,7 +989,12 @@ router.post("/super-admin/payment-destinations", async (req: Request, res: Respo
       renewalDestinationId,
       registrationWhatsappNumber,
     };
-    savePaymentDestinations(next);
+    try {
+      savePaymentDestinations(next);
+    } catch {
+      sendPaymentSettingsWriteFailure(res);
+      return;
+    }
     void sendPlatformSecurityNotice(
       "Platform payment destinations changed",
       "The Super Admin changed platform payment destinations, the registration fee, or registration support contact.",
@@ -1007,15 +1040,21 @@ router.post("/super-admin/payment-destinations", async (req: Request, res: Respo
     return;
   }
 
-  const next = upsertPaymentDestination({
-    id: id || undefined,
-    type: type as PaymentDestinationType,
-    name,
-    number,
-    accountReference,
-    instructions,
-    active: source.active !== false,
-  });
+  let next: ReturnType<typeof upsertPaymentDestination>;
+  try {
+    next = upsertPaymentDestination({
+      id: id || undefined,
+      type: type as PaymentDestinationType,
+      name,
+      number,
+      accountReference,
+      instructions,
+      active: source.active !== false,
+    });
+  } catch {
+    sendPaymentSettingsWriteFailure(res);
+    return;
+  }
   void sendPlatformSecurityNotice(
     "Platform payment destination changed",
     `The Super Admin added or updated a ${type} payment destination named "${name}". Payment account details are not included in this notice.`,
@@ -1034,7 +1073,13 @@ router.delete("/super-admin/payment-destinations/:id", (req: Request, res: Respo
     res.status(400).json({ ok: false, error: "A destination is required." });
     return;
   }
-  const next = deletePaymentDestination(id);
+  let next: ReturnType<typeof deletePaymentDestination>;
+  try {
+    next = deletePaymentDestination(id);
+  } catch {
+    sendPaymentSettingsWriteFailure(res);
+    return;
+  }
   void sendPlatformSecurityNotice(
     "Platform payment destination removed",
     "The Super Admin removed a platform payment destination.",
