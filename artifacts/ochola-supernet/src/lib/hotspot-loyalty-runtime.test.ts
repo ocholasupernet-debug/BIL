@@ -16,6 +16,12 @@ function fixture(responder?: Responder) {
   const title = { textContent: "", style: {} };
   const status = { textContent: "", style: {} };
   const nodes: Record<string, typeof title> = { loyaltyPointsTitle: title, loyaltyPointsStatus: status };
+  const storedValues = new Map<string, string>();
+  const localStorage = {
+    getItem: (key: string) => storedValues.get(key) ?? null,
+    setItem: (key: string, value: string) => { storedValues.set(key, value); },
+    removeItem: (key: string) => { storedValues.delete(key); },
+  };
   const state = { balance: 5, hasAccount: true, canRedeem: true, pointsRequired: 5 };
   const intervals: Array<{ callback: () => void; ms: number }> = [];
   const context = vm.createContext({
@@ -23,7 +29,11 @@ function fixture(responder?: Responder) {
     PORTAL_DEVICE_MAC: "AA:BB:CC:DD:EE:FF", PORTAL_PREVIEW_ONLY: false,
     portalLoyaltyBusy: false, portalLoyaltyRequestId: 0,
     selectedPlan: null, tvPurchase: false, stkPhone: "",
-    stkState: "idle", window: { crypto: { randomUUID: () => "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" } },
+    stkState: "idle", window: {
+      crypto: { randomUUID: () => "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" },
+      location: { host: "portal.example.test" },
+      localStorage,
+    },
     document: { hidden: false, getElementById: (id: string) => nodes[id] ?? null },
     portalCardEnabled: () => true, apiUrl: (path: string) => path,
     renderModal: () => {}, canStartPaymentCheckout: () => true,
@@ -45,7 +55,7 @@ function fixture(responder?: Responder) {
     },
   });
   vm.runInContext(helpers, context);
-  return { context, requests, title, status, state, intervals };
+  return { context, requests, title, status, state, intervals, storedValues };
 }
 
 test("RouterOS loyalty card automatically loads the MAC balance without a phone or package", async () => {
@@ -93,6 +103,32 @@ test("RouterOS points are not shown for an unidentified device", () => {
 
 const reply = (status: number, body: unknown) => ({ ok: status < 400, status, json: async () => body });
 const eligible = { ok: true, balance: 5, pointsRequired: 5, pointsAwarded: 0, canRedeem: true, pendingCheckoutId: null };
+
+test("RouterOS trusted-device token skips the account prompt and is refreshed after redemption", async () => {
+  const f = fixture(async path => path.endsWith("/redeem")
+    ? reply(200, {
+      ok: true,
+      checkout_id: "LOYALTY-test",
+      device_authorization: "refreshed-device-token",
+      device_authorization_expires_at: Date.now() + 60_000,
+    })
+    : reply(200, eligible));
+  f.context.selectedPlan = { id: 41, name: "Five", price: 5 };
+  f.context.loyQuote = { balance: 5, pointsRequired: 5, pointsAwarded: 0, canRedeem: true };
+  f.context.loyState = "ready";
+  f.context.loyDeviceAuthorization = "previous-device-token";
+  f.context.setLoyaltyMode("points");
+  assert.equal(f.context.loyaltyNeedsConfirm(), false);
+  f.context.redeemLoyaltyPoints();
+  await tick(); await tick(); await tick();
+  const redemption = f.requests.find(row => row.path.endsWith("/redeem"));
+  assert.ok(redemption);
+  assert.equal(redemption.body.device_authorization, "previous-device-token");
+  assert.equal("account_credentials" in redemption.body, false);
+  assert.equal(f.context.loyDeviceAuthorization, "refreshed-device-token");
+  assert.equal(f.context.loyPaidWithPoints, true);
+  assert.ok([...f.storedValues.values()].some(value => value.includes("refreshed-device-token")));
+});
 
 test("RouterOS quote 401 clears bad proof and refreshes public eligibility once with the same nonce", async () => {
   const f = fixture(async (_path, body) => body.account_credentials

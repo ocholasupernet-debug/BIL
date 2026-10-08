@@ -7,6 +7,10 @@ import {
   resolveHotspotRedemptionPoints,
 } from "../lib/loyalty-points.js";
 import {
+  issueHotspotLoyaltyDeviceAuthorization,
+  verifyHotspotLoyaltyDeviceAuthorization,
+} from "../lib/hotspot-loyalty-device-authorization.js";
+import {
   isKenyanMobileNumber,
   normaliseKenyanMobile,
 } from "../lib/kenyan-phone.js";
@@ -177,59 +181,119 @@ async function deviceAccountPhone(
   } : null;
 }
 
-// A MAC discovers a wallet; password possession authorizes spending it.
+// A MAC discovers a wallet; credentials authorize the first spend, then a scoped
+// signed device authorization avoids repeated password prompts on that device.
 const verificationAttempts = new Map<string, { attempts: number; until: number }>();
+type LoyaltyDeviceAuthContext = {
+  adminId: number;
+  plan: LoyaltyPlan;
+  phone: string;
+  deviceAccount: { customerId: number; customerAdminId: number } | null;
+};
+
+function loyaltyDeviceAuthorizationScope(
+  context: LoyaltyDeviceAuthContext,
+  macAddress: string,
+) {
+  if (!context.deviceAccount) return null;
+  return {
+    tenantAdminId: context.adminId,
+    customerAdminId: context.deviceAccount.customerAdminId,
+    customerId: context.deviceAccount.customerId,
+    phone: context.phone,
+    macAddress,
+    routerId: context.plan.router_id,
+    portId: context.plan.port_id,
+    resellerId: context.plan.owner_reseller_id,
+  };
+}
+
 async function verifyLoyaltyAccount(
   req: Request,
   res: Response,
-  context: { adminId: number; plan: LoyaltyPlan; phone: string;
-    deviceAccount: { customerId: number; customerAdminId: number; status: string } | null },
+  context: LoyaltyDeviceAuthContext & { deviceAccount: { customerId: number; customerAdminId: number; status: string } | null },
 ): Promise<boolean> {
   const supplied = req.body?.account_credentials;
   const username = typeof supplied?.username === "string" ? supplied.username.trim() : "";
   const password = typeof supplied?.password === "string" ? supplied.password : "";
+  const deviceAuthorization = typeof req.body?.device_authorization === "string"
+    ? req.body.device_authorization.trim() : "";
+  const hasCredentials = Boolean(username && username.length <= 128 && password && password.length <= 512);
   const deny = () => {
     res.status(401).json({ ok: false, verificationRequired: true,
-      error: "Confirm this device's Hotspot account username and password to use its loyalty points." });
+      error: deviceAuthorization
+        ? "This device authorization is invalid or expired. Confirm the Hotspot account once more to continue."
+        : "Confirm this device's Hotspot account username and password to use its loyalty points." });
     return false;
   };
-  if (!username || username.length > 128 || !password || password.length > 512 || !context.deviceAccount) return deny();
+  if ((!hasCredentials && !deviceAuthorization) || !context.deviceAccount) return deny();
   const mac = normalizeMac(req.body?.mac_address);
   const key = `${req.ip}|${context.adminId}|${mac}`;
   const now = Date.now();
-  const previous = verificationAttempts.get(key);
-  if (previous && previous.until > now && previous.attempts >= 6) {
-    res.setHeader("Retry-After", String(Math.ceil((previous.until - now) / 1000)));
-    res.status(429).json({ ok: false, verificationRequired: true, error: "Too many account confirmation attempts. Please retry in one minute." });
-    return false;
-  }
-  if (verificationAttempts.size >= 10000) {
-    for (const [entry, value] of verificationAttempts) if (value.until <= now) verificationAttempts.delete(entry);
-    if (verificationAttempts.size >= 10000) {
-      res.status(503).json({ ok: false, error: "Account confirmation is busy. Please retry shortly." });
+  const previous = hasCredentials ? verificationAttempts.get(key) : undefined;
+  if (hasCredentials) {
+    if (previous && previous.until > now && previous.attempts >= 6) {
+      res.setHeader("Retry-After", String(Math.ceil((previous.until - now) / 1000)));
+      res.status(429).json({ ok: false, verificationRequired: true, error: "Too many account confirmation attempts. Please retry in one minute." });
       return false;
     }
+    if (verificationAttempts.size >= 10000) {
+      for (const [entry, value] of verificationAttempts) if (value.until <= now) verificationAttempts.delete(entry);
+      if (verificationAttempts.size >= 10000) {
+        res.status(503).json({ ok: false, error: "Account confirmation is busy. Please retry shortly." });
+        return false;
+      }
+    }
   }
-  const attempt = previous && previous.until > now ? previous : { attempts: 0, until: now + 60000 };
-  attempt.attempts++;
-  verificationAttempts.set(key, attempt);
+  if (hasCredentials) {
+    const attempt = previous && previous.until > now ? previous : { attempts: 0, until: now + 60000 };
+    attempt.attempts++;
+    verificationAttempts.set(key, attempt);
+  }
+  const selectFields = `id,admin_id,username,phone,mac_address,router_id,port_id,status${hasCredentials ? ",password" : ""}`;
   const profiles = await hotspotLoyaltyOperations.select<{
-    id: number; admin_id: number; username: string; password: string; phone: string;
+    id: number; admin_id: number; username: string; password?: string; phone: string;
     mac_address: string; router_id: number | null; port_id: number | null; status: string;
   }>("isp_customers",
-    `id=eq.${context.deviceAccount.customerId}&admin_id=eq.${context.deviceAccount.customerAdminId}&type=eq.hotspot&select=id,admin_id,username,password,phone,mac_address,router_id,port_id,status&limit=1`);
+    `id=eq.${context.deviceAccount.customerId}&admin_id=eq.${context.deviceAccount.customerAdminId}&type=eq.hotspot&select=${selectFields}&limit=1`);
   const profile = profiles[0];
-  const matches = profile && typeof profile.password === "string" && profile.password.length > 0
+  const accountMatches = profile
     && profile.id === context.deviceAccount.customerId && profile.admin_id === context.deviceAccount.customerAdminId
-    && profile.username === username && normaliseKenyanMobile(profile.phone) === context.phone
+    && typeof profile.username === "string" && profile.username.length > 0
+    && normaliseKenyanMobile(profile.phone) === context.phone
     && normalizeMac(profile.mac_address) === mac && (profile.router_id ?? null) === (context.plan.router_id ?? null)
     && (profile.port_id ?? null) === (context.plan.port_id ?? null)
     && !["suspended", "disabled"].includes(context.deviceAccount.status)
-    && !["suspended", "disabled"].includes(String(profile.status).toLowerCase())
-    && timingSafeEqual(createHash("sha256").update(profile.password).digest(), createHash("sha256").update(password).digest());
-  if (!matches) return deny();
+    && !["suspended", "disabled"].includes(String(profile.status).toLowerCase());
+  const credentialsMatch = Boolean(accountMatches && hasCredentials
+    && profile && profile.username === username
+    && typeof profile.password === "string" && profile.password.length > 0
+    && timingSafeEqual(createHash("sha256").update(profile.password).digest(), createHash("sha256").update(password).digest()));
+  const authorizationScope = accountMatches ? loyaltyDeviceAuthorizationScope(context, mac) : null;
+  const deviceAuthorizationMatches = Boolean(authorizationScope && deviceAuthorization
+    && verifyHotspotLoyaltyDeviceAuthorization(
+      deviceAuthorization,
+      authorizationScope,
+      process.env.TOKEN_SIGNING_SECRET?.trim() || process.env.SESSION_SECRET?.trim(),
+    ));
+  if (!accountMatches || (!credentialsMatch && !deviceAuthorizationMatches)) return deny();
   verificationAttempts.delete(key);
   return true;
+}
+
+function issueDeviceAuthorization(context: {
+  adminId: number;
+  plan: LoyaltyPlan;
+  phone: string;
+  deviceAccount: { customerId: number; customerAdminId: number } | null;
+}, macAddress: string): { token: string; expiresAt: number } | null {
+  const scope = loyaltyDeviceAuthorizationScope(context, macAddress);
+  return scope
+    ? issueHotspotLoyaltyDeviceAuthorization(
+      scope,
+      process.env.TOKEN_SIGNING_SECRET?.trim() || process.env.SESSION_SECRET?.trim(),
+    )
+    : null;
 }
 
 async function deviceBalance(adminId: number, phone: string | null): Promise<number> {
@@ -553,7 +617,9 @@ router.post("/hotspot/loyalty/quote", async (req, res): Promise<void> => {
     // Recover a confirmed debit after a lost HTTP response without spending again.
     const key = String(req.body?.idempotency_key ?? "").trim().toLowerCase();
     let pendingCheckoutId: string | null = null;
-    if (context.hasCustomer && req.body?.account_credentials
+    const hasAccountProof = Boolean(req.body?.account_credentials || req.body?.device_authorization);
+    let deviceAuthorization: { token: string; expiresAt?: number } | null = null;
+    if (context.hasCustomer && hasAccountProof
       && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(key)) {
       // Recovering an access capability requires the same proof as spending.
       if (!await verifyLoyaltyAccount(req, res, context)) return;
@@ -568,9 +634,27 @@ router.post("/hotspot/loyalty/quote", async (req, res): Promise<void> => {
       if (paid && paid.admin_id === context.adminId && paid.plan_id === context.plan.id
           && paid.reference === reference && paid.status === "completed"
           && normaliseKenyanMobile(paid.payment_phone) === context.phone
-          && normalizeMac(paid.mac_address) === mac) pendingCheckoutId = reference;
+          && normalizeMac(paid.mac_address) === mac) {
+        pendingCheckoutId = reference;
+        const suppliedAuthorization = typeof req.body?.device_authorization === "string"
+          ? req.body.device_authorization.trim() : "";
+        const scope = loyaltyDeviceAuthorizationScope(context, mac);
+        const signingSecret = process.env.TOKEN_SIGNING_SECRET?.trim() || process.env.SESSION_SECRET?.trim();
+        deviceAuthorization = scope && suppliedAuthorization
+          && verifyHotspotLoyaltyDeviceAuthorization(suppliedAuthorization, scope, signingSecret)
+          ? { token: suppliedAuthorization }
+          : issueDeviceAuthorization(context, mac);
+      }
     }
-    res.json({ ok: true, ...quote, pendingCheckoutId });
+    res.json({
+      ok: true,
+      ...quote,
+      pendingCheckoutId,
+      ...(deviceAuthorization ? {
+        device_authorization: deviceAuthorization.token,
+        ...(deviceAuthorization.expiresAt ? { device_authorization_expires_at: deviceAuthorization.expiresAt } : {}),
+      } : {}),
+    });
   } catch (error) {
     logger.warn({ err: error }, "[hotspot/loyalty/quote] quote unavailable");
     res.status(503).json({ ok: false, error: "Loyalty points could not be checked right now." });
@@ -592,6 +676,11 @@ router.post("/hotspot/loyalty/redeem", async (req, res): Promise<void> => {
       return;
     }
     if (!await verifyLoyaltyAccount(req, res, context)) return;
+    const deviceAuthorization = issueDeviceAuthorization(context, macAddress);
+    if (!deviceAuthorization) {
+      res.status(503).json({ ok: false, error: "Secure device authorization is unavailable. No points were spent; please retry later." });
+      return;
+    }
     const rows = await hotspotLoyaltyOperations.redeem<{
       checkout_id: string;
       points_balance: number | string;
@@ -620,6 +709,8 @@ router.post("/hotspot/loyalty/redeem", async (req, res): Promise<void> => {
       checkout_id: redemption.checkout_id,
       pointsBalance: pointBalance(accounts[0]?.points_balance ?? redemption.points_balance, accounts[0]?.fractional_balance),
       pointsSpent: Number(redemption.points_spent),
+      device_authorization: deviceAuthorization.token,
+      device_authorization_expires_at: deviceAuthorization.expiresAt,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
