@@ -2760,14 +2760,21 @@ export async function getPaidHotspotBindingSnapshot(
       throw new Error("MikroTik did not return the paid Hotspot expiry scheduler details.");
     }
     const hasManagedExpiry = isManagedPaidExpiryScheduler(schedulers, snapshot?.comment ?? name);
-    if (snapshot) return hasManagedExpiry ? snapshot : null;
-    if (exactCommentMatches.length) {
-      if (hasManagedExpiry) {
+    if (snapshot) {
+      if (hasManagedExpiry) return snapshot;
+      if (snapshot.bindingType === "regular" && snapshot.comment === name) {
         throw new Error(
-          "The managed paid Hotspot binding is incomplete or ambiguous. Verify its router MAC and binding type before saving.",
+          "The exact Hotspot account binding was found, but its saved device identity is stale and no managed expiry scheduler confirms it. No changes were saved; verify the router binding.",
         );
       }
       return null;
+    }
+    if (exactCommentMatches.length) {
+      throw new Error(
+        hasManagedExpiry
+          ? "The managed paid Hotspot binding is incomplete or ambiguous. Verify its router MAC and binding type before saving."
+          : "RouterOS has multiple or incomplete Hotspot bindings for this username. No changes were saved; resolve the binding before editing this account.",
+      );
     }
 
     // A verified app-owned scheduler can be left behind if a binding write

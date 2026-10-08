@@ -218,7 +218,7 @@ test("extends the verified router MAC binding and reenables its paid expiry sche
   ));
 });
 
-test("does not treat a stale-MAC username binding as app-managed without its expiry scheduler", async () => {
+test("fails closed when a stale-MAC username binding lacks its managed expiry scheduler", async () => {
   await withMockRouterApi(command => {
     if (command[0] === "/ip/hotspot/ip-binding/print") {
       return [{
@@ -233,14 +233,20 @@ test("does not treat a stale-MAC username binding as app-managed without its exp
     return [];
   }, async port => {
     const router = credentials(port);
-    assert.equal(await getPaidHotspotBindingSnapshot(router, {
-      name: "user-123",
-      macAddress: "AA:BB:CC:DD:EE:FF",
-    }), null);
-    assert.equal(await hasPaidHotspotAccess(router, {
-      name: "user-123",
-      macAddress: "AA:BB:CC:DD:EE:FF",
-    }), false);
+    await assert.rejects(
+      getPaidHotspotBindingSnapshot(router, {
+        name: "user-123",
+        macAddress: "AA:BB:CC:DD:EE:FF",
+      }),
+      /saved device identity is stale/,
+    );
+    await assert.rejects(
+      hasPaidHotspotAccess(router, {
+        name: "user-123",
+        macAddress: "AA:BB:CC:DD:EE:FF",
+      }),
+      /saved device identity is stale/,
+    );
   });
 });
 
