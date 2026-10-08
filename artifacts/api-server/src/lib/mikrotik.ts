@@ -3512,7 +3512,14 @@ export async function disconnectHotspotActiveUser(
 
 export async function connectHotspotUser(
   creds: RouterCredentials,
-  opts: { user: string; password: string; ip: string; macAddress: string; server?: string },
+  opts: {
+    user: string;
+    password: string;
+    ip: string;
+    macAddress: string;
+    /** Ignored: RouterOS infers the service from client IP/interface and rejects server on active/login. */
+    server?: string;
+  },
 ): Promise<boolean> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
@@ -3535,7 +3542,7 @@ export async function connectHotspotUser(
       `=ip=${opts.ip}`,
       `=mac-address=${opts.macAddress}`,
     ];
-    if (opts.server) command.push(`=server=${opts.server}`);
+    // Do not serialize opts.server: /ip/hotspot/active/login does not accept it.
     await withTimeout(conn.write(command), ms);
 
     for (let attempt = 0; attempt < 4; attempt += 1) {

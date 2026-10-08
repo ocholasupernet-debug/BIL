@@ -181,12 +181,18 @@ test("hotspot login uses the selected device IP and confirms its MAC session", a
       password: "test-password",
       ip: "10.0.0.88",
       macAddress: targetMac,
+      server: "tenant-hotspot",
     });
 
     assert.equal(connected, true);
     const loginCommand = commands.find(({ command }) => command[0] === "/ip/hotspot/active/login")?.command;
-    assert.ok(loginCommand?.includes("=ip=10.0.0.88"));
-    assert.ok(loginCommand?.includes(`=mac-address=${targetMac}`));
+    assert.deepEqual(loginCommand, [
+      "/ip/hotspot/active/login",
+      "=user=tv-package",
+      "=password=test-password",
+      "=ip=10.0.0.88",
+      `=mac-address=${targetMac}`,
+    ]);
     assert.equal(commands.some(({ command }) => command[0] === "/ip/hotspot/active/remove"), false);
   });
 });
