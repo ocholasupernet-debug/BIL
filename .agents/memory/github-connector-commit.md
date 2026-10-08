@@ -5,6 +5,12 @@ description: Reconcile connector commits with the live remote branch without rep
 
 GitHub ref updates cannot target commit objects that exist only in the workspace.
 
+Re-declare impure GitHub request wrappers in each notebook block rather than reusing an impure function object created in an earlier block. Pass persistent branch names, SHAs, and run IDs as plain arguments.
+
+**Why:** Reusing a previously working helper failed with `executeJs is not defined`; an inline wrapper in the new block succeeded. This is a runtime boundary issue, not evidence of invalid GitHub credentials.
+
+**How to apply:** After a dispatch-related failure, inspect existing runs for the exact branch and SHA before retrying, so an ambiguous failure cannot trigger duplicate deployments.
+
 **Why:** GitHub rejects a locally valid commit SHA if that object has not been uploaded to the repository.
 
 **How to apply:** If the intended commit is absent remotely, create verified blobs and a commit from the live remote base, require its full tree SHA to match local `HEAD^{tree}`, then update the ref once with `force: false`.

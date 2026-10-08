@@ -41,7 +41,11 @@ test("the standalone RouterOS portal shows a configurable loyalty balance card",
   assert.match(portalTemplate, /loyalty:true/);
   assert.match(portalTemplate, /function applyPortalLoyaltyCardSettings\(value\)/);
   assert.match(portalTemplate, /applyPortalLoyaltyCardSettings\(data\.loyaltyCard\)/);
+  assert.match(portalTemplate, /\/api\/hotspot\/loyalty\/balance/);
   assert.match(portalTemplate, /\/api\/hotspot\/loyalty\/quote/);
+  assert.match(portalTemplate, /\/api\/hotspot\/loyalty\/redeem/);
+  assert.match(portalTemplate, /idempotency_key/);
+  assert.doesNotMatch(portalTemplate, /id="loyaltyPhone"/);
   assert.match(portalTemplate, /position:"bottom",treatment:"filled",shape:"rounded",size:"standard"/);
 });
 

@@ -200,8 +200,8 @@ test("an explicit device-MAC edit replaces the managed binding set with the chos
     ],
     ensure: [{
       macAddress: "22:33:44:55:66:77",
-      ipAddress: null,
       comment: "paid-user",
+      ipAddress: null,
       bindingType: "bypassed",
     }],
   });
