@@ -14,11 +14,16 @@ test("the standalone portal applies background and package shape from typography
   assert.match(portalTemplate, /style\.setProperty\("background",backgrounds\[PORTAL_BACKGROUND\],"important"\)/);
 });
 
-test("the standalone portal applies saved layouts using the shared stylesheet asset", () => {
-  assert.match(portalTemplate, /function normalisePortalLayout\(value\)/);
-  assert.match(portalTemplate, /applyPortalLayout\(data\.portalLayout\)/);
-  assert.match(portalTemplate, /hotspot\/portal-layouts\.css/);
-  assert.match(portalTemplate, /if\(document\.getElementById\("hotspot-portal-layout"\)\)return/);
+test("the generated standalone portal embeds its saved layout without a router-side stylesheet request", () => {
+  const exporter = readFileSync(
+    new URL("../pages/admin/HotspotSettings.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(portalTemplate, /data-portal-layout="classic"/);
+  assert.match(exporter, /const layoutCss = renderStaticPortalLayoutCss\(config\.portalLayout\)/);
+  assert.match(exporter, /<style id="hotspot-portal-layout">/);
+  assert.match(exporter, /document\.documentElement\.setAttribute\("data-portal-layout",window\.__HOTSPOT_CONFIG__\.portalLayout\)/);
+  assert.doesNotMatch(portalTemplate, /<link[^>]+portal-layouts\.css/);
 });
 
 test("the standalone portal applies the saved ISP or reseller name as soon as branding loads", () => {
@@ -29,6 +34,25 @@ test("the standalone portal applies the saved ISP or reseller name as soon as br
   assert.match(loader, /var brandingRequest=brandingUrl\?fetch/);
   assert.match(loader, /applyPublicHotspotBranding\(data\);return data;/);
   assert.match(portalTemplate, /if\(token\)headers\.set\("X-Hotspot-Portal-Context",token\)/);
+});
+
+test("the standalone RouterOS portal shows a configurable loyalty balance card", () => {
+  assert.match(portalTemplate, /id="loyaltyPointsSection"/);
+  assert.match(portalTemplate, /loyalty:true/);
+  assert.match(portalTemplate, /function applyPortalLoyaltyCardSettings\(value\)/);
+  assert.match(portalTemplate, /applyPortalLoyaltyCardSettings\(data\.loyaltyCard\)/);
+  assert.match(portalTemplate, /\/api\/hotspot\/loyalty\/quote/);
+  assert.match(portalTemplate, /position:"bottom",treatment:"filled",shape:"rounded",size:"standard"/);
+});
+
+test("voucher redemption in the standalone portal records a prepaid account before router login", () => {
+  assert.match(portalTemplate, /id="voucherPhone" type="tel"/);
+  assert.match(portalTemplate, /contact:phone/);
+  assert.match(portalTemplate, /\/api\/vouchers\/hotspot\/redeem/);
+  assert.match(portalTemplate, /function connectRedeemedVoucher\(\)/);
+  assert.match(portalTemplate, /\/api\/customers\/hotspot-login/);
+  assert.doesNotMatch(portalTemplate, /voucherPassHidden/);
+  assert.doesNotMatch(portalTemplate, /name="sendin3" id="voucherForm" action=/);
 });
 
 test("the captive portal reconnects a valid device session and keeps payment handoff separate", () => {
