@@ -8,14 +8,14 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
   const mac = "AA:BB:CC:DD:EE:FF";
   const credentials = { username: "test-hotspot", password: "test-only-9X" };
   const phone = "254700000001";
-  const plan = { id: 41, admin_id: 7, name: "Five", type: "hotspot", price: 5,
+  let plan = { id: 41, admin_id: 7, name: "Five", type: "hotspot", price: 5,
     router_id: 31, port_id: null, owner_reseller_id: null, is_active: true, client_can_purchase: true };
   let customer: Record<string, unknown> | null = { id: 2, admin_id: 7, phone, mac_address: mac, router_id: 31, port_id: null,
     status: "active", ...credentials };
   let proofOverride: Record<string, unknown> | null | undefined;
   let balance = 5;
   let fraction = 0;
-  let enabled = true;
+  let redemptionRule: number | null | undefined = 5;
   let failReads = false;
   let paidTransaction: Record<string, unknown> | null = null;
   const reads: Array<{ table: string; query: string }> = [];
@@ -30,7 +30,8 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
         ? proofOverride ? [proofOverride] : [] : customer ? [customer] : []
       : table === "isp_loyalty_accounts" ? [{ points_balance: balance, fractional_balance: fraction }]
       : table === "isp_loyalty_settings" ? [{ kes_per_point: 10 }]
-      : table === "isp_loyalty_plan_rules" ? [{ plan_id: 41, redemption_points: enabled ? 5 : null, points_awarded: null }]
+      : table === "isp_loyalty_plan_rules" ? redemptionRule === undefined
+        ? [] : [{ plan_id: 41, redemption_points: redemptionRule, points_awarded: null }]
       : table === "isp_transactions" ? paidTransaction ? [paidTransaction] : []
       : [];
     return rows as T[];
@@ -72,7 +73,7 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
         && row.query.includes("order=created_at.desc.nullslast,id.desc&limit=1")));
       fraction = 0;
     });
-    await t.test("exactly five points offers a configured five-point package", async () => {
+    await t.test("exactly five points offers a five-shilling package by default", async () => {
       const result = await request("quote", { plan_id: 41 });
       assert.equal(result.status, 200);
       assert.equal(result.body.balance, 5);
@@ -80,13 +81,34 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
       assert.equal(result.body.pointsRequired, 5);
       assert.equal(result.body.pointsAwarded, 0.5);
     });
-    await t.test("insufficient points and unconfigured packages do not offer redemption", async () => {
+    await t.test("the package price sets the eligibility threshold when the balance is low", async () => {
+      const originalPrice = plan.price;
+      const originalRule = redemptionRule;
+      plan = { ...plan, price: 10 };
+      redemptionRule = undefined;
+      balance = 8;
+      const result = await request("quote", { plan_id: 41 });
+      assert.equal(result.body.pointsRequired, 10);
+      assert.equal(result.body.canRedeem, false);
+      plan = { ...plan, price: originalPrice };
+      redemptionRule = originalRule;
+    });
+    await t.test("an explicit plan cost overrides the price and zero disables redemption", async () => {
+      const originalRule = redemptionRule;
+      balance = 5;
+      redemptionRule = 7;
+      assert.equal((await request("quote", { plan_id: 41 })).body.canRedeem, false);
+      balance = 7;
+      assert.equal((await request("quote", { plan_id: 41 })).body.canRedeem, true);
+      redemptionRule = 0;
+      assert.equal((await request("quote", { plan_id: 41 })).body.canRedeem, false);
+      redemptionRule = originalRule;
+      balance = 5;
+    });
+    await t.test("insufficient balance does not offer redemption", async () => {
       balance = 4;
       assert.equal((await request("quote", { plan_id: 41 })).body.canRedeem, false);
       balance = 5;
-      enabled = false;
-      assert.equal((await request("quote", { plan_id: 41 })).body.canRedeem, false);
-      enabled = true;
     });
     await t.test("typed phone never overrides the device's account or reaches redemption", async () => {
       const result = await request("redeem", { plan_id: 41, phone: "254700000099",

@@ -1,7 +1,11 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
-import { calculateHotspotLoyaltyAward, canRedeemHotspotPlan } from "../lib/loyalty-points.js";
+import {
+  calculateHotspotLoyaltyAward,
+  canRedeemHotspotPlan,
+  resolveHotspotRedemptionPoints,
+} from "../lib/loyalty-points.js";
 import {
   isKenyanMobileNumber,
   normaliseKenyanMobile,
@@ -257,10 +261,10 @@ async function loyaltyQuote(
       `admin_id=eq.${adminId}&select=kes_per_point&limit=1`,
     ),
   ]);
-  const pointsRequiredValue = Number(rules[0]?.redemption_points ?? 0);
-  const pointsRequired = Number.isSafeInteger(pointsRequiredValue) && pointsRequiredValue > 0
-    ? pointsRequiredValue
-    : null;
+  const pointsRequired = resolveHotspotRedemptionPoints(
+    plan.price,
+    rules[0]?.redemption_points,
+  );
   const pointsAwarded = calculateHotspotLoyaltyAward(
     Number(plan.price),
     Number(settings[0]?.kes_per_point ?? 0),

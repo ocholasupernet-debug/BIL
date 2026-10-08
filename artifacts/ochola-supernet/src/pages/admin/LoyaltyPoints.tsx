@@ -144,7 +144,7 @@ export default function LoyaltyPoints() {
 
             <section style={{ ...cardStyle, marginBottom: 18 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}><Gift size={19} color="var(--isp-green)" /><h2 style={{ margin: 0, fontSize: "1rem" }}>Hotspot plan rules</h2></div>
-              <p style={{ color: "var(--isp-text-muted)", fontSize: ".82rem", margin: "0 0 16px", lineHeight: 1.5 }}>Leave award blank to use the spend ratio. Plan awards may be fractional; enter 0 to stop earning. Full-plan redemption costs remain whole points.</p>
+              <p style={{ color: "var(--isp-text-muted)", fontSize: ".82rem", margin: "0 0 16px", lineHeight: 1.5 }}>Leave award blank to use the spend ratio. Plan awards may be fractional; enter 0 to stop earning. Redemption defaults to the plan price in whole points (KSh 5 = 5 points); enter another cost to override it, or 0 to disable point redemption for that plan.</p>
               {context.plans.length === 0 ? <div style={{ padding: "1.5rem", textAlign: "center", border: "1px dashed var(--isp-border)", borderRadius: 10, color: "var(--isp-text-muted)" }}>No Hotspot plans are available to configure.</div> : (
                 <div style={{ display: "grid", gap: 9 }}>
                   {context.plans.map(plan => <PlanRuleRow key={plan.id} plan={plan} busy={savePlan.isPending} onSave={(values) => savePlan.mutate({ id: plan.id, ...values })} />)}
@@ -194,7 +194,7 @@ function PlanRuleRow({ plan, busy, onSave }: { plan: LoyaltyPlan; busy: boolean;
   }} className="loyalty-plan-rule" style={{ display: "grid", gridTemplateColumns: "minmax(150px,1fr) minmax(120px,.7fr) minmax(120px,.7fr) auto", alignItems: "center", gap: 10, padding: "11px 12px", border: "1px solid var(--isp-border)", borderRadius: 10 }}>
     <div style={{ minWidth: 0 }}><strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: ".86rem" }}>{plan.name}</strong><span style={{ display: "block", color: "var(--isp-text-muted)", fontSize: ".74rem", marginTop: 3 }}>KSh {fmt(Number(plan.price) || 0)} · {plan.type}</span></div>
     <label style={{ fontSize: ".69rem", fontWeight: 700, color: "var(--isp-text-muted)" }}>Award points<input type="number" min="0" max="2147483647" step="0.01" value={award} onChange={event => setAward(event.target.value)} placeholder="Use ratio" style={{ ...inputStyle, marginTop: 5 }} /></label>
-    <label style={{ fontSize: ".69rem", fontWeight: 700, color: "var(--isp-text-muted)" }}>Full redemption cost<input type="number" min="0" step="1" value={redemption} onChange={event => setRedemption(event.target.value)} placeholder="Not redeemable" style={{ ...inputStyle, marginTop: 5 }} /></label>
+     <label style={{ fontSize: ".69rem", fontWeight: 700, color: "var(--isp-text-muted)" }}>Full redemption cost<input type="number" min="0" step="1" value={redemption} onChange={event => setRedemption(event.target.value)} placeholder={`Auto: ${Math.ceil(Number(plan.price) || 0)} points`} style={{ ...inputStyle, marginTop: 5 }} /></label>
     <button type="submit" disabled={busy || !changed} className="btn btn-ghost" style={{ minHeight: 40, justifyContent: "center", opacity: changed ? 1 : .55 }}>{busy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Save</button>
   </form>;
 }

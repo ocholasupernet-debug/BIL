@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { calculateHotspotLoyaltyAward, canRedeemHotspotPlan } from "./loyalty-points.js";
+import {
+  calculateHotspotLoyaltyAward,
+  canRedeemHotspotPlan,
+  resolveHotspotRedemptionPoints,
+} from "./loyalty-points.js";
 
 test("spend-based awards preserve fractional points to two decimal places", () => {
   assert.equal(calculateHotspotLoyaltyAward(275, 100, null), 2.75);
@@ -30,4 +34,14 @@ test("a plan is redeemable only when it has a positive point cost the user can c
   const halfPointPurchase = calculateHotspotLoyaltyAward(5, 10, null);
   assert.equal(canRedeemHotspotPlan(halfPointPurchase, 1), false);
   assert.equal(canRedeemHotspotPlan(halfPointPurchase + halfPointPurchase, 1), true);
+});
+
+test("unconfigured Hotspot redemption costs default to the package price in whole points", () => {
+  assert.equal(resolveHotspotRedemptionPoints(5, null), 5);
+  assert.equal(resolveHotspotRedemptionPoints("10.00", undefined), 10);
+  assert.equal(resolveHotspotRedemptionPoints(5.25, null), 6);
+  assert.equal(resolveHotspotRedemptionPoints(10, 7), 7);
+  assert.equal(resolveHotspotRedemptionPoints(10, 0), null);
+  assert.equal(resolveHotspotRedemptionPoints(0, null), null);
+  assert.equal(resolveHotspotRedemptionPoints(Number.POSITIVE_INFINITY, null), null);
 });
