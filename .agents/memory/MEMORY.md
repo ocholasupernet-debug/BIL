@@ -1,4 +1,5 @@
 - [VPS deployment verification](vps-deployment-verification.md) — Verify live source/artifacts; preserve composite fixes, build off-server, and drain API requests before restart.
+- [Authorization test contracts](authorization-test-contracts.md) — Verify tenant ownership and actual service denial; roaming can legitimately read plans from another origin service.
 - [Theme token cascade](theme-token-cascade.md) — Update the final legacy token layer too; later root declarations can silently override the primary design system.
 - [VPS SSH key fallback](vps-ssh-key-fallback.md) — Production SSH may require the versioned deployment-key fallback; validate key format before diagnosing remote service failures.
 - [Wildcard certificate deployment](wildcard-certificate-deployment.md) — Install a separately supplied SAN certificate through encrypted Actions secrets; never commit its private key.

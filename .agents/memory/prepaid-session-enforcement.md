@@ -9,6 +9,12 @@ After the expiry scheduler returns a user to the ordinary RouterOS login page, a
 
 For cumulative Hotspot usage, read the persistent `/ip/hotspot/user` counters rather than active-session counters. Routine sync and refresh must not reset counters or reduce stored usage; a new verified checkout is the reset boundary. FUP throttle packages must not carry a hard byte cap into RouterOS.
 
+Manual Prepaid Users sync must push only active prepaid identities and present one complete, consolidated result rather than separate batch messages. Keep automatic expiry/suspension enforcement separate from this active-only action.
+
+**Why:** The user explicitly requested active-only MikroTik sync and a clean complete result showing username, plan, service type, and router.
+
+**How to apply:** Use the same newest-identity and effective-access rules as the Prepaid Users list. Never claim fully synced for skipped, failed, or unconfirmed accounts; provisioning confirmation is distinct from an online internet session.
+
 RouterOS-imported per-user Hotspot byte caps are account-level hard limits that must survive later RADIUS and router reconciliation. Require disconnect-cap package mapping for capped imports; never add a hard byte cap to a throttle package.
 
 When review-before-import replaces an existing same-tenant PPPoE or Hotspot account, update its customer record in place and change only RADIUS authorization. Do not send RouterOS disconnect/CoA, edit `radacct`, or reset expiry, usage, or account history. Active sessions keep their current policy until the next authentication; disabled or depleted source accounts may reject future logins.

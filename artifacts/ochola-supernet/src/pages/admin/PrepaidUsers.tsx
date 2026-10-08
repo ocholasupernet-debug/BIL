@@ -22,7 +22,8 @@ import {
   purchaseUsername,
 } from "@/lib/prepaid-live-presence";
 import { usePrepaidLiveQueries } from "@/lib/prepaid-live-queries";
-import { SyncUserStatusList, type SyncUserStatus } from "@/components/ui/SyncUserStatusList";
+import { PrepaidSyncReport, type PrepaidSyncResult } from "@/components/ui/PrepaidSyncReport";
+import { syncActiveAccountsToRouter } from "@/lib/prepaid-sync";
 import { transactionDisplayId } from "@/lib/transaction-reference";
 
 const PAGE_SIZE = 20;
@@ -262,92 +263,6 @@ async function fetchPayments(customerIds: number[]): Promise<Payment[]> {
     .order("created_at", { ascending: false });
   if (error) throw error;
   return (data ?? []) as Payment[];
-}
-
-/* ══════════════════════════════ Sync ══════════════════════════════ */
-const SYNC_USERS_BATCH_SIZE = 5;
-
-async function syncUsersToRouter(
-  router: Router,
-  users:  Customer[],
-  plans:  Plan[],
-  log:    (m: string) => void,
-): Promise<{ ok: boolean; syncUsers: SyncUserStatus[] | null }> {
-  if (!router.host && !router.bridge_ip) {
-    log(`  ${router.name}: no IP address — skipped`);
-    return { ok: false, syncUsers: null };
-  }
-  log(`\n${router.name}`);
-  const planMap = Object.fromEntries(plans.map(p => [p.id, p]));
-  const payloadUsers = users.map(u => ({
-    customer_id:  u.id,
-    router_id:    u.router_id ?? (u.plan_id ? planMap[u.plan_id]?.router_id : undefined),
-    username:     u.type === "hotspot" ? purchaseUsername(u) : (u.pppoe_username || u.username || ""),
-    password:     u.password || "",
-    type:         u.type || "hotspot",
-    status:       u.status,
-    plan_id:      u.plan_id || undefined,
-    mac_address:  u.mac_address || undefined,
-    plan_name:    u.plan_id ? planMap[u.plan_id]?.name : "",
-    ip_address:   u.ip_address || undefined,
-    speed_down:   u.plan_id ? planMap[u.plan_id]?.speed_down : undefined,
-    speed_up:     u.plan_id ? planMap[u.plan_id]?.speed_up : undefined,
-    speed_down_unit: u.plan_id ? planMap[u.plan_id]?.speed_down_unit || "Mbps" : "Mbps",
-    speed_up_unit: u.plan_id ? planMap[u.plan_id]?.speed_up_unit || "Mbps" : "Mbps",
-    data_limit_mb: u.fup_limit_mb ?? (u.plan_id ? planMap[u.plan_id]?.data_limit_mb : undefined),
-    shared_users: 1,
-    expires_at:   u.expires_at || undefined,
-  }));
-  if (!payloadUsers.length) {
-    log("  No users are assigned to this router.");
-    return { ok: false, syncUsers: null };
-  }
-
-  const batchCount = Math.ceil(payloadUsers.length / SYNC_USERS_BATCH_SIZE);
-  const syncedUsers: SyncUserStatus[] = [];
-  let allBatchesSucceeded = true;
-
-  for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
-    const userBatch = payloadUsers.slice(
-      batchIndex * SYNC_USERS_BATCH_SIZE,
-      (batchIndex + 1) * SYNC_USERS_BATCH_SIZE,
-    );
-    log(`  Sending batch ${batchIndex + 1}/${batchCount} (${userBatch.length} users)…`);
-    const payload = {
-      adminId: ADMIN_ID,
-      routerId: router.id,
-      users: userBatch,
-    };
-
-    try {
-      const res  = await fetch(apiUrl("/api/admin/sync/users"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(getAdminApiToken() ? { Authorization: `Bearer ${getAdminApiToken()}` } : {}),
-        },
-        body: JSON.stringify(payload),
-      });
-      const data = await parseJsonResponse<{
-        ok: boolean;
-        error?: string;
-        logs?: string[];
-        syncUsers?: SyncUserStatus[];
-      }>(res);
-      (data.logs ?? []).forEach((l: string) => log(l));
-      if (!res.ok) {
-        throw new Error(data.error || `User sync failed (HTTP ${res.status}).`);
-      }
-      if (Array.isArray(data.syncUsers)) syncedUsers.push(...data.syncUsers);
-      if (data.ok !== true) allBatchesSucceeded = false;
-    } catch (e) {
-      log(`  Batch ${batchIndex + 1}/${batchCount}: ${e instanceof Error ? e.message : e}`);
-      log("  Sync stopped because this batch's final result is unknown; some router changes may already have applied.");
-      return { ok: false, syncUsers: syncedUsers.length ? syncedUsers : null };
-    }
-  }
-
-  return { ok: allBatchesSucceeded, syncUsers: syncedUsers };
 }
 
 function iconButton(color: string): React.CSSProperties {
@@ -1028,9 +943,12 @@ export default function PrepaidUsers() {
   const [showSyncPicker,  setShowSyncPicker]  = useState(false);
   const [pickedRouter,    setPickedRouter]     = useState("");
   const [syncing,         setSyncing]         = useState(false);
+  const syncBusyRef = useRef(false);
   const [syncLogs,        setSyncLogs]        = useState<string[] | null>(null);
-  const [syncOk,          setSyncOk]          = useState<boolean | null>(null);
-  const [syncUserStatuses, setSyncUserStatuses] = useState<SyncUserStatus[] | null>(null);
+  const [syncReport, setSyncReport] = useState<{
+    total: number; processed: number; users: PrepaidSyncResult[];
+    routerName: string; error?: string;
+  } | null>(null);
 
   async function updateUser(user: Customer, updates: Record<string, unknown>) {
     setActionError("");
@@ -1150,26 +1068,46 @@ export default function PrepaidUsers() {
 
   /* ── Sync handler ── */
   async function handleSync() {
+    if (syncBusyRef.current) return;
     if (!pickedRouter) return;
     const router = routers.find(r => String(r.id) === pickedRouter);
     if (!router) return;
-    setSyncing(true); setSyncLogs([]); setSyncOk(null); setSyncUserStatuses(null);
+    syncBusyRef.current = true;
+    setSyncing(true);
+    setSyncLogs([]);
+    setShowSyncPicker(false);
+    setSyncReport({ total: 0, processed: 0, users: [], routerName: router.name });
     const logs: string[] = [];
     const log = (m: string) => { logs.push(m); setSyncLogs([...logs]); };
-    log("Starting user sync…");
-    const result = await syncUsersToRouter(
-      router,
-      customers.filter(c => c.type !== "vlan" && Number(
-        c.router_id ?? (c.plan_id ? planMap[c.plan_id]?.router_id : null),
-      ) === router.id),
-      plans,
-      log,
-    );
-    log(result.ok ? "\nSync complete." : "\nSync finished with errors.");
-    setSyncOk(result.ok);
-    setSyncUserStatuses(result.syncUsers);
-    setSyncing(false);
-    setShowSyncPicker(false);
+    try {
+      const result = await syncActiveAccountsToRouter({
+        router,
+        users: displayCustomers.map(customer => ({
+          ...customer,
+          plan_id: customerPackageId(customer, paymentMap) ?? customer.plan_id,
+        })),
+        plans,
+        endpoint: apiUrl("/api/admin/sync/users"),
+        adminId: ADMIN_ID,
+        token: getAdminApiToken() || "",
+        onLog: log,
+        onProgress: (total, processed, users) => setSyncReport({
+          total, processed, users, routerName: router.name,
+        }),
+      });
+      setSyncReport({ ...result, routerName: router.name });
+      void qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
+      const routerIndex = routers.findIndex(item => item.id === router.id);
+      if (routerIndex >= 0) void liveQueries[routerIndex]?.refetch();
+    } catch (error) {
+      setSyncReport(previous => previous ? {
+        ...previous,
+        error: error instanceof Error ? error.message : "Sync could not be completed.",
+      } : null);
+    } finally {
+      syncBusyRef.current = false;
+      setSyncing(false);
+    }
   }
 
   /* ── Export CSV ── */
@@ -1420,10 +1358,13 @@ export default function PrepaidUsers() {
                     </option>
                   ))}
                 </select>
+                <p style={{ margin: "0 0 0.65rem", fontSize: "0.72rem", lineHeight: 1.5, color: "var(--isp-text-muted)" }}>
+                  Only active prepaid accounts on this router are synced. Expired, suspended, and data-depleted accounts are excluded.
+                </p>
                 <button onClick={handleSync} disabled={!pickedRouter || syncing}
                   style={{ ...BTN(pickedRouter ? "var(--isp-accent)" : "rgba(255,255,255,0.06)"), width: "100%", justifyContent: "center" }}>
                   {syncing ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <RefreshCw size={12} />}
-                  Sync Users
+                  Sync active accounts
                 </button>
               </div>
             )}
@@ -1520,28 +1461,13 @@ export default function PrepaidUsers() {
           </section>
         )}
 
-        {/* ── Sync log ── */}
-        {syncLogs && (
-          <div style={{
-            background: syncOk === false ? "rgba(248,113,113,0.06)" : "rgba(37,99,235,0.05)",
-            border: `1px solid ${syncOk === false ? "rgba(248,113,113,0.25)" : "rgba(37,99,235,0.2)"}`,
-            borderRadius: 10, padding: "0.75rem 1rem",
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.375rem" }}>
-              <span style={{ fontSize: "0.75rem", fontWeight: 700, color: syncOk === false ? "#f87171" : "var(--isp-accent)" }}>
-                Sync Log
-              </span>
-              <button onClick={() => setSyncLogs(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--isp-text-muted)" }}>
-                <X size={13} />
-              </button>
-            </div>
-            <div style={{ fontFamily: "monospace", fontSize: "0.72rem", color: "var(--isp-text-muted)", display: "flex", flexDirection: "column", gap: "0.1rem", maxHeight: 160, overflowY: "auto" }}>
-              {syncLogs.map((l, i) => <span key={i}>{l}</span>)}
-            </div>
-          </div>
-        )}
-        {syncUserStatuses !== null && (
-          <SyncUserStatusList users={syncUserStatuses} />
+        {syncReport && (
+          <PrepaidSyncReport
+            {...syncReport}
+            running={syncing}
+            logs={syncLogs ?? []}
+            onDismiss={() => { setSyncReport(null); setSyncLogs(null); }}
+          />
         )}
 
         {/* ── Compact filter toolbar ── */}
