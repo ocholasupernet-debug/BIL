@@ -21,6 +21,7 @@ test "$(grep -Fc 'portalFileReplacementConsent: true' "$SCRIPT_DIR/refresh-hotsp
 grep -Fq '"allIspBridgeRouters": true' "$SCRIPT_DIR/portal-refresh-once.json"
 grep -Fq '"adminId": 33' "$SCRIPT_DIR/portal-refresh-once.json"
 grep -Fq '"authVersion": 2' "$SCRIPT_DIR/portal-refresh-once.json"
+grep -Fq '"tenantSubdomain": "ocholasupernet"' "$SCRIPT_DIR/portal-refresh-once.json"
 grep -Fq 'createAdminSessionToken' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
 ! grep -Fq '"ispBridgeRouterId"' "$SCRIPT_DIR/portal-refresh-once.json"
 grep -Fq 'resolveTenantRouterTargets(await listTenantRouters())' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { createAdminSessionToken } from "./portal-refresh-token.mjs";
 import {
   isNoActiveHotspotServerResponse,
+  resolveTenantApiOrigin,
   resolveRouterIdByExactName,
   resolveTenantRouterTargets,
   validateExpectedRouterName,
@@ -31,6 +32,7 @@ const ispBridgeName = marker.ispBridgeName === undefined || marker.ispBridgeName
 const allIspBridgeRouters = marker.allIspBridgeRouters === true;
 const adminId = parseOptionalId(marker.adminId) ?? 3;
 const authVersion = parseOptionalId(marker.authVersion);
+const apiOrigin = resolveTenantApiOrigin(marker.tenantSubdomain);
 if (!/^[a-z0-9-]{1,80}$/.test(markerId)) {
   throw new Error("The one-time portal refresh marker has an invalid ID.");
 }
@@ -87,8 +89,6 @@ try {
     issuedAt: Math.floor(Date.now() / 1000),
     signingSecret,
   });
-  const apiOrigin = "https://come.isplatty.org";
-
   async function refreshPortal(path, body, label, { skipIfNoActiveHotspot = false } = {}) {
     const response = await fetch(`${apiOrigin}${path}`, {
       method: "POST",

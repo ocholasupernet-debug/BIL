@@ -8,6 +8,14 @@ export function validateExpectedRouterName(value) {
   return value;
 }
 
+export function resolveTenantApiOrigin(subdomain) {
+  const normalized = typeof subdomain === "string" ? subdomain.trim().toLowerCase() : "";
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(normalized)) {
+    throw new Error("The portal refresh marker must include an exact valid tenant subdomain.");
+  }
+  return `https://${normalized}.isplatty.org`;
+}
+
 export function resolveRouterIdByExactName(routers, expectedName) {
   const name = validateExpectedRouterName(expectedName);
   if (!Array.isArray(routers)) {

@@ -4,8 +4,18 @@ import {
   resolveRouterIdByExactName,
   resolveTenantRouterTargets,
   isNoActiveHotspotServerResponse,
+  resolveTenantApiOrigin,
   validateExpectedRouterName,
 } from "../portal-refresh-target.mjs";
+
+test("builds the API origin from the exact tenant subdomain", () => {
+  assert.equal(resolveTenantApiOrigin("OcholaSuperNet"), "https://ocholasupernet.isplatty.org");
+});
+
+test("rejects invalid tenant subdomains rather than calling a different tenant host", () => {
+  assert.throws(() => resolveTenantApiOrigin("come.example"), /exact valid tenant subdomain/);
+  assert.throws(() => resolveTenantApiOrigin(".."), /exact valid tenant subdomain/);
+});
 
 test("resolves the exact tenant router name rather than reusing a stale numeric ID", () => {
   const routers = [
