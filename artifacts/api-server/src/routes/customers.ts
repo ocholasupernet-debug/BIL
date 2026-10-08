@@ -55,7 +55,12 @@ import {
   rollbackRadiusCustomerMoveStrict,
   syncRadiusCustomerStrict,
 } from "../lib/radius.js";
-import { hotspotPlanProfileName, prepaidHotspotUsernameForEdit, routerRateLimit } from "../lib/prepaid-identifiers.js";
+import {
+  hotspotPlanProfileName,
+  normalisePrepaidMac,
+  prepaidHotspotUsernameForEdit,
+  routerRateLimit,
+} from "../lib/prepaid-identifiers.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import {
@@ -364,10 +369,13 @@ async function reconcileCustomerAccess(
     onRadiusIdentity?: (exists: boolean) => void;
     onRadiusMutation?: () => void;
     assertLock?: () => Promise<void>;
+    replacePaidHotspotBindings?: boolean;
     paidHotspotBindingSnapshot?: PaidHotspotBindingSnapshot | null;
     onPaidHotspotBindingSnapshot?: (snapshot: PaidHotspotBindingSnapshot) => void;
   } = {},
 ): Promise<{ routerSynced: boolean; routerId: number | null; routerName: string | null }> {
+  const replacePaidHotspotBindings = Object.prototype.hasOwnProperty.call(updates, "mac_address")
+    && normalisePrepaidMac(updates.mac_address) !== normalisePrepaidMac(current.mac_address);
   const currentName = current.type === "pppoe"
     ? current.pppoe_username || current.username || ""
     : current.username || current.pppoe_username || "";
@@ -517,7 +525,11 @@ async function reconcileCustomerAccess(
           ipAddress: current.ip_address,
         });
         if (paidHotspotBindingSnapshot) {
-          if (!options.restoreIdentity && updates.mac_address === undefined) {
+          if (
+            !options.restoreIdentity
+            && updates.mac_address === undefined
+            && (paidHotspotBindingSnapshot.bindings?.length ?? 1) === 1
+          ) {
             updates.mac_address = paidHotspotBindingSnapshot.macAddress;
           }
           options.onPaidHotspotBindingSnapshot?.(paidHotspotBindingSnapshot);
@@ -669,6 +681,7 @@ async function reconcileCustomerAccess(
         ).trim() || null,
         expiresAt: nextExpiry,
         enabled,
+        replaceBindings: options.replacePaidHotspotBindings ?? replacePaidHotspotBindings,
       });
     }
     routerSynced = true;

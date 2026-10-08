@@ -73,7 +73,12 @@ test("paid-bound edits preserve and refresh the binding when its identity is unc
     enabled: true,
   }), {
     remove: [],
-    ensure: { macAddress: "AA:BB:CC:DD:EE:FF", comment: "paid-user" },
+    ensure: [{
+      macAddress: "AA:BB:CC:DD:EE:FF",
+      comment: "paid-user",
+      ipAddress: "192.168.10.25",
+      bindingType: "bypassed",
+    }],
   });
 });
 
@@ -87,7 +92,12 @@ test("paid-bound renames remove old binding identities and ensure the edited ide
     enabled: true,
   }), {
     remove: [{ macAddress: "AA:BB:CC:DD:EE:FF", comment: "paid-user" }],
-    ensure: { macAddress: "AA:BB:CC:DD:EE:FF", comment: "renamed-user" },
+    ensure: [{
+      macAddress: "AA:BB:CC:DD:EE:FF",
+      comment: "renamed-user",
+      ipAddress: "192.168.10.25",
+      bindingType: "bypassed",
+    }],
   });
 });
 
@@ -101,7 +111,12 @@ test("paid-bound rollback removes the attempted identity and restores the origin
     enabled: true,
   }), {
     remove: [{ macAddress: "AA:BB:CC:DD:EE:FF", comment: "renamed-user" }],
-    ensure: { macAddress: "AA:BB:CC:DD:EE:FF", comment: "paid-user" },
+    ensure: [{
+      macAddress: "AA:BB:CC:DD:EE:FF",
+      comment: "paid-user",
+      ipAddress: "192.168.10.25",
+      bindingType: "bypassed",
+    }],
   });
 });
 
@@ -115,6 +130,79 @@ test("disabling a paid-bound account removes the binding instead of ensuring acc
     enabled: false,
   }), {
     remove: [{ macAddress: "AA:BB:CC:DD:EE:FF", comment: "paid-user" }],
-    ensure: null,
+    ensure: [],
+  });
+});
+
+test("same-account edits preserve all managed device bindings", () => {
+  const multiDeviceSnapshot = {
+    ...bindingSnapshot,
+    bindings: [
+      bindingSnapshot,
+      {
+        macAddress: "11:22:33:44:55:66",
+        ipAddress: "192.168.10.26",
+        comment: "paid-user",
+        bindingType: "regular" as const,
+      },
+    ],
+  };
+  assert.deepEqual(paidHotspotBindingEditPlan({
+    snapshot: multiDeviceSnapshot,
+    currentName: "paid-user",
+    currentMacAddress: "00:11:22:33:44:55",
+    nextName: "paid-user",
+    nextMacAddress: "00:11:22:33:44:55",
+    enabled: true,
+  }), {
+    remove: [],
+    ensure: [
+      {
+        macAddress: "AA:BB:CC:DD:EE:FF",
+        ipAddress: "192.168.10.25",
+        comment: "paid-user",
+        bindingType: "bypassed",
+      },
+      {
+        macAddress: "11:22:33:44:55:66",
+        ipAddress: "192.168.10.26",
+        comment: "paid-user",
+        bindingType: "regular",
+      },
+    ],
+  });
+});
+
+test("an explicit device-MAC edit replaces the managed binding set with the chosen device", () => {
+  assert.deepEqual(paidHotspotBindingEditPlan({
+    snapshot: {
+      ...bindingSnapshot,
+      bindings: [
+        bindingSnapshot,
+        {
+          macAddress: "11:22:33:44:55:66",
+          ipAddress: "192.168.10.26",
+          comment: "paid-user",
+          bindingType: "regular",
+        },
+      ],
+    },
+    currentName: "paid-user",
+    currentMacAddress: "AA:BB:CC:DD:EE:FF",
+    nextName: "paid-user",
+    nextMacAddress: "22:33:44:55:66:77",
+    enabled: true,
+    replaceBindings: true,
+  }), {
+    remove: [
+      { macAddress: "AA:BB:CC:DD:EE:FF", comment: "paid-user" },
+      { macAddress: "11:22:33:44:55:66", comment: "paid-user" },
+    ],
+    ensure: [{
+      macAddress: "22:33:44:55:66:77",
+      ipAddress: null,
+      comment: "paid-user",
+      bindingType: "bypassed",
+    }],
   });
 });

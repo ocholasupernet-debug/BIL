@@ -250,7 +250,7 @@ test("fails closed when a stale-MAC username binding lacks its managed expiry sc
   });
 });
 
-test("rejects conflicting username bindings instead of synthesizing one from the stale MAC", async () => {
+test("accepts every device binding for a username only with its managed expiry scheduler", async () => {
   await withMockRouterApi(command => {
     if (command[0] === "/ip/hotspot/ip-binding/print") {
       return [
@@ -279,14 +279,125 @@ test("rejects conflicting username bindings instead of synthesizing one from the
     }
     return [];
   }, async port => {
+    const snapshot = await getPaidHotspotBindingSnapshot(credentials(port), {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    });
+    assert.deepEqual(snapshot, {
+      macAddress: "11:22:33:44:55:66",
+      ipAddress: "192.168.10.26",
+      comment: "user-123",
+      bindingType: "regular",
+      bindings: [
+        {
+          macAddress: "11:22:33:44:55:66",
+          ipAddress: "192.168.10.26",
+          comment: "user-123",
+          bindingType: "regular",
+        },
+        {
+          macAddress: "22:33:44:55:66:77",
+          ipAddress: "192.168.10.27",
+          comment: "user-123",
+          bindingType: "regular",
+        },
+      ],
+    });
+  });
+});
+
+test("keeps multiple username bindings ambiguous when no managed expiry scheduler exists", async () => {
+  await withMockRouterApi(command => {
+    if (command[0] === "/ip/hotspot/ip-binding/print") {
+      return [
+        {
+          ".id": "*1",
+          "mac-address": "11:22:33:44:55:66",
+          address: "192.168.10.26",
+          comment: "user-123",
+          type: "regular",
+        },
+        {
+          ".id": "*2",
+          "mac-address": "22:33:44:55:66:77",
+          address: "192.168.10.27",
+          comment: "user-123",
+          type: "regular",
+        },
+      ];
+    }
+    if (command[0] === "/system/scheduler/print") return [];
+    return [];
+  }, async port => {
     await assert.rejects(
       getPaidHotspotBindingSnapshot(credentials(port), {
         name: "user-123",
         macAddress: "AA:BB:CC:DD:EE:FF",
       }),
-      /incomplete or ambiguous/,
+      /multiple or incomplete/,
     );
   });
+});
+
+test("extends every device binding in a verified managed account", async () => {
+  const commands: string[][] = [];
+  const bindings = [
+    {
+      ".id": "*1",
+      "mac-address": "11:22:33:44:55:66",
+      address: "192.168.10.26",
+      comment: "user-123",
+      type: "regular",
+    },
+    {
+      ".id": "*2",
+      "mac-address": "22:33:44:55:66:77",
+      address: "192.168.10.27",
+      comment: "user-123",
+      type: "regular",
+    },
+  ];
+  await withMockRouterApi(command => {
+    commands.push([...command]);
+    if (command[0] === "/ip/hotspot/ip-binding/print") {
+      const macFilter = command.find(value => value.startsWith("?mac-address="))?.slice(13);
+      return macFilter
+        ? bindings.filter(row => row["mac-address"] === macFilter)
+        : bindings;
+    }
+    if (command[0] === "/system/scheduler/print") {
+      return [{
+        ".id": "*3",
+        name: "ochola-paid-user-123",
+        comment: "OcholaSupernet paid access expiry",
+        "on-event": ':foreach id in=[/ip hotspot ip-binding find where comment="user-123"] do={/ip hotspot ip-binding remove $id}; /ip hotspot active find where user="user-123"',
+      }];
+    }
+    if (command[0] === "/system/clock/print") {
+      return [{ date: "oct/07/2026", time: "12:00:00" }];
+    }
+    return [];
+  }, async port => {
+    const router = credentials(port);
+    const snapshot = await getPaidHotspotBindingSnapshot(router, {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    });
+    assert.ok(snapshot?.bindings);
+    await reconcilePaidHotspotBinding(router, {
+      snapshot,
+      currentName: "user-123",
+      currentMacAddress: "AA:BB:CC:DD:EE:FF",
+      nextName: "user-123",
+      nextMacAddress: "AA:BB:CC:DD:EE:FF",
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      enabled: true,
+    });
+  });
+  const bindingUpdates = commands.filter(command => command[0] === "/ip/hotspot/ip-binding/set");
+  assert.equal(bindingUpdates.length, 2);
+  assert.ok(bindingUpdates.some(command => command.includes("=.id=*1")));
+  assert.ok(bindingUpdates.some(command => command.includes("=.id=*2")));
 });
 
 test("does not claim an administrator binding without the managed expiry scheduler", async () => {

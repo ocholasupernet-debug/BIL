@@ -100,8 +100,70 @@ test("collapses duplicate rows for the exact same account/device binding", () =>
     enabled: true,
   }), {
     remove: [{ macAddress: "AA:BB:CC:DD:EE:FF", comment: "user-123" }],
-    ensure: { macAddress: "AA:BB:CC:DD:EE:FF", comment: "user-123" },
+    ensure: [{
+      macAddress: "AA:BB:CC:DD:EE:FF",
+      ipAddress: "192.168.10.25",
+      comment: "user-123",
+      bindingType: "regular",
+    }],
   });
+});
+
+test("collects every exact-username device binding for managed-account validation", () => {
+  const rows = [
+    {
+      "mac-address": "22:33:44:55:66:77",
+      address: "192.168.10.26",
+      comment: "user-123",
+      type: "regular",
+    },
+    {
+      "mac-address": "11:22:33:44:55:66",
+      address: "192.168.10.25",
+      comment: "user-123",
+      type: "regular",
+    },
+  ];
+  assert.deepEqual(paidHotspotBindingSnapshotForCustomer(rows, customer, true), {
+    macAddress: "11:22:33:44:55:66",
+    ipAddress: "192.168.10.25",
+    comment: "user-123",
+    bindingType: "regular",
+    bindings: [
+      {
+        macAddress: "11:22:33:44:55:66",
+        ipAddress: "192.168.10.25",
+        comment: "user-123",
+        bindingType: "regular",
+      },
+      {
+        macAddress: "22:33:44:55:66:77",
+        ipAddress: "192.168.10.26",
+        comment: "user-123",
+        bindingType: "regular",
+      },
+    ],
+  });
+});
+
+test("collects normalized RouterOS binding types but rejects conflicting types per device", () => {
+  const row = {
+    "mac-address": "AA:BB:CC:DD:EE:FF",
+    address: "192.168.10.25",
+    comment: " user-123 ",
+    type: " REGULAR ",
+  };
+  assert.equal(
+    paidHotspotBindingSnapshotForCustomer([row], customer, true)?.bindingType,
+    "regular",
+  );
+  assert.equal(
+    paidHotspotBindingSnapshotForCustomer([
+      { ...row, type: "regular" },
+      { ...row, type: "bypassed" },
+    ], customer, true),
+    null,
+  );
 });
 
 test("still fails closed when duplicate rows disagree about the binding", () => {
