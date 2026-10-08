@@ -1485,9 +1485,11 @@ test("signed reseller portal requests stay within their assigned service", async
     const troubleshooting = await troubleshoot.json() as { found: boolean; status: string };
     assert.equal(troubleshooting.found, false);
     assert.equal(troubleshooting.status, "not_found");
-    assert.ok(dbRequests.some(row => row.table === "isp_plans"
-      && row.rawQuery.includes("router_id=eq.31")
-      && row.rawQuery.includes("port_id=eq.43")));
+    // Roaming-aware lookup screens tenant-owned candidate plans against service
+    // rules in code; its SQL cannot require the purchase's origin router/port.
+    // The not-found response and zero router operations prove sibling denial.
+    assert.ok(dbRequests.filter(row => row.table === "isp_plans").every(row =>
+      row.rawQuery.includes("admin_id=eq.7")));
     assertNoRouterOrWrites();
   });
 

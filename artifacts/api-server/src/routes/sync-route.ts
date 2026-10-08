@@ -919,9 +919,9 @@ router.post("/admin/sync/ip-pools", requireAdmin(), async (req, res): Promise<vo
    }
 ═══════════════════════════════════════════════════════════════ */
 router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void> => {
-  const { host: bodyHost, bridgeIp: bodyBridgeIp, username: bodyUsername, password: bodyPassword, routerId, adminId, users } = req.body as {
+  const { host: bodyHost, bridgeIp: bodyBridgeIp, username: bodyUsername, password: bodyPassword, routerId, adminId, users, activeOnly } = req.body as {
     host?: string; bridgeIp?: string; username?: string; password?: string;
-    routerId?: number; adminId?: number;
+    routerId?: number; adminId?: number; activeOnly?: boolean;
     users: Array<{
       username: string; password: string;
       type: string;           // "hotspot" | "pppoe" | "static" | "voucher"
@@ -948,6 +948,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
   let bridgeIp = bodyBridgeIp;
   let username = bodyUsername || "";
   let password = bodyPassword || "";
+  let routerName = routerId ? `Router #${routerId}` : "Selected router";
   const account = await authenticatedAccount(req);
   if (!account) {
     res.status(403).json({ ok: false, error: "A valid signed-in account is required." });
@@ -962,9 +963,10 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
       return;
     }
     const rows = await sbSelect<{
+      name: string;
       host: string; bridge_ip: string | null; vpn_ip: string | null;
       router_username: string | null; router_secret: string | null;
-    }>("isp_routers", `id=eq.${id}&admin_id=eq.${tenantId}&select=host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`);
+    }>("isp_routers", `id=eq.${id}&admin_id=eq.${tenantId}&select=name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`);
     const routerRow = rows[0];
     if (!routerRow) {
       res.status(404).json({ ok: false, error: "Router not found for this ISP account" });
@@ -982,6 +984,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
       assignedResellerPortIds = new Set(assignedPorts.map(port => Number(port.id)));
     }
     host = routerRow.host || "";
+    routerName = routerRow.name || routerName;
     /* bridge_ip is the router LAN/hotspot gateway. Use only the dedicated
        persistent management address for a server-side RouterOS fallback. */
     bridgeIp = routerRow.vpn_ip || undefined;
@@ -1059,19 +1062,36 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         id: number;
         username: string | null;
         pppoe_username: string | null;
+        plan_id: number | null;
+        router_id: number | null;
         fup_limit_mb: number | null;
         status: string | null;
         expires_at: string | null;
         depletion_reason: string | null;
       }>(
         "isp_customers",
-         `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${customerIds.join(",")})&select=id,username,pppoe_username,fup_limit_mb,status,expires_at,depletion_reason&limit=5000`,
+         `admin_id=eq.${account.parent_id ?? account.id}&id=in.(${customerIds.join(",")})&select=id,username,pppoe_username,plan_id,router_id,fup_limit_mb,status,expires_at,depletion_reason&limit=5000`,
       )
     : [];
   const customersById = new Map(customerRows.map(customer => [Number(customer.id), customer]));
 
   const logs: string[] = [];
-  const log = (msg: string) => logs.push(msg);
+  const syncResults: Array<{
+    customerId: number;
+    username: string;
+    planName: string;
+    serviceType: string;
+    routerName: string;
+    outcome: "synced" | "failed" | "skipped" | "unknown";
+    message?: string;
+  }> = [];
+  let currentResult: (typeof syncResults)[number] | null = null;
+  const log = (msg: string) => {
+    logs.push(msg);
+    if (currentResult && /❌|⚠|Skipping|leaving the router account unchanged/.test(msg)) {
+      currentResult.message = msg.trim().replace(/^[❌⚠—]\s*/u, "");
+    }
+  };
 
   let conn!: RouterOSAPI;
   try {
@@ -1104,6 +1124,16 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         : String(u.username ?? "").trim();
       const customerId = Number(u.customer_id);
       const hasCustomerId = Number.isSafeInteger(customerId) && customerId > 0;
+      currentResult = {
+        customerId: hasCustomerId ? customerId : 0,
+        username: username || "(blank)",
+        planName: plan?.name || u.plan_name || "No assigned plan",
+        serviceType: normalizedType,
+        routerName,
+        outcome: "skipped",
+        message: "Account was not eligible or could not be verified.",
+      };
+      syncResults.push(currentResult);
       if (u.customer_id !== undefined && u.customer_id !== null && !hasCustomerId) {
         log(`  ❌ Skipping '${username || "(blank)"}': invalid customer record`);
         skipped++;
@@ -1116,7 +1146,21 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         continue;
       }
       const suppliedRadiusUsername = username;
-      const storedRadiusUsername = String(storedCustomer?.pppoe_username || storedCustomer?.username || "").trim();
+      const storedRadiusUsername = String(
+        normalizedType === "pppoe"
+          ? storedCustomer?.pppoe_username || storedCustomer?.username || ""
+          : storedCustomer?.username || "",
+      ).trim();
+      if (activeOnly === true && (
+        !storedCustomer
+        || storedRadiusUsername !== username
+        || Number(storedCustomer.plan_id) !== Number(u.plan_id)
+        || (storedCustomer.router_id && Number(storedCustomer.router_id) !== Number(routerId))
+      )) {
+        log(`  — Skipping '${username}': the saved account, plan, and router binding could not be verified`);
+        skipped++;
+        continue;
+      }
       const customerFupLimitMb = storedCustomer && storedRadiusUsername === suppliedRadiusUsername
         ? Number(storedCustomer.fup_limit_mb)
         : 0;
@@ -1195,6 +1239,12 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
             continue;
           }
         }
+      }
+
+      if (activeOnly === true && !enabled) {
+        log(`  — Skipping '${username}': account is no longer active; no router changes were made`);
+        skipped++;
+        continue;
       }
 
       if (!enabled && (isHotspotUser || isPppoeUser)) {
@@ -1403,6 +1453,10 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
             log(`  ✓ ${action ?? "updated"}`);
             action === "created" ? created++ : updated++;
           }
+          currentResult.outcome = result.confirmedActive && enabled ? "synced" : enabled ? "failed" : "skipped";
+          currentResult.message = currentResult.outcome === "synced"
+            ? "MikroTik confirmed the enabled account and assigned profile."
+            : "MikroTik could not confirm this account's active access.";
           const displayStatus = syncUserDisplayStatus(false, result.confirmedActive, hasActiveSession);
           if (displayStatus) {
             syncUsers.push({
@@ -1419,6 +1473,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
           }
         } catch (e) {
           if (e instanceof RouterOSConnectionLostError) throw e;
+          currentResult.outcome = "failed";
           log(`  ❌ ${e instanceof Error ? e.message : String(e)}`);
           failed++;
           skipped++;
@@ -1494,6 +1549,12 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
             log(`  ✓ ${action ?? "updated"}`);
             action === "created" ? created++ : updated++;
           }
+          currentResult.outcome = result.confirmedActive && enabled ? "synced" : enabled ? "failed" : "skipped";
+          currentResult.message = currentResult.outcome === "synced"
+            ? "MikroTik confirmed the enabled account and assigned profile."
+            : quotaDepleted
+              ? "Data allowance is exhausted; this account was not synced as active."
+              : "MikroTik could not confirm this account's active access.";
           const displayStatus = syncUserDisplayStatus(false, result.confirmedActive, hasActiveSession);
           if (displayStatus) {
             syncUsers.push({
@@ -1510,6 +1571,7 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
           }
         } catch (e) {
           if (e instanceof RouterOSConnectionLostError) throw e;
+          currentResult.outcome = "failed";
           log(`  ❌ ${e instanceof Error ? e.message : String(e)}`);
           failed++;
           skipped++;
@@ -1535,13 +1597,18 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
       ...(failed > 0 ? { error: `${failed} account(s) could not be fully synchronized or confirmed.` } : {}),
       logs,
       syncUsers: uniqueSyncUsers,
+      syncResults,
       summary: { created, updated, disabled, activeSessions: activeSessionCount, expired: expiredCount, skipped, failed },
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (currentResult && currentResult.outcome !== "synced") {
+      currentResult.outcome = "unknown";
+      currentResult.message = "Connection was interrupted before MikroTik could confirm this account.";
+    }
     log(`❌ ${msg}`);
     try { conn.close(); } catch { /* ignore */ }
-    res.json({ ok: false, error: connErr(host || bridgeIp || "", msg), logs });
+    res.json({ ok: false, error: connErr(host || bridgeIp || "", msg), logs, syncResults });
   }
 });
 
