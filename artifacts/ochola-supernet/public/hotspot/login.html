@@ -206,6 +206,22 @@
   </div>
 </section>
 
+<section id="loyaltyPointsSection" aria-labelledby="loyaltyPointsTitle" style="max-width:840px;margin:0 auto;padding:.5rem 1.25rem 1.5rem">
+  <div id="loyaltyPointsCard" class="sec-card" style="max-width:840px;margin:0 auto;padding:1rem;background:#16453d;border:1px solid #85baa2;border-radius:.75rem;color:#f4faf7">
+    <div style="font-size:.6875rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#c3f0d8">Your loyalty points</div>
+    <h2 id="loyaltyPointsTitle" style="margin:.375rem 0;color:#fff;font-size:1.125rem">Check your Hotspot rewards</h2>
+    <p style="margin:0 0 .875rem;color:rgba(244,250,247,.78);font-size:.8125rem;line-height:1.5">Enter the phone number linked to your Hotspot account to see your earned points.</p>
+    <form id="loyaltyPointsForm" onsubmit="return checkPortalLoyaltyPoints()">
+      <label class="lbl" for="loyaltyPhone" style="color:#c3f0d8">Mobile phone number</label>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.625rem">
+        <input id="loyaltyPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="07XXXXXXXX or 2547XXXXXXXX" class="inp" aria-label="Phone number linked to your Hotspot account" oninput="resetPortalLoyaltyLookup()" />
+        <button id="loyaltyCheckButton" type="submit" class="btn btn-green">Check points</button>
+      </div>
+    </form>
+    <p id="loyaltyPointsStatus" role="status" aria-live="polite" style="display:none;margin:.75rem 0 0;color:#dbece4;font-size:.8125rem;line-height:1.5"></p>
+  </div>
+</section>
+
 <section id="portalRecoveryCards" style="max-width:880px;margin:-2rem auto 0;padding:0 1.25rem 3rem">
   <div id="portalConnectionSupportCard" class="sec-card" style="max-width:840px;margin:0 auto;background:rgba(255,255,255,.035)">
     <div class="sec-head" style="background:linear-gradient(135deg,rgba(126,34,206,.24),rgba(37,99,235,.18))">
@@ -313,18 +329,18 @@
       <p style="color:rgba(253,186,116,.5);font-size:.875rem;margin-top:.375rem">Have a voucher code? Enter it below to get online</p>
     </div>
     <div class="sec-body" id="voucherFormWrap">
-      <!-- Voucher login: code = username AND password on MikroTik -->
-      <form name="sendin3" id="voucherForm" action="$(link-login-only)" method="post" onsubmit="return redeemVoucher(this)">
-        <input type="hidden" name="dst"   value="$(link-orig)">
-        <input type="hidden" name="popup" value="true">
-        <input type="hidden" name="password" id="voucherPassHidden">
+      <form id="voucherForm" onsubmit="return redeemVoucher(this)" novalidate>
         <div style="display:flex;flex-direction:column;gap:1.125rem">
           <div>
-            <label class="lbl" style="color:rgba(251,191,36,.75)">Voucher Code</label>
-            <input id="voucherCode" name="username" type="text" placeholder="e.g. ABCD-1234-EFGH" class="inp inp-amber" style="font-family:monospace;letter-spacing:.08em" oninput="this.value=this.value.toUpperCase()" />
+            <label class="lbl" for="voucherPhone" style="color:rgba(251,191,36,.75)">Mobile phone number</label>
+            <input id="voucherPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="07XXXXXXXX, 01XXXXXXXX, or 254XXXXXXXXX" class="inp inp-amber" aria-label="Mobile phone number for the voucher account" />
           </div>
-          <div id="voucherError" style="display:none;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);color:#fca5a5;font-size:.8125rem;line-height:1.5"></div>
-          <button type="submit" class="btn btn-amber btn-full" style="margin-top:.25rem">
+          <div>
+            <label class="lbl" style="color:rgba(251,191,36,.75)">Voucher Code</label>
+            <input id="voucherCode" name="code" type="text" autocomplete="off" autocapitalize="characters" placeholder="e.g. HYT46" class="inp inp-amber" style="font-family:monospace;letter-spacing:.08em" oninput="this.value=this.value.toUpperCase().replace(/\s+/g,'')" />
+          </div>
+          <div id="voucherError" role="alert" aria-live="assertive" style="display:none;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);color:#fca5a5;font-size:.8125rem;line-height:1.5"></div>
+          <button id="voucherActivateButton" type="submit" class="btn btn-amber btn-full" style="margin-top:.25rem">
             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z"/></svg>
             Activate Voucher
           </button>
@@ -337,7 +353,8 @@
           <svg width="30" height="30" fill="none" viewBox="0 0 24 24" stroke="#fbbf24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
         </div>
         <p style="font-size:1.125rem;font-weight:700;color:#fbbf24;margin-bottom:.375rem">Voucher Activated!</p>
-        <p style="color:rgba(255,255,255,.5);font-size:.875rem;margin-bottom:1.25rem">You are now connected to the internet.</p>
+        <p id="voucherSuccessMessage" role="status" aria-live="polite" style="color:rgba(255,255,255,.65);font-size:.875rem;line-height:1.5;margin-bottom:1rem">Your prepaid account is ready.</p>
+        <button id="voucherReconnectButton" type="button" onclick="retryVoucherConnection()" class="btn btn-green btn-full" style="display:none;margin-bottom:1rem">Retry connection</button>
         <button onclick="resetVoucher()" style="font-size:.8125rem;color:rgba(251,191,36,.5);background:none;border:none;cursor:pointer;font-family:inherit;transition:color .2s" onmouseover="this.style.color='rgba(251,191,36,.8)'" onmouseout="this.style.color='rgba(251,191,36,.5)'">Use another voucher →</button>
       </div>
     </div>
@@ -508,10 +525,13 @@ var ROUTER_CHAP_CHALLENGE="$(chap-challenge)";
   var PORTAL_ACCENT="#d96835", PORTAL_BACKGROUND="midnight", PORTAL_PACKAGE_SHAPE="rounded", PORTAL_PREVIEW_ONLY=false;
 var PORTAL_CARD_DEFAULTS={
   header:true,hero:true,announcement:true,expiryNotice:true,packages:true,paymentStatus:true,
-  connectionSupport:true,accountLogin:true,voucher:true,paymentRecovery:true,testimonials:false,
+  connectionSupport:true,accountLogin:true,voucher:true,loyalty:true,paymentRecovery:true,testimonials:false,
   faq:false,advert:false,deviceIdentity:true,footer:true,whatsapp:true
 };
 var PORTAL_CARD_VISIBILITY=Object.assign({},PORTAL_CARD_DEFAULTS);
+var PORTAL_LOYALTY_CARD_SETTINGS={position:"bottom",treatment:"filled",shape:"rounded",size:"standard"};
+var portalLoyaltyBusy=false, portalLoyaltyRequestId=0, voucherRedemptionBusy=false, voucherConnectionBusy=false;
+var voucherRedeemedCredentials=null, voucherRedeemedAdminId=0;
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
 var PORTAL_QUERY=new URLSearchParams(window.location.search);
 function normalisePortalCardVisibility(value,legacy){
@@ -528,6 +548,127 @@ function normalisePortalCardVisibility(value,legacy){
   return cards;
 }
 function portalCardEnabled(key){return PORTAL_CARD_VISIBILITY[key]!==false;}
+function applyPortalLoyaltyCardSettings(value){
+  var input=value&&typeof value==="object"&&!Array.isArray(value)?value:{};
+  PORTAL_LOYALTY_CARD_SETTINGS={
+    position:["top","after-packages","bottom"].indexOf(input.position)>=0?input.position:"bottom",
+    treatment:["filled","outlined","glass"].indexOf(input.treatment)>=0?input.treatment:"filled",
+    shape:["rounded","square","pill"].indexOf(input.shape)>=0?input.shape:"rounded",
+    size:["compact","standard","large"].indexOf(input.size)>=0?input.size:"standard"
+  };
+  var section=document.getElementById("loyaltyPointsSection");
+  var card=document.getElementById("loyaltyPointsCard");
+  if(!section||!card)return;
+  var sizes={
+    compact:{width:560,padding:12,title:16,body:11},
+    standard:{width:840,padding:16,title:18,body:12},
+    large:{width:1040,padding:22,title:22,body:13}
+  };
+  var size=sizes[PORTAL_LOYALTY_CARD_SETTINGS.size];
+  var treatments={
+    filled:{background:"#16453d",border:"1px solid #85baa2",backdropFilter:"none"},
+    outlined:{background:"rgba(8,20,18,.22)",border:"1px solid #85baa2",backdropFilter:"none"},
+    glass:{background:"rgba(22,69,61,.34)",border:"1px solid rgba(133,186,162,.5)",backdropFilter:"blur(12px)"}
+  };
+  var treatment=treatments[PORTAL_LOYALTY_CARD_SETTINGS.treatment];
+  section.style.maxWidth=size.width+"px";
+  card.style.maxWidth=size.width+"px";
+  card.style.padding=size.padding+"px";
+  card.style.background=treatment.background;
+  card.style.border=treatment.border;
+  card.style.backdropFilter=treatment.backdropFilter;
+  card.style.webkitBackdropFilter=treatment.backdropFilter;
+  card.style.borderRadius=PORTAL_LOYALTY_CARD_SETTINGS.shape==="pill"?"28px":PORTAL_LOYALTY_CARD_SETTINGS.shape==="square"?"4px":"12px";
+  var title=document.getElementById("loyaltyPointsTitle");
+  var body=section.querySelector("p");
+  if(title)title.style.fontSize=size.title+"px";
+  if(body)body.style.fontSize=size.body+"px";
+  section.style.display=portalCardEnabled("loyalty")?"":"none";
+  var hero=document.getElementById("portalHero");
+  var plans=document.getElementById("plansSection");
+  var device=document.getElementById("portalDeviceMac");
+  var footer=document.getElementById("portalFooter");
+  if(PORTAL_LOYALTY_CARD_SETTINGS.position==="top"&&hero){
+    hero.insertAdjacentElement("afterend",section);
+  }else if(PORTAL_LOYALTY_CARD_SETTINGS.position==="after-packages"&&plans){
+    plans.insertAdjacentElement("afterend",section);
+  }else if(device){
+    device.insertAdjacentElement("afterend",section);
+  }else if(footer){
+    footer.insertAdjacentElement("beforebegin",section);
+  }
+}
+function formatPortalLoyaltyPoints(value){
+  var points=Number(value);
+  if(!Number.isFinite(points)||points<0)return "0";
+  try{return new Intl.NumberFormat("en-KE",{maximumFractionDigits:2}).format(Math.round(points*100)/100);}
+  catch(e){return String(Math.round(points*100)/100);}
+}
+function setPortalLoyaltyStatus(message,isError){
+  var status=document.getElementById("loyaltyPointsStatus");
+  if(!status)return;
+  status.textContent=message;
+  status.style.display=message?"block":"none";
+  status.style.color=isError?"#fecaca":"#dbece4";
+}
+function resetPortalLoyaltyLookup(){
+  portalLoyaltyRequestId++;
+  var title=document.getElementById("loyaltyPointsTitle");
+  if(title)title.textContent="Check your Hotspot rewards";
+  setPortalLoyaltyStatus("",false);
+}
+function checkPortalLoyaltyPoints(){
+  if(portalLoyaltyBusy)return false;
+  var phoneInput=document.getElementById("loyaltyPhone");
+  var phone=String(phoneInput&&phoneInput.value||"").trim().replace(/[\s()-]/g,"");
+  var plan=selectedPlan||PLANS[0]||EMBEDDED_PLANS[0];
+  var button=document.getElementById("loyaltyCheckButton");
+  var title=document.getElementById("loyaltyPointsTitle");
+  if(!/^(?:\+254|254|0)(?:7|1)\d{8}$/.test(phone)){
+    setPortalLoyaltyStatus("Enter a valid Kenyan mobile number linked to your Hotspot account.",true);
+    return false;
+  }
+  if(PORTAL_ADMIN_ID<1||!plan||!Number.isSafeInteger(Number(plan.id))){
+    setPortalLoyaltyStatus("The Hotspot service is still loading. Please try again in a moment.",true);
+    return false;
+  }
+  portalLoyaltyBusy=true;
+  var requestId=++portalLoyaltyRequestId;
+  if(button){button.disabled=true;button.textContent="Checking…";}
+  if(title)title.textContent="Checking your points…";
+  setPortalLoyaltyStatus("",false);
+  fetch(apiUrl("/api/hotspot/loyalty/quote"),{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      adminId:PORTAL_ADMIN_ID,
+      plan_id:Number(plan.id),
+      phone:phone,
+      ...(DEVICE_MAC?{mac_address:DEVICE_MAC}:{}),
+      ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+      ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})
+    })
+  }).then(function(response){
+    return response.json().catch(function(){return{};}).then(function(data){return{ok:response.ok,data:data||{}};});
+  }).then(function(result){
+    if(requestId!==portalLoyaltyRequestId)return;
+    var data=result.data||{};
+    if(!result.ok||data.ok!==true||!Number.isFinite(Number(data.balance)))throw new Error(data.error||"Your points balance could not be checked.");
+    if(title)title.textContent=formatPortalLoyaltyPoints(data.balance)+" points";
+    var awarded=Number(data.pointsAwarded)||0;
+    setPortalLoyaltyStatus(awarded>0
+      ?"This "+plan.name+" package would earn "+formatPortalLoyaltyPoints(awarded)+" points after payment and account activation."
+      :"Your earned balance is shown above. This package does not currently award additional points.",false);
+  }).catch(function(error){
+    if(requestId!==portalLoyaltyRequestId)return;
+    if(title)title.textContent="Check your Hotspot rewards";
+    setPortalLoyaltyStatus(error&&error.message?error.message:"Your points balance could not be checked. Please try again.",true);
+  }).then(function(){
+    portalLoyaltyBusy=false;
+    if(button){button.disabled=false;button.textContent="Check points";}
+  });
+  return false;
+}
 function isSupportedPaymentGateway(gateway){
   return gateway==="mpesa_paybill"||gateway==="mpesa_till_push"||gateway==="bank_stk_push";
 }
@@ -589,6 +730,7 @@ function applyPortalCardVisibility(){
     ["expiryNotice","portalExpiryNotice"],["packages","plansSection"],["paymentStatus","mpesaBanner"],
     ["connectionSupport","portalConnectionSupportCard"],["connectionSupport","troubleshootModule"],
     ["accountLogin","loginSection"],["voucher","voucherSection"],["paymentRecovery","mpesaReconnectSection"],
+    ["loyalty","loyaltyPointsSection"],
     ["testimonials","testimonialCard"],["faq","faqCard"],["advert","portalAdvertSection"],
     ["deviceIdentity","portalDeviceMac"],["footer","portalFooter"]
   ];
@@ -856,7 +998,10 @@ function shouldHidePackageSection(maintenanceMode,allowPackagesDuringMaintenance
   return (Boolean(maintenanceMode)&&allowPackagesDuringMaintenance!==true)||!portalCardEnabled("packages");
 }
 function applyPortalConfig(data){
-  if(!data||typeof data!=="object")return;
+  if(!data||typeof data!=="object"){
+    applyPortalLoyaltyCardSettings({});
+    return;
+  }
   var publicBase=safePublicApiBase(data.apiBase);
   if(publicBase)PORTAL_API_BASE=publicBase;
   /* Package context must survive optional appearance rendering failures. */
@@ -868,6 +1013,7 @@ function applyPortalConfig(data){
   if(configuredPlans.length)EMBEDDED_PLANS=configuredPlans;
   PORTAL_CARD_VISIBILITY=normalisePortalCardVisibility(data.portalCards,data);
   applyPortalCardVisibility();
+  applyPortalLoyaltyCardSettings(data.loyaltyCard);
   MPESA_PROMPT_ENABLED=portalMpesaPromptEnabled(data);
   var colors=data.colors&&typeof data.colors==="object"?data.colors:{};
   var hexKeys=["bgColor","bgColor2","primaryColor","accentColor","cardColor","buttonColor","textColor","inputBgColor"];
@@ -1972,21 +2118,131 @@ function doLogin(form){
   return true;
 }
 
-/* ── Voucher: code is both username and password ── */
+/* Redeem through the billing API so expiry, one-use rules, and prepaid-account
+   recording are enforced before this device is logged in to RouterOS. */
+function setVoucherError(message){
+  var error=document.getElementById("voucherError");
+  if(!error)return;
+  error.textContent=message||"";
+  error.style.display=message?"block":"none";
+}
+function setVoucherConnectionState(connected,message){
+  var status=document.getElementById("voucherSuccessMessage");
+  var retry=document.getElementById("voucherReconnectButton");
+  if(status)status.textContent=message;
+  if(retry)retry.style.display=connected?"none":"flex";
+}
+function connectRedeemedVoucher(){
+  if(!voucherRedeemedCredentials||!voucherRedeemedAdminId)return Promise.reject(new Error("The redeemed Hotspot account is not available in this page. Redeem the voucher again or contact support."));
+  if(!DEVICE_MAC)return Promise.reject(new Error("Keep this device connected to the Hotspot Wi-Fi so the router can identify it."));
+  return fetch(apiUrl("/api/customers/hotspot-login"),{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      adminId:voucherRedeemedAdminId,
+      username:voucherRedeemedCredentials.username,
+      password:voucherRedeemedCredentials.password,
+      mac_address:DEVICE_MAC,
+      ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+    })
+  }).then(function(response){
+    return response.json().catch(function(){return{};}).then(function(data){return{ok:response.ok,data:data||{}};});
+  }).then(function(result){
+    if(!result.ok||result.data.ok!==true||result.data.connected!==true){
+      throw new Error(result.data.error||"The account is saved, but the router has not confirmed this device's connection yet.");
+    }
+    return true;
+  });
+}
 function redeemVoucher(form){
-  var code=document.getElementById("voucherCode").value.trim();
-  var errEl=document.getElementById("voucherError");
-  if(!code){errEl.textContent="Please enter your voucher code.";errEl.style.display="block";return false;}
-  errEl.style.display="none";
-  /* Voucher codes are RouterOS usernames and passwords. Submit immediately
-     so a successful router/RADIUS authentication logs the user in. */
-  var passHidden=document.getElementById("voucherPassHidden");
-  if(passHidden){passHidden.value=routerLoginPassword(code);}
-  return true;
+  if(voucherRedemptionBusy)return false;
+  var code=String(document.getElementById("voucherCode").value||"").trim().toUpperCase().replace(/\s+/g,"");
+  var phone=String(document.getElementById("voucherPhone").value||"").trim().replace(/[\s()-]/g,"");
+  var button=document.getElementById("voucherActivateButton");
+  setVoucherError("");
+  if(!/^(?:\+254|254|0)(?:7|1)\d{8}$/.test(phone)){
+    setVoucherError("Enter a valid Kenyan mobile number for the prepaid account.");
+    return false;
+  }
+  if(!/^[A-Z0-9-]{3,32}$/.test(code)||code.replace(/-/g,"").length<3){
+    setVoucherError("Enter a voucher code with at least 3 letters or numbers and no spaces.");
+    return false;
+  }
+  if(!DEVICE_MAC){
+    setVoucherError("Reconnect to this Hotspot Wi-Fi and reopen its sign-in page so the voucher can be linked to this device.");
+    return false;
+  }
+  if(PORTAL_ADMIN_ID<1){
+    setVoucherError("The Hotspot service could not be identified. Reload this sign-in page and try again.");
+    return false;
+  }
+  voucherRedemptionBusy=true;
+  if(button){button.disabled=true;button.textContent="Activating…";}
+  fetch(apiUrl("/api/vouchers/hotspot/redeem"),{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      adminId:PORTAL_ADMIN_ID,
+      code:code,
+      contact:phone,
+      mac_address:DEVICE_MAC,
+      ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+      ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})
+    })
+  }).then(function(response){
+    return response.json().catch(function(){return{};}).then(function(data){return{ok:response.ok,data:data||{}};});
+  }).then(function(result){
+    var data=result.data||{};
+    if(!result.ok||data.ok!==true||!data.credentials||!data.credentials.username||!data.credentials.password||!Number.isSafeInteger(Number(data.account_admin_id))||Number(data.account_admin_id)<1){
+      throw new Error(data.error||"Voucher activation failed. Check the code and try again.");
+    }
+    voucherRedeemedCredentials={username:String(data.credentials.username),password:String(data.credentials.password)};
+    voucherRedeemedAdminId=Number(data.account_admin_id);
+    setVoucherError("");
+    document.getElementById("voucherFormWrap").style.display="none";
+    document.getElementById("voucherSuccess").style.display="block";
+    setVoucherConnectionState(false,"Voucher redeemed for "+phone+". Your prepaid account is saved; connecting this device…");
+    return connectRedeemedVoucher().then(function(){
+      setVoucherConnectionState(true,"Voucher redeemed and your device is connected to the internet.");
+    },function(error){
+      setVoucherConnectionState(false,"Voucher redeemed and your prepaid account is saved, but connection is pending: "+(error&&error.message?error.message:"The router has not confirmed sign-in yet."));
+    });
+  }).catch(function(error){
+    setVoucherError(error&&error.message?error.message:"Voucher redemption failed. Please try again.");
+  }).then(function(){
+    voucherRedemptionBusy=false;
+    if(button){button.disabled=false;button.textContent="Activate Voucher";}
+  });
+  return false;
+}
+function retryVoucherConnection(){
+  if(voucherConnectionBusy||!voucherRedeemedCredentials)return;
+  voucherConnectionBusy=true;
+  var retry=document.getElementById("voucherReconnectButton");
+  if(retry){retry.disabled=true;retry.textContent="Connecting…";}
+  setVoucherConnectionState(false,"Checking the saved prepaid account and retrying sign-in…");
+  connectRedeemedVoucher().then(function(){
+    setVoucherConnectionState(true,"Voucher redeemed and your device is connected to the internet.");
+  }).catch(function(error){
+    setVoucherConnectionState(false,error&&error.message?error.message:"The router has not confirmed sign-in. Keep this device on Wi-Fi and retry.");
+  }).then(function(){
+    voucherConnectionBusy=false;
+    if(retry){retry.disabled=false;retry.textContent="Retry connection";}
+  });
 }
 function resetVoucher(){
-  document.getElementById("voucherCode").value="";
-  document.getElementById("voucherFormWrap").style.display="block";document.getElementById("voucherSuccess").style.display="none";
+  var phone=document.getElementById("voucherPhone");
+  var code=document.getElementById("voucherCode");
+  if(phone)phone.value="";
+  if(code)code.value="";
+  voucherRedeemedCredentials=null;
+  voucherRedeemedAdminId=0;
+  setVoucherError("");
+  document.getElementById("voucherFormWrap").style.display="block";
+  document.getElementById("voucherSuccess").style.display="none";
+  var retry=document.getElementById("voucherReconnectButton");
+  if(retry){retry.style.display="none";retry.disabled=false;retry.textContent="Retry connection";}
+  setVoucherConnectionState(false,"Your prepaid account is ready.");
 }
 
 function submitMpesa(){
