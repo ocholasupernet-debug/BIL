@@ -4,6 +4,7 @@ import {
   resolveRouterIdByExactName,
   resolveTenantRouterTargets,
   isNoActiveHotspotServerResponse,
+  resolvePortalBridgeSelection,
   resolveTenantApiOrigin,
   validateExpectedRouterName,
 } from "../portal-refresh-target.mjs";
@@ -15,6 +16,24 @@ test("builds the API origin from the exact tenant subdomain", () => {
 test("rejects invalid tenant subdomains rather than calling a different tenant host", () => {
   assert.throws(() => resolveTenantApiOrigin("come.example"), /exact valid tenant subdomain/);
   assert.throws(() => resolveTenantApiOrigin(".."), /exact valid tenant subdomain/);
+});
+
+test("selects the chosen Hotspot bridge and pins the exact router", () => {
+  assert.deepEqual(
+    resolvePortalBridgeSelection("ocholasupernet2", "hotspot-bridge"),
+    { bridgeName: "hotspot-bridge", expectedRouterName: "ocholasupernet2" },
+  );
+});
+
+test("keeps automatic selection only for targets without an explicit bridge", () => {
+  assert.deepEqual(
+    resolvePortalBridgeSelection("ocholasupernet2", null),
+    { autoSelectBridgeServer: true, expectedRouterName: "ocholasupernet2" },
+  );
+  assert.deepEqual(
+    resolvePortalBridgeSelection(null, null),
+    { bridgeName: "co-hotspot-bridge" },
+  );
 });
 
 test("resolves the exact tenant router name rather than reusing a stale numeric ID", () => {

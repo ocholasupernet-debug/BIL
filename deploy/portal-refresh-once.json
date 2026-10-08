@@ -3,5 +3,6 @@
   "adminId": 33,
   "authVersion": 2,
   "tenantSubdomain": "ocholasupernet",
-  "allIspBridgeRouters": true
+  "ispBridgeRouterName": "ocholasupernet2",
+  "ispBridgeName": "hotspot-bridge"
 }

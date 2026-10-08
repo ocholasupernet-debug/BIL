@@ -16,6 +16,22 @@ export function resolveTenantApiOrigin(subdomain) {
   return `https://${normalized}.isplatty.org`;
 }
 
+export function resolvePortalBridgeSelection(routerName = null, bridgeName = null) {
+  const expectedRouterName = routerName === null ? null : validateExpectedRouterName(routerName);
+  const selectedBridgeName = bridgeName === null ? null : validateExpectedRouterName(bridgeName);
+
+  if (selectedBridgeName !== null) {
+    return {
+      bridgeName: selectedBridgeName,
+      ...(expectedRouterName !== null ? { expectedRouterName } : {}),
+    };
+  }
+  if (expectedRouterName !== null) {
+    return { autoSelectBridgeServer: true, expectedRouterName };
+  }
+  return { bridgeName: "co-hotspot-bridge" };
+}
+
 export function resolveRouterIdByExactName(routers, expectedName) {
   const name = validateExpectedRouterName(expectedName);
   if (!Array.isArray(routers)) {

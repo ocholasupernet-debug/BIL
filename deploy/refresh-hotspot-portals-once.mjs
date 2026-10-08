@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { createAdminSessionToken } from "./portal-refresh-token.mjs";
 import {
   isNoActiveHotspotServerResponse,
+  resolvePortalBridgeSelection,
   resolveTenantApiOrigin,
   resolveRouterIdByExactName,
   resolveTenantRouterTargets,
@@ -153,15 +154,13 @@ try {
 
   async function refreshIspBridge(routerId, routerName = null) {
     const targetDescription = routerName ? `ISP bridge ${routerName}` : "ISP bridge";
+  const selection = resolvePortalBridgeSelection(routerName, ispBridgeName);
     return refreshPortal(
       `/api/admin/router/${routerId}/hotspot-portal/bridge-deploy`,
       {
-        ...(routerName === null
-          ? { bridgeName: ispBridgeName ?? "co-hotspot-bridge" }
-          : { autoSelectBridgeServer: true }),
+      ...selection,
         overwrite: true,
         portalFileReplacementConsent: true,
-        ...(routerName !== null ? { expectedRouterName: routerName } : {}),
       },
       targetDescription,
       { skipIfNoActiveHotspot: routerName !== null },
