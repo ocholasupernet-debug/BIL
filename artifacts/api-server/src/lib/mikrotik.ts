@@ -3802,21 +3802,31 @@ async function resolveHotspotClientIpByMacOnConnection(
   if (activeAddress) return activeAddress;
 
   const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-  const fallbackCommands = [
-    ["/ip/dhcp-server/lease/print", "?status=bound", "=.proplist=host-name,address,mac-address,comment"],
-    ["/ip/hotspot/host/print", "=.proplist=address,mac-address,host-name,comment"],
-    ["/ip/arp/print", "=.proplist=address,mac-address,interface,complete"],
-  ];
-  for (const command of fallbackCommands) {
+  const readOptionalRows = async (command: string[]): Promise<Record<string, string>[]> => {
     try {
-      const rows = await withTimeout(conn.write(command), ms) as Record<string, string>[];
-      const address = addressForTarget(Array.isArray(rows) ? rows : []);
-      if (address) return address;
+      const rows = await withTimeout(conn.write(command), ms);
+      return Array.isArray(rows) ? rows as Record<string, string>[] : [];
     } catch {
-      // These tables are optional on some RouterOS hotspot installations.
+      return [];
     }
-  }
-  return null;
+  };
+  const dhcpRows = await readOptionalRows([
+    "/ip/dhcp-server/lease/print",
+    "?status=bound",
+    "=.proplist=host-name,address,mac-address,comment",
+  ]);
+  const dhcpAddress = addressForTarget(dhcpRows);
+  if (dhcpAddress) return dhcpAddress;
+
+  // Host and ARP are independent read-only fallbacks. Run them together only
+  // after DHCP misses, while preferring the Hotspot host result when both match.
+  const [hostRows, arpRows] = await Promise.all([
+    readOptionalRows(["/ip/hotspot/host/print", "=.proplist=address,mac-address,host-name,comment"]),
+    readOptionalRows(["/ip/arp/print", "=.proplist=address,mac-address,interface,complete"]),
+  ]);
+  const hostAddress = addressForTarget(hostRows);
+  if (hostAddress) return hostAddress;
+  return addressForTarget(arpRows);
 }
 
 export type HotspotMacReconnectKind =

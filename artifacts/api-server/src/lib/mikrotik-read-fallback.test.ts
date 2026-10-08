@@ -243,6 +243,57 @@ test("paid Hotspot reconnect discovers and confirms a device over one RouterOS c
   });
 });
 
+test("paid Hotspot reconnect checks Host and ARP fallbacks concurrently after a DHCP miss", async () => {
+  let loginSeen = false;
+  let activeFallbackReads = 0;
+  let maxActiveFallbackReads = 0;
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi(async (_username, command) => {
+    if (command[0] === "/ip/hotspot/active/login") {
+      loginSeen = true;
+      return [];
+    }
+    if (command[0] === "/ip/hotspot/active/print") {
+      const userScoped = command.some(value => String(value).startsWith("?user="));
+      if (loginSeen && userScoped) {
+        return [{ user: "tv-package", address: "10.0.0.88", "mac-address": targetMac }];
+      }
+      return [];
+    }
+    if (command[0] === "/ip/dhcp-server/lease/print") return [];
+    if (command[0] === "/ip/hotspot/host/print" || command[0] === "/ip/arp/print") {
+      activeFallbackReads += 1;
+      maxActiveFallbackReads = Math.max(maxActiveFallbackReads, activeFallbackReads);
+      await new Promise(resolve => setTimeout(resolve, 40));
+      activeFallbackReads -= 1;
+      return command[0] === "/ip/arp/print"
+        ? [{ address: "10.0.0.88", "mac-address": targetMac }]
+        : [];
+    }
+    return [];
+  }, async ({ port, connectedUsers, commands }) => {
+    const result = await reconnectHotspotUserByMac(routerCredentials(port), {
+      user: "tv-package",
+      password: "test-password",
+      macAddress: targetMac,
+    });
+
+    assert.equal(result.kind, "connected");
+    assert.equal(connectedUsers.length, 1);
+    assert.equal(maxActiveFallbackReads, 2);
+    assert.deepEqual(
+      new Set(commands.map(({ command }) => command[0])),
+      new Set([
+        "/ip/hotspot/active/print",
+        "/ip/dhcp-server/lease/print",
+        "/ip/hotspot/host/print",
+        "/ip/arp/print",
+        "/ip/hotspot/active/login",
+      ]),
+    );
+  });
+});
+
 test("paid Hotspot reconnect stops before login when a VLAN device IP does not match", async () => {
   const targetMac = "AA:BB:CC:DD:EE:FF";
   await withMockRouterApi((_username, command) => {

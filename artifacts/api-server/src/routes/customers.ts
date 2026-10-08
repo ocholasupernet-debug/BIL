@@ -2319,8 +2319,9 @@ async function loadSharedRoamingUsage(
   options: {
     credentialsForRouter?: (row: RouterRow) => ReturnType<typeof routerCredentials>;
     fetchUsage?: typeof fetchHotspotUserUsage;
+    readTrafficUsage?: boolean;
   } = {},
-): Promise<{ totalBytes: number; targetRouterBytes: number; routerIds: number[] }> {
+): Promise<{ totalBytes: number; targetRouterBytes: number; routerIds: number[]; routers: RouterRow[] }> {
   if (!plan.router_id) throw new Error("The purchased package has no source MikroTik.");
   const historicalRules = await sbSelectStrict<RoamingRuleRow>(
     "isp_hotspot_roaming_rules",
@@ -2343,6 +2344,9 @@ async function loadSharedRoamingUsage(
   if (routers.length !== routerIds.length) {
     throw new Error("A MikroTik needed to verify shared package usage could not be found.");
   }
+  if (options.readTrafficUsage === false) {
+    return { totalBytes: 0, targetRouterBytes: 0, routerIds, routers };
+  }
   const usageRows = await Promise.all(routers.map(async row => ({
     routerId: row.id,
     usage: await (options.fetchUsage ?? fetchHotspotUserUsage)(
@@ -2363,6 +2367,7 @@ async function loadSharedRoamingUsage(
     totalBytes,
     targetRouterBytes: (targetRouterBytes?.usage?.bytesIn ?? 0) + (targetRouterBytes?.usage?.bytesOut ?? 0),
     routerIds,
+    routers,
   };
 }
 
@@ -3359,17 +3364,15 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
         // Re-read usage after a disconnect to capture RouterOS's final counters.
         const preLoginUsageSnapshot = await measureReconnectStage(
           "pre_login_shared_usage_read",
-          () => loadSharedRoamingUsage(adminId, plan, username, routerId),
+          () => loadSharedRoamingUsage(adminId, plan, username, routerId, {
+            // Uncapped plans still need the authorized router scope for session
+            // cleanup, but do not need traffic counters to determine entitlement.
+            readTrafficUsage: capBytes !== null,
+          }),
         );
         usageSnapshot = preLoginUsageSnapshot;
         let sessionDisconnected = false;
-        const scopedRouterRows = await measureReconnectStage(
-          "router_scope_lookup",
-          () => sbSelectStrict<RouterRow>(
-            "isp_routers",
-            `admin_id=eq.${adminId}&id=in.(${preLoginUsageSnapshot.routerIds.join(",")})&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=100`,
-          ),
-        );
+        const scopedRouterRows = preLoginUsageSnapshot.routers;
         if (scopedRouterRows.length !== preLoginUsageSnapshot.routerIds.length) {
           throw new Error("A MikroTik needed to verify the shared package could not be found.");
         }
@@ -3403,7 +3406,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
             }
           }
         });
-        if (sessionDisconnected) {
+        if (sessionDisconnected && capBytes !== null) {
           await assertLock();
           usageSnapshot = await measureReconnectStage(
             "usage_refresh_after_disconnect",
