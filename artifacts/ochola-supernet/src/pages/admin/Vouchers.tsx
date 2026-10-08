@@ -12,6 +12,7 @@ import { getCurrencySymbol } from "@/lib/utils";
 
 /* ─────────────────────────── Types ─────────────────────────── */
 interface VoucherRedemptionAccount {
+  customer_id: number | null;
   username: string;
   phone: string | null;
   redeemed_at: string;
@@ -32,6 +33,7 @@ interface VoucherRow {
   expiry_kind: "service" | "redeem_by" | null;
   service_expires_at?: string | null;
   used: boolean;
+  redemption_status: "available" | "partially_redeemed" | "redeemed" | "expired";
   redemptions_used: number;
   max_redemptions: number;
   remaining_redemptions: number;
@@ -136,6 +138,25 @@ interface VoucherConfig {
   routers: DbRouterLite[];
 }
 
+interface LocalVoucherCleanupRouterResult {
+  routerId: number;
+  routerName: string;
+  status: "cleaned" | "no_matches" | "offline" | "failed";
+  inspectedUsers: number;
+  matchedVouchers: string[];
+  removedUsers: number;
+  unmatchedVoucherCodes: string[];
+  failedVoucherCodes: string[];
+  error?: string;
+  warning?: string;
+}
+
+interface LocalVoucherCleanupResult {
+  ok: boolean;
+  removedUsers: number;
+  routers: LocalVoucherCleanupRouterResult[];
+}
+
 async function voucherApi<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(adminApiHeaders());
   if (init.headers) new Headers(init.headers).forEach((value, key) => headers.set(key, value));
@@ -184,6 +205,14 @@ async function deleteVouchers(codes: string[]): Promise<{ deleted: number }> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ codes }),
+  });
+}
+
+async function cleanLocalVoucherCopies(): Promise<LocalVoucherCleanupResult> {
+  return voucherApi("/api/vouchers/hotspot/cleanup-local-users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
   });
 }
 
@@ -333,10 +362,11 @@ function EditVoucherModal({
 
 /* ─────────────────────────── Generate Modal ─────────────────── */
 function GenerateModal({
-  plans, routers, onClose, onGenerate,
+  plans, routers, generating, onClose, onGenerate,
 }: {
   plans: DbPlanLite[];
   routers: DbRouterLite[];
+  generating: boolean;
   onClose: () => void;
   onGenerate: (batch: VoucherGenerationInput) => void;
 }) {
@@ -347,14 +377,12 @@ function GenerateModal({
   const [prefix, setPrefix] = useState("");
   const [fixedCode, setFixedCode] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
-  const [generating, setGenerating] = useState(false);
 
   const plan = plans.find(p => p.id === selectedPlanId) ?? plans[0];
   const router = selectedRouterId === "all" ? null : (routers.find(r => r.id === selectedRouterId) ?? null);
 
-  const handleGenerate = async () => {
+  const handleGenerate = () => {
     if (!plan) return;
-    setGenerating(true);
     onGenerate({
       quantity: fixedCode ? 1 : qty,
       maxRedemptions,
@@ -367,15 +395,15 @@ function GenerateModal({
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
-      <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 16, width: "100%", maxWidth: 500, padding: "1.75rem", boxShadow: "0 25px 60px rgba(0,0,0,0.5)" }}>
+    <div role="presentation" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", overflowY: "auto", padding: "1rem", boxSizing: "border-box" }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="voucher-generate-title" style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 16, width: "100%", maxWidth: 680, maxHeight: "calc(100dvh - 2rem)", overflowY: "auto", overscrollBehavior: "contain", padding: "clamp(1rem, 3vw, 1.75rem)", boxShadow: "0 25px 60px rgba(0,0,0,0.5)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1.5rem" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "0.625rem" }}>
             <div style={{ width: 36, height: 36, borderRadius: 10, background: "var(--isp-accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Ticket size={18} style={{ color: "white" }} />
             </div>
             <div>
-              <div style={{ fontSize: "1rem", fontWeight: 700, color: "var(--isp-text)" }}>Generate Vouchers</div>
+              <div id="voucher-generate-title" style={{ fontSize: "1rem", fontWeight: 700, color: "var(--isp-text)" }}>Generate Vouchers</div>
               <div style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>Create new hotspot voucher codes</div>
             </div>
           </div>
@@ -579,6 +607,17 @@ export default function Vouchers() {
   const [selected,       setSelected]       = useState<Set<string>>(new Set());
   const [copiedCode,     setCopiedCode]     = useState<string | null>(null);
   const [toast,          setToast]          = useState<{ msg: string; ok: boolean } | null>(null);
+  const [cleanupResult,  setCleanupResult]  = useState<LocalVoucherCleanupResult | null>(null);
+  const [syncProgress,   setSyncProgress]   = useState<{
+    running: boolean;
+    total: number;
+    completed: number;
+    connected: number;
+    alreadyConnected: number;
+    needsAttention: number;
+  } | null>(null);
+  const [syncNotes, setSyncNotes] = useState<string[]>([]);
+  const syncBusyRef = useRef(false);
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -628,6 +667,115 @@ export default function Vouchers() {
     onError:   (e: Error) => showToast(`Error: ${e.message}`, false),
   });
 
+  const cleanupMutation = useMutation({
+    mutationFn: cleanLocalVoucherCopies,
+    onSuccess: result => {
+      setCleanupResult(result);
+      const needsAttention = result.routers.some(item =>
+        item.status === "offline"
+        || item.status === "failed"
+        || item.unmatchedVoucherCodes.length > 0,
+      );
+      showToast(
+        needsAttention
+          ? `Removed ${result.removedUsers} matched router voucher user(s); review the router results`
+          : `Checked ${result.routers.length} router(s); removed ${result.removedUsers} local voucher user(s)`,
+        !needsAttention,
+      );
+    },
+    onError: (e: Error) => showToast(`Router voucher cleanup failed: ${e.message}`, false),
+  });
+
+  const syncEligibleAccounts = useMemo(() => {
+    const accounts = new Map<number, VoucherRedemptionAccount>();
+    for (const voucher of vouchers) {
+      for (const account of voucher.redemption_accounts) {
+        const customerId = Number(account.customer_id);
+        if (
+          Number.isSafeInteger(customerId)
+          && customerId > 0
+          && !account.online
+          && account.service_status !== "expired"
+        ) {
+          accounts.set(customerId, account);
+        }
+      }
+    }
+    return [...accounts.entries()].map(([customerId, account]) => ({ customerId, account }));
+  }, [vouchers]);
+
+  const syncOfflineVoucherAccounts = async () => {
+    if (syncBusyRef.current || syncEligibleAccounts.length === 0) return;
+    if (!confirm(
+      `Reconnect ${syncEligibleAccounts.length} offline, unexpired voucher account(s) using their individual prepaid usernames? Expired accounts are skipped; voucher codes are never added as router logins.`,
+    )) return;
+
+    syncBusyRef.current = true;
+    const total = syncEligibleAccounts.length;
+    let nextIndex = 0;
+    let completed = 0;
+    let connected = 0;
+    let alreadyConnected = 0;
+    let needsAttention = 0;
+    const notes: string[] = [];
+    setSyncNotes([]);
+    setSyncProgress({ running: true, total, completed, connected, alreadyConnected, needsAttention });
+
+    const publishProgress = () => setSyncProgress({
+      running: true,
+      total,
+      completed,
+      connected,
+      alreadyConnected,
+      needsAttention,
+    });
+
+    const worker = async () => {
+      while (true) {
+        const index = nextIndex++;
+        if (index >= total) return;
+        const { customerId, account } = syncEligibleAccounts[index];
+        try {
+          const response = await fetch(`/api/customers/${customerId}/hotspot-reconnect`, {
+            method: "POST",
+            headers: adminApiHeaders(),
+          });
+          const payload = await response.json() as { status?: string; message?: string; error?: string };
+          if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+          if (payload.status === "connected") connected++;
+          else if (payload.status === "already_connected") alreadyConnected++;
+          else {
+            needsAttention++;
+            if (notes.length < 5) notes.push(`${account.username}: ${payload.status || "check required"}`);
+          }
+        } catch {
+          needsAttention++;
+          if (notes.length < 5) notes.push(`${account.username}: router check failed`);
+        } finally {
+          completed++;
+          publishProgress();
+        }
+      }
+    };
+
+    try {
+      await Promise.all(Array.from(
+        { length: Math.min(2, total) },
+        () => worker(),
+      ));
+      setSyncProgress({ running: false, total, completed, connected, alreadyConnected, needsAttention });
+      setSyncNotes(notes);
+      await refetch();
+      await qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
+      showToast(
+        `Voucher account sync finished: ${connected} connected, ${alreadyConnected} already connected, ${needsAttention} need attention`,
+        needsAttention === 0,
+      );
+    } finally {
+      syncBusyRef.current = false;
+    }
+  };
+
   const updateMutation = useMutation({
     mutationFn: updateVoucher,
     onSuccess: () => {
@@ -655,12 +803,15 @@ export default function Vouchers() {
         v.plan_name.toLowerCase().includes(search.toLowerCase());
       const matchRouter = filterRouter === "all" || String(v.router_id) === filterRouter || (filterRouter === "0" && !v.router_id);
       const matchPlan   = filterPlan   === "all" || v.plan_name === filterPlan;
-      const matchStatus = filterStatus === "all" || (filterStatus === "used" ? v.used : !v.used);
+      const matchStatus = filterStatus === "all" || v.redemption_status === filterStatus;
       return matchSearch && matchRouter && matchPlan && matchStatus;
     });
   }, [vouchers, search, filterRouter, filterPlan, filterStatus]);
 
-  const unusedCount = vouchers.filter(v => v.remaining_redemptions > 0 && v.service_status === "available").length;
+  const redeemableCount = vouchers.filter(v =>
+    v.remaining_redemptions > 0
+    && (v.redemption_status === "available" || v.redemption_status === "partially_redeemed"),
+  ).length;
   const usedCount = vouchers.reduce((total, voucher) => total + voucher.redemptions_used, 0);
 
   const selectableFiltered = filtered.filter(v => !v.used);
@@ -707,6 +858,7 @@ export default function Vouchers() {
         <GenerateModal
           plans={plans}
           routers={routers}
+          generating={generateMutation.isPending}
           onClose={() => setShowGenerate(false)}
           onGenerate={batch => generateMutation.mutate(batch)}
         />
@@ -733,7 +885,7 @@ export default function Vouchers() {
           <div>
             <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>Vouchers</h1>
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: "0.25rem 0 0" }}>
-              {isLoading ? "Loading…" : voucherListFailed ? "Voucher list could not be loaded" : `${vouchers.length} codes · ${unusedCount} redeemable · ${usedCount} redemptions`}
+              {isLoading ? "Loading…" : voucherListFailed ? "Voucher list could not be loaded" : `${vouchers.length} codes · ${redeemableCount} redeemable · ${usedCount} redemptions`}
             </p>
             <p style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", margin: "0.25rem 0 0" }}>
               Each code has a redemption limit and creates a separate tracked Hotspot account for each person who redeems it.
@@ -742,6 +894,33 @@ export default function Vouchers() {
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
             <button onClick={() => refetch()} style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.875rem", borderRadius: 8, background: "rgba(255,255,255,0.05)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8125rem", cursor: "pointer", fontFamily: "inherit" }}>
               <RefreshCw size={13} style={{ animation: vouchersLoading ? "spin 1s linear infinite" : "none" }} /> Refresh
+            </button>
+            <button
+              type="button"
+              onClick={() => void syncOfflineVoucherAccounts()}
+              disabled={Boolean(syncProgress?.running) || syncEligibleAccounts.length === 0}
+              title="Reconnect active, offline voucher accounts using their separate prepaid usernames."
+              style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.875rem", borderRadius: 8, background: "rgba(37,99,235,0.1)", border: "1px solid rgba(37,99,235,0.25)", color: "var(--isp-accent)", fontWeight: 600, fontSize: "0.8125rem", cursor: syncProgress?.running || syncEligibleAccounts.length === 0 ? "not-allowed" : "pointer", opacity: syncEligibleAccounts.length === 0 ? 0.55 : 1, fontFamily: "inherit" }}
+            >
+              <RefreshCw size={13} style={{ animation: syncProgress?.running ? "spin 1s linear infinite" : "none" }} />
+              {syncProgress?.running
+                ? `Syncing ${syncProgress.completed}/${syncProgress.total}…`
+                : `Sync offline accounts (${syncEligibleAccounts.length})`}
+            </button>
+            <button
+              onClick={() => {
+                if (confirm("Check each MikroTik for locally stored users with the managed voucher marker. Only users whose exact code exists in this account’s voucher records will be removed; unrelated or unmatched users will be left untouched.")) {
+                  setCleanupResult(null);
+                  cleanupMutation.mutate();
+                }
+              }}
+              disabled={cleanupMutation.isPending || routers.length === 0}
+              style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.875rem", borderRadius: 8, background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.2)", color: "#f87171", fontWeight: 600, fontSize: "0.8125rem", cursor: cleanupMutation.isPending || routers.length === 0 ? "not-allowed" : "pointer", opacity: routers.length === 0 ? 0.55 : 1, fontFamily: "inherit" }}
+            >
+              {cleanupMutation.isPending
+                ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />
+                : <Trash2 size={13} />}
+              {cleanupMutation.isPending ? "Checking Routers…" : "Clean Router Copies"}
             </button>
             {selected.size > 0 && (
               <>
@@ -766,11 +945,108 @@ export default function Vouchers() {
           </div>
         </div>
 
+        {syncProgress && !syncProgress.running && (
+          <section
+            role="status"
+            aria-live="polite"
+            style={{
+              padding: "0.85rem 1rem",
+              borderRadius: 10,
+              border: `1px solid ${syncProgress.needsAttention ? "rgba(245,158,11,0.28)" : "rgba(34,197,94,0.25)"}`,
+              background: syncProgress.needsAttention ? "rgba(245,158,11,0.06)" : "rgba(34,197,94,0.06)",
+              color: "var(--isp-text)",
+              fontSize: "0.78rem",
+            }}
+          >
+            Account sync finished: {syncProgress.connected} connected, {syncProgress.alreadyConnected} already connected, {syncProgress.needsAttention} need attention.
+            <span style={{ display: "block", marginTop: 3, color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>
+              Only active prepaid accounts were reconciled. Voucher codes were not added to MikroTik.
+            </span>
+            {syncNotes.length > 0 && (
+              <ul style={{ margin: "8px 0 0", paddingLeft: 18, color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>
+                {syncNotes.map(note => <li key={note}>{note}</li>)}
+              </ul>
+            )}
+          </section>
+        )}
+
+        {cleanupResult && (
+          <section
+            role="status"
+            style={{
+              padding: "1rem 1.125rem",
+              borderRadius: 12,
+              border: `1px solid ${cleanupResult.ok ? "rgba(34,197,94,0.25)" : "rgba(248,113,113,0.25)"}`,
+              background: cleanupResult.ok ? "rgba(34,197,94,0.06)" : "rgba(248,113,113,0.06)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem" }}>
+              <div>
+                <div style={{ fontWeight: 700, color: "var(--isp-text)", fontSize: "0.875rem" }}>
+                  Router voucher cleanup: {cleanupResult.removedUsers} user(s) removed
+                </div>
+                <p style={{ margin: "0.3rem 0 0.75rem", color: "var(--isp-text-muted)", fontSize: "0.75rem" }}>
+                  Only tagged users matching a voucher record in this account were removed. Unmatched tagged users were left untouched.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Dismiss router voucher cleanup results"
+                onClick={() => setCleanupResult(null)}
+                style={{ background: "transparent", border: 0, color: "var(--isp-text-muted)", cursor: "pointer", padding: 2 }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {cleanupResult.routers.length === 0 ? (
+              <div style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)" }}>No routers are registered for this account.</div>
+            ) : (
+              <div style={{ display: "grid", gap: "0.4rem" }}>
+                {cleanupResult.routers.map(item => {
+                  const needsAttention = item.status === "offline"
+                    || item.status === "failed"
+                    || item.unmatchedVoucherCodes.length > 0;
+                  const statusLabel = item.status === "offline"
+                    ? "Offline / unreachable"
+                    : item.status === "failed"
+                      ? "Cleanup failed"
+                      : item.status === "cleaned"
+                        ? "Cleaned"
+                        : "No confirmed copies";
+                  return (
+                    <div key={item.routerId} style={{ display: "flex", flexDirection: "column", gap: "0.2rem", fontSize: "0.75rem" }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem", alignItems: "baseline" }}>
+                        <strong style={{ color: "var(--isp-text)" }}>{item.routerName}</strong>
+                        <span style={{ color: needsAttention ? "#f87171" : "#4ade80" }}>{statusLabel}</span>
+                        <span style={{ color: "var(--isp-text-muted)" }}>
+                          {item.inspectedUsers} users checked · {item.removedUsers} removed
+                        </span>
+                      </div>
+                      {item.matchedVouchers.length > 0 && (
+                        <span style={{ color: "var(--isp-text-muted)" }}>
+                          Tagged voucher codes found: {item.matchedVouchers.join(", ")}
+                        </span>
+                      )}
+                      {item.error && <span style={{ color: "#f87171" }}>{item.error}</span>}
+                      {item.failedVoucherCodes.length > 0 && (
+                        <span style={{ color: "#f87171" }}>Not confirmed removed: {item.failedVoucherCodes.join(", ")}</span>
+                      )}
+                      {item.unmatchedVoucherCodes.length > 0 && (
+                        <span style={{ color: "#fbbf24" }}>Tagged users without a matching voucher record (left in place): {item.unmatchedVoucherCodes.join(", ")}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
         {/* ── Stat Cards ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
           {[
             { label: "Voucher Codes",  value: vouchers.length,  grad: "linear-gradient(135deg,#0fb8ad,#1fc8db)", icon: <Ticket size={22} style={{ opacity: 0.9 }} /> },
-            { label: "Redeemable Codes",  value: unusedCount,       grad: "linear-gradient(135deg,#43e97b,#38f9d7)", icon: <CheckCircle2 size={22} style={{ opacity: 0.9 }} /> },
+            { label: "Redeemable Codes",  value: redeemableCount,    grad: "linear-gradient(135deg,#43e97b,#38f9d7)", icon: <CheckCircle2 size={22} style={{ opacity: 0.9 }} /> },
             { label: "Total Redemptions", value: usedCount,         grad: "linear-gradient(135deg,#f7971e,#ffd200)", icon: <Wifi size={22} style={{ opacity: 0.9 }} /> },
             { label: "Routers Linked",  value: new Set(vouchers.map(v => v.router_id).filter(Boolean)).size, grad: "linear-gradient(135deg,#a18cd1,#fbc2eb)", icon: <Filter size={22} style={{ opacity: 0.9 }} /> },
           ].map(k => (
@@ -837,8 +1113,10 @@ export default function Vouchers() {
             <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
               style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.75rem", color: "var(--isp-text)", fontSize: "0.8125rem", fontFamily: "inherit" }}>
               <option value="all">All Status</option>
-              <option value="unused">Unused</option>
-              <option value="used">Used</option>
+              <option value="available">Unused</option>
+              <option value="partially_redeemed">Partially redeemed</option>
+              <option value="redeemed">Redeemed</option>
+              <option value="expired">Expired</option>
             </select>
             <button onClick={() => setShowCodes(c => !c)} title={showCodes ? "Hide codes" : "Show codes"}
               style={{ display: "flex", alignItems: "center", gap: "0.375rem", padding: "0.5rem 0.75rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit" }}>
@@ -921,6 +1199,20 @@ export default function Vouchers() {
                     : v.service_status === "inactive" || v.service_status === "expired"
                       ? "#f87171"
                       : "#94a3b8";
+                  const redemptionStatusLabel = v.redemption_status === "redeemed"
+                    ? `Redeemed ${v.redemptions_used}/${v.max_redemptions}`
+                    : v.redemption_status === "partially_redeemed"
+                      ? `Partially redeemed ${v.redemptions_used}/${v.max_redemptions}`
+                      : v.redemption_status === "expired"
+                        ? `Expired · ${v.redemptions_used}/${v.max_redemptions}`
+                        : "Unused";
+                  const redemptionStatusColor = v.redemption_status === "redeemed"
+                    ? "#fbbf24"
+                    : v.redemption_status === "expired"
+                      ? "#f87171"
+                      : v.redemption_status === "partially_redeemed"
+                        ? "#60a5fa"
+                        : "#22c55e";
                   return (
                     <tr key={v.code} className="vrow"
                       style={{ borderBottom: "1px solid var(--isp-border-subtle)", background: isSelected && !v.used ? "rgba(37,99,235,0.05)" : "transparent", cursor: v.used ? "default" : "pointer" }}
@@ -1019,8 +1311,8 @@ export default function Vouchers() {
                         )}
                       </td>
                       <td style={{ padding: "0.7rem 1rem" }}>
-                        <span style={{ fontSize: "0.7rem", padding: "0.2rem 0.625rem", borderRadius: 20, fontWeight: 700, background: v.used ? "rgba(251,191,36,0.1)" : "rgba(34,197,94,0.1)", color: v.used ? "#fbbf24" : "#22c55e" }}>
-                          {v.used ? `Redeemed ${v.redemptions_used}/${v.max_redemptions}` : "Unused"}
+                        <span style={{ fontSize: "0.7rem", padding: "0.2rem 0.625rem", borderRadius: 20, fontWeight: 700, background: `${redemptionStatusColor}1a`, color: redemptionStatusColor, whiteSpace: "nowrap" }}>
+                          {redemptionStatusLabel}
                         </span>
                       </td>
                       <td style={{ padding: "0.7rem 1rem" }} onClick={e => e.stopPropagation()}>

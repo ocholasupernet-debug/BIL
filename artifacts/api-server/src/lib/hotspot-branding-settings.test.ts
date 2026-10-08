@@ -32,6 +32,32 @@ test("forces package checkout visible when legacy branding settings hid it", () 
   );
 });
 
+test("accepts only the supported loyalty card display controls", () => {
+  assert.deepEqual(
+    sanitizeHotspotBrandingSettings({
+      loyaltyCard: {
+        position: "after-packages",
+        treatment: "glass",
+        shape: "pill",
+        size: "large",
+        script: "discard",
+      },
+    }),
+    {
+      loyaltyCard: {
+        position: "after-packages",
+        treatment: "glass",
+        shape: "pill",
+        size: "large",
+      },
+    },
+  );
+  assert.deepEqual(
+    sanitizeHotspotBrandingSettings({ loyaltyCard: { position: "javascript:alert(1)", size: 999 } }),
+    { loyaltyCard: {} },
+  );
+});
+
 test("drops malformed portal card maps without discarding other branding settings", () => {
   const sanitized = sanitizeHotspotBrandingSettings({
     tagline: "Fast internet",

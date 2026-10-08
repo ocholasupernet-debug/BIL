@@ -267,6 +267,7 @@ export function getAdminApiReauthFeature(path: string): string | null {
   }
   if (
     /^\/router\/[^/]+\/managed-reset(?:\/|$)/.test(pathname) ||
+    pathname === "/admin/hotspot-roaming/live-users" ||
     /^\/admin\/router\/(?:install-progress|install-history)(?:\/|$)/.test(pathname)
   ) {
     return "network.routers";

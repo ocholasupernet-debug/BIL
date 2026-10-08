@@ -10,6 +10,7 @@ test("hotspot voucher management is authenticated and account-scoped", async () 
   for (const [method, path] of [
     ["get", "/vouchers/hotspot/config"],
     ["get", "/vouchers/hotspot"],
+    ["post", "/vouchers/hotspot/cleanup-local-users"],
     ["post", "/vouchers/hotspot/generate"],
     ["post", "/vouchers/hotspot/delete"],
     ["delete", "/vouchers/hotspot/:code"],
@@ -24,6 +25,32 @@ test("hotspot voucher management is authenticated and account-scoped", async () 
   assert.match(route, /authenticatedAdminId\(req/);
   assert.match(route, /admin_id=eq\.\$\{adminId\}/);
   assert.match(route, /admin_id=eq\.\$\{adminId\}&\$\{inFilter\("code", ownedCodes\)\}/);
+  assert.match(route, /findManagedVoucherCopies\(localUsers, voucherCodes\)/);
+  assert.match(route, /removeHotspotUsersById\(credentials, removableUsers\.map/);
+  assert.match(route, /unmatchedVoucherCodes/);
+});
+
+test("router voucher cleanup reports matches, unreachable routers, and failed removals", async () => {
+  const [route, helper, mikrotik, page] = await Promise.all([
+    read("../src/routes/hotspot-vouchers-route.ts"),
+    read("../src/lib/hotspot-voucher-cleanup.ts"),
+    read("../src/lib/mikrotik.ts"),
+    read("../../ochola-supernet/src/pages/admin/Vouchers.tsx"),
+  ]);
+
+  assert.match(route, /router\.post\("\/vouchers\/hotspot\/cleanup-local-users", requireAdmin\(\)/);
+  assert.match(route, /findUnmatchedManagedVoucherUsers\(localUsers, voucherCodes\)/);
+  assert.match(route, /status: "offline"/);
+  assert.match(route, /failedVoucherCodes/);
+  assert.match(helper, /" voucher · "/);
+  assert.match(mikrotik, /current\.name !== target\.name/);
+  assert.match(mikrotik, /current\.comment \?\? ""\)\.includes\(target\.commentMarker\)/);
+  assert.match(mikrotik, /\/ip\/hotspot\/user\/remove.*target\.id/);
+  assert.match(mikrotik, /MikroTik still reports one or more selected Hotspot users/);
+  assert.match(page, /Clean Router Copies/);
+  assert.match(page, /Tagged voucher codes found:/);
+  assert.match(page, /Offline \/ unreachable/);
+  assert.match(page, /Tagged users without a matching voucher record \(left in place\)/);
 });
 
 test("redeemed hotspot vouchers show their use and are protected from destructive actions", async () => {
@@ -187,11 +214,18 @@ test("voucher redemption limits create separate tracked Hotspot prepaid accounts
   assert.match(migration, /'account_admin_id', activation_row\.out_account_admin_id/);
   assert.match(route, /max_redemptions: maxRedemptions/);
   assert.match(route, /redemption_accounts: accountRowsForStatus/);
+  assert.match(route, /customer_id: Number\.isSafeInteger\(customerId\)/);
+  assert.match(route, /redemption_status: redemptionStatus/);
   assert.match(customersRoute, /accountOwnerId = returnedAccountOwnerId/);
   assert.match(customersRoute, /admin_id=eq\.\$\{accountOwnerId\}/);
   assert.match(portal, /contact: voucherPhone\.trim\(\)/);
   assert.match(page, /maxRedemptions/);
   assert.match(page, /redemption_accounts\.map/);
+  assert.match(page, /Sync offline accounts/);
+  assert.match(page, /\/api\/customers\/\$\{customerId\}\/hotspot-reconnect/);
+  assert.match(page, /Partially redeemed/);
+  assert.match(page, /maxHeight: "calc\(100dvh - 2rem\)"/);
+  assert.match(page, /Voucher codes were not added to MikroTik/);
   assert.doesNotMatch(page, /RouterSyncBar|voucher-restore|\/api\/admin\/sync\/users/);
   assert.match(adminLayout, /name: "Loyalty points"[\s\S]*name: "Vouchers"/);
   assert.match(runner, /2026_hotspot_voucher_multi_redemption\.sql/);

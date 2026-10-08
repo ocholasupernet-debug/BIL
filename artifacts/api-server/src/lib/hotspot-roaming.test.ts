@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   authorizedRoamingRouterIds,
   canPlanRoamToService,
+  classifyHotspotSessionService,
   hotspotRoamingUserServer,
   isDifferentHotspotService,
+  matchingHotspotRoamingRule,
   sharedHotspotUsageAllowance,
   type HotspotRoamingRule,
 } from "./hotspot-roaming.js";
@@ -26,6 +28,26 @@ test("roaming matches explicit source and destination ports", () => {
     { routerId: 2, portId: 21 },
     rules,
   ), false);
+});
+
+test("roaming evidence returns the exact permission covering a source and destination", () => {
+  const permission = { ...rules[0], id: 82 };
+  assert.deepEqual(
+    matchingHotspotRoamingRule(
+      { type: "hotspot", router_id: 1, port_id: 10 },
+      { routerId: 2, portId: 20 },
+      [permission],
+    ),
+    permission,
+  );
+  assert.equal(
+    matchingHotspotRoamingRule(
+      { type: "hotspot", router_id: 1, port_id: 10 },
+      { routerId: 2, portId: 21 },
+      [permission],
+    ),
+    null,
+  );
 });
 
 test("router-wide destination permission matches any port on that router", () => {
@@ -52,6 +74,29 @@ test("roaming is limited to hotspot service plans and enabled grants", () => {
     { routerId: 4, portId: 40 },
     rules,
   ), false);
+});
+
+test("live Hotspot review distinguishes same service, allowed roaming, unapproved router, and unknown scope", () => {
+  assert.equal(classifyHotspotSessionService(
+    { type: "hotspot", router_id: 1, port_id: 10 },
+    { routerId: 1, portId: 10 },
+    rules,
+  ), "same-service");
+  assert.equal(classifyHotspotSessionService(
+    { type: "hotspot", router_id: 1, port_id: 10 },
+    { routerId: 2, portId: 20 },
+    rules,
+  ), "allowed-roaming");
+  assert.equal(classifyHotspotSessionService(
+    { type: "hotspot", router_id: 1, port_id: 10 },
+    { routerId: 2, portId: 21 },
+    rules,
+  ), "unapproved-router");
+  assert.equal(classifyHotspotSessionService(
+    { type: "pppoe", router_id: 1, port_id: 10 },
+    { routerId: 2, portId: 20 },
+    rules,
+  ), "unknown");
 });
 
 test("same-router port changes still require destination provisioning", () => {

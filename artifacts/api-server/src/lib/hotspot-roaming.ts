@@ -18,6 +18,12 @@ export type HotspotRoamingPlan = {
   port_id: number | null;
 };
 
+export type HotspotSessionReviewClassification =
+  | "same-service"
+  | "allowed-roaming"
+  | "unapproved-router"
+  | "unknown";
+
 function sameNullableId(left: unknown, right: unknown): boolean {
   const a = left == null ? null : Number(left);
   const b = right == null ? null : Number(right);
@@ -60,13 +66,48 @@ export function canPlanRoamToService(
     && sameNullableId(plan.port_id, target.portId)
   ) return true;
 
-  return rules.some(rule =>
+  return matchingHotspotRoamingRule(plan, target, rules) !== null;
+}
+
+/** Return the exact active permission that supports a source-to-target roam. */
+export function matchingHotspotRoamingRule(
+  plan: HotspotRoamingPlan,
+  target: HotspotRoamingServiceScope,
+  rules: readonly HotspotRoamingRule[],
+): HotspotRoamingRule | null {
+  const planType = String(plan.type ?? "").trim().toLowerCase();
+  if (!["hotspot", "trial", "trials"].includes(planType)) return null;
+  if (!Number.isSafeInteger(plan.router_id) || Number(plan.router_id) < 1) return null;
+
+  return rules.find(rule =>
     rule.enabled
     && rule.source_router_id === Number(plan.router_id)
     && (rule.source_port_id === null || sameNullableId(rule.source_port_id, plan.port_id))
     && rule.target_router_id === target.routerId
     && (rule.target_port_id === null || sameNullableId(rule.target_port_id, target.portId)),
-  );
+  ) ?? null;
+}
+
+export function classifyHotspotSessionService(
+  plan: HotspotRoamingPlan,
+  target: HotspotRoamingServiceScope,
+  rules: readonly HotspotRoamingRule[],
+): HotspotSessionReviewClassification {
+  const planType = String(plan.type ?? "").trim().toLowerCase();
+  if (
+    !["hotspot", "trial", "trials"].includes(planType)
+    || !Number.isSafeInteger(plan.router_id)
+    || Number(plan.router_id) < 1
+  ) return "unknown";
+
+  if (
+    Number(plan.router_id) === target.routerId
+    && sameNullableId(plan.port_id, target.portId)
+  ) return "same-service";
+
+  return canPlanRoamToService(plan, target, rules)
+    ? "allowed-roaming"
+    : "unapproved-router";
 }
 
 export function authorizedRoamingRouterIds(

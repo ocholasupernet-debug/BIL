@@ -95,6 +95,7 @@ test("settings API reauthentication maps M-Pesa endpoints to Billing & M-Pesa", 
 test("router and file APIs use separate page verification features", () => {
   assert.equal(getAdminApiReauthFeature("/api/routers?adminId=7"), "network.routers");
   assert.equal(getAdminApiReauthFeature("/api/router/7/managed-reset/plan"), "network.routers");
+  assert.equal(getAdminApiReauthFeature("/api/admin/hotspot-roaming/live-users"), "network.routers");
   assert.equal(getAdminApiReauthFeature("/api/admin/router/install-progress?adminId=7"), "network.routers");
   assert.equal(getAdminApiReauthFeature("/api/admin/router/install-history?adminId=7"), "network.routers");
   assert.equal(getAdminApiReauthFeature("/api/files/routers?adminId=7"), "network.files");

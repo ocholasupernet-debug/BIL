@@ -12,11 +12,14 @@ import {
 } from "@/lib/dashboard-preferences";
 import {
   DEFAULT_HOTSPOT_LOGO_URL,
+  DEFAULT_HOTSPOT_LOYALTY_CARD_SETTINGS,
   DEFAULT_HOTSPOT_PORTAL_CARDS,
   HOTSPOT_PORTAL_CARD_OPTIONS,
+  normalizeHotspotLoyaltyCardSettings,
   normalizeHotspotPortalCards,
   type HotspotPortalCardKey,
   type HotspotPortalCardVisibility,
+  type HotspotLoyaltyCardSettings,
 } from "@/lib/hotspot-portal-cards";
 import {
   HOTSPOT_PORTAL_LAYOUTS,
@@ -90,6 +93,7 @@ interface HSettings {
   testimonialText: string;
   faqText: string;
   portalCards: HotspotPortalCardVisibility;
+  loyaltyCard: HotspotLoyaltyCardSettings;
   portalLayout: HotspotPortalLayout;
   colors: ColorSettings;
 }
@@ -199,6 +203,7 @@ const DEFAULT_SETTINGS: HSettings = {
   testimonialText: "Fast, reliable Wi-Fi whenever I need it.",
   faqText: "How do I connect?\nChoose a package, complete payment, then sign in with the credentials you receive.",
   portalCards: DEFAULT_HOTSPOT_PORTAL_CARDS,
+  loyaltyCard: DEFAULT_HOTSPOT_LOYALTY_CARD_SETTINGS,
   portalLayout: "classic",
   colors: DEFAULT_COLORS,
 };
@@ -210,6 +215,7 @@ function loadSettings(storageKey: string): HSettings {
       return {
         ...DEFAULT_SETTINGS,
         portalCards: { ...DEFAULT_HOTSPOT_PORTAL_CARDS },
+        loyaltyCard: { ...DEFAULT_HOTSPOT_LOYALTY_CARD_SETTINGS },
         colors: { ...DEFAULT_COLORS },
       };
     }
@@ -218,6 +224,7 @@ function loadSettings(storageKey: string): HSettings {
       ...DEFAULT_SETTINGS,
       ...parsed,
       portalCards: normalizeHotspotPortalCards(parsed.portalCards, { ...DEFAULT_SETTINGS, ...parsed }),
+      loyaltyCard: normalizeHotspotLoyaltyCardSettings(parsed.loyaltyCard),
       portalLayout: normalizeHotspotPortalLayout(parsed.portalLayout),
       colors: { ...DEFAULT_COLORS, ...(parsed.colors ?? {}) },
     };
@@ -229,6 +236,7 @@ function loadSettings(storageKey: string): HSettings {
     return {
       ...DEFAULT_SETTINGS,
       portalCards: { ...DEFAULT_HOTSPOT_PORTAL_CARDS },
+      loyaltyCard: { ...DEFAULT_HOTSPOT_LOYALTY_CARD_SETTINGS },
       colors: { ...DEFAULT_COLORS },
     };
   }
@@ -353,6 +361,7 @@ type ExportConfig = {
   faqEnabled: boolean;
   faqText: string;
   portalCards: HotspotPortalCardVisibility;
+  loyaltyCard: HotspotLoyaltyCardSettings;
   portalLayout: HotspotPortalLayout;
   colors: ColorSettings;
   portalBackground: string;
@@ -421,6 +430,7 @@ function makeExportConfig(
     faqEnabled: portalCards.faq,
     faqText: safeText(settings.faqText, DEFAULT_SETTINGS.faqText),
     portalCards,
+    loyaltyCard: normalizeHotspotLoyaltyCardSettings(settings.loyaltyCard),
     colors: { ...DEFAULT_COLORS, ...settings.colors },
     portalBackground: safePortalBackground(appearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearance.portalPackageShape),
@@ -937,6 +947,7 @@ export default function HotspotSettings() {
             portalHostname: typeof branding.portalHostname === "string" ? branding.portalHostname : previous.portalHostname,
             colors: { ...DEFAULT_COLORS, ...(persisted.colors ?? {}) },
             portalCards: normalizeHotspotPortalCards(persisted.portalCards, { ...previous, ...persisted }),
+            loyaltyCard: normalizeHotspotLoyaltyCardSettings(persisted.loyaltyCard),
             portalLayout: normalizeHotspotPortalLayout(persisted.portalLayout ?? previous.portalLayout),
           };
           merged.logoUrl = typeof persisted.logoUrl === "string" && persisted.logoUrl.trim()
@@ -1054,6 +1065,19 @@ export default function HotspotSettings() {
         },
       };
     });
+    setNotice(null);
+  };
+  const updateLoyaltyCard = <K extends keyof HotspotLoyaltyCardSettings>(
+    key: K,
+    value: HotspotLoyaltyCardSettings[K],
+  ) => {
+    setSettings(previous => ({
+      ...previous,
+      loyaltyCard: {
+        ...normalizeHotspotLoyaltyCardSettings(previous.loyaltyCard),
+        [key]: value,
+      },
+    }));
     setNotice(null);
   };
   const updateColor = (key: keyof ColorSettings, value: string) => {
@@ -1866,6 +1890,36 @@ export default function HotspotSettings() {
                     </button>
                   );
                 })}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, marginTop: 16 }}>
+                <Field label="Loyalty card position" help="Choose where customers see their points balance.">
+                  <SelectField
+                    value={settings.loyaltyCard.position === "top" ? "At top" : settings.loyaltyCard.position === "after-packages" ? "After packages" : "At bottom"}
+                    onChange={value => updateLoyaltyCard("position", value === "At top" ? "top" : value === "After packages" ? "after-packages" : "bottom")}
+                    options={["At top", "After packages", "At bottom"]}
+                  />
+                </Field>
+                <Field label="Loyalty card treatment" help="Choose a filled, outlined, or glass effect.">
+                  <SelectField
+                    value={settings.loyaltyCard.treatment === "outlined" ? "Outlined" : settings.loyaltyCard.treatment === "glass" ? "Glass" : "Filled"}
+                    onChange={value => updateLoyaltyCard("treatment", value === "Outlined" ? "outlined" : value === "Glass" ? "glass" : "filled")}
+                    options={["Filled", "Outlined", "Glass"]}
+                  />
+                </Field>
+                <Field label="Loyalty card shape" help="Adjust the card corners.">
+                  <SelectField
+                    value={settings.loyaltyCard.shape === "square" ? "Square" : settings.loyaltyCard.shape === "pill" ? "Pill" : "Rounded"}
+                    onChange={value => updateLoyaltyCard("shape", value === "Square" ? "square" : value === "Pill" ? "pill" : "rounded")}
+                    options={["Rounded", "Square", "Pill"]}
+                  />
+                </Field>
+                <Field label="Loyalty card size" help="Adjust the card width, spacing, and text size.">
+                  <SelectField
+                    value={settings.loyaltyCard.size[0].toUpperCase() + settings.loyaltyCard.size.slice(1)}
+                    onChange={value => updateLoyaltyCard("size", value.toLowerCase() as HotspotLoyaltyCardSettings["size"])}
+                    options={["Compact", "Standard", "Large"]}
+                  />
+                </Field>
               </div>
             </Section>
 

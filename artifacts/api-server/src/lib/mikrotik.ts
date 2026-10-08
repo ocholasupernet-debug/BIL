@@ -3338,6 +3338,52 @@ export async function removeHotspotUser(creds: RouterCredentials, name: string):
   });
 }
 
+export async function removeHotspotUsersById(
+  creds: RouterCredentials,
+  targets: Array<{ id: string; name: string; commentMarker: string }>,
+): Promise<void> {
+  const uniqueTargets = [...new Map(
+    targets
+      .filter(target => target.id.trim() && target.name.trim() && target.commentMarker)
+      .map(target => [target.id, target] as const),
+  ).values()];
+  if (uniqueTargets.length === 0) return;
+
+  return withConn(creds, async conn => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const currentRows = (await withTimeout(
+      conn.write(["/ip/hotspot/user/print"]),
+      ms,
+    )) as Record<string, string>[];
+    if (!Array.isArray(currentRows)) {
+      throw new Error("MikroTik did not return Hotspot users for the removal check.");
+    }
+    for (const target of uniqueTargets) {
+      const current = currentRows.find(row => row[".id"] === target.id);
+      if (
+        !current
+        || current.name !== target.name
+        || !String(current.comment ?? "").includes(target.commentMarker)
+      ) {
+        throw new Error("A selected Hotspot user changed after inventory; no selected users were removed.");
+      }
+    }
+    for (const target of uniqueTargets) {
+      await withTimeout(conn.write(["/ip/hotspot/user/remove", `=.id=${target.id}`]), ms);
+    }
+    const remaining = (await withTimeout(
+      conn.write(["/ip/hotspot/user/print"]),
+      ms,
+    )) as Record<string, string>[];
+    const remainingIds = new Set(
+      (Array.isArray(remaining) ? remaining : []).map(row => row[".id"]).filter(Boolean),
+    );
+    if (uniqueTargets.some(target => remainingIds.has(target.id))) {
+      throw new Error("MikroTik still reports one or more selected Hotspot users.");
+    }
+  });
+}
+
 export async function updateHotspotUser(
   creds: RouterCredentials,
   name: string,

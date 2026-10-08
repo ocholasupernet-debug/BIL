@@ -16,9 +16,12 @@ import {
   type SavedHotspotDevice,
 } from "@/lib/saved-hotspot-devices";
 import {
+  DEFAULT_HOTSPOT_LOYALTY_CARD_SETTINGS,
   DEFAULT_HOTSPOT_PORTAL_CARDS,
   isDefaultPlatformPortalName,
+  normalizeHotspotLoyaltyCardSettings,
   normalizeHotspotPortalCards,
+  type HotspotLoyaltyCardSettings,
   type HotspotPortalCardVisibility,
 } from "@/lib/hotspot-portal-cards";
 import {
@@ -59,6 +62,7 @@ interface HotspotRuntimeConfig {
   portalContextToken: string;
   previewOnly: boolean;
   portalLayout: HotspotPortalLayout;
+  loyaltyCard: HotspotLoyaltyCardSettings;
   plans: Plan[];
 }
 interface HotspotCredentials {
@@ -205,6 +209,7 @@ function readHotspotRuntimeConfig(): HotspotRuntimeConfig {
     portalContextToken: typeof raw?.portalContextToken === "string" ? raw.portalContextToken.trim() : "",
     previewOnly: raw?.previewOnly === true,
     portalLayout: normalizeHotspotPortalLayout(raw?.portalLayout),
+    loyaltyCard: normalizeHotspotLoyaltyCardSettings(raw?.loyaltyCard),
     plans: Array.isArray(raw?.plans)
       ? raw.plans.map(normalizeRuntimePlan).filter((plan): plan is Plan => Boolean(plan))
       : [],
@@ -258,6 +263,7 @@ type PortalBranding = {
   supportEmail?: string;
   portalHostname?: string;
   portalCards?: HotspotPortalCardVisibility;
+  loyaltyCard?: HotspotLoyaltyCardSettings;
   portalLayout?: HotspotPortalLayout;
 };
 
@@ -396,6 +402,7 @@ function HotspotLoginView({
   const brand = useBrand();
   const [portalBranding, setPortalBranding] = useState<PortalBranding>({
     portalLayout: HOTSPOT_RUNTIME_CONFIG.portalLayout,
+    loyaltyCard: HOTSPOT_RUNTIME_CONFIG.loyaltyCard ?? DEFAULT_HOTSPOT_LOYALTY_CARD_SETTINGS,
   });
   useEffect(() => {
     if (!HOTSPOT_RUNTIME_CONFIG.adminId) return;
@@ -416,6 +423,7 @@ function HotspotLoginView({
           supportEmail: typeof row.supportEmail === "string" ? row.supportEmail : undefined,
           portalHostname: typeof payload?.branding?.portalHostname === "string" ? payload.branding.portalHostname : undefined,
           portalCards: normalizeHotspotPortalCards(row.portalCards, row),
+          loyaltyCard: normalizeHotspotLoyaltyCardSettings(row.loyaltyCard ?? HOTSPOT_RUNTIME_CONFIG.loyaltyCard),
           portalLayout: typeof row.portalLayout === "string"
             ? normalizeHotspotPortalLayout(row.portalLayout)
             : HOTSPOT_RUNTIME_CONFIG.portalLayout,
@@ -1741,6 +1749,69 @@ function HotspotLoginView({
     : loginSession?.status === "active" || loginSession?.status === "expired" || loginSession?.status === "depleted"
       ? "warning"
       : "help";
+  const loyaltyCardSettings = normalizeHotspotLoyaltyCardSettings(portalBranding.loyaltyCard);
+  const loyaltyCardSize = {
+    compact: { maxWidth: 560, padding: 12, title: 16, body: 11 },
+    standard: { maxWidth: 840, padding: 16, title: 18, body: 12 },
+    large: { maxWidth: 1040, padding: 22, title: 22, body: 13 },
+  }[loyaltyCardSettings.size];
+  const loyaltyCardTreatment = {
+    filled: { background: "#16453d", border: "1px solid #85baa2" },
+    outlined: { background: "rgba(8,20,18,0.22)", border: "1px solid #85baa2" },
+    glass: { background: "rgba(22,69,61,0.34)", border: "1px solid rgba(133,186,162,0.5)", backdropFilter: "blur(12px)" },
+  }[loyaltyCardSettings.treatment];
+  const loyaltyBalanceCard = portalCards.loyalty && !troubleshootingOnly ? (
+    <section
+      aria-labelledby="hp-loyalty-balance-title"
+      aria-live="polite"
+      style={{
+        width: "100%",
+        maxWidth: loyaltyCardSize.maxWidth,
+        margin: "8px auto 18px",
+        padding: loyaltyCardSize.padding,
+        borderRadius: loyaltyCardSettings.shape === "pill" ? 28 : loyaltyCardSettings.shape === "square" ? 4 : 12,
+        ...loyaltyCardTreatment,
+        color: "#f4faf7",
+      }}
+    >
+      <div style={{ color: "#c3f0d8", fontSize: loyaltyCardSize.body, fontWeight: 800, letterSpacing: ".07em", textTransform: "uppercase" }}>
+        Your loyalty points
+      </div>
+      <h2 id="hp-loyalty-balance-title" style={{ margin: "6px 0", color: "#fff", fontSize: loyaltyCardSize.title }}>
+        {loyaltyQuote
+          ? `${formatLoyaltyPoints(loyaltyQuote.balance)} points`
+          : "Check your Hotspot rewards"}
+      </h2>
+      {loyaltyQuoteLoading ? (
+        <p role="status" style={{ margin: "6px 0 0", fontSize: loyaltyCardSize.body }}>Checking your points balance…</p>
+      ) : loyaltyQuote ? (
+        <>
+          <p style={{ margin: "6px 0 0", fontSize: loyaltyCardSize.body, lineHeight: 1.5 }}>
+            {loyaltyPaidWithPoints || loyaltyPayment === "points"
+              ? "Your balance is updated. Paying with loyalty points does not earn additional points."
+              : loyaltyQuote.pointsAwarded > 0 && selectedPlan
+                ? `This KSh ${selectedPlan.price} purchase earns ${formatLoyaltyPoints(loyaltyQuote.pointsAwarded)} points after M-Pesa confirms payment and the account is saved.`
+                : selectedPlan
+                  ? "This package does not currently award loyalty points."
+                  : "Your earned points are ready to use on an eligible package."}
+          </p>
+          {loyaltyQuote.balance % 1 !== 0 && (
+            <p style={{ margin: "5px 0 0", fontSize: Math.max(10, loyaltyCardSize.body - 1), lineHeight: 1.45, color: "#dbece4" }}>
+              Partial points stay in your balance; a package uses its configured whole-point redemption cost.
+            </p>
+          )}
+        </>
+      ) : loyaltyQuoteError ? (
+        <p role="status" style={{ margin: "6px 0 0", fontSize: loyaltyCardSize.body, lineHeight: 1.5 }}>
+          {loyaltyQuoteError} Choose a Hotspot package and enter the phone number linked to your account to check your points.
+        </p>
+      ) : (
+        <p style={{ margin: "6px 0 0", fontSize: loyaltyCardSize.body, lineHeight: 1.5 }}>
+          Choose a Hotspot package and enter the phone number linked to your account to see your balance and the points it can earn.
+        </p>
+      )}
+    </section>
+  ) : null;
 
   return (
     <>
@@ -2727,6 +2798,8 @@ function HotspotLoginView({
           </div>
           )}
 
+          {loyaltyCardSettings.position === "top" && loyaltyBalanceCard}
+
           {/* ── BUY DATA ── */}
            {portalCards.packages && (activeTab === "plans" || activeTab === "tv") && (
             <div className="hp-section">
@@ -3148,6 +3221,8 @@ function HotspotLoginView({
             </div>
           )}
 
+          {loyaltyCardSettings.position === "after-packages" && loyaltyBalanceCard}
+
           {/* ── VOUCHER ── */}
           {portalCards.voucher && activeTab === "voucher" && (
             <div className="hp-section">
@@ -3229,14 +3304,20 @@ function HotspotLoginView({
 
                       <div className="hp-input-group">
                         <input className="hp-input" type="tel"
-                          placeholder="Phone number (07… or 2547…)" required
+                          placeholder="Phone number (07… or 2547…)" required inputMode="tel" autoComplete="tel"
+                          aria-label="Phone number for voucher account"
                           value={voucherPhone} onChange={e => setVoucherPhone(e.target.value)} />
                       </div>
                       <div className="hp-input-group">
                         <input className="hp-input hp-voucher-input" type="text"
                           placeholder="Voucher code (e.g. HYT46)" required minLength={3} maxLength={32}
+                          pattern="[A-Za-z0-9-]{3,32}" title="Enter the voucher code without spaces."
+                          autoComplete="off" autoCapitalize="characters" aria-label="Voucher code"
                           value={voucherCode} onChange={e => setVoucherCode(e.target.value.replace(/[^a-zA-Z0-9-]/g, "").toUpperCase())} />
                       </div>
+                      <p style={{ margin: "-4px 0 12px", color: "rgba(255,255,255,0.48)", fontSize: 11, lineHeight: 1.45 }}>
+                        Each permitted redemption creates its own prepaid login. A used or expired voucher cannot be reused.
+                      </p>
 
                       <button type="submit" disabled={voucherLoading} className="hp-btn hp-btn-voucher">
                         {voucherLoading ? (
@@ -3649,57 +3730,7 @@ function HotspotLoginView({
               </span>
             </div>
           )}
-          {portalCards.packages && activeTab === "plans" && !troubleshootingOnly && (
-            <section
-              aria-labelledby="hp-loyalty-balance-title"
-              aria-live="polite"
-              style={{
-                margin: "8px 0 18px",
-                padding: "16px",
-                borderRadius: 12,
-                background: "#16453d",
-                border: "1px solid #85baa2",
-                color: "#f4faf7",
-              }}
-            >
-              <div style={{ color: "#c3f0d8", fontSize: 12, fontWeight: 800, letterSpacing: ".07em", textTransform: "uppercase" }}>
-                Your loyalty points
-              </div>
-              <h2 id="hp-loyalty-balance-title" style={{ margin: "6px 0", color: "#fff", fontSize: 18 }}>
-                {loyaltyQuote
-                  ? `${formatLoyaltyPoints(loyaltyQuote.balance)} points`
-                  : "Check your Hotspot rewards"}
-              </h2>
-              {loyaltyQuoteLoading ? (
-                <p role="status" style={{ margin: "6px 0 0", fontSize: 12 }}>Checking your points balance…</p>
-              ) : loyaltyQuote ? (
-                <>
-                  <p style={{ margin: "6px 0 0", fontSize: 12, lineHeight: 1.5 }}>
-                    {loyaltyPaidWithPoints || loyaltyPayment === "points"
-                      ? "Your balance is updated. Paying with loyalty points does not earn additional points."
-                      : loyaltyQuote.pointsAwarded > 0 && selectedPlan
-                        ? `This KSh ${selectedPlan.price} purchase earns ${formatLoyaltyPoints(loyaltyQuote.pointsAwarded)} points after M-Pesa confirms payment and the account is saved.`
-                        : selectedPlan
-                          ? "This package does not currently award loyalty points."
-                          : "Your earned points are ready to use on an eligible package."}
-                  </p>
-                  {loyaltyQuote.balance % 1 !== 0 && (
-                    <p style={{ margin: "5px 0 0", fontSize: 11, lineHeight: 1.45, color: "#dbece4" }}>
-                      Partial points stay in your balance; a package uses its configured whole-point redemption cost.
-                    </p>
-                  )}
-                </>
-              ) : loyaltyQuoteError ? (
-                <p role="status" style={{ margin: "6px 0 0", fontSize: 12, lineHeight: 1.5 }}>
-                  {loyaltyQuoteError} Choose a Hotspot package and enter the phone number linked to your account to check your points.
-                </p>
-              ) : (
-                <p style={{ margin: "6px 0 0", fontSize: 12, lineHeight: 1.5 }}>
-                  Choose a Hotspot package and enter the phone number linked to your account to see your balance and the points it can earn.
-                </p>
-              )}
-            </section>
-          )}
+          {loyaltyCardSettings.position === "bottom" && loyaltyBalanceCard}
           {portalCards.footer && (
             <div className="hp-footer">
               {new Date().getFullYear()} {portalDisplayName}
