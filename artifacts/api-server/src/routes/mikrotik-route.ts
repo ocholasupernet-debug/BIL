@@ -85,6 +85,17 @@ import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authoriz
 import { validateRouterTakeoverMainhotspot } from "../lib/router-takeover-template.js";
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
 import { planHotspotChatWalledGardenAdds } from "../lib/hotspot-chat-walled-garden.js";
+import { portServiceResourceNames, type PortServiceResourceInput } from "../lib/port-service-resources.js";
+import { SHARED_HOTSPOT_SERVER_NAME } from "../lib/shared-hotspot-resources.js";
+import {
+  classifyHotspotSessionService,
+  matchingHotspotRoamingRule,
+  type HotspotRoamingRule,
+} from "../lib/hotspot-roaming.js";
+import {
+  matchingActiveCustomerRecordsForRouterSession,
+  type CustomerEntitlementRecord,
+} from "../lib/router-live-session-entitlement.js";
 
 const router: IRouter = Router();
 
@@ -3086,6 +3097,412 @@ router.get("/router/:id/live", requireAdmin(), async (req, res): Promise<void> =
     res.json({ routerId: id, ...data, onlineVlanUsers });
   } catch (err) {
     routerErrorResponse(res, err);
+  }
+});
+
+router.get("/admin/hotspot-roaming/live-users", requireAdmin(), async (req, res): Promise<void> => {
+  const account = await authenticatedAccount(req);
+  const tenantId = await authenticatedTenantAdminId(req);
+  if (!account || !tenantId || account.role === "reseller") {
+    res.status(403).json({ ok: false, error: "An ISP administrator account is required." });
+    return;
+  }
+
+  try {
+    type LiveRouter = { id: number; name: string; status: string | null };
+    type LivePort = {
+      id: number;
+      router_id: number;
+      interface_name: string;
+      bridge_name?: string | null;
+      handoff_mode?: "services" | "isp_router" | "vlan_services" | null;
+      reseller_id?: number | null;
+      assigned_reseller_id?: number | null;
+      vlan_tag?: string | null;
+    };
+    type LiveCustomer = CustomerEntitlementRecord & {
+      id: number;
+    };
+    type PaidTransaction = {
+      id: number;
+      customer_id: number | null;
+      plan_id: number | null;
+      created_at: string;
+    };
+    type LivePlan = {
+      id: number;
+      name: string;
+      type: string | null;
+      router_id: number | null;
+      port_id: number | null;
+    };
+
+    const [routerRows, portRows, adminRows, roamingRules] = await Promise.all([
+      sbSelectStrict<LiveRouter>(
+        "isp_routers",
+        `admin_id=eq.${tenantId}&status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,name,status&order=name.asc&limit=1000`,
+      ),
+      sbSelectStrict<LivePort>(
+        "isp_reseller_ports",
+        `admin_id=eq.${tenantId}&status=eq.active&hotspot_enabled=is.true&assigned_reseller_id=is.null&select=id,router_id,interface_name,bridge_name,handoff_mode,reseller_id,assigned_reseller_id,vlan_tag&order=interface_name.asc&limit=1000`,
+      ),
+      sbSelectStrict<{ name: string | null; company_name: string | null }>(
+        "isp_admins",
+        `id=eq.${tenantId}&select=name,company_name&limit=1`,
+      ),
+      sbSelectStrict<HotspotRoamingRule>(
+        "isp_hotspot_roaming_rules",
+        `admin_id=eq.${tenantId}&enabled=is.true&select=id,source_router_id,source_port_id,target_router_id,target_port_id,enabled&order=created_at.desc&limit=1000`,
+      ),
+    ]);
+    if (
+      routerRows.length >= 1000
+      || portRows.length >= 1000
+      || roamingRules.length >= 1000
+    ) {
+      res.status(503).json({
+        ok: false,
+        error: "The router, service, or roaming-permission list is too large to verify completely.",
+      });
+      return;
+    }
+
+    const routerById = new Map(routerRows.map(row => [Number(row.id), row]));
+    const companyName = adminRows[0]?.company_name ?? adminRows[0]?.name ?? null;
+    const portsWithServer = portRows.map(port => ({
+      ...port,
+      hotspotServer: portServiceResourceNames(port, {
+        companyName,
+        routerName: routerById.get(Number(port.router_id))?.name ?? null,
+      }).hotspotServer,
+    }));
+    const routerResults: Array<{
+      router: LiveRouter;
+      sessions: Awaited<ReturnType<typeof fetchHotspotUsers>> | null;
+    }> = [];
+
+    for (let index = 0; index < routerRows.length; index += 4) {
+      const batch = routerRows.slice(index, index + 4);
+      const results = await Promise.all(batch.map(async liveRouter => {
+        try {
+          const found = await getRouterCreds(Number(liveRouter.id), tenantId);
+          if (!found) return { router: liveRouter, sessions: null };
+          return { router: liveRouter, sessions: await fetchHotspotUsers(found.creds) };
+        } catch (error) {
+          logger.warn(
+            { routerId: liveRouter.id, error: error instanceof Error ? error.message : String(error) },
+            "hotspot roaming live-session read failed",
+          );
+          return { router: liveRouter, sessions: null };
+        }
+      }));
+      routerResults.push(...results);
+    }
+
+    const unavailableRouters = routerResults
+      .filter(result => result.sessions === null)
+      .map(result => ({ id: Number(result.router.id), name: result.router.name }));
+    const liveSessions = routerResults.flatMap(result =>
+      (result.sessions ?? []).map(session => ({
+        router: result.router,
+        session,
+      })),
+    );
+    const checkedAt = new Date().toISOString();
+
+    if (!liveSessions.length) {
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ ok: true, sessions: [], unavailableRouters, checkedAt });
+      return;
+    }
+
+    const distinctSessions = new Map<string, (typeof liveSessions)[number]>();
+    for (const entry of liveSessions) {
+      const key = JSON.stringify([
+        String(entry.session.user ?? "").trim().toLowerCase(),
+        String(entry.session.macAddress ?? "").trim().toLowerCase(),
+      ]);
+      distinctSessions.set(key, entry);
+    }
+    const identityEntries = [...distinctSessions.values()];
+    const accountQueries: string[] = [];
+    for (let index = 0; index < identityEntries.length; index += 10) {
+      const batch = identityEntries.slice(index, index + 10);
+      const usernameValues = new Set<string>();
+      const macValues = new Set<string>();
+      for (const entry of batch) {
+        const username = String(entry.session.user ?? "").trim();
+        const macAddress = String(entry.session.macAddress ?? "").trim();
+        for (const value of [username, username.toLowerCase(), username.toUpperCase()]) {
+          if (value) usernameValues.add(value);
+        }
+        for (const value of [macAddress, macAddress.toLowerCase(), macAddress.toUpperCase()]) {
+          if (value) macValues.add(value);
+        }
+      }
+      const filters = [
+        ...[...usernameValues].map(value => `username.eq.${encodeURIComponent(value)}`),
+        ...[...macValues].map(value => `mac_address.eq.${encodeURIComponent(value)}`),
+      ];
+      if (!filters.length) continue;
+      accountQueries.push(
+        `admin_id=eq.${tenantId}&type=in.(hotspot,voucher,trial,trials)&or=(${filters.join(",")})&select=id,username,mac_address,type,status,expires_at,depletion_reason,plan_id,router_id,port_id&limit=1000`,
+      );
+    }
+
+    const matchedCustomers: LiveCustomer[] = [];
+    for (let index = 0; index < accountQueries.length; index += 4) {
+      const batch = accountQueries.slice(index, index + 4);
+      const results = await Promise.all(batch.map(query =>
+        sbSelectStrict<LiveCustomer>("isp_customers", query),
+      ));
+      if (results.some(rows => rows.length >= 1000)) {
+        res.status(503).json({
+          ok: false,
+          error: "Too many matching prepaid accounts were returned to verify roaming completely.",
+        });
+        return;
+      }
+      matchedCustomers.push(...results.flat());
+    }
+    const customersById = new Map(matchedCustomers.map(customer => [Number(customer.id), customer]));
+    const uniqueCustomers = [...customersById.values()];
+    const activeCustomerIds = new Set<number>();
+    for (const { session } of liveSessions) {
+      for (const customer of matchingActiveCustomerRecordsForRouterSession(
+        "hotspot",
+        session.user,
+        session.macAddress,
+        uniqueCustomers,
+      )) {
+        if (Number.isSafeInteger(Number(customer.id))) activeCustomerIds.add(Number(customer.id));
+      }
+    }
+    const activeCustomers = uniqueCustomers.filter(customer => activeCustomerIds.has(Number(customer.id)));
+
+    const customerIdBatches: number[][] = [];
+    const activeCustomerIdList = [...activeCustomerIds];
+    for (let index = 0; index < activeCustomerIdList.length; index += 40) {
+      customerIdBatches.push(activeCustomerIdList.slice(index, index + 40));
+    }
+    const transactionRows: PaidTransaction[] = [];
+    for (let index = 0; index < customerIdBatches.length; index += 4) {
+      const results = await Promise.all(customerIdBatches.slice(index, index + 4).map(customerIds =>
+        sbSelectStrict<PaidTransaction>(
+          "isp_transactions",
+          `admin_id=eq.${tenantId}&customer_id=in.(${customerIds.join(",")})&status=in.(completed,paid,success)&payment_method=not.in.(mpesa_registration,manual_registration,mpesa_platform_billing)&select=id,customer_id,plan_id,created_at&order=created_at.desc,id.desc&limit=1000`,
+        ),
+      ));
+      if (results.some(rows => rows.length >= 1000)) {
+        res.status(503).json({
+          ok: false,
+          error: "Purchase history is too large to verify the assigned router completely.",
+        });
+        return;
+      }
+      transactionRows.push(...results.flat());
+    }
+    const latestTransactionByCustomerId = new Map<number, PaidTransaction>();
+    for (const transaction of transactionRows) {
+      if (transaction.customer_id == null) continue;
+      const current = latestTransactionByCustomerId.get(Number(transaction.customer_id));
+      if (!current || Date.parse(transaction.created_at) > Date.parse(current.created_at)) {
+        latestTransactionByCustomerId.set(Number(transaction.customer_id), transaction);
+      }
+    }
+
+    const planIds = [...new Set(activeCustomers.flatMap(customer => {
+      const paidPlanId = latestTransactionByCustomerId.get(Number(customer.id))?.plan_id;
+      const planId = paidPlanId ?? customer.plan_id;
+      const id = Number(planId);
+      return Number.isSafeInteger(id) && id > 0 ? [id] : [];
+    }))];
+    const planRows: LivePlan[] = [];
+    for (let index = 0; index < planIds.length; index += 100) {
+      const rows = await sbSelectStrict<LivePlan>(
+        "isp_plans",
+        `admin_id=eq.${tenantId}&id=in.(${planIds.slice(index, index + 100).join(",")})&select=id,name,type,router_id,port_id&limit=1000`,
+      );
+      if (rows.length >= 1000) {
+        res.status(503).json({
+          ok: false,
+          error: "The assigned Hotspot plans could not be verified completely.",
+        });
+        return;
+      }
+      planRows.push(...rows);
+    }
+    const plansById = new Map(planRows.map(plan => [Number(plan.id), plan]));
+    const portsById = new Map(portsWithServer.map(port => [Number(port.id), port]));
+    const roamingSessions: Array<Record<string, unknown>> = [];
+
+    for (const { router: connectedRouter, session } of liveSessions) {
+      const matchingAccounts = matchingActiveCustomerRecordsForRouterSession(
+        "hotspot",
+        session.user,
+        session.macAddress,
+        activeCustomers,
+      ).map(customer => customersById.get(Number(customer.id)))
+        .filter((customer): customer is LiveCustomer => Boolean(customer));
+      if (!matchingAccounts.length) continue;
+
+      const serverName = String(session.server ?? "").trim();
+      let connectedPortId: number | null | undefined;
+      let connectedPortName: string | null = null;
+      if (serverName.toLowerCase() === "hotspot") {
+        connectedPortId = null;
+      } else if (serverName) {
+        const matches = portsWithServer.filter(port =>
+          Number(port.router_id) === Number(connectedRouter.id)
+          && port.hotspotServer.toLowerCase() === serverName.toLowerCase(),
+        );
+        if (matches.length === 1) {
+          connectedPortId = Number(matches[0].id);
+          connectedPortName = matches[0].interface_name;
+        }
+      }
+
+      const assignments = matchingAccounts.map(customer => {
+        const transaction = latestTransactionByCustomerId.get(Number(customer.id));
+        const linkedTransaction = transaction?.plan_id != null ? transaction : null;
+        const planId = linkedTransaction?.plan_id ?? customer.plan_id ?? null;
+        const plan = planId == null ? undefined : plansById.get(Number(planId));
+        const planReferenceMissing = planId != null && !plan;
+        const sourceRouterId = plan
+          ? plan.router_id
+          : planReferenceMissing
+            ? null
+            : customer.router_id ?? null;
+        const sourcePortId = plan
+          ? plan.port_id
+          : planReferenceMissing
+            ? null
+            : customer.port_id ?? null;
+        const planTypeRaw = String(plan?.type ?? (planReferenceMissing ? "" : customer.type) ?? "").trim().toLowerCase();
+        const planType = planTypeRaw === "voucher" ? "hotspot" : planTypeRaw;
+        const validPlanType = ["hotspot", "trial", "trials"].includes(planType);
+        const numericSourceRouterId = Number(sourceRouterId);
+        const sourceRouterKnown = Number.isSafeInteger(numericSourceRouterId)
+          && numericSourceRouterId > 0
+          && routerById.has(numericSourceRouterId);
+        const sourcePort = sourcePortId == null ? null : portsById.get(Number(sourcePortId));
+        return {
+          customerId: Number(customer.id),
+          routerId: Number.isSafeInteger(numericSourceRouterId) && numericSourceRouterId > 0
+            ? numericSourceRouterId
+            : null,
+          routerName: sourceRouterKnown
+            ? routerById.get(numericSourceRouterId)!.name
+            : Number.isSafeInteger(numericSourceRouterId) && numericSourceRouterId > 0
+              ? `MikroTik #${numericSourceRouterId}`
+              : null,
+          portId: sourcePortId == null ? null : Number(sourcePortId),
+          portName: sourcePort ? sourcePort.interface_name : null,
+          planName: plan?.name ?? null,
+          transactionId: linkedTransaction?.id ?? null,
+          purchasedAt: linkedTransaction?.created_at ?? null,
+          evidenceSource: linkedTransaction ? "paid-transaction" : "prepaid-account",
+          planType,
+          sourceRouterKnown,
+          sourcePortKnown: sourcePortId == null || Boolean(sourcePort),
+          validPlanType,
+          planReferenceMissing,
+        };
+      });
+
+      // A user with any active entitlement on the connected router is not
+      // roaming away from an assigned router for this connection.
+      if (assignments.some(assignment => assignment.routerId === Number(connectedRouter.id))) continue;
+
+      const crossRouterAssignments = assignments.filter(assignment =>
+        assignment.routerId !== null && assignment.routerId !== Number(connectedRouter.id),
+      );
+      const missingAssignmentEvidence = assignments.some(assignment =>
+        assignment.routerId === null
+        || !assignment.sourceRouterKnown
+        || !assignment.sourcePortKnown
+        || !assignment.validPlanType
+        || assignment.planReferenceMissing,
+      );
+      if (!crossRouterAssignments.length && !missingAssignmentEvidence) continue;
+
+      const matchingPermissions = connectedPortId === undefined
+        ? []
+        : crossRouterAssignments.flatMap(assignment => {
+            if (
+              !assignment.validPlanType
+              || !assignment.sourceRouterKnown
+              || !assignment.sourcePortKnown
+              || assignment.planReferenceMissing
+              || assignment.routerId === null
+            ) return [];
+            const plan = {
+              type: assignment.planType,
+              router_id: assignment.routerId,
+              port_id: assignment.portId,
+            };
+            const permission = matchingHotspotRoamingRule(
+              plan,
+              { routerId: Number(connectedRouter.id), portId: connectedPortId },
+              roamingRules,
+            );
+            return permission ? [{ assignment, permission }] : [];
+          });
+      const status = matchingPermissions.length
+        ? "authorized"
+        : missingAssignmentEvidence || connectedPortId === undefined || crossRouterAssignments.some(assignment => !assignment.sourceRouterKnown || !assignment.validPlanType)
+          ? "needs_review"
+          : "unapproved";
+      const permission = matchingPermissions[0]?.permission;
+      const uniqueAssignments = [...new Map(assignments.map(assignment => [
+        `${assignment.routerId ?? "unknown"}:${assignment.portId ?? "all"}:${assignment.planName ?? ""}:${assignment.transactionId ?? ""}`,
+        assignment,
+      ])).values()];
+      const sessionKey = String(session.id || `${session.user}:${session.macAddress}:${session.server}`);
+
+      roamingSessions.push({
+        key: `${connectedRouter.id}:${sessionKey}`,
+        username: String(session.user ?? "").trim() || "Unknown user",
+        macAddress: session.macAddress || null,
+        address: session.address || null,
+        uptime: session.uptime || null,
+        bytesUsed: Math.max(0, Number(session.bytesIn) || 0) + Math.max(0, Number(session.bytesOut) || 0),
+        connectedRouterId: Number(connectedRouter.id),
+        connectedRouterName: connectedRouter.name,
+        connectedServerName: serverName || null,
+        connectedPortId: connectedPortId ?? null,
+        connectedPortName,
+        assignedSources: uniqueAssignments.map(assignment => ({
+          routerId: assignment.routerId,
+          routerName: assignment.routerName,
+          portId: assignment.portId,
+          portName: assignment.portName,
+          planName: assignment.planName,
+          transactionId: assignment.transactionId,
+          purchasedAt: assignment.purchasedAt,
+          evidenceSource: assignment.evidenceSource,
+        })),
+        status,
+        permissionId: permission?.id ?? null,
+      });
+    }
+
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      ok: true,
+      sessions: roamingSessions,
+      unavailableRouters,
+      checkedAt,
+    });
+  } catch (error) {
+    logger.warn(
+      { error: error instanceof Error ? error.message : String(error), tenantId },
+      "hotspot roaming live-user review failed",
+    );
+    res.status(503).json({
+      ok: false,
+      error: "Live Hotspot roaming evidence could not be verified. Please retry.",
+    });
   }
 });
 
