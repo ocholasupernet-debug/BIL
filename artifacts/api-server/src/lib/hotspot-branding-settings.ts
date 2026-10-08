@@ -3,18 +3,24 @@ const SAFE_SETTINGS = new Set([
   "mpesaPrompt", "testimonials", "faqSection", "logoUrl", "advertUrl", "announcement",
   "paymentInstructions", "supportPhone", "supportEmail", "whatsappNumber", "termsUrl",
   "privacyUrl", "maintenanceMode", "maintenanceMessage", "testimonialText", "faqText", "colors",
-  "portalCards", "portalLayout", "tawkEnabled",
+  "portalCards", "loyaltyCard", "portalLayout", "tawkEnabled",
 ]);
 
 const SAFE_PORTAL_CARD_KEYS = new Set([
   "header", "hero", "announcement", "expiryNotice", "packages", "paymentStatus",
   "connectionSupport", "accountLogin", "voucher", "paymentRecovery", "testimonials",
-  "faq", "advert", "deviceIdentity", "footer", "whatsapp",
+  "loyalty", "faq", "advert", "deviceIdentity", "footer", "whatsapp",
 ]);
 
 const SAFE_PORTAL_LAYOUTS = new Set([
   "classic", "split-horizon", "coastal-light", "signal-grid", "warm-studio", "forest-pulse",
 ]);
+const SAFE_LOYALTY_CARD_SETTINGS = {
+  position: new Set(["top", "after-packages", "bottom"]),
+  treatment: new Set(["filled", "outlined", "glass"]),
+  shape: new Set(["rounded", "square", "pill"]),
+  size: new Set(["compact", "standard", "large"]),
+} as const;
 
 export function sanitizeHotspotBrandingSettings(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -41,6 +47,16 @@ export function sanitizeHotspotBrandingSettings(value: unknown): Record<string, 
       // customer checkout visible without requiring a MikroTik file update.
       cards.packages = true;
       output.portalCards = cards;
+    } else if (key === "loyaltyCard") {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const loyaltyCard: Record<string, string> = {};
+      for (const [setting, allowed] of Object.entries(SAFE_LOYALTY_CARD_SETTINGS)) {
+        const candidate = (item as Record<string, unknown>)[setting];
+        if (typeof candidate === "string" && allowed.has(candidate as never)) {
+          loyaltyCard[setting] = candidate;
+        }
+      }
+      output.loyaltyCard = loyaltyCard;
     } else if (key === "tawkEnabled") {
       if (typeof item === "boolean") output.tawkEnabled = item;
     } else if (key === "portalLayout") {

@@ -12,8 +12,15 @@ import { logger } from "../lib/logger.js";
 import {
   fetchHotspotUserList,
   removeHotspotUser,
+  removeHotspotUsersById,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
+import {
+  findManagedVoucherCopies,
+  findUnmatchedManagedVoucherUsers,
+  isManagedLegacyVoucherComment,
+  MANAGED_LEGACY_VOUCHER_COMMENT_MARKER,
+} from "../lib/hotspot-voucher-cleanup.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import {
@@ -457,6 +464,7 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
           now,
         });
         return {
+          customer_id: Number.isSafeInteger(customerId) && customerId > 0 ? customerId : null,
           username,
           phone: redemption.redeemed_by_phone,
           redeemed_at: redemption.redeemed_at,
@@ -490,6 +498,7 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
         ? accounts
         : usedCount > 0
           ? [{
+            customer_id: Number(voucher.prepaid_customer_id) > 0 ? Number(voucher.prepaid_customer_id) : null,
             username: legacyUsername,
             phone: voucher.redeemed_by_phone,
             redeemed_at: voucher.redeemed_at ?? "",
@@ -505,15 +514,21 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
         && (!account.service_expires_at || Date.parse(account.service_expires_at) > now),
       );
       const redeemByHasPassed = voucher.expires_at != null && Date.parse(voucher.expires_at) <= now;
+      const redemptionStatus: "available" | "partially_redeemed" | "redeemed" | "expired" =
+        usedCount >= maxRedemptions
+          ? "redeemed"
+          : redeemByHasPassed
+            ? "expired"
+            : usedCount > 0
+              ? "partially_redeemed"
+              : "available";
       const serviceStatus: "available" | "expired" | "active" | "inactive" | "unknown" = online
         ? "active"
         : anyAccountStillEntitled
           ? "inactive"
-          : usedCount < maxRedemptions && !redeemByHasPassed
+          : redemptionStatus === "available" || redemptionStatus === "partially_redeemed"
             ? "available"
-            : usedCount > 0 || redeemByHasPassed
-              ? "expired"
-              : "available";
+            : "expired";
       const dataUsedBytes = accounts.reduce((total, account) => total + account.data_used_bytes, 0)
         || (accounts.length === 0 ? legacySummary.dataUsedBytes : 0);
       const firstRedemption = voucherRedemptions[0];
@@ -539,6 +554,7 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
         expiry_kind: "redeem_by",
         service_expires_at: firstRedemption?.service_expires_at ?? voucher.service_expires_at ?? null,
         used: usedCount > 0,
+        redemption_status: redemptionStatus,
         redemptions_used: usedCount,
         max_redemptions: maxRedemptions,
         remaining_redemptions: Math.max(0, maxRedemptions - usedCount),
@@ -557,6 +573,131 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
   } catch (err) {
     logger.error({ err, adminId }, "[hotspot-vouchers] list request failed");
     res.status(500).json({ error: "Vouchers could not be loaded for this account." });
+  }
+});
+
+router.post("/vouchers/hotspot/cleanup-local-users", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = requestedAdminId(req, res);
+  if (!adminId) return;
+
+  try {
+    const [voucherRows, tenantRouters] = await Promise.all([
+      sbSelectStrict<{ code: string }>(
+        "isp_radius_vouchers",
+        `admin_id=eq.${adminId}&select=code&limit=10000`,
+      ),
+      sbSelectStrict<HotspotRouter>(
+        "isp_routers",
+        `admin_id=eq.${adminId}&select=id,name,host,status,bridge_ip,vpn_ip,router_username,router_secret&order=name.asc`,
+      ),
+    ]);
+    const voucherCodes = new Set(voucherRows.map(voucher => String(voucher.code)));
+
+    const routerResults = await Promise.all(tenantRouters.map(async candidateRouter => {
+      const resultBase = {
+        routerId: Number(candidateRouter.id),
+        routerName: String(candidateRouter.name ?? "Router"),
+        inspectedUsers: 0,
+        matchedVouchers: [] as string[],
+        removedUsers: 0,
+        unmatchedVoucherCodes: [] as string[],
+        failedVoucherCodes: [] as string[],
+      };
+      let credentials: RouterCredentials;
+      let localUsers: Awaited<ReturnType<typeof fetchHotspotUserList>>;
+      try {
+        credentials = voucherRouterCredentials(candidateRouter);
+        if (!credentials.host) {
+          return {
+            ...resultBase,
+            status: "offline" as const,
+            error: "No management host is configured; no users were changed.",
+          };
+        }
+        localUsers = await fetchHotspotUserList(credentials);
+      } catch (error) {
+        logger.warn(
+          { routerId: resultBase.routerId, err: error },
+          "[hotspot-vouchers] local voucher inventory could not reach router",
+        );
+        return {
+          ...resultBase,
+          status: "offline" as const,
+          error: "Router could not be reached; no users were changed.",
+        };
+      }
+
+      const managedUsers = localUsers.filter(user => isManagedLegacyVoucherComment(user.comment));
+      const matchedUsers = findManagedVoucherCopies(localUsers, voucherCodes);
+      const unmatchedUsers = findUnmatchedManagedVoucherUsers(localUsers, voucherCodes);
+      const usersMissingIds = matchedUsers.filter(user => !user.id);
+      const removableUsers = matchedUsers.filter(user => Boolean(user.id));
+      const failedVoucherCodes = usersMissingIds.map(user => user.name);
+      let removedUsers = 0;
+      if (removableUsers.length > 0) {
+        try {
+          await removeHotspotUsersById(credentials, removableUsers.map(user => ({
+            id: user.id,
+            name: user.name,
+            commentMarker: MANAGED_LEGACY_VOUCHER_COMMENT_MARKER,
+          })));
+          removedUsers = removableUsers.length;
+        } catch (error) {
+          logger.warn(
+            { routerId: resultBase.routerId, err: error, count: removableUsers.length },
+            "[hotspot-vouchers] local voucher cleanup failed",
+          );
+          try {
+            const remainingUsers = await fetchHotspotUserList(credentials);
+            const remainingIds = new Set(remainingUsers.map(user => user.id).filter(Boolean));
+            const confirmedRemovedUsers = removableUsers.filter(user => !remainingIds.has(user.id));
+            removedUsers = confirmedRemovedUsers.length;
+            failedVoucherCodes.push(...removableUsers
+              .filter(user => remainingIds.has(user.id))
+              .map(user => user.name));
+          } catch {
+            failedVoucherCodes.push(...removableUsers.map(user => user.name));
+          }
+        }
+      }
+      const failedCodes = [...new Set(failedVoucherCodes)];
+      const unmatchedCodes = [...new Set(unmatchedUsers.map(user => user.name))];
+      return {
+        ...resultBase,
+        inspectedUsers: localUsers.length,
+        matchedVouchers: [...new Set(matchedUsers.map(user => user.name))],
+        removedUsers,
+        unmatchedVoucherCodes: unmatchedCodes,
+        failedVoucherCodes: failedCodes,
+        status: failedCodes.length > 0
+          ? "failed" as const
+          : removedUsers > 0
+            ? "cleaned" as const
+            : "no_matches" as const,
+        ...(failedCodes.length > 0
+          ? { error: "MikroTik did not confirm removal of every matched voucher user." }
+          : {}),
+        ...(unmatchedCodes.length > 0
+          ? { warning: "Tagged router users without a matching voucher record were left untouched." }
+          : {}),
+        managedUserCount: managedUsers.length,
+      };
+    }));
+
+    const removedUsers = routerResults.reduce((total, result) => total + result.removedUsers, 0);
+    const needsAttention = routerResults.some(result =>
+      result.status === "offline"
+      || result.status === "failed"
+      || result.unmatchedVoucherCodes.length > 0,
+    );
+    res.json({
+      ok: !needsAttention,
+      removedUsers,
+      routers: routerResults,
+    });
+  } catch (err) {
+    logger.error({ err, adminId }, "[hotspot-vouchers] local voucher cleanup request failed");
+    res.status(500).json({ error: "Local voucher copies could not be checked for this account." });
   }
 });
 
@@ -786,7 +927,7 @@ router.post("/vouchers/hotspot/redeem", async (req, res): Promise<void> => {
       if (!credentials.host) throw new Error("Router has no management host.");
       const localUsers = await fetchHotspotUserList(credentials);
       const syncedVoucher = localUsers.find(user =>
-        user.name === code && String(user.comment ?? "").includes(" voucher · "),
+        user.name === code && isManagedLegacyVoucherComment(user.comment),
       );
       if (syncedVoucher) await removeHotspotUser(credentials, code);
     }));
