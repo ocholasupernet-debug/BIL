@@ -5,6 +5,10 @@ import loyaltyRouter, { hotspotLoyaltyOperations } from "./hotspot-loyalty-route
 
 test("device loyalty reads and redemption stay tied to the newest scoped MAC account", async t => {
   const original = { ...hotspotLoyaltyOperations };
+  const originalSessionSecret = process.env.SESSION_SECRET;
+  const originalTokenSigningSecret = process.env.TOKEN_SIGNING_SECRET;
+  process.env.SESSION_SECRET = "hotspot-loyalty-route-test-session-secret";
+  process.env.TOKEN_SIGNING_SECRET = "hotspot-loyalty-route-test-signing-secret";
   const mac = "AA:BB:CC:DD:EE:FF";
   const credentials = { username: "test-hotspot", password: "test-only-9X" };
   const phone = "254700000001";
@@ -18,6 +22,7 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
   let redemptionRule: number | null | undefined = 5;
   let failReads = false;
   let paidTransaction: Record<string, unknown> | null = null;
+  let rememberedDeviceAuthorization = "";
   const reads: Array<{ table: string; query: string }> = [];
   const redemptions: Record<string, unknown>[] = [];
   hotspotLoyaltyOperations.select = async <T>(table: string, query: string): Promise<T[]> => {
@@ -26,7 +31,7 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
     const rows = table === "isp_plans" ? [plan]
       : table === "isp_routers" ? [{ id: 31 }]
       : table === "isp_reseller_router_ports" ? [{ assigned_reseller_id: 19 }]
-      : table === "isp_customers" ? query.includes("username,password") && proofOverride !== undefined
+      : table === "isp_customers" ? query.includes("password") && proofOverride !== undefined
         ? proofOverride ? [proofOverride] : [] : customer ? [customer] : []
       : table === "isp_loyalty_accounts" ? [{ points_balance: balance, fractional_balance: fraction }]
       : table === "isp_loyalty_settings" ? [{ kes_per_point: 10 }]
@@ -114,12 +119,29 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
       const result = await request("redeem", { plan_id: 41, phone: "254700000099",
         idempotency_key: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" });
       assert.equal(result.status, 200);
+      assert.equal(typeof result.body.device_authorization, "string");
+      assert.ok(Number(result.body.device_authorization_expires_at) > Date.now());
+      rememberedDeviceAuthorization = String(result.body.device_authorization);
       assert.equal(redemptions.at(-1)?.p_phone, phone);
       assert.equal(redemptions.at(-1)?.p_mac_address, mac);
       assert.equal(redemptions.at(-1)?.p_idempotency_key, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
     });
+    await t.test("a remembered device can redeem again without sending the Hotspot password", async () => {
+      const result = await request("redeem", {
+        plan_id: 41,
+        idempotency_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        account_credentials: null,
+        device_authorization: rememberedDeviceAuthorization,
+      });
+      assert.equal(result.status, 200);
+      assert.equal(typeof result.body.device_authorization, "string");
+      const latestCustomerRead = reads.filter(row => row.table === "isp_customers").at(-1);
+      assert.ok(latestCustomerRead);
+      assert.ok(!latestCustomerRead.query.includes("password"), "token verification should not fetch the account password");
+    });
     await t.test("unknown or cross-service device cannot see or spend another balance", async () => {
       const saved = customer;
+      const before = redemptions.length;
       for (const value of [null, { ...saved, admin_id: 8 }, { ...saved, router_id: 32 },
         { ...saved, port_id: 44 }, { ...saved, mac_address: "11:22:33:44:55:66" }]) {
         customer = value;
@@ -130,7 +152,7 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
         assert.equal((await request("redeem", { plan_id: 41,
           idempotency_key: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" })).status, 409);
       }
-      assert.equal(redemptions.length, 1);
+      assert.equal(redemptions.length, before);
       customer = saved;
     });
     await t.test("missing MAC and invalid service identifiers fail without account reads", async () => {
@@ -159,12 +181,25 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
       paidTransaction = { admin_id: 7, plan_id: 41, payment_phone: phone, mac_address: mac,
         reference: `LOYALTY-${key}`, status: "completed" };
       balance = 0;
-      const result = await request("quote", { plan_id: 41, idempotency_key: key });
+      const result = await request("quote", { plan_id: 41, idempotency_key: key, account_credentials: null });
       assert.equal(result.body.canRedeem, false);
-      assert.equal(result.body.pendingCheckoutId, `LOYALTY-${key}`);
-      assert.equal(redemptions.length, 1, "recovering the reference must not debit points");
+      assert.equal(result.body.pendingCheckoutId, null, "a MAC and idempotency key alone must not recover an access capability");
+      const verifiedRecovery = await request("quote", {
+        plan_id: 41,
+        idempotency_key: key,
+        account_credentials: null,
+        device_authorization: rememberedDeviceAuthorization,
+      });
+      assert.equal(verifiedRecovery.body.pendingCheckoutId, `LOYALTY-${key}`);
+      assert.equal(typeof verifiedRecovery.body.device_authorization, "string");
+      assert.equal(redemptions.length, 2, "recovering the reference must not debit points");
       paidTransaction.mac_address = "11:22:33:44:55:66";
-      assert.equal((await request("quote", { plan_id: 41, idempotency_key: key })).body.pendingCheckoutId, null);
+      assert.equal((await request("quote", {
+        plan_id: 41,
+        idempotency_key: key,
+        account_credentials: null,
+        device_authorization: rememberedDeviceAuthorization,
+      })).body.pendingCheckoutId, null);
       paidTransaction = null;
       balance = 5;
     });
@@ -221,6 +256,10 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
     });
   } finally {
     Object.assign(hotspotLoyaltyOperations, original);
+    if (originalSessionSecret === undefined) delete process.env.SESSION_SECRET;
+    else process.env.SESSION_SECRET = originalSessionSecret;
+    if (originalTokenSigningSecret === undefined) delete process.env.TOKEN_SIGNING_SECRET;
+    else process.env.TOKEN_SIGNING_SECRET = originalTokenSigningSecret;
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }

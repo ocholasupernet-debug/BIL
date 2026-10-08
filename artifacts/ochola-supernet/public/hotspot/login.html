@@ -668,9 +668,40 @@ function startPortalLoyaltyBalance(){
 
 /* Points choice inside the package checkout. Server resolves the account from the scoped device MAC; no phone is sent. */
 var loyQuote=null, loyState="idle", loyMode="mpesa", loyToken=0, loyRedeemBusy=false, loyRedeeming=false;
-var loyKeys={}, loyCheckouts={}, loyUncertain={}, loyConfirmNotice="";
+var loyKeys={}, loyCheckouts={}, loyUncertain={}, loyConfirmNotice="",loyPaidWithPoints=false;
 function hotspotLoginStorageKey(){
   return ["ochola_hotspot_login_v1",window.location.host||"portal",PORTAL_ADMIN_ID>0?String(PORTAL_ADMIN_ID):"tenant"].map(encodeURIComponent).join(":");
+}
+function hotspotLoyaltyDeviceAuthorizationStorageKey(){
+  var mac=String(PORTAL_DEVICE_MAC||"").replace(/[^0-9a-f]/gi,"").toUpperCase();
+  return ["ochola_hotspot_loyalty_device_v1",window.location.host||"portal",
+    PORTAL_ADMIN_ID>0?String(PORTAL_ADMIN_ID):"tenant",
+    PORTAL_ROUTER_ID>0?String(PORTAL_ROUTER_ID):"router",
+    PORTAL_PORT_ID>0?String(PORTAL_PORT_ID):"port",
+    mac||"unidentified"].map(encodeURIComponent).join(":");
+}
+function readHotspotLoyaltyDeviceAuthorization(){
+  try{
+    var saved=JSON.parse(window.localStorage.getItem(hotspotLoyaltyDeviceAuthorizationStorageKey())||"null");
+    if(saved&&typeof saved.token==="string"&&saved.token.trim()&&saved.token.length<=4096
+      &&!(typeof saved.expiresAt==="number"&&saved.expiresAt<=Date.now()))return saved.token;
+  }catch(e){}
+  return "";
+}
+function saveHotspotLoyaltyDeviceAuthorization(token,expiresAt){
+  if(typeof token!=="string"||!token.trim()||token.length>4096)return false;
+  loyDeviceAuthorization=token;
+  try{
+    window.localStorage.setItem(hotspotLoyaltyDeviceAuthorizationStorageKey(),JSON.stringify({
+      token:token,
+      ...(typeof expiresAt==="number"&&isFinite(expiresAt)?{expiresAt:expiresAt}:{})
+    }));
+    return true;
+  }catch(e){return false;}
+}
+function clearHotspotLoyaltyDeviceAuthorization(){
+  loyDeviceAuthorization="";
+  try{window.localStorage.removeItem(hotspotLoyaltyDeviceAuthorizationStorageKey());}catch(e){}
 }
 function saveHotspotLoginCredentials(credentials){
   if(!credentials||!credentials.username||!credentials.password)return;
@@ -685,8 +716,9 @@ function readHotspotLoginCredentials(){
   return null;
 }
 var loyCreds=readHotspotLoginCredentials();
+var loyDeviceAuthorization=readHotspotLoyaltyDeviceAuthorization();
 function loyaltyNeedsConfirm(){
-  return !loyCreds&&!(selectedPlan&&loyCheckouts[loyaltyAttemptId(selectedPlan.id)])&&(loyaltyRedeemable()||!!loyaltyPendingCheckout());
+  return !loyCreds&&!loyDeviceAuthorization&&!(selectedPlan&&loyCheckouts[loyaltyAttemptId(selectedPlan.id)])&&(loyaltyRedeemable()||!!loyaltyPendingCheckout());
 }
 function newLoyaltyKey(){
   if(window.crypto&&typeof window.crypto.randomUUID==="function")return window.crypto.randomUUID();
@@ -707,6 +739,7 @@ function loadLoyaltyQuoteForPlan(silent,proofRetried){
   if(!silent)loyState="loading";
   var payload=loyaltyScopePayload(); payload.plan_id=planId;
   if(loyCreds)payload.account_credentials={username:loyCreds.username,password:loyCreds.password};
+  if(loyDeviceAuthorization)payload.device_authorization=loyDeviceAuthorization;
   if(loyKeys[attempt])payload.idempotency_key=loyKeys[attempt];
   fetchWithTimeout(apiUrl("/api/hotspot/loyalty/quote"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)},10000)
     .then(function(r){return r.json().catch(function(){return{};}).then(function(d){return{ok:r.ok,status:r.status,data:d||{}};});})
@@ -714,11 +747,14 @@ function loadLoyaltyQuoteForPlan(silent,proofRetried){
       var pd=result.data||{};
       if(result.status===401&&pd.verificationRequired===true&&!proofRetried){
         /* Drop the bad proof and refresh public eligibility once, same nonce, no credentials. */
-        loyCreds=null; loyConfirmNotice="Confirm your hotspot account to use points.";
+        loyCreds=null; clearHotspotLoyaltyDeviceAuthorization(); loyConfirmNotice="Confirm your hotspot account to use points.";
         if(token===loyToken)loadLoyaltyQuoteForPlan(true,true);
         return;
       }
       if(result.ok&&pd.ok===true&&typeof pd.pendingCheckoutId==="string"&&pd.pendingCheckoutId&&loyKeys[attempt]&&!loyCheckouts[attempt])loyCheckouts[attempt]=pd.pendingCheckoutId;
+      if(result.ok&&typeof pd.device_authorization==="string"){
+        saveHotspotLoyaltyDeviceAuthorization(pd.device_authorization,pd.device_authorization_expires_at);
+      }
       if(token!==loyToken||!selectedPlan||Number(selectedPlan.id)!==planId)return;
       var d=result.data;
       if(!result.ok||d.ok!==true||!Number.isFinite(Number(d.balance)))throw new Error("quote");
@@ -748,7 +784,7 @@ function setLoyaltyMode(mode){
   renderModal();
 }
 function finishLoyaltyAccess(attempt,checkoutId){
-  paidCheckoutId=String(checkoutId); loyRedeeming=false;
+  paidCheckoutId=String(checkoutId); loyRedeeming=false; loyPaidWithPoints=true;
   stkState="provisioning"; renderModal();
   return assignPaidHotspotAccess(paidCheckoutId).then(function(){
     delete loyKeys[attempt]; delete loyCheckouts[attempt];
@@ -768,7 +804,7 @@ function redeemLoyaltyPoints(){
   if(loyCheckouts[attempt]){loyRedeemBusy=true;finishLoyaltyAccess(attempt,loyCheckouts[attempt]);return;}
   if(!loyaltyRedeemable()&&!loyUncertain[attempt])return;
   var typedCreds=null, creds=loyCreds;
-  if(!creds){
+  if(!creds&&!loyDeviceAuthorization){
     var uEl=document.getElementById("loyConfirmUser"), pEl=document.getElementById("loyConfirmPass");
     var u=uEl?uEl.value.trim():"", pw=pEl?pEl.value:"";
     if(!u||!pw){loyConfirmNotice="Enter your hotspot account username and password to use points.";renderModal();return;}
@@ -778,13 +814,14 @@ function redeemLoyaltyPoints(){
   if(!PORTAL_DEVICE_MAC||PORTAL_ADMIN_ID<1){stkError="This device could not be identified. Reconnect to the hotspot Wi-Fi and try again.";stkState="error";renderModal();return;}
   loyRedeemBusy=true; loyRedeeming=true; stkError=""; stkState="loading"; renderModal();
   var payload=loyaltyScopePayload(); payload.plan_id=planId; payload.idempotency_key=loyKeys[attempt];
-  payload.account_credentials={username:creds.username,password:creds.password};
+  if(creds)payload.account_credentials={username:creds.username,password:creds.password};
+  if(loyDeviceAuthorization)payload.device_authorization=loyDeviceAuthorization;
   portalPaymentRequest("/api/hotspot/loyalty/redeem",payload,"Points redemption")
     .catch(function(error){return{ok:false,uncertain:true,data:{error:error&&error.message?error.message:"Points redemption failed before a response was received."}};})
     .then(function(result){
       var d=result.data||{};
       if(result.status===401&&d.verificationRequired===true){
-        loyCreds=null; loyRedeemBusy=false; loyRedeeming=false; stkError="";
+        loyCreds=null; clearHotspotLoyaltyDeviceAuthorization(); loyRedeemBusy=false; loyRedeeming=false; stkError="";
         loyConfirmNotice="We could not confirm that hotspot account. Check the details and try again.";
         stkState="idle"; renderModal(); return;
       }
@@ -796,6 +833,9 @@ function redeemLoyaltyPoints(){
         if(selectedPlan&&Number(selectedPlan.id)===planId)loadLoyaltyQuoteForPlan(true);return;
       }
       loyCheckouts[attempt]=String(d.checkout_id); delete loyUncertain[attempt];
+      if(typeof d.device_authorization==="string"){
+        saveHotspotLoyaltyDeviceAuthorization(d.device_authorization,d.device_authorization_expires_at);
+      }
       if(typedCreds){saveHotspotLoginCredentials(typedCreds);loyCreds=typedCreds;}
       loyConfirmNotice="";
       return finishLoyaltyAccess(attempt,d.checkout_id);
@@ -1512,6 +1552,7 @@ function renderPlans(preserveLoadingMarkup){
 /* ── STK Modal ── */
 function openModal(i){
   if(!canOpenPurchaseModal())return;
+  loyPaidWithPoints=false;
   tvPurchase=false; tvDeviceName=""; tvDeviceRouterId=0; tvRememberDevice=false; tvDeviceSaveNotice="";
   selectedPlan=PLANS[i]; stkState="idle"; stkPhone="";
   loadLoyaltyQuoteForPlan(false);
@@ -1631,8 +1672,8 @@ function renderModal(){
     b.innerHTML='<div style="text-align:center;padding:2.25rem 0">'+
       '<div style="width:72px;height:72px;border-radius:50%;background:rgba(74,222,128,.12);border:2px solid rgba(74,222,128,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">'+
       '<svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="#4ade80" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>'+
-       '<p style="font-size:1.0625rem;font-weight:800;color:#4ade80;margin-bottom:.5rem">Payment Received!</p>'+
-       '<p style="color:rgba(255,255,255,.5);font-size:.875rem;margin-bottom:1rem">Your <span style="color:white;font-weight:600">'+(selectedPlan?selectedPlan.name:"")+'</span> plan is now active. These credentials have been entered on the sign-in form.</p>'+
+       '<p style="font-size:1.0625rem;font-weight:800;color:#4ade80;margin-bottom:.5rem">'+(loyPaidWithPoints?"Points Redeemed!":"Payment Received!")+'</p>'+
+       '<p style="color:rgba(255,255,255,.5);font-size:.875rem;margin-bottom:1rem">'+(loyPaidWithPoints?"Your plan is active using loyalty points. The assigned credentials are shown below and the sign-in is being submitted automatically.":'Your <span style="color:white;font-weight:600">'+(selectedPlan?selectedPlan.name:"")+'</span> plan is now active. These credentials have been entered on the sign-in form.')+'</p>'+
        credentialBlock+
         (tvDeviceSaveNotice?'<p style="margin:0 auto 1rem;max-width:300px;color:'+(tvDeviceSaveNotice.indexOf("Payment succeeded")===0?"#fcd34d":"#6ee7b7")+';font-size:.75rem;line-height:1.45">'+escapePortalText(tvDeviceSaveNotice)+'</p>':'')+
        '<button onclick="closeModal()" class="btn btn-green btn-full">Continue online</button></div>';
