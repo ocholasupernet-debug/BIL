@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REAL_NODE="$(command -v node)"
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 CALL_LOG="$TEMP_DIR/node-calls.log"
@@ -17,13 +18,21 @@ chmod +x "$BIN_DIR/node"
 export PATH="$BIN_DIR:$PATH"
 
 test "$(grep -Fc 'portalFileReplacementConsent: true' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs")" -eq 2
-grep -Fq '"ispBridgeRouterName": "come3"' "$SCRIPT_DIR/portal-refresh-once.json"
+grep -Fq '"adminId": 33' "$SCRIPT_DIR/portal-refresh-once.json"
+grep -Fq '"authVersion": 2' "$SCRIPT_DIR/portal-refresh-once.json"
+grep -Fq '"tenantSubdomain": "ocholasupernet"' "$SCRIPT_DIR/portal-refresh-once.json"
+grep -Fq '"ispBridgeRouterName": "ocholasupernet2"' "$SCRIPT_DIR/portal-refresh-once.json"
 grep -Fq '"ispBridgeName": "hotspot-bridge"' "$SCRIPT_DIR/portal-refresh-once.json"
+grep -Fq 'createAdminSessionToken' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
 ! grep -Fq '"ispBridgeRouterId"' "$SCRIPT_DIR/portal-refresh-once.json"
-grep -Fq 'resolveRouterIdByExactName(routers, ispBridgeRouterName)' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
-grep -Fq 'autoSelectBridgeServer: true' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
-grep -Fq 'bridgeName: ispBridgeName' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
-grep -Fq 'expectedRouterName: ispBridgeRouterName' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
+grep -Fq 'resolveTenantRouterTargets(await listTenantRouters())' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
+grep -Fq 'for (const target of targets)' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
+grep -Fq 'resolvePortalBridgeSelection(routerName, ispBridgeName)' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
+grep -Fq 'return { autoSelectBridgeServer: true, expectedRouterName }' "$SCRIPT_DIR/portal-refresh-target.mjs"
+grep -Fq '...selection' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
+"$REAL_NODE" --test \
+  "$SCRIPT_DIR/tests/portal-refresh-target.test.mjs" \
+  "$SCRIPT_DIR/tests/portal-refresh-token.test.mjs"
 
 make_project() {
   local project_dir="$1"

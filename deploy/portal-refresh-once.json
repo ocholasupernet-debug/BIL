@@ -1,6 +1,8 @@
 {
-  "id": "isp-router-come3-signin-refresh-flow-20261005",
-  "adminId": 3,
-  "ispBridgeRouterName": "come3",
+  "id": "ocholasupernet2-hotspot-portals-loyalty-redemption-20261008",
+  "adminId": 33,
+  "authVersion": 2,
+  "tenantSubdomain": "ocholasupernet",
+  "ispBridgeRouterName": "ocholasupernet2",
   "ispBridgeName": "hotspot-bridge"
 }

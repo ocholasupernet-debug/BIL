@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -7,7 +6,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { resolveRouterIdByExactName, validateExpectedRouterName } from "./portal-refresh-target.mjs";
+import { createAdminSessionToken } from "./portal-refresh-token.mjs";
+import {
+  isNoActiveHotspotServerResponse,
+  resolvePortalBridgeSelection,
+  resolveTenantApiOrigin,
+  resolveRouterIdByExactName,
+  resolveTenantRouterTargets,
+  validateExpectedRouterName,
+} from "./portal-refresh-target.mjs";
 
 const markerPath = process.argv[2];
 if (!markerPath) throw new Error("A one-time portal refresh marker path is required.");
@@ -23,12 +30,18 @@ const ispBridgeRouterName = marker.ispBridgeRouterName === undefined || marker.i
 const ispBridgeName = marker.ispBridgeName === undefined || marker.ispBridgeName === null || marker.ispBridgeName === ""
   ? null
   : validateExpectedRouterName(marker.ispBridgeName);
+const allIspBridgeRouters = marker.allIspBridgeRouters === true;
 const adminId = parseOptionalId(marker.adminId) ?? 3;
+const authVersion = parseOptionalId(marker.authVersion);
+const apiOrigin = resolveTenantApiOrigin(marker.tenantSubdomain);
 if (!/^[a-z0-9-]{1,80}$/.test(markerId)) {
   throw new Error("The one-time portal refresh marker has an invalid ID.");
 }
 if (!Number.isSafeInteger(adminId) || adminId < 1) {
   throw new Error("The one-time portal refresh marker must identify a valid tenant admin.");
+}
+if (!Number.isSafeInteger(authVersion) || authVersion < 1) {
+  throw new Error("The one-time portal refresh marker must include the current tenant auth version.");
 }
 if (resellerPortId !== null && (!Number.isSafeInteger(resellerPortId) || resellerPortId < 1)) {
   throw new Error("The reseller port ID must be a positive integer.");
@@ -42,7 +55,18 @@ if (ispBridgeRouterId !== null && ispBridgeRouterName !== null) {
 if (ispBridgeName !== null && ispBridgeRouterName === null) {
   throw new Error("An explicit ISP Hotspot interface requires an exact router name.");
 }
-if (resellerPortId === null && ispBridgeRouterId === null && ispBridgeRouterName === null) {
+if (
+  allIspBridgeRouters
+  && (resellerPortId !== null || ispBridgeRouterId !== null || ispBridgeRouterName !== null || ispBridgeName !== null)
+) {
+  throw new Error("The all-router portal refresh cannot be combined with a single router or reseller target.");
+}
+if (
+  resellerPortId === null
+  && ispBridgeRouterId === null
+  && ispBridgeRouterName === null
+  && !allIspBridgeRouters
+) {
   throw new Error("The one-time portal refresh marker must identify at least one target.");
 }
 
@@ -60,13 +84,13 @@ try {
     throw new Error("TOKEN_SIGNING_SECRET or SESSION_SECRET is required for the one-time portal refresh.");
   }
 
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const payload = `a.${adminId}.${issuedAt}`;
-  const signature = createHmac("sha256", signingSecret).update(payload).digest("hex");
-  const token = `${payload}.${signature}`;
-  const apiOrigin = "https://come.isplatty.org";
-
-  async function refreshPortal(path, body, label) {
+  const token = createAdminSessionToken({
+    adminId,
+    authVersion,
+    issuedAt: Math.floor(Date.now() / 1000),
+    signingSecret,
+  });
+  async function refreshPortal(path, body, label, { skipIfNoActiveHotspot = false } = {}) {
     const response = await fetch(`${apiOrigin}${path}`, {
       method: "POST",
       headers: {
@@ -78,6 +102,22 @@ try {
     });
     const text = await response.text();
     if (!response.ok) {
+      if (skipIfNoActiveHotspot && response.status === 409) {
+        try {
+          const errorBody = JSON.parse(text);
+          if (isNoActiveHotspotServerResponse(response.status, errorBody)) {
+            console.log(JSON.stringify({
+              label,
+              ok: false,
+              skipped: true,
+              reason: "No active Hotspot server is configured on this router.",
+            }));
+            return { skipped: true };
+          }
+        } catch {
+          // Keep the original API error below if the response body is not JSON.
+        }
+      }
       throw new Error(`${label} portal refresh failed (${response.status}): ${text.slice(0, 500)}`);
     }
 
@@ -96,10 +136,10 @@ try {
       deployedFiles: result.deployedFiles ?? [],
       serviceConfigurationChanged: result.serviceConfigurationChanged ?? false,
     }));
+    return { skipped: false };
   }
 
-  let selectedRouterId = ispBridgeRouterId;
-  if (ispBridgeRouterName !== null) {
+  async function listTenantRouters() {
     const response = await fetch(`${apiOrigin}/api/routers?adminId=${encodeURIComponent(adminId)}`, {
       method: "GET",
       headers: { authorization: `Bearer ${token}` },
@@ -107,15 +147,80 @@ try {
     });
     const text = await response.text();
     if (!response.ok) {
-      throw new Error(`Could not resolve the exact ISP router name (${response.status}): ${text.slice(0, 500)}`);
+      throw new Error(`Could not read the tenant router list (${response.status}): ${text.slice(0, 500)}`);
     }
-    const routers = JSON.parse(text);
+    return JSON.parse(text);
+  }
+
+  async function refreshIspBridge(routerId, routerName = null) {
+    const targetDescription = routerName ? `ISP bridge ${routerName}` : "ISP bridge";
+  const selection = resolvePortalBridgeSelection(routerName, ispBridgeName);
+    return refreshPortal(
+      `/api/admin/router/${routerId}/hotspot-portal/bridge-deploy`,
+      {
+      ...selection,
+        overwrite: true,
+        portalFileReplacementConsent: true,
+      },
+      targetDescription,
+      { skipIfNoActiveHotspot: routerName !== null },
+    );
+  }
+
+  let selectedRouterId = ispBridgeRouterId;
+  if (ispBridgeRouterName !== null) {
+    const routers = await listTenantRouters();
     selectedRouterId = resolveRouterIdByExactName(routers, ispBridgeRouterName);
     console.log(JSON.stringify({
       label: "ISP bridge target",
       routerId: selectedRouterId,
       routerName: ispBridgeRouterName,
     }));
+  }
+  if (allIspBridgeRouters) {
+    const targets = resolveTenantRouterTargets(await listTenantRouters());
+    if (targets.length === 0) {
+      throw new Error("No installed tenant routers were found; no portal files were changed.");
+    }
+    console.log(JSON.stringify({
+      label: "ISP bridge targets",
+      count: targets.length,
+      routerNames: targets.map(router => router.name),
+    }));
+    const failures = [];
+    const deployedRouterNames = [];
+    const skippedRouterNames = [];
+    for (const target of targets) {
+      try {
+        const result = await refreshIspBridge(target.id, target.name);
+        if (result?.skipped) skippedRouterNames.push(target.name);
+        else deployedRouterNames.push(target.name);
+      } catch (error) {
+        const detail = String(error instanceof Error ? error.message : error)
+          .replace(/[\r\n]+/g, " ")
+          .slice(0, 500);
+        failures.push(`${target.name}: ${detail}`);
+        console.log(JSON.stringify({
+          label: "ISP bridge refresh failed",
+          routerId: target.id,
+          routerName: target.name,
+          error: detail,
+        }));
+      }
+    }
+    console.log(JSON.stringify({
+      label: "ISP bridge refresh summary",
+      deployedCount: deployedRouterNames.length,
+      deployedRouterNames,
+      skippedNoHotspotCount: skippedRouterNames.length,
+      skippedNoHotspotRouterNames: skippedRouterNames,
+    }));
+    if (deployedRouterNames.length === 0 && skippedRouterNames.length === targets.length) {
+      throw new Error("No installed tenant router has an active Hotspot server; no portal files were changed.");
+    }
+    if (failures.length > 0) {
+      throw new Error(`Portal refresh failed for ${failures.length} of ${targets.length} tenant router(s): ${failures.join(" | ")}`);
+    }
   }
 
   if (resellerPortId !== null) {
@@ -126,20 +231,7 @@ try {
     );
   }
   if (selectedRouterId !== null) {
-    await refreshPortal(
-      `/api/admin/router/${selectedRouterId}/hotspot-portal/bridge-deploy`,
-      {
-        ...(ispBridgeName !== null
-          ? { bridgeName: ispBridgeName }
-          : ispBridgeRouterName !== null
-            ? { autoSelectBridgeServer: true }
-            : { bridgeName: "co-hotspot-bridge" }),
-        overwrite: true,
-        portalFileReplacementConsent: true,
-        ...(ispBridgeRouterName !== null ? { expectedRouterName: ispBridgeRouterName } : {}),
-      },
-      "ISP bridge",
-    );
+    await refreshIspBridge(selectedRouterId, ispBridgeRouterName);
   }
 
   mkdirSync(stateDirectory, { recursive: true, mode: 0o750 });
@@ -149,7 +241,7 @@ try {
     completedAt: new Date().toISOString(),
   }), { mode: 0o640 });
   renameSync(temporaryPath, completionPath);
-  console.log("::notice title=Hotspot portal refresh::Both portal file refreshes completed and the one-time marker was recorded.");
+  console.log("::notice title=Hotspot portal refresh::All targeted Hotspot portal file refreshes completed and the one-time marker was recorded.");
 } catch (error) {
   const detail = String(error instanceof Error ? error.message : error).replace(/[\r\n]+/g, " ").slice(0, 700);
   console.log(`::error title=One-time Hotspot portal refresh failed::${detail}`);

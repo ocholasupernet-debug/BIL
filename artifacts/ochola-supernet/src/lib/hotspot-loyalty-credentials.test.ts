@@ -66,11 +66,12 @@ test("React portal wires credentials into quote and redeem without URLs", () => 
   assert.ok(!/loyalty\/(quote|redeem)\?/.test(src));
 });
 
-test("static portal saves credentials and sends them with quote and redeem", () => {
+test("static portal remembers verified devices after purchase and sends authorization with loyalty requests", () => {
   const html = readFileSync(new URL("../../public/hotspot/login.html", import.meta.url), "utf8");
   assert.ok(html.includes("function saveHotspotLoginCredentials("));
   assert.ok((html.match(/saveHotspotLoginCredentials\(/g) ?? []).length >= 4);
   assert.ok((html.match(/account_credentials/g) ?? []).length >= 2);
   assert.ok(html.includes("device_authorization"));
+  assert.match(html, /data\.device_authorization[\s\S]{0,240}saveHotspotLoyaltyDeviceAuthorization/);
   assert.ok(html.includes("loyUncertain"));
 });

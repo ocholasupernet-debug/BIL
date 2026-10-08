@@ -10,7 +10,7 @@
  */
 
 import { Router, type IRouter, type Request, type Response } from "express";
-import { randomUUID } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 import { sbDelete, sbInsert, sbInsertStrict, sbRpc, sbSelect, sbSelectStrict, sbUpdate, sbUpdateStrict, SupabaseHttpError, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import { billingSelect } from "../lib/platform-billing-store.js";
 import { logger } from "../lib/logger.js";
@@ -25,6 +25,7 @@ import { isPrepaidCustomerEntitled } from "../lib/prepaid-entitlement.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { latestMpesaStkPushHealth, withMpesaStkPushHealth, type MpesaStkPushStatus } from "../lib/mpesa-health.js";
 import { createDarajaTokenProvider } from "../lib/daraja-oauth-token.js";
+import { issueHotspotLoyaltyDeviceAuthorization } from "../lib/hotspot-loyalty-device-authorization.js";
 import {
   addHotspotIpBinding,
   addHotspotUser,
@@ -3010,7 +3011,10 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     res.status(409).json({ ok: false, error: "This device identifier is already assigned to another hotspot account." });
     return;
   }
-  let hotspotPassword = "12345";
+  // Generate the password server-side. Keep it stable for an existing account
+  // or transaction retry, while each genuinely new paid account gets a
+  // distinct high-entropy credential.
+  let hotspotPassword = reusableCustomer?.password?.trim() || randomBytes(18).toString("base64url");
   let isSameCheckoutRetry = !!reusableCustomer && transaction.customer_id === reusableCustomer.id;
   const existingExpiry = reusableCustomer?.expires_at ? Date.parse(reusableCustomer.expires_at) : 0;
   let expiresAt = isSameCheckoutRetry
@@ -3389,6 +3393,18 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
       );
     });
     timing("routerActivationReady");
+    const loyaltyDeviceAuthorization = customer?.id
+      ? issueHotspotLoyaltyDeviceAuthorization({
+          tenantAdminId: adminId,
+          customerAdminId,
+          customerId: customer.id,
+          phone: paymentPhone,
+          macAddress: mac,
+          routerId: plan.router_id,
+          portId: plan.port_id,
+          resellerId: plan.owner_reseller_id,
+        }, process.env.TOKEN_SIGNING_SECRET?.trim() || process.env.SESSION_SECRET?.trim())
+      : null;
     res.json({
       ok: true,
       access: routerConnected
@@ -3415,6 +3431,10 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
       mac_address: mac,
       credentials: { username: hotspotUsername, password: hotspotPassword },
       expires_at: expiresAt.toISOString(),
+      ...(loyaltyDeviceAuthorization ? {
+        device_authorization: loyaltyDeviceAuthorization.token,
+        device_authorization_expires_at: loyaltyDeviceAuthorization.expiresAt,
+      } : {}),
     });
   } catch (error) {
     const diagnosis = logRouterConnectionFailure(

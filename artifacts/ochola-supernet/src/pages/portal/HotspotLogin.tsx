@@ -963,9 +963,20 @@ function HotspotLoginView({
         portal_login_handoff?: boolean;
         expires_at?: string;
         message?: string;
+        device_authorization?: string;
+        device_authorization_expires_at?: number;
       };
       if (!accessResponse.ok || !accessData.ok || !accessData.credentials?.username || !accessData.credentials.password) {
         throw new Error(accessData.error || "Payment confirmed, but the hotspot router could not be updated yet.");
+      }
+      if (typeof accessData.device_authorization === "string") {
+        storeHotspotLoyaltyDeviceAuthorization(
+          window.localStorage,
+          loyaltyDeviceAuthorizationStorageKey,
+          accessData.device_authorization,
+          accessData.device_authorization_expires_at,
+        );
+        setLoyaltyDeviceAuthorization(accessData.device_authorization);
       }
       setHotspotCredentials(accessData.credentials);
       storeHotspotCredentials(loginCredentialsStorageKey, accessData.credentials);
@@ -1022,6 +1033,7 @@ function HotspotLoginView({
     adminId,
     deviceMacAddress,
     deviceName,
+    loyaltyDeviceAuthorizationStorageKey,
     loginCredentialsStorageKey,
     paymentMode,
     portalContext.ip,
