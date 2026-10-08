@@ -1,9 +1,9 @@
 import { Router, type IRouter, type Request, type Response } from "express";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
 import { calculateHotspotLoyaltyAward, canRedeemHotspotPlan } from "../lib/loyalty-points.js";
 import {
   isKenyanMobileNumber,
-  kenyanMobilePhoneVariants,
   normaliseKenyanMobile,
 } from "../lib/kenyan-phone.js";
 import { logger } from "../lib/logger.js";
@@ -15,6 +15,9 @@ import {
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
+
+// Injectable boundaries for route tests; production uses strict database reads.
+export const hotspotLoyaltyOperations = { select: sbSelectStrict, redeem: sbRpc };
 
 type LoyaltyPlan = {
   id: number;
@@ -117,12 +120,12 @@ async function getHotspotPlan(
   planId: number,
   req: Request,
 ): Promise<LoyaltyPlan | null> {
-  const planRows = await sbSelectStrict<LoyaltyPlan>(
+  const planRows = await hotspotLoyaltyOperations.select<LoyaltyPlan>(
     "isp_plans",
     `id=eq.${planId}&admin_id=eq.${adminId}&select=id,admin_id,name,type,price,router_id,port_id,owner_reseller_id,is_active,client_can_purchase&limit=1`,
   );
   const plan = planRows[0];
-  if (!plan || String(plan.type).toLowerCase() !== "hotspot") return null;
+  if (!plan || plan.admin_id !== adminId || String(plan.type).toLowerCase() !== "hotspot") return null;
 
   const signedScope = req.hotspotPortalContext;
   if (signedScope && (
@@ -138,21 +141,102 @@ async function getHotspotPlan(
   return plan;
 }
 
-async function hasHotspotCustomer(
+async function deviceAccountPhone(
   adminId: number,
-  plan: LoyaltyPlan,
-  phone: string,
-): Promise<boolean> {
-  const phoneVariants = kenyanMobilePhoneVariants(phone);
-  const customerAdminIds = [...new Set([adminId, plan.owner_reseller_id].filter(
+  mac: string,
+  scope: { routerId: number | null; portId?: number | null; resellerId?: number | null },
+): Promise<{ phone: string; customerId: number; customerAdminId: number; status: string } | null> {
+  const customerAdminIds = [...new Set([adminId, scope.resellerId].filter(
     (value): value is number => Number.isSafeInteger(value) && Number(value) > 0,
   ))];
-  if (!phoneVariants.length || !customerAdminIds.length) return false;
-  const customers = await sbSelectStrict<{ id: number }>(
+  const compact = mac.replace(/:/g, "");
+  const variants = [...new Set([mac, mac.toLowerCase(), compact, compact.toLowerCase(), mac.replace(/:/g, "-"), mac.toLowerCase().replace(/:/g, "-")])];
+  const customers = await hotspotLoyaltyOperations.select<{
+    id: number; admin_id: number; phone: string; mac_address: string;
+    router_id: number | null; port_id: number | null; status?: string;
+  }>(
     "isp_customers",
-    `admin_id=in.(${customerAdminIds.join(",")})&type=eq.hotspot&phone=in.(${phoneVariants.join(",")})&select=id&limit=1`,
+    `admin_id=in.(${customerAdminIds.join(",")})&type=eq.hotspot&mac_address=in.(${variants.map(encodeURIComponent).join(",")})`
+      + (scope.routerId ? `&router_id=eq.${scope.routerId}` : "")
+      + (scope.portId === undefined ? "" : scope.portId === null ? "&port_id=is.null" : `&port_id=eq.${scope.portId}`)
+      + "&select=id,admin_id,phone,mac_address,router_id,port_id,status&order=created_at.desc.nullslast,id.desc&limit=1",
   );
-  return customers.length > 0;
+  const customer = customers[0];
+  if (!customer || !customerAdminIds.includes(customer.admin_id)
+      || normalizeMac(customer.mac_address) !== mac
+      || scope.routerId && customer.router_id !== scope.routerId
+      || scope.portId !== undefined && (customer.port_id ?? null) !== scope.portId) return null;
+  const phone = normaliseKenyanMobile(customer.phone);
+  return isKenyanMobileNumber(phone) ? {
+    phone, customerId: customer.id, customerAdminId: customer.admin_id,
+    status: String(customer.status ?? "").toLowerCase(),
+  } : null;
+}
+
+// A MAC discovers a wallet; password possession authorizes spending it.
+const verificationAttempts = new Map<string, { attempts: number; until: number }>();
+async function verifyLoyaltyAccount(
+  req: Request,
+  res: Response,
+  context: { adminId: number; plan: LoyaltyPlan; phone: string;
+    deviceAccount: { customerId: number; customerAdminId: number; status: string } | null },
+): Promise<boolean> {
+  const supplied = req.body?.account_credentials;
+  const username = typeof supplied?.username === "string" ? supplied.username.trim() : "";
+  const password = typeof supplied?.password === "string" ? supplied.password : "";
+  const deny = () => {
+    res.status(401).json({ ok: false, verificationRequired: true,
+      error: "Confirm this device's Hotspot account username and password to use its loyalty points." });
+    return false;
+  };
+  if (!username || username.length > 128 || !password || password.length > 512 || !context.deviceAccount) return deny();
+  const mac = normalizeMac(req.body?.mac_address);
+  const key = `${req.ip}|${context.adminId}|${mac}`;
+  const now = Date.now();
+  const previous = verificationAttempts.get(key);
+  if (previous && previous.until > now && previous.attempts >= 6) {
+    res.setHeader("Retry-After", String(Math.ceil((previous.until - now) / 1000)));
+    res.status(429).json({ ok: false, verificationRequired: true, error: "Too many account confirmation attempts. Please retry in one minute." });
+    return false;
+  }
+  if (verificationAttempts.size >= 10000) {
+    for (const [entry, value] of verificationAttempts) if (value.until <= now) verificationAttempts.delete(entry);
+    if (verificationAttempts.size >= 10000) {
+      res.status(503).json({ ok: false, error: "Account confirmation is busy. Please retry shortly." });
+      return false;
+    }
+  }
+  const attempt = previous && previous.until > now ? previous : { attempts: 0, until: now + 60000 };
+  attempt.attempts++;
+  verificationAttempts.set(key, attempt);
+  const profiles = await hotspotLoyaltyOperations.select<{
+    id: number; admin_id: number; username: string; password: string; phone: string;
+    mac_address: string; router_id: number | null; port_id: number | null; status: string;
+  }>("isp_customers",
+    `id=eq.${context.deviceAccount.customerId}&admin_id=eq.${context.deviceAccount.customerAdminId}&type=eq.hotspot&select=id,admin_id,username,password,phone,mac_address,router_id,port_id,status&limit=1`);
+  const profile = profiles[0];
+  const matches = profile && typeof profile.password === "string" && profile.password.length > 0
+    && profile.id === context.deviceAccount.customerId && profile.admin_id === context.deviceAccount.customerAdminId
+    && profile.username === username && normaliseKenyanMobile(profile.phone) === context.phone
+    && normalizeMac(profile.mac_address) === mac && (profile.router_id ?? null) === (context.plan.router_id ?? null)
+    && (profile.port_id ?? null) === (context.plan.port_id ?? null)
+    && !["suspended", "disabled"].includes(context.deviceAccount.status)
+    && !["suspended", "disabled"].includes(String(profile.status).toLowerCase())
+    && timingSafeEqual(createHash("sha256").update(profile.password).digest(), createHash("sha256").update(password).digest());
+  if (!matches) return deny();
+  verificationAttempts.delete(key);
+  return true;
+}
+
+async function deviceBalance(adminId: number, phone: string | null): Promise<number> {
+  if (!phone) return 0;
+  const accounts = await hotspotLoyaltyOperations.select<{
+    points_balance: number | string; fractional_balance: number | string;
+  }>(
+    "isp_loyalty_accounts",
+    `admin_id=eq.${adminId}&phone=eq.${phone}&select=points_balance,fractional_balance&limit=1`,
+  );
+  return pointBalance(accounts[0]?.points_balance, accounts[0]?.fractional_balance);
 }
 
 async function loyaltyQuote(
@@ -162,21 +246,17 @@ async function loyaltyQuote(
   hasCustomer: boolean,
   hasDeviceMac: boolean,
 ): Promise<{ balance: number; pointsRequired: number | null; pointsAwarded: number; canRedeem: boolean }> {
-  const [accounts, rules, settings] = await Promise.all([
-    sbSelectStrict<{ points_balance: number | string; fractional_balance: number | string }>(
-      "isp_loyalty_accounts",
-      `admin_id=eq.${adminId}&phone=eq.${phone}&select=points_balance,fractional_balance&limit=1`,
-    ),
-    sbSelectStrict<LoyaltyRule>(
+  const [balance, rules, settings] = await Promise.all([
+    deviceBalance(adminId, phone || null),
+    hotspotLoyaltyOperations.select<LoyaltyRule>(
       "isp_loyalty_plan_rules",
       `admin_id=eq.${adminId}&plan_id=eq.${plan.id}&select=plan_id,points_awarded,redemption_points&limit=1`,
     ),
-    sbSelectStrict<{ kes_per_point: number | string }>(
+    hotspotLoyaltyOperations.select<{ kes_per_point: number | string }>(
       "isp_loyalty_settings",
       `admin_id=eq.${adminId}&select=kes_per_point&limit=1`,
     ),
   ]);
-  const balance = pointBalance(accounts[0]?.points_balance, accounts[0]?.fractional_balance);
   const pointsRequiredValue = Number(rules[0]?.redemption_points ?? 0);
   const pointsRequired = Number.isSafeInteger(pointsRequiredValue) && pointsRequiredValue > 0
     ? pointsRequiredValue
@@ -203,12 +283,13 @@ async function publicPlanContext(req: Request, res: Response): Promise<{
   plan: LoyaltyPlan;
   phone: string;
   hasCustomer: boolean;
+  deviceAccount: { phone: string; customerId: number; customerAdminId: number; status: string } | null;
 } | null> {
   const adminId = await portalAdminId(req, req.body?.adminId);
   const planId = positiveId(req.body?.plan_id);
-  const phone = normaliseKenyanMobile(req.body?.phone);
-  if (!adminId || !planId || !isKenyanMobileNumber(phone)) {
-    res.status(400).json({ ok: false, error: "A Hotspot plan and valid Kenyan phone number are required." });
+  const mac = normalizeMac(req.body?.mac_address);
+  if (!adminId || !planId || !mac) {
+    res.status(400).json({ ok: false, error: "A Hotspot plan and the connected device's MAC address are required." });
     return null;
   }
 
@@ -217,8 +298,10 @@ async function publicPlanContext(req: Request, res: Response): Promise<{
     res.status(404).json({ ok: false, error: "This Hotspot plan is not available in the current service." });
     return null;
   }
-  const hasCustomer = await hasHotspotCustomer(adminId, plan, phone);
-  return { adminId, plan, phone, hasCustomer };
+  const phone = await deviceAccountPhone(adminId, mac, {
+    routerId: plan.router_id, portId: plan.port_id, resellerId: plan.owner_reseller_id,
+  });
+  return { adminId, plan, phone: phone?.phone ?? "", hasCustomer: phone !== null, deviceAccount: phone };
 }
 
 router.get("/admin/loyalty/context", requireAdmin(), async (req, res): Promise<void> => {
@@ -398,12 +481,64 @@ router.put("/admin/loyalty/plans/:planId", requireAdmin(), async (req, res): Pro
   }
 });
 
+router.post("/hotspot/loyalty/balance", async (req, res): Promise<void> => {
+  try {
+    const adminId = await portalAdminId(req, req.body?.adminId);
+    const mac = normalizeMac(req.body?.mac_address);
+    const signed = req.hotspotPortalContext;
+    const requestedRouter = positiveId(req.body?.router_id);
+    const requestedPort = positiveId(req.body?.port_id);
+    if (!adminId || !mac
+        || (req.body?.router_id != null && !requestedRouter)
+        || (req.body?.port_id != null && !requestedPort)) {
+      res.status(400).json({ ok: false, error: "A Hotspot service and connected device MAC address are required." });
+      return;
+    }
+    const routerId = signed?.routerId ?? requestedRouter;
+    const portId = signed?.portId ?? requestedPort;
+    if ((signed && ((requestedRouter && requestedRouter !== signed.routerId)
+        || (requestedPort && requestedPort !== signed.portId))) || (portId && !routerId)) {
+      res.status(404).json({ ok: false, error: "This Hotspot service is not available." });
+      return;
+    }
+    if (routerId) {
+      const routers = await hotspotLoyaltyOperations.select<{ id: number }>(
+        "isp_routers", `id=eq.${routerId}&admin_id=eq.${adminId}&select=id&limit=1`,
+      );
+      if (!routers[0]) {
+        res.status(404).json({ ok: false, error: "This Hotspot service is not available." });
+        return;
+      }
+    }
+    let resellerId = signed?.resellerId ?? null;
+    if (portId) {
+      const ports = await hotspotLoyaltyOperations.select<{ assigned_reseller_id: number | null }>(
+        "isp_reseller_router_ports",
+        `id=eq.${portId}&admin_id=eq.${adminId}&router_id=eq.${routerId}&select=assigned_reseller_id&limit=1`,
+      );
+      if (!ports[0] || signed && ports[0].assigned_reseller_id !== signed.resellerId) {
+        res.status(404).json({ ok: false, error: "This Hotspot service is not available." });
+        return;
+      }
+      resellerId = ports[0].assigned_reseller_id;
+    }
+    const phone = await deviceAccountPhone(adminId, mac, {
+      routerId, portId: routerId ? portId : undefined, resellerId,
+    });
+    res.json({ ok: true, balance: await deviceBalance(adminId, phone?.phone ?? null), hasAccount: phone !== null });
+  } catch (error) {
+    logger.warn({ err: error }, "[hotspot/loyalty/balance] device balance unavailable");
+    res.status(503).json({ ok: false, error: "This device's loyalty points could not be checked right now." });
+  }
+});
+
 router.post("/hotspot/loyalty/quote", async (req, res): Promise<void> => {
   try {
     const context = await publicPlanContext(req, res);
     if (!context) return;
     const mac = normalizeMac(req.body?.mac_address);
-    const hasCustomer = context.hasCustomer;
+    const hasCustomer = context.hasCustomer
+      && !["suspended", "disabled"].includes(context.deviceAccount?.status ?? "");
     const quote = await loyaltyQuote(
       context.adminId,
       context.plan,
@@ -411,7 +546,27 @@ router.post("/hotspot/loyalty/quote", async (req, res): Promise<void> => {
       hasCustomer,
       !!mac,
     );
-    res.json({ ok: true, ...quote });
+    // Recover a confirmed debit after a lost HTTP response without spending again.
+    const key = String(req.body?.idempotency_key ?? "").trim().toLowerCase();
+    let pendingCheckoutId: string | null = null;
+    if (context.hasCustomer && req.body?.account_credentials
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(key)) {
+      // Recovering an access capability requires the same proof as spending.
+      if (!await verifyLoyaltyAccount(req, res, context)) return;
+      const reference = `LOYALTY-${key}`;
+      const transactions = await hotspotLoyaltyOperations.select<{
+        admin_id: number; plan_id: number; payment_phone: string; mac_address: string; reference: string; status: string;
+      }>(
+        "isp_transactions",
+        `admin_id=eq.${context.adminId}&reference=eq.${reference}&payment_method=eq.loyalty_points&status=eq.completed&select=admin_id,plan_id,payment_phone,mac_address,reference,status&limit=1`,
+      );
+      const paid = transactions[0];
+      if (paid && paid.admin_id === context.adminId && paid.plan_id === context.plan.id
+          && paid.reference === reference && paid.status === "completed"
+          && normaliseKenyanMobile(paid.payment_phone) === context.phone
+          && normalizeMac(paid.mac_address) === mac) pendingCheckoutId = reference;
+    }
+    res.json({ ok: true, ...quote, pendingCheckoutId });
   } catch (error) {
     logger.warn({ err: error }, "[hotspot/loyalty/quote] quote unavailable");
     res.status(503).json({ ok: false, error: "Loyalty points could not be checked right now." });
@@ -429,10 +584,11 @@ router.post("/hotspot/loyalty/redeem", async (req, res): Promise<void> => {
       return;
     }
     if (!context.hasCustomer) {
-      res.status(409).json({ ok: false, error: "This phone number does not have a Hotspot account in this service." });
+      res.status(409).json({ ok: false, error: "This device is not linked to a Hotspot account in this service." });
       return;
     }
-    const rows = await sbRpc<{
+    if (!await verifyLoyaltyAccount(req, res, context)) return;
+    const rows = await hotspotLoyaltyOperations.redeem<{
       checkout_id: string;
       points_balance: number | string;
       points_spent: number;
@@ -448,7 +604,7 @@ router.post("/hotspot/loyalty/redeem", async (req, res): Promise<void> => {
       res.status(503).json({ ok: false, error: "The loyalty redemption could not be confirmed. Your balance was not changed." });
       return;
     }
-    const accounts = await sbSelectStrict<{
+    const accounts = await hotspotLoyaltyOperations.select<{
       points_balance: number | string;
       fractional_balance: number | string;
     }>(

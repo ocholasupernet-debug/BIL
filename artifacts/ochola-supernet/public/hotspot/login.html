@@ -209,15 +209,8 @@
 <section id="loyaltyPointsSection" aria-labelledby="loyaltyPointsTitle" style="max-width:840px;margin:0 auto;padding:.5rem 1.25rem 1.5rem">
   <div id="loyaltyPointsCard" class="sec-card" style="max-width:840px;margin:0 auto;padding:1rem;background:#16453d;border:1px solid #85baa2;border-radius:.75rem;color:#f4faf7">
     <div style="font-size:.6875rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#c3f0d8">Your loyalty points</div>
-    <h2 id="loyaltyPointsTitle" style="margin:.375rem 0;color:#fff;font-size:1.125rem">Check your Hotspot rewards</h2>
-    <p style="margin:0 0 .875rem;color:rgba(244,250,247,.78);font-size:.8125rem;line-height:1.5">Enter the phone number linked to your Hotspot account to see your earned points.</p>
-    <form id="loyaltyPointsForm" onsubmit="return checkPortalLoyaltyPoints()">
-      <label class="lbl" for="loyaltyPhone" style="color:#c3f0d8">Mobile phone number</label>
-      <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:.625rem">
-        <input id="loyaltyPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="07XXXXXXXX or 2547XXXXXXXX" class="inp" aria-label="Phone number linked to your Hotspot account" oninput="resetPortalLoyaltyLookup()" />
-        <button id="loyaltyCheckButton" type="submit" class="btn btn-green">Check points</button>
-      </div>
-    </form>
+    <h2 id="loyaltyPointsTitle" style="margin:.375rem 0;color:#fff;font-size:1.125rem">Checking your points…</h2>
+    <p style="margin:0 0 .25rem;color:rgba(244,250,247,.78);font-size:.8125rem;line-height:1.5">Points are matched automatically to this connected device.</p>
     <p id="loyaltyPointsStatus" role="status" aria-live="polite" style="display:none;margin:.75rem 0 0;color:#dbece4;font-size:.8125rem;line-height:1.5"></p>
   </div>
 </section>
@@ -611,63 +604,202 @@ function setPortalLoyaltyStatus(message,isError){
   status.style.display=message?"block":"none";
   status.style.color=isError?"#fecaca":"#dbece4";
 }
-function resetPortalLoyaltyLookup(){
-  portalLoyaltyRequestId++;
-  var title=document.getElementById("loyaltyPointsTitle");
-  if(title)title.textContent="Check your Hotspot rewards";
-  setPortalLoyaltyStatus("",false);
+var portalLoyaltyTimer=null, portalLoyaltyKey="", portalLoyaltyLast=null;
+function fetchWithTimeout(url,options,ms){
+  var controller=typeof AbortController==="function"?new AbortController():null;
+  var timer=controller?setTimeout(function(){controller.abort();},ms||10000):null;
+  var opts=Object.assign({},options||{});
+  if(controller)opts.signal=controller.signal;
+  return fetch(url,opts).then(function(r){if(timer)clearTimeout(timer);return r;},function(e){if(timer)clearTimeout(timer);throw e;});
 }
-function checkPortalLoyaltyPoints(){
-  if(portalLoyaltyBusy)return false;
-  var phoneInput=document.getElementById("loyaltyPhone");
-  var phone=String(phoneInput&&phoneInput.value||"").trim().replace(/[\s()-]/g,"");
-  var plan=selectedPlan||PLANS[0]||EMBEDDED_PLANS[0];
-  var button=document.getElementById("loyaltyCheckButton");
+function portalLoyaltyScopeKey(){return [PORTAL_ADMIN_ID,PORTAL_ROUTER_ID,PORTAL_PORT_ID,PORTAL_DEVICE_MAC].join("|");}
+function loadPortalLoyaltyBalance(){
   var title=document.getElementById("loyaltyPointsTitle");
-  if(!/^(?:\+254|254|0)(?:7|1)\d{8}$/.test(phone)){
-    setPortalLoyaltyStatus("Enter a valid Kenyan mobile number linked to your Hotspot account.",true);
-    return false;
+  if(PORTAL_PREVIEW_ONLY||!portalCardEnabled("loyalty"))return;
+  if(!PORTAL_DEVICE_MAC){
+    if(title)title.textContent="Device not identified";
+    setPortalLoyaltyStatus("This device could not be identified, so its points cannot be shown. Reconnect to the hotspot Wi-Fi and reopen this page.",true);
+    return;
   }
-  if(PORTAL_ADMIN_ID<1||!plan||!Number.isSafeInteger(Number(plan.id))){
-    setPortalLoyaltyStatus("The Hotspot service is still loading. Please try again in a moment.",true);
-    return false;
+  if(PORTAL_ADMIN_ID<1)return;
+  var key=portalLoyaltyScopeKey();
+  if(key!==portalLoyaltyKey){
+    /* New device or service: drop any old points immediately, even if a request is still running. */
+    portalLoyaltyKey=key; portalLoyaltyRequestId++; portalLoyaltyBusy=false; portalLoyaltyLast=null;
+    if(title)title.textContent="Checking your points…";
+    setPortalLoyaltyStatus("",false);
   }
-  portalLoyaltyBusy=true;
+  if(portalLoyaltyBusy)return;
   var requestId=++portalLoyaltyRequestId;
-  if(button){button.disabled=true;button.textContent="Checking…";}
-  if(title)title.textContent="Checking your points…";
-  setPortalLoyaltyStatus("",false);
-  fetch(apiUrl("/api/hotspot/loyalty/quote"),{
+  portalLoyaltyBusy=true;
+  fetchWithTimeout(apiUrl("/api/hotspot/loyalty/balance"),{
     method:"POST",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify({
       adminId:PORTAL_ADMIN_ID,
-      plan_id:Number(plan.id),
-      phone:phone,
-      ...(DEVICE_MAC?{mac_address:DEVICE_MAC}:{}),
+      mac_address:PORTAL_DEVICE_MAC,
       ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
       ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})
     })
-  }).then(function(response){
+  },10000).then(function(response){
     return response.json().catch(function(){return{};}).then(function(data){return{ok:response.ok,data:data||{}};});
   }).then(function(result){
-    if(requestId!==portalLoyaltyRequestId)return;
+    if(requestId!==portalLoyaltyRequestId||key!==portalLoyaltyScopeKey())return;
     var data=result.data||{};
-    if(!result.ok||data.ok!==true||!Number.isFinite(Number(data.balance)))throw new Error(data.error||"Your points balance could not be checked.");
-    if(title)title.textContent=formatPortalLoyaltyPoints(data.balance)+" points";
-    var awarded=Number(data.pointsAwarded)||0;
-    setPortalLoyaltyStatus(awarded>0
-      ?"This "+plan.name+" package would earn "+formatPortalLoyaltyPoints(awarded)+" points after payment and account activation."
-      :"Your earned balance is shown above. This package does not currently award additional points.",false);
+    if(!result.ok||data.ok!==true||!Number.isFinite(Number(data.balance)))throw new Error(data.error||"Your points balance could not be loaded.");
+    var hasAccount=data.hasAccount!==false;
+    var balance=hasAccount?Number(data.balance):0;
+    if(title)title.textContent=formatPortalLoyaltyPoints(balance)+" points";
+    setPortalLoyaltyStatus(hasAccount?"":"No account is linked to this device yet, so it has 0 points. Points are earned after your first paid package.",false);
+    var changed=portalLoyaltyLast!==null&&portalLoyaltyLast!==balance;
+    portalLoyaltyLast=balance;
+    if(changed&&selectedPlan&&stkState==="idle"&&!tvPurchase)loadLoyaltyQuoteForPlan(true);
   }).catch(function(error){
     if(requestId!==portalLoyaltyRequestId)return;
-    if(title)title.textContent="Check your Hotspot rewards";
-    setPortalLoyaltyStatus(error&&error.message?error.message:"Your points balance could not be checked. Please try again.",true);
+    var message=error&&error.name==="AbortError"?"The points request timed out.":(error&&error.message?error.message:"Your points balance could not be loaded.");
+    setPortalLoyaltyStatus(message+" It will retry automatically.",true);
+  }).then(function(){if(requestId===portalLoyaltyRequestId)portalLoyaltyBusy=false;});
+}
+function startPortalLoyaltyBalance(){
+  if(portalLoyaltyTimer)clearInterval(portalLoyaltyTimer);
+  loadPortalLoyaltyBalance();
+  portalLoyaltyTimer=setInterval(function(){if(!document.hidden)loadPortalLoyaltyBalance();},30000);
+}
+
+/* Points choice inside the package checkout. Server resolves the account from the scoped device MAC; no phone is sent. */
+var loyQuote=null, loyState="idle", loyMode="mpesa", loyToken=0, loyRedeemBusy=false, loyRedeeming=false;
+var loyKeys={}, loyCheckouts={}, loyUncertain={}, loyConfirmNotice="";
+function hotspotLoginStorageKey(){
+  return ["ochola_hotspot_login_v1",window.location.host||"portal",PORTAL_ADMIN_ID>0?String(PORTAL_ADMIN_ID):"tenant"].map(encodeURIComponent).join(":");
+}
+function saveHotspotLoginCredentials(credentials){
+  if(!credentials||!credentials.username||!credentials.password)return;
+  loyCreds={username:String(credentials.username),password:String(credentials.password)};
+  try{window.localStorage.setItem(hotspotLoginStorageKey(),JSON.stringify({username:String(credentials.username),password:String(credentials.password)}));}catch(e){}
+}
+function readHotspotLoginCredentials(){
+  try{
+    var c=JSON.parse(window.localStorage.getItem(hotspotLoginStorageKey())||"null");
+    if(c&&typeof c.username==="string"&&c.username.trim()&&typeof c.password==="string"&&c.password)return{username:c.username.trim(),password:c.password};
+  }catch(e){}
+  return null;
+}
+var loyCreds=readHotspotLoginCredentials();
+function loyaltyNeedsConfirm(){
+  return !loyCreds&&!(selectedPlan&&loyCheckouts[loyaltyAttemptId(selectedPlan.id)])&&(loyaltyRedeemable()||!!loyaltyPendingCheckout());
+}
+function newLoyaltyKey(){
+  if(window.crypto&&typeof window.crypto.randomUUID==="function")return window.crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,function(ch){var v=Math.floor(Math.random()*16);return (ch==="x"?v:(v&3)|8).toString(16);});
+}
+function loyaltyAttemptId(planId){return portalLoyaltyScopeKey()+"|"+Number(planId);}
+function loyaltyScopePayload(){
+  return {adminId:PORTAL_ADMIN_ID,mac_address:PORTAL_DEVICE_MAC,
+    ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
+    ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})};
+}
+function loadLoyaltyQuoteForPlan(silent,proofRetried){
+  if(!silent){loyQuote=null; loyMode="mpesa"; loyState="idle";}
+  var token=++loyToken;
+  if(tvPurchase||!selectedPlan||!PORTAL_DEVICE_MAC||PORTAL_ADMIN_ID<1||PORTAL_PREVIEW_ONLY){loyQuote=null;loyState="idle";return;}
+  var planId=Number(selectedPlan.id);
+  var attempt=loyaltyAttemptId(planId);
+  if(!silent)loyState="loading";
+  var payload=loyaltyScopePayload(); payload.plan_id=planId;
+  if(loyCreds)payload.account_credentials={username:loyCreds.username,password:loyCreds.password};
+  if(loyKeys[attempt])payload.idempotency_key=loyKeys[attempt];
+  fetchWithTimeout(apiUrl("/api/hotspot/loyalty/quote"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)},10000)
+    .then(function(r){return r.json().catch(function(){return{};}).then(function(d){return{ok:r.ok,status:r.status,data:d||{}};});})
+    .then(function(result){
+      var pd=result.data||{};
+      if(result.status===401&&pd.verificationRequired===true&&!proofRetried){
+        /* Drop the bad proof and refresh public eligibility once, same nonce, no credentials. */
+        loyCreds=null; loyConfirmNotice="Confirm your hotspot account to use points.";
+        if(token===loyToken)loadLoyaltyQuoteForPlan(true,true);
+        return;
+      }
+      if(result.ok&&pd.ok===true&&typeof pd.pendingCheckoutId==="string"&&pd.pendingCheckoutId&&loyKeys[attempt]&&!loyCheckouts[attempt])loyCheckouts[attempt]=pd.pendingCheckoutId;
+      if(token!==loyToken||!selectedPlan||Number(selectedPlan.id)!==planId)return;
+      var d=result.data;
+      if(!result.ok||d.ok!==true||!Number.isFinite(Number(d.balance)))throw new Error("quote");
+      loyQuote={balance:Number(d.balance),pointsRequired:Number.isFinite(Number(d.pointsRequired))?Number(d.pointsRequired):null,pointsAwarded:Number(d.pointsAwarded)||0,canRedeem:d.canRedeem===true};
+      loyState="ready";
+    }).catch(function(){
+      if(token!==loyToken)return;
+      if(!silent){loyQuote=null; loyState="error";}
+    }).then(function(){
+      if(token===loyToken&&stkState==="idle"&&selectedPlan)renderModal();
+    });
+}
+function loyaltyPendingCheckout(){
+  return !tvPurchase&&!PORTAL_PREVIEW_ONLY&&selectedPlan?(loyCheckouts[loyaltyAttemptId(selectedPlan.id)]||""):"";
+}
+function loyaltyRedeemable(){
+  return !tvPurchase&&!PORTAL_PREVIEW_ONLY&&loyState==="ready"&&loyQuote&&loyQuote.canRedeem===true&&loyQuote.pointsRequired>0;
+}
+function loyaltyEffectiveMode(){
+  if(loyaltyPendingCheckout()||(selectedPlan&&loyUncertain[loyaltyAttemptId(selectedPlan.id)]))return "points";
+  return loyaltyRedeemable()&&(loyMode==="points"||!canStartPaymentCheckout())?"points":"mpesa";
+}
+function setLoyaltyMode(mode){
+  var input=document.getElementById("stkPhoneInput");
+  if(input)stkPhone=input.value;
+  loyMode=mode==="points"?"points":"mpesa";
+  renderModal();
+}
+function finishLoyaltyAccess(attempt,checkoutId){
+  paidCheckoutId=String(checkoutId); loyRedeeming=false;
+  stkState="provisioning"; renderModal();
+  return assignPaidHotspotAccess(paidCheckoutId).then(function(){
+    delete loyKeys[attempt]; delete loyCheckouts[attempt];
+    stkState="confirmed"; renderModal();
+  }).catch(function(error){
+    /* The checkout already exists; retry setup (Retry Account Setup) never debits again. */
+    stkError=error&&error.message?error.message:"The hotspot account could not be updated yet.";
+    stkState="access_error"; renderModal();
   }).then(function(){
-    portalLoyaltyBusy=false;
-    if(button){button.disabled=false;button.textContent="Check points";}
+    loyRedeemBusy=false; loadPortalLoyaltyBalance();
   });
-  return false;
+}
+function redeemLoyaltyPoints(){
+  if(loyRedeemBusy||!selectedPlan)return;
+  var planId=Number(selectedPlan.id);
+  var attempt=loyaltyAttemptId(planId);
+  if(loyCheckouts[attempt]){loyRedeemBusy=true;finishLoyaltyAccess(attempt,loyCheckouts[attempt]);return;}
+  if(!loyaltyRedeemable()&&!loyUncertain[attempt])return;
+  var typedCreds=null, creds=loyCreds;
+  if(!creds){
+    var uEl=document.getElementById("loyConfirmUser"), pEl=document.getElementById("loyConfirmPass");
+    var u=uEl?uEl.value.trim():"", pw=pEl?pEl.value:"";
+    if(!u||!pw){loyConfirmNotice="Enter your hotspot account username and password to use points.";renderModal();return;}
+    creds=typedCreds={username:u,password:pw};
+  }
+  if(!loyKeys[attempt])loyKeys[attempt]=newLoyaltyKey();
+  if(!PORTAL_DEVICE_MAC||PORTAL_ADMIN_ID<1){stkError="This device could not be identified. Reconnect to the hotspot Wi-Fi and try again.";stkState="error";renderModal();return;}
+  loyRedeemBusy=true; loyRedeeming=true; stkError=""; stkState="loading"; renderModal();
+  var payload=loyaltyScopePayload(); payload.plan_id=planId; payload.idempotency_key=loyKeys[attempt];
+  payload.account_credentials={username:creds.username,password:creds.password};
+  portalPaymentRequest("/api/hotspot/loyalty/redeem",payload,"Points redemption")
+    .catch(function(error){return{ok:false,uncertain:true,data:{error:error&&error.message?error.message:"Points redemption failed before a response was received."}};})
+    .then(function(result){
+      var d=result.data||{};
+      if(result.status===401&&d.verificationRequired===true){
+        loyCreds=null; loyRedeemBusy=false; loyRedeeming=false; stkError="";
+        loyConfirmNotice="We could not confirm that hotspot account. Check the details and try again.";
+        stkState="idle"; renderModal(); return;
+      }
+      if(!result.ok||d.ok!==true||!d.checkout_id){
+        if(result.uncertain||!result.status||result.status>=500||result.status===408||result.status===429)loyUncertain[attempt]=true;
+        /* Key is kept: a retry may be the same uncertain request and the server dedupes it. */
+        loyRedeemBusy=false; loyRedeeming=false;
+        stkError=d.error||"Points redemption could not be completed.";stkState="error";renderModal();
+        if(selectedPlan&&Number(selectedPlan.id)===planId)loadLoyaltyQuoteForPlan(true);return;
+      }
+      loyCheckouts[attempt]=String(d.checkout_id); delete loyUncertain[attempt];
+      if(typedCreds){saveHotspotLoginCredentials(typedCreds);loyCreds=typedCreds;}
+      loyConfirmNotice="";
+      return finishLoyaltyAccess(attempt,d.checkout_id);
+    });
 }
 function isSupportedPaymentGateway(gateway){
   return gateway==="mpesa_paybill"||gateway==="mpesa_till_push"||gateway==="bank_stk_push";
@@ -676,6 +808,10 @@ function portalMpesaPromptEnabled(config){
   if(!config||typeof config!=="object")return false;
   if(typeof config.mpesaPromptEnabled==="boolean")return config.mpesaPromptEnabled;
   return config.mpesaPrompt==="Enable";
+}
+function canOpenPurchaseModal(){
+  return canStartPaymentCheckout()
+    ||(!PORTAL_PREVIEW_ONLY&&PAYMENT_STATUS_LOADED&&!!PORTAL_DEVICE_MAC&&PORTAL_ADMIN_ID>0);
 }
 function canStartPaymentCheckout(){
   return MPESA_PROMPT_ENABLED&&!PORTAL_PREVIEW_ONLY
@@ -775,6 +911,7 @@ function normaliseMac(value){
   return compact.toUpperCase().match(/.{2}/g).join(":");
 }
 var DEVICE_MAC=normaliseMac(ROUTER_MAC)||normaliseMac(PORTAL_QUERY.get("mac")||PORTAL_QUERY.get("mac-address")||"");
+var PORTAL_DEVICE_MAC=DEVICE_MAC;
 function normaliseIp(value){
   var raw=String(value||"").trim();
   if(!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(raw))return "";
@@ -1351,9 +1488,9 @@ function renderPlans(preserveLoadingMarkup){
     var c=COLORS[i%COLORS.length];
     var dataAllowance=formatPortalDataAllowance(p);
     var sharedDevices=formatPortalSharedDevices(p.shared_users);
-    var checkoutAvailable=canStartPaymentCheckout();
+    var checkoutAvailable=canOpenPurchaseModal();
     var checkoutLabel=checkoutAvailable
-      ?PAYMENT_METHOD_READY?"Connect Now":"Try checkout"
+      ?!canStartPaymentCheckout()?"Pay with points":PAYMENT_METHOD_READY?"Connect Now":"Try checkout"
       :PAYMENT_STATUS_LOADED?"Payment method not configured":"Checking payment…";
      return '<div class="plan-card package-shape-'+PORTAL_PACKAGE_SHAPE+'" style="border:1px solid '+c.from+'22"'+
       ' onmouseover="this.style.boxShadow=\'0 16px 48px '+c.glow+'30,0 0 0 1px '+c.from+'40\'"'+
@@ -1374,9 +1511,10 @@ function renderPlans(preserveLoadingMarkup){
 
 /* ── STK Modal ── */
 function openModal(i){
-  if(!canStartPaymentCheckout())return;
+  if(!canOpenPurchaseModal())return;
   tvPurchase=false; tvDeviceName=""; tvDeviceRouterId=0; tvRememberDevice=false; tvDeviceSaveNotice="";
   selectedPlan=PLANS[i]; stkState="idle"; stkPhone="";
+  loadLoyaltyQuoteForPlan(false);
   document.getElementById("modalPlanName").textContent=selectedPlan.name;
   document.getElementById("modalPlanDetails").textContent="Ksh "+selectedPlan.price+" · "+selectedPlan.validity+" "+selectedPlan.unit+" · "+formatPortalDataAllowance(selectedPlan)+" · "+formatPortalSharedDevices(selectedPlan.shared_users);
   renderModal();
@@ -1385,7 +1523,7 @@ function openModal(i){
 function closeModal(){
   clearInterval(pollTimer);
   document.getElementById("stkModal").style.display="none";
-  selectedPlan=null; stkState="idle";
+  selectedPlan=null; stkState="idle"; loyToken++; loyQuote=null; loyState="idle";
 }
 
 var PHONE_SVG='<svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="white" stroke-width="1.75"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 5.25v1.5z"/></svg>';
@@ -1399,16 +1537,46 @@ function pingRings(color,delay){
 function renderModal(){
   var b=document.getElementById("modalBody");
   if(stkState==="idle"){
-    b.innerHTML='<div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.22)">'+
-       '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.</p>'+
-      '</div>'+
+    var existingPhone=document.getElementById("stkPhoneInput");
+    if(existingPhone)stkPhone=existingPhone.value;
+    var mpesaOk=canStartPaymentCheckout();
+    var mode=loyaltyEffectiveMode();
+    var identified=(DEVICE_MAC||DEVICE_IP)&&PORTAL_ADMIN_ID>0;
+    var loyHtml="";
+    if(!tvPurchase&&loyState==="loading"){
+      loyHtml='<p role="status" style="margin-bottom:1rem;font-size:.8rem;color:rgba(255,255,255,.55)">Checking loyalty points for this device…</p>';
+    }else if(loyaltyRedeemable()){
+      var radio=function(value,label){
+        var on=mode===value;
+        return '<label style="display:flex;align-items:center;gap:.6rem;cursor:pointer;padding:.65rem .75rem;border-radius:.6rem;font-size:.8125rem;color:rgba(255,255,255,.85);border:1px solid '+(on?'rgba(117,220,169,.55)':'rgba(255,255,255,.12)')+';background:'+(on?'rgba(67,160,112,.12)':'transparent')+'">'+
+          '<input type="radio" name="portalPaymentChoice" value="'+value+'" '+(on?'checked ':'')+'onchange="setLoyaltyMode(\''+value+'\')" />'+label+'</label>';
+      };
+      loyHtml='<div role="group" aria-label="Payment method" style="display:grid;gap:.5rem;margin-bottom:1.25rem">'+
+        '<div style="display:flex;justify-content:space-between;font-size:.75rem;color:rgba(255,255,255,.6)"><span>Your points balance</span><strong style="color:#9fe0be">'+formatPortalLoyaltyPoints(loyQuote.balance)+' points</strong></div>'+
+        radio("points",'Redeem <strong>'+formatPortalLoyaltyPoints(loyQuote.pointsRequired)+' points</strong> for this full plan')+
+        (mpesaOk?radio("mpesa",'Pay Ksh '+(selectedPlan?selectedPlan.price:"")+' with M-Pesa'):'')+
+        '</div>';
+    }
+    var confirmHtml=(mode==="points"&&loyaltyNeedsConfirm())?
+      '<div role="group" aria-label="Confirm hotspot account" style="display:grid;gap:.5rem;margin-bottom:1.25rem">'+
+      '<p style="font-size:.78rem;color:rgba(255,255,255,.7)">'+escapePortalText(loyConfirmNotice||"Confirm your hotspot account once on this device to use points.")+'</p>'+
+      '<input id="loyConfirmUser" type="text" autocomplete="username" placeholder="Hotspot username" class="inp" />'+
+      '<input id="loyConfirmPass" type="password" autocomplete="current-password" placeholder="Hotspot password" class="inp" /></div>':'';
+    var phoneHtml=mode==="points"?'':
       '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
-      '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+stkPhone+'" />'+
+      '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+escapePortalText(stkPhone)+'" />';
+    var noMethod=!mpesaOk&&mode!=="points"&&loyState!=="loading";
+    b.innerHTML='<div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.22)">'+
+       '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">'+(mode==="points"
+         ?(loyaltyPendingCheckout()?'Your points were already redeemed for this package. Finish setting up your access; no more points will be used.':'Redeem your loyalty points for this package. No phone number or M-Pesa payment is needed.')
+         :noMethod?'No M-Pesa payment method is available for this service, and this device cannot pay with points for this package.'
+         :'Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.')+'</p>'+
+      '</div>'+loyHtml+confirmHtml+(noMethod?'':phoneHtml)+
       '<div id="stkErrBox" style="display:none;margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>'+
-      '<button onclick="sendStk()" '+((DEVICE_MAC||DEVICE_IP)&&PORTAL_ADMIN_ID>0?'':'disabled')+' class="btn btn-purple btn-full" style="font-size:.875rem;padding:.875rem;opacity:'+((DEVICE_MAC||DEVICE_IP)&&PORTAL_ADMIN_ID>0?'1':'.5')+'">'+
-      'Send STK Push &mdash; Ksh '+(selectedPlan?selectedPlan.price:"")+
-      '</button>';
-     if(PORTAL_PAYMENT_INSTRUCTIONS){
+      (noMethod?'':'<button onclick="'+(mode==="points"?'redeemLoyaltyPoints()':'sendStk()')+'" '+(identified?'':'disabled')+' class="btn btn-purple btn-full" style="font-size:.875rem;padding:.875rem;opacity:'+(identified?'1':'.5')+'">'+
+      (mode==="points"?(loyaltyPendingCheckout()?'Finish access setup':'Redeem '+formatPortalLoyaltyPoints(loyQuote.pointsRequired)+' points'):'Send STK Push &mdash; Ksh '+(selectedPlan?selectedPlan.price:""))+
+      '</button>');
+     if(PORTAL_PAYMENT_INSTRUCTIONS&&mode!=="points"&&!noMethod){
        var instruction=document.getElementById("paymentInstructionText");
        if(instruction)instruction.textContent=PORTAL_PAYMENT_INSTRUCTIONS;
      }
@@ -1419,8 +1587,8 @@ function renderModal(){
       '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">'+
       '<div style="width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,#a855f7,#6d28d9);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(147,51,234,.5)">'+PHONE_SVG+'</div>'+
       '</div></div>'+
-      '<p style="font-size:1rem;font-weight:700;color:#d8b4fe;margin-bottom:.5rem">Sending STK Push…</p>'+
-      '<p style="color:rgba(255,255,255,.45);font-size:.875rem">Contacting M-Pesa, please wait</p></div>';
+      '<p style="font-size:1rem;font-weight:700;color:#d8b4fe;margin-bottom:.5rem">'+(loyRedeeming?"Redeeming points…":"Sending STK Push…")+'</p>'+
+      '<p style="color:rgba(255,255,255,.45);font-size:.875rem">'+(loyRedeeming?"Confirming your balance, please wait":"Contacting M-Pesa, please wait")+'</p></div>';
    }else if(stkState==="provisioning"){
      b.innerHTML='<div style="text-align:center;padding:2.5rem 0">'+
        '<div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">'+
@@ -1477,6 +1645,7 @@ function renderModal(){
  function applyPaidHotspotCredentials(credentials){
    if(!credentials||!credentials.username||!credentials.password)return false;
    hotspotCredentials={username:String(credentials.username),password:String(credentials.password)};
+   saveHotspotLoginCredentials(hotspotCredentials);
    var user=document.getElementById("loginUser");
    var pass=document.getElementById("loginPass");
    if(user)user.value=hotspotCredentials.username;
@@ -1551,7 +1720,7 @@ function portalPaymentRequest(path,payload,label){
       if(!data||typeof data!=="object"||Array.isArray(data)){
         throw new Error(label+" received an invalid payment response (HTTP "+response.status+") from "+url+".");
       }
-      return{ok:response.ok,data:data};
+      return{ok:response.ok,status:response.status,data:data};
     });
   },function(){
     throw new Error(label+" could not reach "+url+". Check HTTPS access before Hotspot login. No payment confirmation was received.");
@@ -2113,6 +2282,8 @@ function doLogin(form){
   var btn=document.getElementById("loginBtn");
   var pass=document.getElementById("loginPass");
   if(!pass||!pass.value)return false;
+  var loginUserEl=document.getElementById("loginUser");
+  if(loginUserEl&&loginUserEl.value.trim())saveHotspotLoginCredentials({username:loginUserEl.value.trim(),password:pass.value});
   btn.innerHTML=SPINNER+" Connecting…"; btn.style.opacity=".65";
   pass.value=routerLoginPassword(pass.value);
   return true;
@@ -2198,6 +2369,7 @@ function redeemVoucher(form){
     }
     voucherRedeemedCredentials={username:String(data.credentials.username),password:String(data.credentials.password)};
     voucherRedeemedAdminId=Number(data.account_admin_id);
+    saveHotspotLoginCredentials(voucherRedeemedCredentials);
     setVoucherError("");
     document.getElementById("voucherFormWrap").style.display="none";
     document.getElementById("voucherSuccess").style.display="block";
@@ -2295,12 +2467,14 @@ function renderPortalDeviceMac(){
     value.textContent=mac||"Resolved by router";
   }
 }
+(function(){var base=applyPortalConfig;applyPortalConfig=function(data){var r=base(data);try{loadPortalLoyaltyBalance();}catch(e){}return r;};})();
 try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
   EMBEDDED_PLANS=normalisePlanList(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.plans);
 }
 loadPlans();
 bindPlanButtons();
 renderPortalDeviceMac();
+startPortalLoyaltyBalance();
 var portalPaidHandoffStarted=applyCredentialsFromHash();
 loadPortalTypography(function(){
   loadPlans();
