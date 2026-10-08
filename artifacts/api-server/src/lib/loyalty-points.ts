@@ -33,3 +33,19 @@ export function canRedeemHotspotPlan(balance: number, pointsRequired: number | n
     && (pointsRequired ?? 0) > 0
     && balance >= (pointsRequired ?? Number.POSITIVE_INFINITY);
 }
+
+export function resolveHotspotRedemptionPoints(
+  planPrice: number | string | null | undefined,
+  configuredPoints: number | null | undefined,
+): number | null {
+  if (configuredPoints !== null && configuredPoints !== undefined) {
+    return Number.isSafeInteger(configuredPoints) && configuredPoints > 0
+      ? configuredPoints
+      : null;
+  }
+
+  const price = Number(planPrice);
+  if (!Number.isFinite(price) || price <= 0 || price > MAX_AWARD) return null;
+  const defaultPoints = Math.ceil(price);
+  return Number.isSafeInteger(defaultPoints) && defaultPoints > 0 ? defaultPoints : null;
+}

@@ -189,8 +189,9 @@ begin
 end;
 $$;
 
--- Redeem the exact points configured for one Hotspot plan. Creating the zero-
--- cash transaction, debit ledger row, and balance update is one DB transaction.
+-- Redeem the configured points for one Hotspot plan. A null cost uses the
+-- whole-point package price; zero explicitly disables redemption. Creating
+-- the zero-cash transaction, debit ledger row, and balance update is atomic.
 create or replace function public.redeem_hotspot_loyalty_points(
   p_admin_id bigint,
   p_plan_id bigint,
@@ -254,6 +255,12 @@ begin
   select rule.redemption_points into v_points_required
     from public.isp_loyalty_plan_rules as rule
    where rule.admin_id = p_admin_id and rule.plan_id = p_plan_id;
+  if v_points_required is null then
+    if coalesce(v_plan.price, 0) <= 0 or v_plan.price > 2147483647 then
+      raise exception 'This Hotspot plan has no valid points redemption price.';
+    end if;
+    v_points_required := ceil(v_plan.price)::integer;
+  end if;
   if coalesce(v_points_required, 0) <= 0 then
     raise exception 'This plan is not enabled for loyalty redemption.';
   end if;
