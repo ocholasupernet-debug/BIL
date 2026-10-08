@@ -3302,15 +3302,6 @@ export async function reconcileHotspotUserAccess(
   const expiryMs = opts.expiresAt ? Date.parse(opts.expiresAt) : NaN;
   const expired = Number.isFinite(expiryMs) && expiryMs <= Date.now();
   const enabled = opts.enabled && !expired;
-  const fields = {
-    password: opts.password,
-    profile: opts.profile,
-    disabled: !enabled,
-    ...(opts.server !== undefined ? { server: opts.server } : {}),
-    ...(opts.address !== undefined ? { address: opts.address ?? "" } : {}),
-    ...(opts.comment !== undefined ? { comment: opts.comment } : {}),
-    ...(opts.limitBytesTotal !== undefined ? { limitBytesTotal: opts.limitBytesTotal } : {}),
-  };
 
   await requireHotspotUserProfile(creds, opts.profile);
 
@@ -3323,20 +3314,16 @@ export async function reconcileHotspotUserAccess(
     await removeHotspotUserExpiry(creds, opts.name);
   }
 
-  try {
-    await updateHotspotUser(creds, opts.name, fields);
-  } catch {
-    await addHotspotUser(creds, {
-      name: opts.name,
-      password: opts.password,
-      profile: opts.profile,
-      server: opts.server,
-      comment: opts.comment,
-      address: opts.address ?? undefined,
-      limitBytesTotal: opts.limitBytesTotal,
-    });
-    if (!enabled) await updateHotspotUser(creds, opts.name, { disabled: true });
-  }
+  await upsertHotspotUser(creds, {
+    name: opts.name,
+    password: opts.password,
+    profile: opts.profile,
+    server: opts.server,
+    comment: opts.comment,
+    address: opts.address !== undefined ? opts.address ?? "" : undefined,
+    limitBytesTotal: opts.limitBytesTotal,
+    disabled: !enabled,
+  });
 
   if (!enabled) {
     await disconnectHotspotActiveUser(creds, opts.name);
@@ -3596,24 +3583,83 @@ export async function upsertHotspotUser(
       conn.write(["/ip/hotspot/user/print", `?name=${opts.name}`]),
       ms,
     )) as Record<string, string>[];
-    const existing = Array.isArray(rows) ? rows[0] : undefined;
-    const params: string[] = existing?.[".id"]
-      ? ["/ip/hotspot/user/set", `=.id=${existing[".id"]}`]
-      : [
-          "/ip/hotspot/user/add",
-          `=name=${opts.name}`,
-          `=profile=${opts.profile ?? "default"}`,
-        ];
-    params.push(`=password=${opts.password}`);
-    if (existing && opts.profile !== undefined) params.push(`=profile=${opts.profile}`);
-    if (opts.disabled !== undefined) params.push(`=disabled=${opts.disabled ? "yes" : "no"}`);
-    if (opts.comment) params.push(`=comment=${opts.comment}`);
-    if (opts.server) params.push(`=server=${opts.server}`);
-    if (opts.email) params.push(`=email=${opts.email}`);
-    if (opts.address) params.push(`=address=${opts.address}`);
-    if (opts.limitUptime) params.push(`=limit-uptime=${opts.limitUptime}`);
-    if (opts.limitBytesTotal) params.push(`=limit-bytes-total=${opts.limitBytesTotal}`);
-    await withTimeout(conn.write(params), ms);
+    const selectExisting = (records: Record<string, string>[]) => {
+      const matches = records.filter(row =>
+        row.name === opts.name && Boolean(row[".id"]),
+      );
+      if (matches.length <= 1) return matches[0];
+      if (opts.server) {
+        const serverMatches = matches.filter(row => row.server === opts.server);
+        if (serverMatches.length === 1) return serverMatches[0];
+        if (serverMatches.length > 1) {
+          throw new Error(`RouterOS returned multiple Hotspot users named '${opts.name}' on server '${opts.server}'.`);
+        }
+        const allServerMatches = matches.filter(row => !row.server || row.server === "all");
+        if (allServerMatches.length === 1) return allServerMatches[0];
+        if (allServerMatches.length > 1) {
+          throw new Error(`RouterOS returned multiple all-server Hotspot users named '${opts.name}'.`);
+        }
+      }
+      throw new Error(`RouterOS returned multiple Hotspot users named '${opts.name}'; the server binding is ambiguous.`);
+    };
+    const existing = selectExisting(Array.isArray(rows) ? rows : []);
+
+    const writeForExistingUser = async (userId: string) => {
+      const params = ["/ip/hotspot/user/set", `=.id=${userId}`, `=password=${opts.password}`];
+      if (opts.profile !== undefined) params.push(`=profile=${opts.profile}`);
+      if (opts.disabled !== undefined) params.push(`=disabled=${opts.disabled ? "yes" : "no"}`);
+      if (opts.comment !== undefined) params.push(`=comment=${opts.comment}`);
+      if (opts.server !== undefined) params.push(`=server=${opts.server}`);
+      if (opts.email) params.push(`=email=${opts.email}`);
+      if (opts.address !== undefined) params.push(`=address=${opts.address}`);
+      if (opts.limitUptime) params.push(`=limit-uptime=${opts.limitUptime}`);
+      if (opts.limitBytesTotal) params.push(`=limit-bytes-total=${opts.limitBytesTotal}`);
+      await withTimeout(conn.write(params), ms);
+    };
+
+    if (existing?.[".id"]) {
+      // A failed update must remain an update failure; never mask it by trying
+      // to add the same username and replacing the useful error with a
+      // duplicate-name failure.
+      await writeForExistingUser(existing[".id"]);
+      return;
+    }
+
+    const addParams = [
+      "/ip/hotspot/user/add",
+      `=name=${opts.name}`,
+      `=password=${opts.password}`,
+      `=profile=${opts.profile ?? "default"}`,
+    ];
+    if (opts.disabled !== undefined) addParams.push(`=disabled=${opts.disabled ? "yes" : "no"}`);
+    if (opts.comment) addParams.push(`=comment=${opts.comment}`);
+    if (opts.server) addParams.push(`=server=${opts.server}`);
+    if (opts.email) addParams.push(`=email=${opts.email}`);
+    if (opts.address) addParams.push(`=address=${opts.address}`);
+    if (opts.limitUptime) addParams.push(`=limit-uptime=${opts.limitUptime}`);
+    if (opts.limitBytesTotal) addParams.push(`=limit-bytes-total=${opts.limitBytesTotal}`);
+
+    try {
+      await withTimeout(conn.write(addParams), ms);
+    } catch (addError) {
+      const message = addError instanceof Error ? addError.message : String(addError);
+      if (!/already have user with this name/i.test(message)) throw addError;
+
+      // The name query can miss a pre-existing RouterOS row, and a concurrent
+      // payment can create it between the read and add. On the specific
+      // duplicate-name response, re-read exact names and update the existing
+      // row instead of failing the paid account or creating a second one.
+      const allRows = (await withTimeout(
+        conn.write([
+          "/ip/hotspot/user/print",
+          "=.proplist=.id,name,server,profile,comment",
+        ]),
+        ms,
+      )) as Record<string, string>[];
+      const conflictedUser = selectExisting(Array.isArray(allRows) ? allRows : []);
+      if (!conflictedUser?.[".id"]) throw addError;
+      await writeForExistingUser(conflictedUser[".id"]);
+    }
   });
 }
 

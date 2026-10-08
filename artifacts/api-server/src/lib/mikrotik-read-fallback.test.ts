@@ -8,6 +8,7 @@ import {
   reconnectHotspotUserByMac,
   ensureHotspotServerAddressPool,
   ensureRouterFileDirectory,
+  reconcileHotspotUserAccess,
   upsertHotspotUser,
   resolveHotspotClientIpByMac,
   fetchBridgePortLayout,
@@ -818,6 +819,76 @@ test("paid hotspot user upsert creates or updates through one RouterOS connectio
       "/ip/hotspot/user/set",
     ]);
     assert.ok(commands[1]?.command.includes("=.id=*7"));
+  });
+});
+
+test("paid Hotspot edit recovers an existing RouterOS user when the name query misses it", async () => {
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/user/profile/print") {
+      return [{ ".id": "*p1", name: "tv-package" }];
+    }
+    if (command[0] === "/system/scheduler/print") return [];
+    if (command[0] === "/ip/hotspot/user/print") {
+      if (command.some(word => word.startsWith("?name="))) return [];
+      return [{ ".id": "*7", name: "paid-tv-account", server: "all" }];
+    }
+    if (command[0] === "/ip/hotspot/user/add") {
+      throw new Error("failure: already have user with this name for this server");
+    }
+    return [];
+  }, async ({ port, connectedUsers, commands }) => {
+    await reconcileHotspotUserAccess(routerCredentials(port), {
+      name: "paid-tv-account",
+      password: "12345",
+      profile: "tv-package",
+      enabled: true,
+      address: null,
+      resetCounters: false,
+    });
+
+    assert.ok(connectedUsers.length >= 1);
+    assert.ok(connectedUsers.every(username => username === savedAccount));
+    assert.deepEqual(
+      commands
+        .filter(({ command }) => command[0]?.startsWith("/ip/hotspot/user/"))
+        .map(({ command }) => command[0]),
+      ["/ip/hotspot/user/profile/print", "/ip/hotspot/user/print", "/ip/hotspot/user/add", "/ip/hotspot/user/print", "/ip/hotspot/user/set"],
+    );
+    const setCommand = commands.find(({ command }) => command[0] === "/ip/hotspot/user/set")?.command;
+    assert.ok(setCommand?.includes("=.id=*7"));
+    assert.ok(setCommand?.includes("=profile=tv-package"));
+    assert.ok(setCommand?.includes("=address="));
+  });
+});
+
+test("a real RouterOS update failure is not hidden by retrying add", async () => {
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/user/profile/print") {
+      return [{ ".id": "*p1", name: "tv-package" }];
+    }
+    if (command[0] === "/system/scheduler/print") return [];
+    if (command[0] === "/ip/hotspot/user/print") {
+      return [{ ".id": "*7", name: "paid-tv-account", server: "all" }];
+    }
+    if (command[0] === "/ip/hotspot/user/set") {
+      throw new Error("failure: profile is invalid");
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    await assert.rejects(
+      reconcileHotspotUserAccess(routerCredentials(port), {
+        name: "paid-tv-account",
+        password: "12345",
+        profile: "tv-package",
+        enabled: true,
+        resetCounters: false,
+      }),
+      /failure: profile is invalid/,
+    );
+    assert.equal(
+      commands.some(({ command }) => command[0] === "/ip/hotspot/user/add"),
+      false,
+    );
   });
 });
 
