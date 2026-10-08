@@ -76,13 +76,13 @@ export function normalizeLiveIdentity(value?: string | null) {
 
 export function prepaidServiceType(value?: string | null) {
   const type = String(value ?? "").toLowerCase();
-  return type === "trial" || type === "trials" ? "hotspot" : type;
+  return type === "trial" || type === "trials" || type === "voucher" ? "hotspot" : type;
 }
 
 export function purchaseUsername(user: PrepaidOnlineCustomer) {
   const type = String(user.type ?? "").toLowerCase();
   if (type === "vlan") return user.ip_address || `VLAN customer #${user.id}`;
-  const actual = type === "hotspot" ? user.username : (user.pppoe_username || user.username);
+  const actual = type === "hotspot" || type === "voucher" ? user.username : (user.pppoe_username || user.username);
   if (actual) return actual;
   return `prepaid-${user.id}`;
 }

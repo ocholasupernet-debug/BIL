@@ -167,3 +167,47 @@ test("tenant ownership storage is private and included in the deployment migrati
   assert.match(migration, /ON CONFLICT \(code\) DO NOTHING/);
   assert.match(runner, /2026_account_scoped_hotspot_vouchers\.sql/);
 });
+
+test("voucher redemption limits create separate tracked Hotspot prepaid accounts", async () => {
+  const [migration, route, customersRoute, portal, page, adminLayout, runner] = await Promise.all([
+    read("../migrations/2026_hotspot_voucher_multi_redemption.sql"),
+    read("../src/routes/hotspot-vouchers-route.ts"),
+    read("../src/routes/customers.ts"),
+    read("../../ochola-supernet/src/pages/portal/HotspotLogin.tsx"),
+    read("../../ochola-supernet/src/pages/admin/Vouchers.tsx"),
+    read("../../ochola-supernet/src/components/layout/AdminLayout.tsx"),
+    read("../scripts/apply-deployment-migrations.mjs"),
+  ]);
+
+  assert.match(migration, /FROM public\.isp_radius_vouchers AS voucher[\s\S]*FOR UPDATE/);
+  assert.match(migration, /redemption_count >= greatest\(1, voucher_row\.max_redemptions\)/);
+  assert.match(migration, /INSERT INTO public\.isp_customers[\s\S]*'hotspot'/);
+  assert.match(migration, /INSERT INTO public\.isp_radius_voucher_redemptions/);
+  assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS isp_radius_voucher_redemptions_mac_uidx/);
+  assert.match(migration, /'account_admin_id', activation_row\.out_account_admin_id/);
+  assert.match(route, /max_redemptions: maxRedemptions/);
+  assert.match(route, /redemption_accounts: accountRowsForStatus/);
+  assert.match(customersRoute, /accountOwnerId = returnedAccountOwnerId/);
+  assert.match(customersRoute, /admin_id=eq\.\$\{accountOwnerId\}/);
+  assert.match(portal, /contact: voucherPhone\.trim\(\)/);
+  assert.match(page, /maxRedemptions/);
+  assert.match(page, /redemption_accounts\.map/);
+  assert.doesNotMatch(page, /RouterSyncBar|voucher-restore|\/api\/admin\/sync\/users/);
+  assert.match(adminLayout, /name: "Loyalty points"[\s\S]*name: "Vouchers"/);
+  assert.match(runner, /2026_hotspot_voucher_multi_redemption\.sql/);
+});
+
+test("voucher expiry is an East Africa redeem-by deadline and shows the exact expiry", async () => {
+  const [migration, route, helper, page] = await Promise.all([
+    read("../migrations/2026_hotspot_voucher_multi_redemption.sql"),
+    read("../src/routes/hotspot-vouchers-route.ts"),
+    read("../src/lib/hotspot-voucher-redemption.ts"),
+    read("../../ochola-supernet/src/pages/admin/Vouchers.tsx"),
+  ]);
+
+  assert.match(migration, /HOTSPOT_VOUCHER_EXPIRED_AT:[\s\S]*to_char\(voucher_row\.expires_at AT TIME ZONE 'UTC'/);
+  assert.match(route, /formatVoucherExpiryInEastAfrica\(expiryMarker\)/);
+  assert.match(helper, /timeZone: "Africa\/Nairobi"/);
+  assert.match(helper, /T23:59:59\.999\+03:00/);
+  assert.match(page, /Redeem-by \(EAT\)/);
+});

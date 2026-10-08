@@ -835,12 +835,38 @@ create table if not exists isp_radius_vouchers (
   data_limit_mb  numeric(14,2),
   data_cap_mode  text not null default 'disconnect'
     check (data_cap_mode in ('disconnect', 'throttle')),
+  max_redemptions integer not null default 1
+    check (max_redemptions between 1 and 500),
   expires_at     timestamptz,
   created_at     timestamptz not null default now(),
   redeemed_at    timestamptz,
   redeemed_by_phone text,
+  redeemed_mac_address text,
+  service_expires_at timestamptz,
   prepaid_customer_id bigint references isp_customers(id) on delete set null
 );
+create table if not exists isp_radius_voucher_redemptions (
+  id                    bigserial primary key,
+  admin_id              bigint not null references isp_admins(id) on delete cascade,
+  voucher_id            bigint not null references isp_radius_vouchers(id) on delete cascade,
+  identity_key          text not null,
+  prepaid_customer_id   bigint references isp_customers(id) on delete set null,
+  redeemed_by_phone     text,
+  redeemed_mac_address  text,
+  redeemed_at           timestamptz not null default now(),
+  service_expires_at    timestamptz,
+  created_at            timestamptz not null default now()
+);
+create unique index if not exists isp_radius_voucher_redemptions_identity_uidx
+  on isp_radius_voucher_redemptions(voucher_id, identity_key);
+create unique index if not exists isp_radius_voucher_redemptions_customer_uidx
+  on isp_radius_voucher_redemptions(voucher_id, prepaid_customer_id)
+  where prepaid_customer_id is not null;
+create unique index if not exists isp_radius_voucher_redemptions_mac_uidx
+  on isp_radius_voucher_redemptions(voucher_id, redeemed_mac_address)
+  where redeemed_mac_address is not null;
+create index if not exists isp_radius_voucher_redemptions_admin_created_idx
+  on isp_radius_voucher_redemptions(admin_id, created_at desc);
 create index if not exists isp_radius_vouchers_admin_created_idx
   on isp_radius_vouchers(admin_id, created_at desc);
 create unique index if not exists isp_radius_vouchers_prepaid_customer_uidx

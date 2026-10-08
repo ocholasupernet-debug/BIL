@@ -25,7 +25,7 @@ export const ADMIN_PAGE_VISIBILITY_CATALOG: AdminVisibilitySection[] = [
     pages: [
       { key: "customers.customers", label: "Customers", description: "Customer records and status views." },
       { key: "customers.activation", label: "Activation", description: "Pending customer activations." },
-      { key: "customers.vouchers", label: "Hotspot Vouchers", description: "Voucher codes and batches." },
+      { key: "customers.vouchers", label: "Vouchers", description: "Manage voucher codes and prepaid Hotspot redemptions." },
       { key: "customers.hotspot-binding", label: "Hotspot Binding", description: "Bindings and active sessions." },
     ],
   },
