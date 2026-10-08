@@ -1,4 +1,5 @@
 const ROUTER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const NO_ACTIVE_HOTSPOT_SERVER_ERROR = "No active Hotspot server is available for automatic selection; no files were changed.";
 
 export function validateExpectedRouterName(value) {
   if (typeof value !== "string" || !ROUTER_NAME_PATTERN.test(value)) {
@@ -25,4 +26,39 @@ export function resolveRouterIdByExactName(routers, expectedName) {
       : `No tenant router has the exact name ${name}.`);
   }
   return Number(matches[0].id);
+}
+
+export function resolveTenantRouterTargets(routers) {
+  if (!Array.isArray(routers)) {
+    throw new Error("The tenant router list response was invalid.");
+  }
+
+  const seenIds = new Set();
+  const seenNames = new Set();
+  const targets = routers.map(router => {
+    const rawId = router?.id;
+    const validIdType = typeof rawId === "number"
+      || (typeof rawId === "string" && /^\d+$/.test(rawId));
+    const id = validIdType ? Number(rawId) : Number.NaN;
+    if (!router || !Number.isSafeInteger(id) || id < 1) {
+      throw new Error("The tenant router list contains an invalid router ID.");
+    }
+
+    const name = validateExpectedRouterName(router.name);
+    if (seenIds.has(id) || seenNames.has(name)) {
+      throw new Error("The tenant router list contains duplicate router IDs or names.");
+    }
+    seenIds.add(id);
+    seenNames.add(name);
+    return { id, name };
+  });
+
+  return targets.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function isNoActiveHotspotServerResponse(status, body) {
+  return status === 409
+    && body?.error === NO_ACTIVE_HOTSPOT_SERVER_ERROR
+    && Array.isArray(body.availableHotspotServers)
+    && body.availableHotspotServers.length === 0;
 }

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveRouterIdByExactName, validateExpectedRouterName } from "../portal-refresh-target.mjs";
+import {
+  resolveRouterIdByExactName,
+  resolveTenantRouterTargets,
+  isNoActiveHotspotServerResponse,
+  validateExpectedRouterName,
+} from "../portal-refresh-target.mjs";
 
 test("resolves the exact tenant router name rather than reusing a stale numeric ID", () => {
   const routers = [
@@ -25,4 +30,45 @@ test("fails closed when the exact tenant router name is absent or ambiguous", ()
 
 test("rejects router names that could alter the API path", () => {
   assert.throws(() => validateExpectedRouterName("../come3"), /exact valid stored name/);
+});
+
+test("resolves every tenant router once in a stable order", () => {
+  assert.deepEqual(
+    resolveTenantRouterTargets([
+      { id: 85, name: "come3" },
+      { id: "4", name: "come1" },
+    ]),
+    [
+      { id: 4, name: "come1" },
+      { id: 85, name: "come3" },
+    ],
+  );
+});
+
+test("fails closed on malformed or ambiguous all-router targets", () => {
+  assert.throws(() => resolveTenantRouterTargets({}), /router list response was invalid/);
+  assert.throws(() => resolveTenantRouterTargets([{ id: true, name: "come1" }]), /invalid router ID/);
+  assert.throws(
+    () => resolveTenantRouterTargets([{ id: 1, name: "come1" }, { id: 1, name: "come2" }]),
+    /duplicate router IDs or names/,
+  );
+  assert.throws(
+    () => resolveTenantRouterTargets([{ id: 1, name: "come1" }, { id: 2, name: "come1" }]),
+    /duplicate router IDs or names/,
+  );
+  assert.throws(
+    () => resolveTenantRouterTargets([{ id: 1, name: "router name with spaces" }]),
+    /exact valid stored name/,
+  );
+});
+
+test("only skips routers explicitly reported to have no active Hotspot server", () => {
+  const response = {
+    error: "No active Hotspot server is available for automatic selection; no files were changed.",
+    availableHotspotServers: [],
+  };
+  assert.equal(isNoActiveHotspotServerResponse(409, response), true);
+  assert.equal(isNoActiveHotspotServerResponse(409, { ...response, availableHotspotServers: [{ name: "hs1" }] }), false);
+  assert.equal(isNoActiveHotspotServerResponse(503, response), false);
+  assert.equal(isNoActiveHotspotServerResponse(409, { ...response, error: "Router connection failed" }), false);
 });

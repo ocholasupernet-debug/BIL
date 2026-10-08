@@ -1,6 +1,5 @@
 {
-  "id": "isp-router-come3-signin-refresh-flow-20261005",
+  "id": "ocholasupernet-all-hotspot-portals-loyalty-redemption-20261008",
   "adminId": 3,
-  "ispBridgeRouterName": "come3",
-  "ispBridgeName": "hotspot-bridge"
+  "allIspBridgeRouters": true
 }

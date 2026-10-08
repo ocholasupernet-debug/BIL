@@ -1726,6 +1726,9 @@ function renderModal(){
        if(!result.ok||!data.ok||!applyPaidHotspotCredentials(data.credentials)){
          throw new Error(data.error||"Payment was confirmed, but the hotspot account could not be updated.");
        }
+       if(typeof data.device_authorization==="string"){
+         saveHotspotLoyaltyDeviceAuthorization(data.device_authorization,data.device_authorization_expires_at);
+       }
          if(tvPurchase&&tvRememberDevice&&!forcePortalLoginHandoff){
           var saved=saveSavedTvDevice(DEVICE_MAC||tvMacAddress,tvDeviceName);
           tvDeviceSaveNotice=saved?"This TV is saved on this browser for next time.":"Payment succeeded, but this browser could not save the TV.";

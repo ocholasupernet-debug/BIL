@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import express from "express";
+import { verifyHotspotLoyaltyDeviceAuthorization } from "../lib/hotspot-loyalty-device-authorization.js";
 
 process.env.SESSION_SECRET = "reseller-portal-route-test-secret";
 process.env.VITE_SUPABASE_URL = "https://reseller-portal-route-test.supabase.co";
@@ -981,12 +982,38 @@ test("signed reseller portal requests stay within their assigned service", async
       assert.equal(activation.status, 200, await activation.clone().text());
       const body = await activation.json() as {
         ok: boolean;
-        credentials?: { username: string };
+        credentials?: { username: string; password: string };
         connected?: boolean;
+        device_authorization?: string;
+        device_authorization_expires_at?: number;
       };
       assert.equal(body.ok, true);
       assert.equal(body.credentials?.username, assignedCustomer.username);
+      assert.equal(body.credentials?.password, assignedCustomer.password, "a paid account retry preserves its saved password");
       assert.equal(body.connected, true);
+      assert.equal(typeof body.device_authorization, "string");
+      assert.ok(Number(body.device_authorization_expires_at) > Date.now());
+      const authorizationScope = {
+        tenantAdminId: 7,
+        customerAdminId: 19,
+        customerId: 802,
+        phone: "254700000000",
+        macAddress: assignedCustomer.mac_address,
+        routerId: 31,
+        portId: 43,
+        resellerId: 19,
+      };
+      const signingSecret = process.env.TOKEN_SIGNING_SECRET?.trim() || process.env.SESSION_SECRET?.trim();
+      assert.equal(verifyHotspotLoyaltyDeviceAuthorization(
+        body.device_authorization,
+        authorizationScope,
+        signingSecret,
+      ), true, "a confirmed checkout grants loyalty access only to its account and assigned device");
+      assert.equal(verifyHotspotLoyaltyDeviceAuthorization(
+        body.device_authorization,
+        { ...authorizationScope, macAddress: "11:22:33:44:55:66" },
+        signingSecret,
+      ), false, "the authorization cannot be reused by another MAC");
       assert.deepEqual(routerOperations.filter(row => row.name === "disconnectUser"), []);
       assertAssignedRouterOperations();
     } finally {
@@ -1037,9 +1064,10 @@ test("signed reseller portal requests stay within their assigned service", async
         assert.equal(response.status, 200, await response.clone().text());
       }
       const payloads = await Promise.all(
-        responses.map(async response => await response.json() as { credentials?: { username?: string } }),
+        responses.map(async response => await response.json() as { credentials?: { username?: string; password?: string } }),
       );
       const usernames = payloads.map(payload => payload.credentials?.username);
+      const passwords = payloads.map(payload => payload.credentials?.password);
 
       assert.equal(concurrentAccountClaimCalls, 2, "both simultaneous requests must contend for the transaction claim");
       assert.equal(accountClaimCreations, 1, "the transaction may create only one customer account");
@@ -1047,6 +1075,10 @@ test("signed reseller portal requests stay within their assigned service", async
       assert.equal(concurrentTransaction.customer_id, customers[0]?.id);
       assert.ok(usernames[0]);
       assert.equal(usernames[0], usernames[1], "both retries must return the same username");
+      assert.match(passwords[0] ?? "", /^[A-Za-z0-9_-]{24}$/, "new account passwords are generated from 18 random bytes");
+      assert.notEqual(passwords[0], "12345", "new accounts must not share a default password");
+      assert.equal(passwords[0], passwords[1], "parallel retries reuse the one saved password");
+      assert.equal(passwords[0], customers[0]?.password, "the generated password is stored on the one transaction-linked account");
       assert.equal(
         dbRequests.filter(row => row.table === "isp_customers" && row.method === "POST").length,
         0,
