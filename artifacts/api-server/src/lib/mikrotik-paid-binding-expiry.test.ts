@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { createServer } from "node:net";
 import test from "node:test";
 import { RouterOSAPI } from "node-routeros";
-import { getPaidHotspotBindingSnapshot, hasPaidHotspotAccess } from "./mikrotik.js";
+import {
+  getPaidHotspotBindingSnapshot,
+  hasPaidHotspotAccess,
+  reconcilePaidHotspotBinding,
+} from "./mikrotik.js";
 
 type MockRows = Record<string, string>[];
 type MockCommand = string[];
@@ -116,6 +120,166 @@ test("allows an exact regular paid binding to be edited when its expiry schedule
     });
     assert.equal(snapshot?.bindingType, "regular");
     assert.equal(snapshot?.comment, "user-123");
+  });
+});
+
+test("recovers a unique paid binding when the customer's saved MAC is stale", async () => {
+  await withMockRouterApi(command => {
+    if (command[0] === "/ip/hotspot/ip-binding/print") {
+      return [{
+        ".id": "*1",
+        "mac-address": "11:22:33:44:55:66",
+        address: "192.168.10.26",
+        comment: "user-123",
+        type: "regular",
+      }];
+    }
+    if (command[0] === "/system/scheduler/print") {
+      return [{
+        name: "ochola-paid-user-123",
+        comment: "OcholaSupernet paid access expiry",
+        "on-event": ':foreach id in=[/ip hotspot ip-binding find where comment="user-123"] do={/ip hotspot ip-binding remove $id}; /ip hotspot active find where user="user-123"',
+      }];
+    }
+    return [];
+  }, async port => {
+    const router = credentials(port);
+    const snapshot = await getPaidHotspotBindingSnapshot(router, {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    });
+    assert.deepEqual(snapshot, {
+      macAddress: "11:22:33:44:55:66",
+      ipAddress: "192.168.10.26",
+      comment: "user-123",
+      bindingType: "regular",
+    });
+    assert.equal(await hasPaidHotspotAccess(router, {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    }), true);
+  });
+});
+
+test("extends the verified router MAC binding and reenables its paid expiry scheduler", async () => {
+  const commands: string[][] = [];
+  await withMockRouterApi(command => {
+    commands.push([...command]);
+    if (command[0] === "/ip/hotspot/ip-binding/print") {
+      return [{
+        ".id": "*1",
+        "mac-address": "11:22:33:44:55:66",
+        address: "192.168.10.26",
+        comment: "user-123",
+        type: "regular",
+      }];
+    }
+    if (command[0] === "/system/scheduler/print") {
+      return [{
+        ".id": "*2",
+        name: "ochola-paid-user-123",
+        comment: "OcholaSupernet paid access expiry",
+        "on-event": ':foreach id in=[/ip hotspot ip-binding find where comment="user-123"] do={/ip hotspot ip-binding remove $id}; /ip hotspot active find where user="user-123"',
+        disabled: "yes",
+      }];
+    }
+    if (command[0] === "/system/clock/print") {
+      return [{ date: "oct/07/2026", time: "12:00:00" }];
+    }
+    return [];
+  }, async port => {
+    const router = credentials(port);
+    const snapshot = await getPaidHotspotBindingSnapshot(router, {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    });
+    assert.ok(snapshot);
+    assert.equal(snapshot.macAddress, "11:22:33:44:55:66");
+    await reconcilePaidHotspotBinding(router, {
+      snapshot,
+      currentName: "user-123",
+      currentMacAddress: snapshot.macAddress,
+      nextName: "user-123",
+      nextMacAddress: snapshot.macAddress,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      enabled: true,
+    });
+  });
+  const schedulerUpdate = commands.find(command => command[0] === "/system/scheduler/set");
+  assert.ok(schedulerUpdate);
+  assert.ok(schedulerUpdate.includes("=disabled=no"));
+  const bindingUpdate = commands.find(command => command[0] === "/ip/hotspot/ip-binding/set");
+  assert.ok(bindingUpdate);
+  assert.ok(bindingUpdate.includes("=type=regular"));
+  assert.ok(bindingUpdate.includes("=comment=user-123"));
+  assert.ok(commands.some(command =>
+    command[0] === "/ip/hotspot/ip-binding/print"
+    && command.includes("?mac-address=11:22:33:44:55:66"),
+  ));
+});
+
+test("does not treat a stale-MAC username binding as app-managed without its expiry scheduler", async () => {
+  await withMockRouterApi(command => {
+    if (command[0] === "/ip/hotspot/ip-binding/print") {
+      return [{
+        ".id": "*1",
+        "mac-address": "11:22:33:44:55:66",
+        address: "192.168.10.26",
+        comment: "user-123",
+        type: "regular",
+      }];
+    }
+    if (command[0] === "/system/scheduler/print") return [];
+    return [];
+  }, async port => {
+    const router = credentials(port);
+    assert.equal(await getPaidHotspotBindingSnapshot(router, {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    }), null);
+    assert.equal(await hasPaidHotspotAccess(router, {
+      name: "user-123",
+      macAddress: "AA:BB:CC:DD:EE:FF",
+    }), false);
+  });
+});
+
+test("rejects conflicting username bindings instead of synthesizing one from the stale MAC", async () => {
+  await withMockRouterApi(command => {
+    if (command[0] === "/ip/hotspot/ip-binding/print") {
+      return [
+        {
+          ".id": "*1",
+          "mac-address": "11:22:33:44:55:66",
+          address: "192.168.10.26",
+          comment: "user-123",
+          type: "regular",
+        },
+        {
+          ".id": "*2",
+          "mac-address": "22:33:44:55:66:77",
+          address: "192.168.10.27",
+          comment: "user-123",
+          type: "regular",
+        },
+      ];
+    }
+    if (command[0] === "/system/scheduler/print") {
+      return [{
+        name: "ochola-paid-user-123",
+        comment: "OcholaSupernet paid access expiry",
+        "on-event": ':foreach id in=[/ip hotspot ip-binding find where comment="user-123"] do={/ip hotspot ip-binding remove $id}; /ip hotspot active find where user="user-123"',
+      }];
+    }
+    return [];
+  }, async port => {
+    await assert.rejects(
+      getPaidHotspotBindingSnapshot(credentials(port), {
+        name: "user-123",
+        macAddress: "AA:BB:CC:DD:EE:FF",
+      }),
+      /incomplete or ambiguous/,
+    );
   });
 });
 

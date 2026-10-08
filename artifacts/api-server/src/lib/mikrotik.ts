@@ -2622,6 +2622,15 @@ function paidHotspotBindingRowsForCustomer(
       if (ipMatches.length) return ipMatches;
     }
     if (exact.length) return exact;
+    if (ipAddress) {
+      const ipMatches = exactByName.filter((row) => normalizeRouterBindingAddress(row.address) === ipAddress);
+      if (ipMatches.length) return ipMatches;
+    }
+    // The customer row can retain an old MAC after a device reconnect. Keep
+    // exact username rows as candidates; the async resolver below requires the
+    // app-owned expiry scheduler before accepting a row that matches neither
+    // the saved MAC nor the saved IP.
+    if (exactByName.length) return exactByName;
   } else if (exactByName.length <= 1) {
     return exactByName;
   } else {
@@ -2713,7 +2722,7 @@ export async function getPaidHotspotBindingSnapshot(
   const macAddress = validRouterMac(opts.macAddress);
   const name = String(opts.name ?? "").trim();
   const ipAddress = normalizeRouterBindingAddress(opts.ipAddress);
-  if (!name || (!macAddress && !ipAddress)) return null;
+  if (!name) return null;
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const rows = await withTimeout(
@@ -2721,6 +2730,9 @@ export async function getPaidHotspotBindingSnapshot(
       ms,
     ) as Record<string, string>[];
     if (!Array.isArray(rows)) throw new Error("MikroTik did not return its paid Hotspot binding details.");
+    const exactCommentMatches = rows.filter(
+      (row) => String(row.comment ?? "").trim() === name,
+    );
     const snapshot = paidHotspotBindingSnapshotForCustomer(rows, { ...opts, name, macAddress });
     if (snapshot) {
       const matchedRow = rows.find((row) =>
@@ -2728,10 +2740,15 @@ export async function getPaidHotspotBindingSnapshot(
         && String(row.comment ?? "").trim() === snapshot.comment,
       );
       if (matchedRow && isLegacyPaidHotspotBinding(matchedRow)) return snapshot;
-      // Current paid checkouts create regular bindings. Their exact username +
-      // device identity is sufficient to repair an expiry scheduler that was
-      // missed by an earlier partial RouterOS write.
-      if (snapshot.bindingType === "regular" && snapshot.comment === name) return snapshot;
+      const savedMacMatches = Boolean(macAddress && snapshot.macAddress === macAddress);
+      const savedIpMatches = Boolean(ipAddress && snapshot.ipAddress === ipAddress);
+      // Exact saved device identity remains sufficient for current regular
+      // bindings, even if an earlier write missed its expiry scheduler.
+      if (
+        snapshot.bindingType === "regular"
+        && snapshot.comment === name
+        && (savedMacMatches || savedIpMatches)
+      ) return snapshot;
     }
 
     const schedulerName = hotspotPaidExpirySchedulerName(name);
@@ -2742,13 +2759,22 @@ export async function getPaidHotspotBindingSnapshot(
     if (!Array.isArray(schedulers)) {
       throw new Error("MikroTik did not return the paid Hotspot expiry scheduler details.");
     }
-    if (snapshot) return isManagedPaidExpiryScheduler(schedulers, snapshot.comment) ? snapshot : null;
+    const hasManagedExpiry = isManagedPaidExpiryScheduler(schedulers, snapshot?.comment ?? name);
+    if (snapshot) return hasManagedExpiry ? snapshot : null;
+    if (exactCommentMatches.length) {
+      if (hasManagedExpiry) {
+        throw new Error(
+          "The managed paid Hotspot binding is incomplete or ambiguous. Verify its router MAC and binding type before saving.",
+        );
+      }
+      return null;
+    }
 
     // A verified app-owned scheduler can be left behind if a binding write
     // failed. Recreate only when this MAC has no other RouterOS binding, so an
     // administrator's or another account's binding is never guessed at.
     if (!macAddress || rows.some((row) => validRouterMac(row["mac-address"]) === macAddress)) return null;
-    if (!isManagedPaidExpiryScheduler(schedulers, name)) return null;
+    if (!hasManagedExpiry) return null;
     return {
       macAddress,
       ipAddress: null,
@@ -2842,28 +2868,7 @@ export async function hasPaidHotspotAccess(
   creds: RouterCredentials,
   opts: { name: string; macAddress?: string | null; ipAddress?: string | null },
 ): Promise<boolean> {
-  return withConn(creds, async conn => {
-    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-    const rows = await withTimeout(
-      conn.write(["/ip/hotspot/ip-binding/print", "=.proplist=.id,mac-address,address,comment,type"]),
-      ms,
-    ) as Record<string, string>[];
-    if (!Array.isArray(rows)) throw new Error("MikroTik did not return its Hotspot bindings.");
-    const candidates = paidHotspotBindingRowsForCustomer(rows, opts);
-    if (candidates.some(isLegacyPaidHotspotBinding)) return true;
-    if (candidates.some((row) =>
-      row.type === "regular" && String(row.comment ?? "").trim() === String(opts.name ?? "").trim(),
-    )) return true;
-    const name = String(opts.name ?? "").trim();
-    if (!name) return false;
-    const schedulerName = hotspotPaidExpirySchedulerName(name);
-    const schedulers = await withTimeout(
-      conn.write(["/system/scheduler/print", `?name=${schedulerName}`, "=.proplist=.id,name,comment,on-event"]),
-      ms,
-    ) as Record<string, string>[];
-    if (!Array.isArray(schedulers)) throw new Error("MikroTik did not return its paid Hotspot expiry schedulers.");
-    return isManagedPaidExpiryScheduler(schedulers, name);
-  });
+  return Boolean(await getPaidHotspotBindingSnapshot(creds, opts));
 }
 
 export async function removeHotspotIpBinding(
@@ -3564,6 +3569,7 @@ export async function addHotspotIpBinding(
       `=start-date=${formatRouterDate(expiresAt)}`,
       `=start-time=${formatRouterTime(expiresAt)}`,
       "=interval=00:00:00",
+      "=disabled=no",
       `=on-event=${expiryScript}`,
       `=comment=OcholaSupernet paid access expiry`,
     );

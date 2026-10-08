@@ -24,11 +24,52 @@ test("captures the identified paid binding's address, type, and comment", () => 
   });
 });
 
-test("does not select a binding attached to a different MAC", () => {
-  assert.equal(paidHotspotBindingSnapshotForCustomer([
+test("uses the unique account comment and actual router MAC when the saved MAC is stale", () => {
+  assert.deepEqual(paidHotspotBindingSnapshotForCustomer([
     {
       "mac-address": "00:11:22:33:44:55",
       address: "192.168.10.25",
+      comment: "user-123",
+      type: "regular",
+    },
+  ], customer), {
+    macAddress: "00:11:22:33:44:55",
+    ipAddress: "192.168.10.25",
+    comment: "user-123",
+    bindingType: "regular",
+  });
+});
+
+test("uses the saved IP to resolve a username binding when its saved MAC is stale", () => {
+  const snapshot = paidHotspotBindingSnapshotForCustomer([
+    {
+      "mac-address": "11:22:33:44:55:66",
+      address: "192.168.10.25",
+      comment: "user-123",
+      type: "regular",
+    },
+    {
+      "mac-address": "22:33:44:55:66:77",
+      address: "192.168.10.26",
+      comment: "user-123",
+      type: "regular",
+    },
+  ], { ...customer, ipAddress: "192.168.10.26/32" });
+  assert.equal(snapshot?.macAddress, "22:33:44:55:66:77");
+  assert.equal(snapshot?.ipAddress, "192.168.10.26");
+});
+
+test("does not guess when a stale MAC leaves multiple conflicting username bindings", () => {
+  assert.equal(paidHotspotBindingSnapshotForCustomer([
+    {
+      "mac-address": "11:22:33:44:55:66",
+      address: "192.168.10.25",
+      comment: "user-123",
+      type: "regular",
+    },
+    {
+      "mac-address": "22:33:44:55:66:77",
+      address: "192.168.10.26",
       comment: "user-123",
       type: "regular",
     },

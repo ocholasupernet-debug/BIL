@@ -35,7 +35,6 @@ import {
   connectHotspotUser,
   ensureHotspotUserProfile,
   removeHotspotIpBinding,
-  hasPaidHotspotAccess,
   removeHotspotUserExpiry,
   removeHotspotUserRateQueue,
   disconnectPPPActiveByName,
@@ -508,24 +507,18 @@ async function reconcileCustomerAccess(
         || !sameExpiry
         || address !== oldAddress
         || newMac !== oldMac;
-      const paidHotspotAccess = Boolean(paidHotspotBindingSnapshot)
-        || (accessChanged && await hasPaidHotspotAccess(creds, {
-          name: currentName,
-          macAddress: current.mac_address,
-          ipAddress: current.ip_address,
-        }));
-      if (paidHotspotAccess) {
+      if (paidHotspotBindingSnapshot || accessChanged) {
         paidHotspotBindingSnapshot ??= await getPaidHotspotBindingSnapshot(creds, {
           name: currentName,
           macAddress: current.mac_address,
           ipAddress: current.ip_address,
         });
-        if (!paidHotspotBindingSnapshot) {
-          throw new Error(
-            "The paid Hotspot binding could not be identified safely. No changes were saved; verify the user's router binding first.",
-          );
+        if (paidHotspotBindingSnapshot) {
+          if (!options.restoreIdentity && updates.mac_address === undefined) {
+            updates.mac_address = paidHotspotBindingSnapshot.macAddress;
+          }
+          options.onPaidHotspotBindingSnapshot?.(paidHotspotBindingSnapshot);
         }
-        options.onPaidHotspotBindingSnapshot?.(paidHotspotBindingSnapshot);
       }
     }
 
@@ -662,7 +655,9 @@ async function reconcileCustomerAccess(
       await reconcilePaidHotspotBinding(creds, {
         snapshot: paidHotspotBindingSnapshot,
         currentName,
-        currentMacAddress: current.mac_address ?? paidHotspotBindingSnapshot.macAddress,
+        currentMacAddress: options.restoreIdentity
+          ? current.mac_address
+          : paidHotspotBindingSnapshot.macAddress,
         nextName,
         nextMacAddress: String(
           updates.mac_address === undefined
