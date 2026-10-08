@@ -14,6 +14,7 @@ import {
 } from "../lib/supabase-client.js";
 import { logActivity } from "../lib/activity-log.js";
 import { logger } from "../lib/logger.js";
+import { formatVoucherExpiryInEastAfrica } from "../lib/hotspot-voucher-redemption.js";
 import {
   isPrepaidCustomerEntitled,
   isPrepaidCustomerExpired,
@@ -1774,6 +1775,7 @@ router.post("/customers/hotspot-voucher-activate", async (req, res): Promise<voi
   let planName = "";
   let duration = "";
   let username = phone;
+  let accountOwnerId = adminId;
   try {
     const vouchers = await sbSelectStrict<{
       id: number;
@@ -1794,14 +1796,6 @@ router.post("/customers/hotspot-voucher-activate", async (req, res): Promise<voi
     const voucher = vouchers[0];
     if (!voucher) {
       res.status(404).json({ error: "Voucher code not found for this ISP." });
-      return;
-    }
-    if (voucher.redeemed_at && (voucher.redeemed_by_phone !== phone || !voucher.prepaid_customer_id)) {
-      res.status(409).json({ error: "This voucher has already been used." });
-      return;
-    }
-    if (!voucher.redeemed_at && voucher.expires_at && Date.parse(voucher.expires_at) <= Date.now()) {
-      res.status(410).json({ error: "This voucher has expired." });
       return;
     }
     if (voucher.router_id && Number(voucher.router_id) !== routerId) {
@@ -1870,10 +1864,14 @@ router.post("/customers/hotspot-voucher-activate", async (req, res): Promise<voi
     if (!Number.isSafeInteger(customerId) || customerId < 1) {
       throw new Error("Voucher account creation did not return a customer record.");
     }
+    const returnedAccountOwnerId = Number(claim?.account_admin_id);
+    if (Number.isSafeInteger(returnedAccountOwnerId) && returnedAccountOwnerId > 0) {
+      accountOwnerId = returnedAccountOwnerId;
+    }
     accountCreated = true;
     const claimedRows = await sbSelectStrict<CustomerRow>(
       "isp_customers",
-      `id=eq.${customerId}&admin_id=eq.${adminId}&select=id,admin_id,name,phone,mac_address,username,pppoe_username,password,type,plan_id,router_id,port_id,ip_address,status,expires_at,fup_limit_mb,depletion_reason&limit=1`,
+      `id=eq.${customerId}&admin_id=eq.${accountOwnerId}&select=id,admin_id,name,phone,mac_address,username,pppoe_username,password,type,plan_id,router_id,port_id,ip_address,status,expires_at,fup_limit_mb,depletion_reason&limit=1`,
     );
     claimedCustomer = claimedRows[0] ?? null;
     if (!claimedCustomer?.username || !claimedCustomer.password) {
@@ -1972,7 +1970,7 @@ router.post("/customers/hotspot-voucher-activate", async (req, res): Promise<voi
     });
     await sbUpdateStrict(
       "isp_customers",
-      `id=eq.${customerId}&admin_id=eq.${adminId}`,
+      `id=eq.${customerId}&admin_id=eq.${accountOwnerId}`,
       {
         mac_address: macAddress,
         ip_address: ipAddress,
@@ -2011,7 +2009,18 @@ router.post("/customers/hotspot-voucher-activate", async (req, res): Promise<voi
       });
       return;
     }
-    res.status(500).json({ error: error instanceof Error ? error.message : "Voucher activation failed." });
+    const message = error instanceof Error ? error.message : "Voucher activation failed.";
+    const expiryMarker = message.match(/HOTSPOT_VOUCHER_EXPIRED_AT:([^\s]+)/i)?.[1];
+    const limitMarker = message.match(/HOTSPOT_VOUCHER_REDEMPTION_LIMIT:(\d+):(\d+)/i);
+    if (expiryMarker) {
+      res.status(410).json({ error: `This voucher expired at ${formatVoucherExpiryInEastAfrica(expiryMarker)}.` });
+    } else if (limitMarker) {
+      res.status(409).json({ error: `This voucher has reached its redemption limit (${limitMarker[1]} of ${limitMarker[2]} uses).` });
+    } else if (message.toLowerCase().includes("already_linked_to_device")) {
+      res.status(409).json({ error: "This voucher was already redeemed by this device." });
+    } else {
+      res.status(500).json({ error: message });
+    }
   }
 });
 

@@ -9,7 +9,21 @@ import {
   sbUpdateStrict,
 } from "../lib/supabase-client.js";
 import { logger } from "../lib/logger.js";
-import { normalizeFixedHotspotVoucherCode } from "../lib/hotspot-voucher-utils.js";
+import {
+  fetchHotspotUserList,
+  removeHotspotUser,
+  type RouterCredentials,
+} from "../lib/mikrotik.js";
+import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
+import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
+import {
+  normalizeFixedHotspotVoucherCode,
+  normalizeKenyanVoucherPhone,
+} from "../lib/hotspot-voucher-utils.js";
+import {
+  formatVoucherExpiryInEastAfrica,
+  voucherExpiryFromEastAfricaDate,
+} from "../lib/hotspot-voucher-redemption.js";
 import {
   summarizeHotspotVoucherStatus,
   type HotspotVoucherSession,
@@ -39,6 +53,10 @@ interface HotspotRouter {
   name: string;
   host: string;
   status: string;
+  bridge_ip?: string | null;
+  vpn_ip?: string | null;
+  router_username?: string | null;
+  router_secret?: string | null;
 }
 
 interface StoredVoucher {
@@ -60,6 +78,19 @@ interface StoredVoucher {
   redeemed_by_phone: string | null;
   redeemed_mac_address?: string | null;
   prepaid_customer_id?: number | string | null;
+  max_redemptions?: number | string | null;
+}
+
+interface VoucherRedemptionRow {
+  id: number | string;
+  admin_id: number | string;
+  voucher_id: number | string;
+  identity_key: string;
+  prepaid_customer_id: number | string | null;
+  redeemed_by_phone: string | null;
+  redeemed_mac_address: string | null;
+  redeemed_at: string;
+  service_expires_at: string | null;
 }
 
 function isMissingRadacctStartTime(error: unknown): boolean {
@@ -112,34 +143,57 @@ function normalizeMacAddress(value: unknown): string | null {
   return normalized.length === 12 ? normalized : null;
 }
 
-async function loadVoucherSessions(
-  code: string,
-  prepaidCustomerId?: number | string | null,
-): Promise<HotspotVoucherSession[]> {
-  const usernames = new Set([code]);
-  const customerId = Number(prepaidCustomerId);
-  if (Number.isSafeInteger(customerId) && customerId > 0) {
-    const customers = await sbSelectStrict<{ username: string | null }>(
-      "isp_customers",
-      `id=eq.${customerId}&select=username&limit=1`,
-    );
-    const linkedUsername = String(customers[0]?.username ?? "").trim();
-    if (linkedUsername) usernames.add(linkedUsername);
+function voucherRouterCredentials(router: HotspotRouter): RouterCredentials {
+  const isManagementVpnIp = (value: unknown): boolean =>
+    /^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(String(value ?? "").trim());
+  const storedManagementIp = [router.vpn_ip, router.bridge_ip].find(isManagementVpnIp)?.trim() ?? "";
+  const clients = readVpnClients();
+  const discoveredCandidate = vpnIpFor(router.host ?? "", clients)
+    ?? vpnIpFor(router.name ?? "", clients)
+    ?? "";
+  const discoveredManagementIp = isManagementVpnIp(discoveredCandidate)
+    ? discoveredCandidate.trim()
+    : "";
+  const managementIp = discoveredManagementIp || storedManagementIp;
+  const host = String(router.host ?? "").trim() || managementIp;
+  const username = managementIp
+    ? (String(router.router_username ?? "").trim() || ROUTER_MANAGEMENT_API_USERNAME)
+    : (String(router.router_username ?? "").trim() || "admin");
+  return {
+    host,
+    port: 8728,
+    username,
+    password: String(router.router_secret ?? ""),
+    useSSL: false,
+    alternateUsernames: managementIp && username !== ROUTER_MANAGEMENT_API_USERNAME
+      ? [ROUTER_MANAGEMENT_API_USERNAME]
+      : undefined,
+    bridgeIp: managementIp && managementIp !== host ? managementIp : undefined,
+    connectTimeoutMs: 10_000,
+    requestTimeoutMs: 12_000,
+  };
+}
+
+async function loadSessionsForUsernames(
+  usernames: string[],
+): Promise<(HotspotVoucherSession & { username: string })[]> {
+  const uniqueUsernames = [...new Set(usernames.map(username => username.trim()).filter(Boolean))];
+  const rows: (HotspotVoucherSession & { username: string })[] = [];
+  for (const batch of chunks(uniqueUsernames, QUERY_BATCH_SIZE)) {
+    try {
+      rows.push(...await sbSelectStrict<HotspotVoucherSession & { username: string }>(
+        "radacct",
+        `${inFilter("username", batch)}&select=username,acctstarttime,acctstoptime,callingstationid,framedipaddress,acctinputoctets,acctoutputoctets,acctinputgigawords,acctoutputgigawords&order=acctstarttime.asc&limit=10000`,
+      ));
+    } catch (error) {
+      if (!isMissingRadacctStartTime(error)) throw error;
+      rows.push(...await sbSelectStrict<HotspotVoucherSession & { username: string }>(
+        "radacct",
+        `${inFilter("username", batch)}&select=username,acctstoptime,callingstationid,framedipaddress,acctinputoctets,acctoutputoctets,acctinputgigawords,acctoutputgigawords&limit=10000`,
+      ));
+    }
   }
-  const userFilter = inFilter("username", [...usernames]);
-  const fields = "acctstoptime,callingstationid,framedipaddress,acctinputoctets,acctoutputoctets,acctinputgigawords,acctoutputgigawords";
-  try {
-    return await sbSelectStrict<HotspotVoucherSession & { username: string }>(
-      "radacct",
-      `${userFilter}&select=acctstarttime,${fields}&limit=10000`,
-    );
-  } catch (error) {
-    if (!isMissingRadacctStartTime(error)) throw error;
-    return sbSelectStrict<HotspotVoucherSession & { username: string }>(
-      "radacct",
-      `${userFilter}&select=${fields}&limit=10000`,
-    );
-  }
+  return rows;
 }
 
 async function syncVoucherDataLimit(
@@ -210,17 +264,6 @@ async function syncVoucherExpiryAttributes(
       value: expiryDate.toISOString().slice(0, 10),
     }]);
   }
-}
-
-async function syncVoucherValidityMinutes(code: string, validityMins: number): Promise<void> {
-  const username = `username=eq.${encodeURIComponent(code)}`;
-  await sbDeleteStrict("radcheck", `${username}&attribute=eq.Isp-Validity-Mins`);
-  await sbInsertStrict("radcheck", [{
-    username: code,
-    attribute: "Isp-Validity-Mins",
-    op: ":=",
-    value: String(Math.max(0, Math.floor(validityMins))),
-  }]);
 }
 
 async function syncVoucherRadiusEntitlements(
@@ -347,12 +390,27 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
   try {
     const vouchers = await sbSelectStrict<StoredVoucher>(
       "isp_radius_vouchers",
-      `admin_id=eq.${adminId}&select=id,admin_id,code,plan_id,plan_name,router_id,router_name,price,validity_mins,data_limit_mb,data_cap_mode,expires_at,service_expires_at,prepaid_customer_id,created_at,redeemed_at,redeemed_by_phone,redeemed_mac_address&order=created_at.desc&limit=10000`,
+      `admin_id=eq.${adminId}&select=id,admin_id,code,plan_id,plan_name,router_id,router_name,price,validity_mins,data_limit_mb,data_cap_mode,max_redemptions,expires_at,service_expires_at,prepaid_customer_id,created_at,redeemed_at,redeemed_by_phone,redeemed_mac_address&order=created_at.desc&limit=10000`,
     );
-    const linkedCustomerIds = [...new Set(vouchers
-      .map(voucher => Number(voucher.prepaid_customer_id))
-      .filter(id => Number.isSafeInteger(id) && id > 0))]
-      .map(String);
+    const voucherIds = vouchers.map(voucher => String(voucher.id));
+    const redemptions: VoucherRedemptionRow[] = [];
+    for (const batch of chunks(voucherIds, QUERY_BATCH_SIZE)) {
+      redemptions.push(...await sbSelectStrict<VoucherRedemptionRow>(
+        "isp_radius_voucher_redemptions",
+        `admin_id=eq.${adminId}&${inFilter("voucher_id", batch)}&select=id,admin_id,voucher_id,identity_key,prepaid_customer_id,redeemed_by_phone,redeemed_mac_address,redeemed_at,service_expires_at&order=redeemed_at.asc&limit=10000`,
+      ));
+    }
+    const redemptionsByVoucher = new Map<number, VoucherRedemptionRow[]>();
+    for (const redemption of redemptions) {
+      const voucherId = Number(redemption.voucher_id);
+      const list = redemptionsByVoucher.get(voucherId) ?? [];
+      list.push(redemption);
+      redemptionsByVoucher.set(voucherId, list);
+    }
+    const linkedCustomerIds = [...new Set([
+      ...vouchers.map(voucher => Number(voucher.prepaid_customer_id)),
+      ...redemptions.map(redemption => Number(redemption.prepaid_customer_id)),
+    ].filter(id => Number.isSafeInteger(id) && id > 0))].map(String);
     const linkedCustomers: { id: number; username: string | null }[] = [];
     for (const batch of chunks(linkedCustomerIds, QUERY_BATCH_SIZE)) {
       linkedCustomers.push(...await sbSelectStrict<{ id: number; username: string | null }>(
@@ -363,40 +421,110 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
     const usernameByCustomerId = new Map(
       linkedCustomers.map(customer => [Number(customer.id), String(customer.username ?? "").trim()]),
     );
-    const usernames = [...new Set(vouchers.flatMap(voucher => [
-      voucher.code,
-      usernameByCustomerId.get(Number(voucher.prepaid_customer_id)) ?? "",
-    ]).filter(Boolean))];
-    const accountRows: (HotspotVoucherSession & { username: string })[] = [];
-    for (const batch of chunks(usernames, QUERY_BATCH_SIZE)) {
-      accountRows.push(...await sbSelectStrict<HotspotVoucherSession & { username: string }>(
-        "radacct",
-        `${inFilter("username", batch)}&select=username,acctstarttime,acctstoptime,callingstationid,framedipaddress,acctinputoctets,acctoutputoctets,acctinputgigawords,acctoutputgigawords&order=acctstarttime.asc&limit=10000`,
-      ));
-    }
-    const sessionsByCode = new Map<string, HotspotVoucherSession[]>();
+    const usernames = [...new Set([
+      ...vouchers.map(voucher => voucher.code),
+      ...linkedCustomers.map(customer => String(customer.username ?? "")),
+    ].map(username => username.trim()).filter(Boolean))];
+    const accountRows = await loadSessionsForUsernames(usernames);
+    const sessionsByUsername = new Map<string, HotspotVoucherSession[]>();
     for (const row of accountRows) {
       const key = String(row.username ?? "").toLowerCase();
-      const sessions = sessionsByCode.get(key) ?? [];
+      const sessions = sessionsByUsername.get(key) ?? [];
       sessions.push(row);
-      sessionsByCode.set(key, sessions);
+      sessionsByUsername.set(key, sessions);
     }
     const now = Date.now();
     res.json(vouchers.map(voucher => {
       const dataLimitMb = voucher.data_limit_mb == null || Number(voucher.data_limit_mb) <= 0
         ? null
         : Number(voucher.data_limit_mb);
-      const summary = summarizeHotspotVoucherStatus({
-        sessions: [...new Set([
-          voucher.code.toLowerCase(),
-          (usernameByCustomerId.get(Number(voucher.prepaid_customer_id)) ?? "").toLowerCase(),
-        ].filter(Boolean))].flatMap(username => sessionsByCode.get(username) ?? []),
+      const voucherRedemptions = redemptionsByVoucher.get(Number(voucher.id)) ?? [];
+      const accounts = voucherRedemptions.map(redemption => {
+        const customerId = Number(redemption.prepaid_customer_id);
+        const username = usernameByCustomerId.get(customerId) ?? "";
+        const sessions = username
+          ? sessionsByUsername.get(username.toLowerCase()) ?? []
+          : [];
+        const accountStatus = summarizeHotspotVoucherStatus({
+          sessions,
+          validityMins: Number(voucher.validity_mins) || 0,
+          redeemBy: null,
+          redeemedAt: redemption.redeemed_at,
+          redeemedBy: redemption.redeemed_by_phone,
+          serviceExpiresAt: redemption.service_expires_at,
+          dataLimitMb,
+          dataCapMode: voucher.data_cap_mode,
+          now,
+        });
+        return {
+          username,
+          phone: redemption.redeemed_by_phone,
+          redeemed_at: redemption.redeemed_at,
+          service_expires_at: redemption.service_expires_at,
+          online: accountStatus.online,
+          service_status: accountStatus.serviceStatus,
+          data_used_bytes: accountStatus.dataUsedBytes,
+        };
+      });
+      const usedCount = Math.max(
+        voucherRedemptions.length,
+        voucher.redeemed_at && voucherRedemptions.length === 0 ? 1 : 0,
+      );
+      const maxRedemptions = Math.min(500, Math.max(1, Number(voucher.max_redemptions) || 1));
+      const legacyUsername = usernameByCustomerId.get(Number(voucher.prepaid_customer_id)) ?? "";
+      const legacySessions = legacyUsername
+        ? sessionsByUsername.get(legacyUsername.toLowerCase()) ?? []
+        : sessionsByUsername.get(voucher.code.toLowerCase()) ?? [];
+      const legacySummary = summarizeHotspotVoucherStatus({
+        sessions: legacySessions,
         validityMins: Number(voucher.validity_mins) || 0,
-        redeemBy: voucher.expires_at,
+        redeemBy: null,
         redeemedAt: voucher.redeemed_at,
         redeemedBy: voucher.redeemed_by_phone,
         serviceExpiresAt: voucher.service_expires_at,
         dataLimitMb,
+        dataCapMode: voucher.data_cap_mode,
+        now,
+      });
+      const accountRowsForStatus = accounts.length > 0
+        ? accounts
+        : usedCount > 0
+          ? [{
+            username: legacyUsername,
+            phone: voucher.redeemed_by_phone,
+            redeemed_at: voucher.redeemed_at ?? "",
+            service_expires_at: voucher.service_expires_at,
+            online: legacySummary.online,
+            service_status: legacySummary.serviceStatus,
+            data_used_bytes: legacySummary.dataUsedBytes,
+          }]
+          : [];
+      const online = accountRowsForStatus.some(account => account.online);
+      const anyAccountStillEntitled = accountRowsForStatus.some(account =>
+        account.service_status !== "expired"
+        && (!account.service_expires_at || Date.parse(account.service_expires_at) > now),
+      );
+      const redeemByHasPassed = voucher.expires_at != null && Date.parse(voucher.expires_at) <= now;
+      const serviceStatus: "available" | "expired" | "active" | "inactive" | "unknown" = online
+        ? "active"
+        : anyAccountStillEntitled
+          ? "inactive"
+          : usedCount < maxRedemptions && !redeemByHasPassed
+            ? "available"
+            : usedCount > 0 || redeemByHasPassed
+              ? "expired"
+              : "available";
+      const dataUsedBytes = accounts.reduce((total, account) => total + account.data_used_bytes, 0)
+        || (accounts.length === 0 ? legacySummary.dataUsedBytes : 0);
+      const firstRedemption = voucherRedemptions[0];
+      const deadlineSummary = summarizeHotspotVoucherStatus({
+        sessions: [],
+        validityMins: Number(voucher.validity_mins) || 0,
+        redeemBy: voucher.expires_at,
+        redeemedAt: null,
+        redeemedBy: null,
+        serviceExpiresAt: null,
+        dataLimitMb: null,
         dataCapMode: voucher.data_cap_mode,
         now,
       });
@@ -407,18 +535,22 @@ router.get("/vouchers/hotspot", requireAdmin(), async (req, res): Promise<void> 
         router_name: voucher.router_name,
         price: Number(voucher.price),
         validity_mins: Number(voucher.validity_mins),
-        expiry: summary.expiry,
-        expiry_kind: summary.expiryKind,
-        service_expires_at: voucher.service_expires_at ?? (summary.expiryKind === "service" ? summary.expiry : null),
-        used: summary.used,
-        redeemed_at: summary.redeemedAt,
-        redeemed_by: summary.redeemedBy,
-        online: summary.online,
-        service_status: summary.serviceStatus,
+        expiry: deadlineSummary.expiry,
+        expiry_kind: "redeem_by",
+        service_expires_at: firstRedemption?.service_expires_at ?? voucher.service_expires_at ?? null,
+        used: usedCount > 0,
+        redemptions_used: usedCount,
+        max_redemptions: maxRedemptions,
+        remaining_redemptions: Math.max(0, maxRedemptions - usedCount),
+        redemption_accounts: accountRowsForStatus,
+        redeemed_at: firstRedemption?.redeemed_at ?? voucher.redeemed_at,
+        redeemed_by: firstRedemption?.redeemed_by_phone ?? voucher.redeemed_by_phone,
+        online,
+        service_status: serviceStatus,
         data_limit_mb: dataLimitMb,
         data_cap_mode: voucher.data_cap_mode === "throttle" ? "throttle" : "disconnect",
-        data_limit_bytes: summary.dataLimitBytes,
-        data_used_bytes: summary.dataUsedBytes,
+        data_limit_bytes: dataLimitMb === null ? null : Math.floor(dataLimitMb * 1_000_000 * Math.max(usedCount, 1)),
+        data_used_bytes: dataUsedBytes,
         created_at: voucher.created_at,
       };
     }));
@@ -450,8 +582,20 @@ router.patch("/vouchers/hotspot/:code", requireAdmin(), async (req, res): Promis
     const rawExpiry = req.body?.expiryAt;
     if (rawExpiry === null || rawExpiry === "") {
       expiryValue = null;
-    } else if (typeof rawExpiry === "string" && Number.isFinite(Date.parse(rawExpiry))) {
-      expiryValue = new Date(rawExpiry).toISOString();
+    } else if (typeof rawExpiry === "string") {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(rawExpiry)) {
+        const eatDate = voucherExpiryFromEastAfricaDate(rawExpiry);
+        if (!eatDate) {
+          res.status(400).json({ error: "Enter a valid calendar date for the voucher expiry." });
+          return;
+        }
+        expiryValue = eatDate;
+      } else if (Number.isFinite(Date.parse(rawExpiry))) {
+        expiryValue = new Date(rawExpiry).toISOString();
+      } else {
+        res.status(400).json({ error: "Enter a valid voucher expiry date and time." });
+        return;
+      }
     } else {
       res.status(400).json({ error: "Enter a valid voucher expiry date and time." });
       return;
@@ -488,147 +632,44 @@ router.patch("/vouchers/hotspot/:code", requireAdmin(), async (req, res): Promis
       res.status(404).json({ error: "Voucher not found for this account." });
       return;
     }
-
-    const sessions = await loadVoucherSessions(code, voucher.prepaid_customer_id);
-    const oldLimitMb = voucher.data_limit_mb == null || Number(voucher.data_limit_mb) <= 0
-      ? null
-      : Number(voucher.data_limit_mb);
-    const status = summarizeHotspotVoucherStatus({
-      sessions,
-      validityMins: Number(voucher.validity_mins) || 0,
-      redeemBy: voucher.expires_at,
-      redeemedAt: voucher.redeemed_at,
-      redeemedBy: voucher.redeemed_by_phone,
-      serviceExpiresAt: voucher.service_expires_at,
-      dataLimitMb: oldLimitMb,
-      dataCapMode: voucher.data_cap_mode,
-    });
-    const used = status.used;
-    const preserveUnknownExpiry = used && status.serviceStatus === "unknown" && !expiryWasProvided;
-    const dataLimitMb = dataLimitWasProvided ? requestedDataLimitMb! : oldLimitMb;
+    const redemptions = await sbSelectStrict<{ id: number | string }>(
+      "isp_radius_voucher_redemptions",
+      `admin_id=eq.${adminId}&voucher_id=eq.${voucher.id}&select=id&limit=1`,
+    );
+    const used = voucher.redeemed_at != null || redemptions.length > 0;
+    const dataLimitMb = dataLimitWasProvided
+      ? requestedDataLimitMb!
+      : voucher.data_limit_mb == null || Number(voucher.data_limit_mb) <= 0
+        ? null
+        : Number(voucher.data_limit_mb);
     const dataCapMode = capModeWasProvided
       ? requestedCapMode as "disconnect" | "throttle"
       : voucher.data_cap_mode === "throttle" ? "throttle" : "disconnect";
-    const serviceExpiresAt = used
-      ? expiryWasProvided
-        ? expiryValue!
-        : voucher.service_expires_at ?? (status.expiryKind === "service" ? status.expiry : null)
-      : null;
-    const redeemBy = used
-      ? voucher.expires_at
-      : expiryWasProvided
-        ? expiryValue!
-        : voucher.expires_at;
-    const voucherUpdates: Record<string, unknown> = {
+    const updates: Record<string, unknown> = {
       data_limit_mb: dataLimitMb,
       data_cap_mode: dataLimitMb === null ? "disconnect" : dataCapMode,
     };
-    let linkedVoucherUsername = "";
-    if (used) {
-      if (!preserveUnknownExpiry) voucherUpdates.service_expires_at = serviceExpiresAt;
-      if (status.redeemedAt) voucherUpdates.redeemed_at = status.redeemedAt;
-      if (status.redeemedAt && expiryWasProvided) {
-        voucherUpdates.validity_mins = serviceExpiresAt
-          ? Math.max(0, Math.ceil((Date.parse(serviceExpiresAt) - Date.parse(status.redeemedAt)) / 60_000))
-          : 0;
-      }
-    } else if (expiryWasProvided) {
-      voucherUpdates.expires_at = redeemBy;
-    }
+    if (expiryWasProvided) updates.expires_at = expiryValue;
 
     const [updated] = await sbUpdateStrict<StoredVoucher>(
       "isp_radius_vouchers",
       `admin_id=eq.${adminId}&code=eq.${encodeURIComponent(code)}`,
-      voucherUpdates,
+      updates,
     );
     if (!updated) {
       res.status(404).json({ error: "Voucher not found for this account." });
       return;
-    }
-
-    if (used) {
-      const plans = updated.plan_id == null ? [] : await sbSelectStrict<{
-        admin_id: number;
-        owner_reseller_id: number | null;
-      }>(
-        "isp_plans",
-        `id=eq.${updated.plan_id}&admin_id=eq.${adminId}&select=admin_id,owner_reseller_id&limit=1`,
-      );
-      const accountAdminId = Number(plans[0]?.owner_reseller_id ?? adminId);
-      const accountFilter = updated.prepaid_customer_id != null
-        ? `id=eq.${encodeURIComponent(String(updated.prepaid_customer_id))}`
-        : `admin_id=eq.${accountAdminId}&type=eq.voucher&username=eq.${encodeURIComponent(code)}`;
-      const accountRows = await sbSelectStrict<{
-        id: number;
-        admin_id: number;
-        username: string;
-        status: string;
-        depletion_reason: string | null;
-      }>(
-        "isp_customers",
-        `${accountFilter}&select=id,admin_id,username,status,depletion_reason&limit=2`,
-      );
-      const account = accountRows[0];
-      if (account) {
-        if (account.admin_id !== adminId && account.admin_id !== accountAdminId) {
-          throw new Error("The voucher is linked to a prepaid account outside its owner scope.");
-        }
-        linkedVoucherUsername = String(account.username || "").trim() || code;
-        const newExpiryTime = serviceExpiresAt ? Date.parse(serviceExpiresAt) : Number.NaN;
-        const isTimeExpired = Number.isFinite(newExpiryTime) && newExpiryTime <= Date.now();
-        const isDataDepleted = dataLimitMb !== null
-          && dataCapMode === "disconnect"
-          && status.dataUsedBytes >= Math.floor(dataLimitMb * 1_000_000);
-        const accountUpdates: Record<string, unknown> = preserveUnknownExpiry
-          ? {}
-          : { expires_at: serviceExpiresAt, updated_at: new Date().toISOString() };
-        if (account.status !== "suspended") {
-          if (isDataDepleted) {
-            accountUpdates.status = "expired";
-            accountUpdates.depletion_reason = "data_limit";
-          } else if (!preserveUnknownExpiry) {
-            if (isTimeExpired) {
-              accountUpdates.status = "expired";
-              accountUpdates.depletion_reason = null;
-            } else if (account.status === "expired") {
-              accountUpdates.status = "active";
-              accountUpdates.depletion_reason = null;
-            }
-          }
-        }
-        if (Object.keys(accountUpdates).length > 0) {
-          await sbUpdateStrict("isp_customers", `id=eq.${account.id}`, accountUpdates);
-        }
-      }
-    }
-
-    const radiusUsername = used ? linkedVoucherUsername || code : code;
-    await syncVoucherRadiusEntitlements(
-      radiusUsername,
-      dataLimitMb,
-      dataLimitMb === null ? "disconnect" : dataCapMode,
-    );
-    if (!preserveUnknownExpiry) {
-      await syncVoucherExpiryAttributes(radiusUsername, used ? serviceExpiresAt ?? null : redeemBy ?? null, used);
-    }
-    if (used) {
-      if (expiryWasProvided && status.redeemedAt) {
-        const updatedValidityMins = serviceExpiresAt
-          ? Math.max(0, Math.ceil((Date.parse(serviceExpiresAt) - Date.parse(status.redeemedAt)) / 60_000))
-          : 0;
-        await syncVoucherValidityMinutes(radiusUsername, updatedValidityMins);
-      }
     }
     res.json({
       ok: true,
       used,
       voucher: {
         code: updated.code,
-        expiry: used ? serviceExpiresAt : redeemBy,
-        expiry_kind: used ? "service" : "redeem_by",
+        expiry: updated.expires_at,
+        expiry_kind: "redeem_by",
         data_limit_mb: dataLimitMb,
         data_cap_mode: dataLimitMb === null ? "disconnect" : dataCapMode,
-        data_used_bytes: status.dataUsedBytes,
+        note: "Changes apply to future redemptions. Each existing prepaid account keeps its own service expiry and data allowance.",
       },
     });
   } catch (error) {
@@ -640,10 +681,11 @@ router.patch("/vouchers/hotspot/:code", requireAdmin(), async (req, res): Promis
 router.post("/vouchers/hotspot/redeem", async (req, res): Promise<void> => {
   const code = String(req.body?.code ?? "").trim().toUpperCase();
   const normalizedMac = normalizeMacAddress(req.body?.mac_address);
+  const contact = normalizeKenyanVoucherPhone(String(req.body?.contact ?? ""));
   const requestedAdminId = Number(req.body?.adminId);
   const portalScope = req.hotspotPortalContext;
-  if (!code || !normalizedMac) {
-    res.status(400).json({ error: "Enter a voucher code and activate it from this device's hotspot sign-in page." });
+  if (!code || !normalizedMac || !contact) {
+    res.status(400).json({ error: "Enter a valid Kenyan phone number and voucher code on this device's hotspot sign-in page." });
     return;
   }
   const allowedAdminIds = portalScope
@@ -698,7 +740,7 @@ router.post("/vouchers/hotspot/redeem", async (req, res): Promise<void> => {
     }
     const routerRows = await sbSelectStrict<HotspotRouter & { admin_id: number }>(
       "isp_routers",
-      `id=eq.${routerId}&admin_id=eq.${plan.admin_id}&select=id,name,host,status,admin_id&limit=1`,
+      `id=eq.${routerId}&admin_id=eq.${plan.admin_id}&select=id,name,host,status,admin_id,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
     );
     if (!routerRows[0]) {
       res.status(409).json({ error: "The voucher's Hotspot router is not available." });
@@ -731,38 +773,30 @@ router.post("/vouchers/hotspot/redeem", async (req, res): Promise<void> => {
       portId = portalScope.portId;
     }
 
-    const sessions = await loadVoucherSessions(code, voucher.prepaid_customer_id);
+    // Remove legacy local voucher users before checking a new claim. Otherwise a
+    // RouterOS-local password could bypass this database's expiry/use limits.
+    const possibleRouters = voucher.router_id || plan.router_id
+      ? routerRows
+      : await sbSelectStrict<HotspotRouter>(
+          "isp_routers",
+          `admin_id=eq.${plan.admin_id}&select=id,name,host,status,bridge_ip,vpn_ip,router_username,router_secret`,
+        );
+    const localVoucherCleanup = await Promise.allSettled(possibleRouters.map(async candidateRouter => {
+      const credentials = voucherRouterCredentials(candidateRouter);
+      if (!credentials.host) throw new Error("Router has no management host.");
+      const localUsers = await fetchHotspotUserList(credentials);
+      const syncedVoucher = localUsers.find(user =>
+        user.name === code && String(user.comment ?? "").includes(" voucher · "),
+      );
+      if (syncedVoucher) await removeHotspotUser(credentials, code);
+    }));
+    if (localVoucherCleanup.some(result => result.status === "rejected")) {
+      logger.warn({ code, voucherId: voucher.id }, "[hotspot-vouchers] legacy local voucher cleanup incomplete");
+    }
+
     const dataLimitMb = voucher.data_limit_mb == null || Number(voucher.data_limit_mb) <= 0
       ? null
       : Number(voucher.data_limit_mb);
-    const summary = summarizeHotspotVoucherStatus({
-      sessions,
-      validityMins: Number(voucher.validity_mins) || 0,
-      redeemBy: voucher.expires_at,
-      redeemedAt: voucher.redeemed_at,
-      redeemedBy: voucher.redeemed_by_phone,
-      serviceExpiresAt: voucher.service_expires_at,
-      dataLimitMb,
-      dataCapMode: voucher.data_cap_mode,
-    });
-    if (summary.serviceStatus === "expired" || summary.serviceStatus === "inactive") {
-      res.status(410).json({ error: summary.serviceStatus === "expired" ? "This voucher has expired." : "This voucher's package is no longer active." });
-      return;
-    }
-    if (summary.used && Number(voucher.validity_mins) > 0 && !summary.redeemedAt && !voucher.service_expires_at) {
-      res.status(409).json({ error: "The original voucher start time is unavailable. Ask the ISP to restore it without changing its expiry." });
-      return;
-    }
-    const conflictingSession = sessions.some(session => {
-      const sessionMac = normalizeMacAddress(session.callingstationid);
-      return sessionMac !== null && sessionMac !== normalizedMac;
-    });
-    if (conflictingSession) {
-      res.status(409).json({ error: "This voucher has already been used by another device." });
-      return;
-    }
-
-    const contact = typeof req.body?.contact === "string" ? req.body.contact.trim().slice(0, 120) : "";
     const activatedRows = await sbRpc<Record<string, unknown>>("activate_hotspot_voucher", {
       p_admin_id: voucher.admin_id,
       p_code: code,
@@ -770,7 +804,7 @@ router.post("/vouchers/hotspot/redeem", async (req, res): Promise<void> => {
       p_contact: contact || null,
       p_router_id: routerId,
       p_port_id: portId,
-      p_redeemed_at: summary.redeemedAt,
+      p_redeemed_at: null,
     });
     const activated = activatedRows[0];
     if (!activated) {
@@ -799,12 +833,39 @@ router.post("/vouchers/hotspot/redeem", async (req, res): Promise<void> => {
     if (accountRows.length !== 1 || !accountUsername || !accountPassword) {
       throw new Error("The voucher prepaid account was saved without usable login credentials.");
     }
+    await Promise.all([
+      sbDeleteStrict("radcheck", `username=eq.${encodeURIComponent(accountUsername)}&attribute=eq.Cleartext-Password`),
+      sbDeleteStrict("radusergroup", `username=eq.${encodeURIComponent(accountUsername)}`),
+    ]);
+    await Promise.all([
+      sbInsertStrict("radcheck", [{
+        username: accountUsername,
+        attribute: "Cleartext-Password",
+        op: ":=",
+        value: accountPassword,
+      }]),
+      sbInsertStrict("radusergroup", [{
+        username: accountUsername,
+        groupname: String(activated.out_plan_name ?? voucher.plan_name),
+        priority: 1,
+      }]),
+    ]);
+    if (accountUsername.toLowerCase() !== code.toLowerCase()) {
+      await Promise.all([
+        sbDeleteStrict("radcheck", `username=eq.${encodeURIComponent(code)}`),
+        sbDeleteStrict("radusergroup", `username=eq.${encodeURIComponent(code)}`),
+      ]);
+    }
     await syncVoucherRadiusEntitlements(
       accountUsername,
       dataLimitMb,
       dataLimitMb === null ? "disconnect" : voucher.data_cap_mode === "throttle" ? "throttle" : "disconnect",
     );
     await syncVoucherExpiryAttributes(accountUsername, serviceExpiresAt, true);
+    const redemptionRows = await sbSelectStrict<{ id: number | string }>(
+      "isp_radius_voucher_redemptions",
+      `admin_id=eq.${voucher.admin_id}&voucher_id=eq.${voucher.id}&select=id&limit=500`,
+    );
 
     res.json({
       ok: true,
@@ -817,15 +878,27 @@ router.post("/vouchers/hotspot/redeem", async (req, res): Promise<void> => {
         validity_mins: Number(activated.out_validity_mins) || 0,
         data_limit_mb: activated.out_data_limit_mb == null ? null : Number(activated.out_data_limit_mb),
         service_expires_at: serviceExpiresAt,
+        redemptions_used: redemptionRows.length,
+        max_redemptions: Math.max(1, Number(voucher.max_redemptions) || 1),
       },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error({ err: error, adminId: portalScope?.adminId ?? requestedAdminId }, "[hotspot-vouchers] activation failed");
     const normalizedMessage = message.toLowerCase();
-    if (
+    const expiryMarker = message.match(/HOTSPOT_VOUCHER_EXPIRED_AT:([^\s]+)/i)?.[1];
+    const serviceExpiryMarker = message.match(/HOTSPOT_VOUCHER_SERVICE_EXPIRED_AT:([^\s]+)/i)?.[1];
+    const limitMarker = message.match(/HOTSPOT_VOUCHER_REDEMPTION_LIMIT:(\d+):(\d+)/i);
+    if (expiryMarker) {
+      res.status(410).json({ error: `This voucher expired at ${formatVoucherExpiryInEastAfrica(expiryMarker)}.` });
+    } else if (serviceExpiryMarker) {
+      res.status(410).json({ error: `This voucher account expired at ${formatVoucherExpiryInEastAfrica(serviceExpiryMarker)}.` });
+    } else if (limitMarker) {
+      res.status(409).json({ error: `This voucher has reached its redemption limit (${limitMarker[1]} of ${limitMarker[2]} uses).` });
+    } else if (
       normalizedMessage.includes("another device")
       || normalizedMessage.includes("different hotspot account or service")
+      || normalizedMessage.includes("already_linked_to_device")
       || normalizedMessage.includes("original voucher start time is unavailable")
     ) {
       res.status(409).json({ error: "This voucher is already linked to another device." });
@@ -844,6 +917,7 @@ router.post("/vouchers/hotspot/generate", requireAdmin(), async (req, res): Prom
   if (!adminId) return;
 
   const quantity = Number(req.body?.quantity);
+  const maxRedemptions = Number(req.body?.maxRedemptions ?? 1);
   const planId = Number(req.body?.planId);
   const routerValue = req.body?.routerId;
   const routerId = routerValue === null || routerValue === undefined || routerValue === "all"
@@ -858,6 +932,10 @@ router.post("/vouchers/hotspot/generate", requireAdmin(), async (req, res): Prom
 
   if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > MAX_VOUCHERS_PER_REQUEST) {
     res.status(400).json({ error: `quantity must be between 1 and ${MAX_VOUCHERS_PER_REQUEST}` });
+    return;
+  }
+  if (!Number.isSafeInteger(maxRedemptions) || maxRedemptions < 1 || maxRedemptions > 500) {
+    res.status(400).json({ error: "Each voucher must allow between 1 and 500 redemptions." });
     return;
   }
   if (!Number.isSafeInteger(planId) || planId <= 0) {
@@ -884,7 +962,7 @@ router.post("/vouchers/hotspot/generate", requireAdmin(), async (req, res): Prom
     res.status(400).json({ error: "expiryDate must be a calendar date in YYYY-MM-DD format." });
     return;
   }
-  if (expiryDate !== null && Number.isNaN(Date.parse(`${expiryDate}T00:00:00.000Z`))) {
+  if (expiryDate !== null && !voucherExpiryFromEastAfricaDate(expiryDate)) {
     res.status(400).json({ error: "expiryDate is not a valid calendar date." });
     return;
   }
@@ -938,7 +1016,7 @@ router.post("/vouchers/hotspot/generate", requireAdmin(), async (req, res): Prom
     const dataCapMode = dataLimitMb !== null && plan.data_cap_mode === "throttle"
       ? "throttle"
       : "disconnect";
-    const expiresAt = expiryDate ? `${expiryDate}T00:00:00.000Z` : null;
+    const expiresAt = expiryDate ? voucherExpiryFromEastAfricaDate(expiryDate) : null;
     const rows: Record<string, unknown>[] = codes.map(code => ({
       admin_id: adminId,
       code,
@@ -950,35 +1028,12 @@ router.post("/vouchers/hotspot/generate", requireAdmin(), async (req, res): Prom
       validity_mins: validityMins,
       data_limit_mb: dataLimitMb,
       data_cap_mode: dataCapMode,
+      max_redemptions: maxRedemptions,
       expires_at: expiresAt,
       created_at: now,
     }));
-    const checks: Record<string, unknown>[] = [];
-    const groups = codes.map(code => ({ username: code, groupname: plan.name, priority: 1 }));
-    for (const code of codes) {
-      checks.push(
-        { username: code, attribute: "Cleartext-Password", op: ":=", value: code },
-        { username: code, attribute: "Isp-Price", op: ":=", value: String(Number(plan.price) || 0) },
-        { username: code, attribute: "Isp-Router-Id", op: ":=", value: selectedRouter ? String(selectedRouter.id) : "0" },
-        { username: code, attribute: "Isp-Router-Name", op: ":=", value: selectedRouter?.name ?? "Any" },
-        { username: code, attribute: "Isp-Plan-Name", op: ":=", value: plan.name },
-        { username: code, attribute: "Isp-Validity-Mins", op: ":=", value: String(validityMins) },
-        { username: code, attribute: "Isp-Created-At", op: ":=", value: now },
-      );
-      if (dataLimitMb !== null && dataCapMode === "disconnect") {
-        checks.push({
-          username: code,
-          attribute: "Max-Data",
-          op: ":=",
-          value: String(Math.floor(dataLimitMb * 1_000_000)),
-        });
-      }
-      if (expiryDate) checks.push({ username: code, attribute: "Expiration", op: ":=", value: expiryDate });
-    }
 
     try {
-      await sbInsertStrict("radcheck", checks);
-      await sbInsertStrict("radusergroup", groups);
       await sbInsertStrict("isp_radius_vouchers", rows);
     } catch (error) {
       try {

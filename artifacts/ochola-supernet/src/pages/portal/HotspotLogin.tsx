@@ -1597,7 +1597,6 @@ function HotspotLoginView({
   const [voucherError, setVoucherError] = useState("");
   const [voucherSuccess, setVoucherSuccess] = useState(false);
   const [voucherInfo, setVoucherInfo] = useState<Record<string, unknown> | null>(null);
-  const [voucherContact, setVoucherContact] = useState("");
   const [voucherConnected, setVoucherConnected] = useState(false);
   const [voucherCredentials, setVoucherCredentials] = useState<HotspotCredentials | null>(null);
   const [voucherAccountAdminId, setVoucherAccountAdminId] = useState<number | null>(null);
@@ -1640,7 +1639,7 @@ function HotspotLoginView({
           ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
           ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
           code: voucherCode.trim().toUpperCase(),
-          contact: voucherContact.trim(),
+          contact: voucherPhone.trim(),
           mac_address: macAddress,
         }),
       });
@@ -3172,9 +3171,6 @@ function HotspotLoginView({
                       {voucherPlanName && (
                         <p>Plan: <strong style={{ color: "#fff" }}>{voucherPlanName}</strong></p>
                       )}
-                      {voucherUsername && (
-                        <p>Hotspot username: <strong style={{ color: "#fff" }}>{voucherUsername}</strong></p>
-                      )}
                       {voucherDuration && (
                         <p style={{ marginBottom: 16 }}>Duration: <strong style={{ color: "#fff" }}>{voucherDuration}</strong></p>
                       )}
@@ -3207,7 +3203,6 @@ function HotspotLoginView({
                           setVoucherSuccess(false);
                           setVoucherConnected(false);
                           setVoucherCode("");
-                          setVoucherContact("");
                           setVoucherInfo(null);
                           setVoucherCredentials(null);
                           setVoucherAccountAdminId(null);
@@ -3241,12 +3236,6 @@ function HotspotLoginView({
                         <input className="hp-input hp-voucher-input" type="text"
                           placeholder="Voucher code (e.g. HYT46)" required minLength={3} maxLength={32}
                           value={voucherCode} onChange={e => setVoucherCode(e.target.value.replace(/[^a-zA-Z0-9-]/g, "").toUpperCase())} />
-                      </div>
-
-                      <div className="hp-input-group">
-                        <input className="hp-input" type="text" maxLength={120}
-                          placeholder="Phone number or name (optional)"
-                          value={voucherContact} onChange={e => setVoucherContact(e.target.value)} />
                       </div>
 
                       <button type="submit" disabled={voucherLoading} className="hp-btn hp-btn-voucher">

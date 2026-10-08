@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useSearch } from "wouter";
 import {
-  LayoutDashboard, Users, Ticket, Package, CreditCard,
+  LayoutDashboard, Users, Package, CreditCard,
   Network, Settings, Bell, Wifi, Shield, FolderOpen,
   Sliders, BookOpen, LogOut, Webhook, ChevronRight,
   CheckSquare, Search, Sun, Moon, Menu, KeyRound, X, ShieldAlert,
@@ -152,14 +152,6 @@ const navSections: NavSection[] = [
         href: "/admin/activation/prepaid-users",
       },
       {
-        name: "Hotspot Vouchers", icon: Ticket, visibilityKey: "customers.vouchers",
-        children: [
-          { name: "All Vouchers",  href: "/admin/vouchers" },
-          { name: "Generate",      href: "/admin/vouchers?action=generate" },
-          { name: "Batches",       href: "/admin/vouchers?tab=batches" },
-        ],
-      },
-      {
         name: "Hotspot Binding", icon: Wifi, visibilityKey: "customers.hotspot-binding",
         children: [
           { name: "Bindings",      href: "/admin/hotspot-binding" },
@@ -183,6 +175,7 @@ const navSections: NavSection[] = [
           { name: "FUP",           href: "/admin/plans?type=fup" },
           { name: "Roaming",       href: "/admin/plans/roaming" },
           { name: "Loyalty points", href: "/admin/plans/loyalty" },
+          { name: "Vouchers", href: "/admin/vouchers" },
         ],
       },
       {
@@ -578,7 +571,7 @@ export function AdminLayout({
 
   const resellerSections = new Set(["Overview", "Customers", "Billing", "Network", "Admin", "Reseller"]);
   const resellerItems: Record<string, Set<string>> = {
-    Customers: new Set(["Customers", "Prepaid Users", "Hotspot Vouchers", "Hotspot Binding"]),
+    Customers: new Set(["Customers", "Prepaid Users", "Hotspot Binding"]),
     Billing: new Set(["Packages / Plans", "Transactions"]),
     Network: new Set(["Hotspot Settings"]),
     Admin: new Set(["Settings"]),

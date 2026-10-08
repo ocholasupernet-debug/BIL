@@ -6,12 +6,21 @@ import { adminApiHeaders } from "@/lib/admin-router-context";
 import {
   Plus, Search, Printer, Copy, Trash2, Loader2, CheckCircle2,
   Ticket, Wifi, X, Download, RefreshCw, Filter, Eye, EyeOff,
-  AlertTriangle, ChevronDown, UploadCloud, RotateCcw, Pencil,
+  AlertTriangle, ChevronDown, Pencil,
 } from "lucide-react";
-import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 import { getCurrencySymbol } from "@/lib/utils";
 
 /* ─────────────────────────── Types ─────────────────────────── */
+interface VoucherRedemptionAccount {
+  username: string;
+  phone: string | null;
+  redeemed_at: string;
+  service_expires_at: string | null;
+  online: boolean;
+  service_status: "available" | "expired" | "active" | "inactive" | "unknown";
+  data_used_bytes: number;
+}
+
 interface VoucherRow {
   code: string;
   plan_name: string;
@@ -23,6 +32,10 @@ interface VoucherRow {
   expiry_kind: "service" | "redeem_by" | null;
   service_expires_at?: string | null;
   used: boolean;
+  redemptions_used: number;
+  max_redemptions: number;
+  remaining_redemptions: number;
+  redemption_accounts: VoucherRedemptionAccount[];
   redeemed_at: string | null;
   redeemed_by: string | null;
   online: boolean;
@@ -67,16 +80,18 @@ function fmtDateTime(d: string) {
   });
 }
 
-function toLocalDateTimeInput(value: string | null | undefined): string {
+function toEastAfricaDateInput(value: string | null | undefined): string {
   if (!value) return "";
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "";
-  const pad = (part: number) => String(part).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function toLocalDateInput(value: string | null | undefined): string {
-  return toLocalDateTimeInput(value).slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Nairobi",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const valueByType = new Map(parts.map(part => [part.type, part.value]));
+  return `${valueByType.get("year")}-${valueByType.get("month")}-${valueByType.get("day")}`;
 }
 
 function fmtDataLimit(mb: number | null | undefined): string {
@@ -119,7 +134,6 @@ function previewCode(prefix: string): string {
 interface VoucherConfig {
   plans: DbPlanLite[];
   routers: DbRouterLite[];
-  companyName: string;
 }
 
 async function voucherApi<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -145,6 +159,7 @@ async function fetchVouchers(): Promise<VoucherRow[]> {
 
 interface VoucherGenerationInput {
   quantity: number;
+  maxRedemptions: number;
   planId: number;
   routerId: number | null;
   prefix: string;
@@ -189,26 +204,6 @@ async function updateVoucher(input: VoucherUpdateInput): Promise<{ ok: boolean }
   });
 }
 
-interface VoucherRestoreInput {
-  code: string;
-  routerId: number;
-}
-
-interface VoucherRestoreResult {
-  voucher: string;
-  router: string;
-  remainingBytes: number | null;
-  expiry: string | null;
-}
-
-async function restoreVoucher(input: VoucherRestoreInput): Promise<VoucherRestoreResult> {
-  return voucherApi("/api/admin/sync/voucher-restore", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-}
-
 /* ─────────────────────────── Print Component ─────────────────── */
 function PrintVoucherCard({ v, plan }: { v: VoucherRow; plan?: DbPlanLite }) {
   return (
@@ -225,6 +220,12 @@ function PrintVoucherCard({ v, plan }: { v: VoucherRow; plan?: DbPlanLite }) {
       </div>
       <div style={{ fontSize: "0.6rem", color: "#64748b", marginTop: "0.2rem" }}>
         Data: {fmtDataLimit(v.data_limit_mb)} · Time: {v.validity_mins > 0 ? fmtValidity(v.validity_mins) : "No time limit"}
+      </div>
+      <div style={{ fontSize: "0.6rem", color: "#64748b", marginTop: "0.2rem" }}>
+        Up to {v.max_redemptions} redemption{v.max_redemptions === 1 ? "" : "s"} · one account each
+      </div>
+      <div style={{ fontSize: "0.6rem", color: "#64748b", marginTop: "0.2rem" }}>
+        Up to {v.max_redemptions} redemption{v.max_redemptions === 1 ? "" : "s"} · one account each
       </div>
       {v.expiry && (
         <div style={{ fontSize: "0.6rem", color: "#64748b", marginTop: "0.2rem" }}>
@@ -246,31 +247,19 @@ function EditVoucherModal({
   onClose: () => void;
   onSave: (input: VoucherUpdateInput) => void;
 }) {
-  const [expiry, setExpiry] = useState(
-    voucher.used ? toLocalDateTimeInput(voucher.expiry) : toLocalDateInput(voucher.expiry),
-  );
+  const [expiry, setExpiry] = useState(toEastAfricaDateInput(voucher.expiry));
   const [expiryTouched, setExpiryTouched] = useState(false);
   const [limited, setLimited] = useState(voucher.data_limit_mb != null && voucher.data_limit_mb > 0);
   const [dataLimitMb, setDataLimitMb] = useState(
     voucher.data_limit_mb != null && voucher.data_limit_mb > 0 ? String(voucher.data_limit_mb) : "",
   );
-  const isUsed = voucher.used;
-  const proposedCap = limited ? Number(dataLimitMb) * 1_000_000 : Number.POSITIVE_INFINITY;
-  const wouldExceedRecordedUsage = limited
-    && Number.isFinite(proposedCap)
-    && proposedCap > 0
-    && voucher.data_used_bytes >= proposedCap
-    && voucher.data_cap_mode === "disconnect";
-
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     if (limited && (!Number.isFinite(Number(dataLimitMb)) || Number(dataLimitMb) <= 0)) return;
     onSave({
       code: voucher.code,
       ...(expiryTouched ? {
-        expiryAt: expiry
-          ? new Date(isUsed ? expiry : `${expiry}T00:00:00.000Z`).toISOString()
-          : null,
+        expiryAt: expiry || null,
       } : {}),
       dataLimitMb: limited ? Number(dataLimitMb) : null,
     });
@@ -296,19 +285,17 @@ function EditVoucherModal({
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem" }}>
           <div>
             <h2 id="edit-voucher-title" style={{ margin: 0, color: "var(--isp-text)", fontSize: "1.05rem" }}>Edit voucher</h2>
-            <div style={{ marginTop: "0.25rem", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>{voucher.code} · {isUsed ? "Redeemed" : "Unused"}</div>
+            <div style={{ marginTop: "0.25rem", color: "var(--isp-text-muted)", fontSize: "0.8rem" }}>{voucher.code} · {voucher.redemptions_used}/{voucher.max_redemptions} redeemed</div>
           </div>
           <button type="button" onClick={onClose} aria-label="Close edit voucher"
             style={{ border: 0, background: "transparent", color: "var(--isp-text-muted)", cursor: "pointer" }}><X size={18} /></button>
         </div>
 
         <label style={{ display: "grid", gap: "0.4rem", color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 600 }}>
-          {isUsed ? "Service expiry" : "Redeem-by deadline"}
-          <input type={isUsed ? "datetime-local" : "date"} value={expiry} onChange={event => { setExpiry(event.target.value); setExpiryTouched(true); }} style={inputStyle} />
+          Redeem-by deadline (East Africa Time)
+          <input type="date" value={expiry} onChange={event => { setExpiry(event.target.value); setExpiryTouched(true); }} style={inputStyle} />
           <span style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem", fontWeight: 400 }}>
-            {isUsed
-              ? "Leave blank for no time expiry. This time is shown in your local timezone."
-              : "Leave blank for no redemption deadline. The deadline applies to unused vouchers."}
+            Leave blank for no redemption deadline. The selected date expires at 11:59:59 p.m. EAT. This changes future redemptions only; existing prepaid accounts keep their own expiry.
           </span>
         </label>
 
@@ -326,11 +313,9 @@ function EditVoucherModal({
               </span>
             </div>
           )}
-          {isUsed && (
-            <div style={{ color: wouldExceedRecordedUsage ? "#fbbf24" : "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.45 }}>
-              Recorded usage ({fmtDataUsage(voucher.data_used_bytes)}) is preserved. A disconnect cap at or below that amount will make the voucher inactive.
-            </div>
-          )}
+          <div style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.45 }}>
+            The data limit applies to each new prepaid account from this voucher; existing accounts keep their saved allowance and usage.
+          </div>
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", paddingTop: "0.25rem" }}>
@@ -358,6 +343,7 @@ function GenerateModal({
   const [selectedPlanId, setSelectedPlanId] = useState(plans[0]?.id ?? 0);
   const [selectedRouterId, setSelectedRouterId] = useState<number | "all">("all");
   const [qty, setQty] = useState(5);
+  const [maxRedemptions, setMaxRedemptions] = useState(1);
   const [prefix, setPrefix] = useState("");
   const [fixedCode, setFixedCode] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
@@ -371,6 +357,7 @@ function GenerateModal({
     setGenerating(true);
     onGenerate({
       quantity: fixedCode ? 1 : qty,
+      maxRedemptions,
       planId: plan.id,
       routerId: router?.id ?? null,
       prefix,
@@ -449,7 +436,7 @@ function GenerateModal({
           )}
           {plan && (
             <div style={{ marginTop: "-0.5rem", fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
-              Each voucher keeps this data allowance from the selected plan. Change the plan to set a different allowance for future vouchers.
+              Each separate account created from a voucher receives this plan allowance.
             </div>
           )}
 
@@ -473,6 +460,20 @@ function GenerateModal({
 
           <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
             <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+              People per voucher
+            </span>
+            <input
+              type="number" min={1} max={500} step={1} value={maxRedemptions}
+              onChange={event => setMaxRedemptions(Math.min(500, Math.max(1, Number(event.target.value) || 1)))}
+              style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%" }}
+            />
+            <span style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>
+              Each successful redemption creates a separate prepaid Hotspot account. Set 1 for a single-use code.
+            </span>
+          </label>
+
+          <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+            <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
               Fixed voucher code <span style={{ textTransform: "none", opacity: 0.6 }}>(optional · 3–32 letters or numbers, no spaces)</span>
             </span>
             <input
@@ -490,11 +491,14 @@ function GenerateModal({
 
           {/* Expiry */}
           <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-            <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Batch Expiry Date <span style={{ textTransform: "none", opacity: 0.6 }}>(optional)</span></span>
+            <span style={{ fontSize: "0.75rem", fontWeight: 600, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Redeem-by deadline <span style={{ textTransform: "none", opacity: 0.6 }}>(optional)</span></span>
             <input
               type="date" value={expiryDate}
               onChange={e => setExpiryDate(e.target.value)}
               style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%" }} />
+            <span style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem" }}>
+              The code expires at the end of the selected date in East Africa Time.
+            </span>
           </label>
 
           {/* Preview code */}
@@ -587,7 +591,6 @@ export default function Vouchers() {
   });
   const plans = voucherConfig?.plans ?? [];
   const routers = voucherConfig?.routers ?? [];
-  const companyName = voucherConfig?.companyName ?? "ISP";
   const {
     data: vouchers = [],
     isLoading: vouchersLoading,
@@ -625,22 +628,12 @@ export default function Vouchers() {
     onError:   (e: Error) => showToast(`Error: ${e.message}`, false),
   });
 
-  /* ─── Restore an active redeemed voucher on RADIUS and its router ─── */
-  const restoreMutation = useMutation({
-    mutationFn: restoreVoucher,
-    onSuccess: result => {
-      qc.invalidateQueries({ queryKey: ["vouchers", ADMIN_ID] });
-      showToast(`Restored ${result.voucher} on ${result.router}; usage and expiry preserved`);
-    },
-    onError: (e: Error) => showToast(`Restore failed: ${e.message}`, false),
-  });
-
   const updateMutation = useMutation({
     mutationFn: updateVoucher,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["vouchers", ADMIN_ID] });
       setEditingVoucher(null);
-      showToast("Voucher expiry and data allowance updated; recorded usage was preserved");
+              showToast("Voucher settings updated for future redemptions");
     },
     onError: (e: Error) => showToast(`Voucher update failed: ${e.message}`, false),
   });
@@ -667,8 +660,8 @@ export default function Vouchers() {
     });
   }, [vouchers, search, filterRouter, filterPlan, filterStatus]);
 
-  const unusedCount = vouchers.filter(v => !v.used).length;
-  const usedCount   = vouchers.filter(v =>  v.used).length;
+  const unusedCount = vouchers.filter(v => v.remaining_redemptions > 0 && v.service_status === "available").length;
+  const usedCount = vouchers.reduce((total, voucher) => total + voucher.redemptions_used, 0);
 
   const selectableFiltered = filtered.filter(v => !v.used);
   const selectedDeletableCodes = selectableFiltered
@@ -738,12 +731,12 @@ export default function Vouchers() {
         {/* ── Header ── */}
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: "0.75rem" }}>
           <div>
-            <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>Hotspot Vouchers</h1>
+            <h1 style={{ fontSize: "1.25rem", fontWeight: 700, color: "var(--isp-text)", margin: 0 }}>Vouchers</h1>
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: "0.25rem 0 0" }}>
-              {isLoading ? "Loading…" : voucherListFailed ? "Voucher list could not be loaded" : `${vouchers.length} total · ${unusedCount} unused · ${usedCount} used`}
+              {isLoading ? "Loading…" : voucherListFailed ? "Voucher list could not be loaded" : `${vouchers.length} codes · ${unusedCount} redeemable · ${usedCount} redemptions`}
             </p>
             <p style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", margin: "0.25rem 0 0" }}>
-              Redeemed vouchers are protected from deletion; their service status and expiry are based on first RADIUS use.
+              Each code has a redemption limit and creates a separate tracked Hotspot account for each person who redeems it.
             </p>
           </div>
           <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
@@ -776,9 +769,9 @@ export default function Vouchers() {
         {/* ── Stat Cards ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
           {[
-            { label: "Total Vouchers",  value: vouchers.length,  grad: "linear-gradient(135deg,#0fb8ad,#1fc8db)", icon: <Ticket size={22} style={{ opacity: 0.9 }} /> },
-            { label: "Unused / Ready",  value: unusedCount,       grad: "linear-gradient(135deg,#43e97b,#38f9d7)", icon: <CheckCircle2 size={22} style={{ opacity: 0.9 }} /> },
-            { label: "Used / Redeemed", value: usedCount,         grad: "linear-gradient(135deg,#f7971e,#ffd200)", icon: <Wifi size={22} style={{ opacity: 0.9 }} /> },
+            { label: "Voucher Codes",  value: vouchers.length,  grad: "linear-gradient(135deg,#0fb8ad,#1fc8db)", icon: <Ticket size={22} style={{ opacity: 0.9 }} /> },
+            { label: "Redeemable Codes",  value: unusedCount,       grad: "linear-gradient(135deg,#43e97b,#38f9d7)", icon: <CheckCircle2 size={22} style={{ opacity: 0.9 }} /> },
+            { label: "Total Redemptions", value: usedCount,         grad: "linear-gradient(135deg,#f7971e,#ffd200)", icon: <Wifi size={22} style={{ opacity: 0.9 }} /> },
             { label: "Routers Linked",  value: new Set(vouchers.map(v => v.router_id).filter(Boolean)).size, grad: "linear-gradient(135deg,#a18cd1,#fbc2eb)", icon: <Filter size={22} style={{ opacity: 0.9 }} /> },
           ].map(k => (
             <div key={k.label} style={{ borderRadius: 12, background: k.grad, padding: "1.125rem 1.25rem", display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 90, overflow: "hidden", position: "relative" }}>
@@ -817,33 +810,6 @@ export default function Vouchers() {
             </div>
           </div>
         )}
-
-        {/* ── Sync to Router ── */}
-        <RouterSyncBar
-          label="Sync Vouchers to Router"
-          description="Push all unused voucher codes as MikroTik hotspot users so they can be authenticated locally on the router (useful as a RADIUS fallback)."
-          icon={<UploadCloud size={18} />}
-          endpoint="/api/admin/sync/users"
-          color="var(--isp-accent)"
-          buildPayload={router => ({
-            users: vouchers
-              .filter(v => !v.used && (v.router_id === router.id || (!v.router_id && v.router_name === router.name)))
-              .map(v => {
-                const plan = plans.find(candidate =>
-                  candidate.name === v.plan_name && candidate.router_id === router.id,
-                );
-                return {
-                  username: v.code,
-                  password: v.code,
-                  type: "voucher",
-                  plan_id: plan?.id,
-                  router_id: router.id,
-                  plan_name: v.plan_name,
-                  comment: `${companyName} voucher · ${v.plan_name}`,
-                };
-              }),
-          })}
-        />
 
         {/* ── Table Container ── */}
         <div style={{ borderRadius: 12, background: "var(--isp-section)", border: "1px solid var(--isp-border)", overflow: "hidden" }}>
@@ -890,7 +856,7 @@ export default function Vouchers() {
                     <input type="checkbox" checked={allSelected} disabled={selectableFiltered.length === 0} onChange={toggleAll}
                       style={{ accentColor: "var(--isp-accent)", width: 14, height: 14 }} />
                   </th>
-                  {["Code", "Plan", "Router", "Price", "Speed", "Data", "Redeemer", "Connection", "Service", "Expiry", "Status", "Actions"].map(h => (
+                  {["Code", "Plan", "Router", "Price", "Speed", "Data", "Prepaid accounts", "Connection", "Service", "Redeem-by (EAT)", "Redemptions", "Actions"].map(h => (
                     <th key={h} style={{ textAlign: "left", padding: "0.75rem 1rem", color: "var(--isp-text-sub)", fontWeight: 600, fontSize: "0.6875rem", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -942,14 +908,6 @@ export default function Vouchers() {
                   </td></tr>
                 ) : filtered.map(v => {
                   const planInfo = plans.find(p => p.name === v.plan_name);
-                  const restoreRouterId = v.router_id ?? planInfo?.router_id ?? null;
-                  const restoreRouterName = routers.find(router => router.id === restoreRouterId)?.name
-                    ?? v.router_name;
-                  const canRestore = v.used
-                    && v.service_status === "active"
-                    && restoreRouterId !== null;
-                  const isRestoring = restoreMutation.isPending
-                    && restoreMutation.variables?.code === v.code;
                   const isSelected = selected.has(v.code);
                   const serviceStatusLabel = ({
                     available: "Ready",
@@ -998,9 +956,10 @@ export default function Vouchers() {
                         <div style={{ color: "var(--isp-text)", fontWeight: 600 }}>
                           {v.data_limit_mb !== null ? fmtDataLimit(v.data_limit_mb) : "Unlimited"}
                         </div>
+                        <div style={{ fontSize: "0.64rem", marginTop: "0.15rem" }}>per prepaid account</div>
                         {v.used && v.data_limit_bytes !== null && (
                           <div style={{ fontSize: "0.67rem", marginTop: "0.15rem" }}>
-                            {fmtDataUsage(v.data_used_bytes)} used
+                            {fmtDataUsage(v.data_used_bytes)} combined used
                           </div>
                         )}
                         {v.data_limit_mb !== null && (
@@ -1009,11 +968,27 @@ export default function Vouchers() {
                           </div>
                         )}
                       </td>
-                      <td style={{ padding: "0.7rem 1rem", color: "var(--isp-text-muted)", fontSize: "0.75rem", minWidth: 130 }}>
-                        {v.used ? (
+                      <td style={{ padding: "0.7rem 1rem", color: "var(--isp-text-muted)", fontSize: "0.75rem", minWidth: 190 }}>
+                        {v.redemption_accounts.length > 0 ? (
+                          <div style={{ display: "grid", gap: "0.35rem" }}>
+                            {v.redemption_accounts.map((account, index) => (
+                              <div key={`${account.username}-${index}`} style={{ borderBottom: index < v.redemption_accounts.length - 1 ? "1px solid var(--isp-border-subtle)" : "none", paddingBottom: index < v.redemption_accounts.length - 1 ? "0.35rem" : 0 }}>
+                                <div style={{ color: "var(--isp-text)", fontWeight: 600, overflowWrap: "anywhere" }}>
+                                  {account.username || account.phone || "Unlinked account"}
+                                </div>
+                                {account.phone && account.phone !== account.username && (
+                                  <div style={{ fontSize: "0.66rem", marginTop: "0.1rem" }}>{account.phone}</div>
+                                )}
+                                <div style={{ fontSize: "0.66rem", marginTop: "0.1rem" }}>
+                                  {fmtDateTime(account.redeemed_at)} · {account.online ? "Online" : account.service_status === "expired" ? "Expired" : "Offline"}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : v.used ? (
                           <>
                             <div style={{ color: "var(--isp-text)", fontWeight: 600, overflowWrap: "anywhere" }}>
-                              {v.redeemed_by ?? "Device not reported"}
+                              {v.redeemed_by ?? "Legacy redemption"}
                             </div>
                             {v.redeemed_at && (
                               <div style={{ fontSize: "0.66rem", marginTop: "0.15rem" }}>First use {fmtDateTime(v.redeemed_at)}</div>
@@ -1035,17 +1010,17 @@ export default function Vouchers() {
                       </td>
                       <td style={{ padding: "0.7rem 1rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", minWidth: 150 }}>
                         <div style={{ color: "var(--isp-text)", fontFamily: "monospace", whiteSpace: "nowrap" }}>
-                          {v.expiry ? fmtDateTime(v.expiry) : v.used && v.validity_mins === 0 ? "No time expiry" : v.used ? "Expiry unavailable" : "No redeem-by date"}
+                          {v.expiry ? fmtDateTime(v.expiry) : "No redeem-by date"}
                         </div>
                         {v.expiry && (
                           <div style={{ fontSize: "0.65rem", marginTop: "0.15rem" }}>
-                            {v.expiry_kind === "service" ? "Actual service expiry" : "Voucher redeem-by date"}
+                            Voucher redeem-by date (EAT)
                           </div>
                         )}
                       </td>
                       <td style={{ padding: "0.7rem 1rem" }}>
                         <span style={{ fontSize: "0.7rem", padding: "0.2rem 0.625rem", borderRadius: 20, fontWeight: 700, background: v.used ? "rgba(251,191,36,0.1)" : "rgba(34,197,94,0.1)", color: v.used ? "#fbbf24" : "#22c55e" }}>
-                          {v.used ? "Redeemed" : "Unused"}
+                          {v.used ? `Redeemed ${v.redemptions_used}/${v.max_redemptions}` : "Unused"}
                         </span>
                       </td>
                       <td style={{ padding: "0.7rem 1rem" }} onClick={e => e.stopPropagation()}>
@@ -1064,29 +1039,6 @@ export default function Vouchers() {
                             onClick={() => setEditingVoucher(v)}
                             style={{ padding: "0.35rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--isp-accent)", cursor: "pointer" }}>
                             <Pencil size={13} />
-                          </button>
-                          <button
-                            aria-label={`Restore active voucher ${v.code}`}
-                            title={canRestore
-                              ? "Restore this active voucher to RADIUS and its router without resetting usage or expiry."
-                              : !v.used
-                                ? "Only redeemed vouchers can be restored."
-                                : v.service_status !== "active"
-                                  ? "Only vouchers with a verifiably active package can be restored."
-                                  : "Assign this voucher to a router before restoring it."}
-                            disabled={!canRestore || restoreMutation.isPending}
-                            onClick={() => {
-                              if (
-                                canRestore
-                                && restoreRouterId !== null
-                                && confirm(`Restore ${v.code} to RADIUS and ${restoreRouterName}? Recorded data use and expiry will be preserved.`)
-                              ) {
-                                restoreMutation.mutate({ code: v.code, routerId: restoreRouterId });
-                              }
-                            }}
-                            style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem", padding: "0.35rem 0.45rem", borderRadius: 6, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: canRestore ? "var(--isp-accent)" : "var(--isp-text-sub)", cursor: canRestore && !restoreMutation.isPending ? "pointer" : "not-allowed", opacity: canRestore ? 1 : 0.45, fontSize: "0.68rem", fontFamily: "inherit" }}>
-                            {isRestoring ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
-                            Restore
                           </button>
                           <button
                             title={v.used ? "Redeemed vouchers cannot be deleted. You can still edit expiry and data allowance." : "Delete unused voucher"}
