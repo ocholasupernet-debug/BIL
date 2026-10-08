@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -7,6 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { createAdminSessionToken } from "./portal-refresh-token.mjs";
 import {
   isNoActiveHotspotServerResponse,
   resolveRouterIdByExactName,
@@ -30,11 +30,15 @@ const ispBridgeName = marker.ispBridgeName === undefined || marker.ispBridgeName
   : validateExpectedRouterName(marker.ispBridgeName);
 const allIspBridgeRouters = marker.allIspBridgeRouters === true;
 const adminId = parseOptionalId(marker.adminId) ?? 3;
+const authVersion = parseOptionalId(marker.authVersion);
 if (!/^[a-z0-9-]{1,80}$/.test(markerId)) {
   throw new Error("The one-time portal refresh marker has an invalid ID.");
 }
 if (!Number.isSafeInteger(adminId) || adminId < 1) {
   throw new Error("The one-time portal refresh marker must identify a valid tenant admin.");
+}
+if (!Number.isSafeInteger(authVersion) || authVersion < 1) {
+  throw new Error("The one-time portal refresh marker must include the current tenant auth version.");
 }
 if (resellerPortId !== null && (!Number.isSafeInteger(resellerPortId) || resellerPortId < 1)) {
   throw new Error("The reseller port ID must be a positive integer.");
@@ -77,10 +81,12 @@ try {
     throw new Error("TOKEN_SIGNING_SECRET or SESSION_SECRET is required for the one-time portal refresh.");
   }
 
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const payload = `a.${adminId}.${issuedAt}`;
-  const signature = createHmac("sha256", signingSecret).update(payload).digest("hex");
-  const token = `${payload}.${signature}`;
+  const token = createAdminSessionToken({
+    adminId,
+    authVersion,
+    issuedAt: Math.floor(Date.now() / 1000),
+    signingSecret,
+  });
   const apiOrigin = "https://come.isplatty.org";
 
   async function refreshPortal(path, body, label, { skipIfNoActiveHotspot = false } = {}) {

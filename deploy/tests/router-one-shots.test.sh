@@ -19,14 +19,18 @@ export PATH="$BIN_DIR:$PATH"
 
 test "$(grep -Fc 'portalFileReplacementConsent: true' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs")" -eq 2
 grep -Fq '"allIspBridgeRouters": true' "$SCRIPT_DIR/portal-refresh-once.json"
-grep -Fq '"adminId": 3' "$SCRIPT_DIR/portal-refresh-once.json"
+grep -Fq '"adminId": 33' "$SCRIPT_DIR/portal-refresh-once.json"
+grep -Fq '"authVersion": 2' "$SCRIPT_DIR/portal-refresh-once.json"
+grep -Fq 'createAdminSessionToken' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
 ! grep -Fq '"ispBridgeRouterId"' "$SCRIPT_DIR/portal-refresh-once.json"
 grep -Fq 'resolveTenantRouterTargets(await listTenantRouters())' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
 grep -Fq 'for (const target of targets)' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
 grep -Fq 'expectedRouterName: routerName' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
 grep -Fq 'autoSelectBridgeServer: true' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
 grep -Fq 'bridgeName: ispBridgeName' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
-"$REAL_NODE" --test "$SCRIPT_DIR/tests/portal-refresh-target.test.mjs"
+"$REAL_NODE" --test \
+  "$SCRIPT_DIR/tests/portal-refresh-target.test.mjs" \
+  "$SCRIPT_DIR/tests/portal-refresh-token.test.mjs"
 
 make_project() {
   local project_dir="$1"
