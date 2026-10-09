@@ -33,6 +33,15 @@ test("the first ISP admin login uses the same fixed username and temporary passw
 });
 
 
+test("payment settings reads do not silently rewrite saved ISP gateway destinations", () => {
+  const settings = api("src/routes/settings-route.ts");
+  assert.doesNotMatch(
+    settings,
+    /scrubLegacyDarajaCredentials|scrub_legacy_isp_daraja_settings/,
+    "saved payment destinations may change only through an explicit admin edit",
+  );
+});
+
 test("deployments register both loyalty and voucher entitlement migrations", () => {
   const runner = api("scripts/apply-deployment-migrations.mjs");
   for (const name of [
