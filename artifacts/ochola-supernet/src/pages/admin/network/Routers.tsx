@@ -49,11 +49,12 @@ function pingErrorInfo(err: string): { label: string; cmds: string[]; hint: stri
   }
   if (e.includes("timed out") || e.includes("etimedout") || e.includes("did not respond")) {
     return {
-      label: "Port 8728 blocked by firewall",
-      hint:  "Run both commands in Winbox → Terminal:",
+      label: "Router management path did not respond",
+      hint:  "First check that the management VPN is connected and the shown tunnel IP is current. A timeout alone does not prove the API is disabled or the firewall is blocking it. If you need to inspect the router, run these read-only commands:",
       cmds:  [
-        "/ip service enable api",
-         "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept place-before=0",
+        "/interface ovpn-client print detail",
+        "/ip service print detail where name=api",
+        "/system resource print",
       ],
     };
   }

@@ -11,18 +11,25 @@ export interface PaymentRouterConnectionSource {
   router_secret?: string | null;
 }
 
-export function paymentRouterConnectionCredentials(
+export function routerManagementVpnIpFor(
   router: PaymentRouterConnectionSource,
   vpnClients: VpnClient[],
-) {
+): string | undefined {
   const storedManagementIp = [router.vpn_ip, router.bridge_ip, router.host]
     .map(value => value?.trim() ?? "")
     .find(isRouterManagementVpnIp);
   const discoveredIp = vpnIpFor(router.host?.trim() ?? "", vpnClients)
     ?? vpnIpFor(router.name?.trim() ?? "", vpnClients);
-  const managementVpnIp = isRouterManagementVpnIp(discoveredIp)
-    ? discoveredIp
-    : storedManagementIp;
+
+  if (discoveredIp && isRouterManagementVpnIp(discoveredIp)) return discoveredIp;
+  return storedManagementIp;
+}
+
+export function paymentRouterConnectionCredentials(
+  router: PaymentRouterConnectionSource,
+  vpnClients: VpnClient[],
+) {
+  const managementVpnIp = routerManagementVpnIpFor(router, vpnClients);
 
   const host = managementVpnIp
     || router.host?.trim()

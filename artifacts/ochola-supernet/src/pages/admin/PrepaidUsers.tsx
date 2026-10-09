@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
-import { useReconnectPrepaidHotspot, type HotspotReconnectResult } from "@workspace/api-client-react";
 import {
   Loader2, RefreshCw, Wifi, Network, Globe,
   Users, CheckCircle2, XCircle, Clock, AlertTriangle,
@@ -25,6 +24,7 @@ import { usePrepaidLiveQueries } from "@/lib/prepaid-live-queries";
 import { PrepaidSyncReport, type PrepaidSyncResult } from "@/components/ui/PrepaidSyncReport";
 import { syncActiveAccountsToRouter } from "@/lib/prepaid-sync";
 import { transactionDisplayId } from "@/lib/transaction-reference";
+import { PrepaidHotspotAdminGrantDialog } from "./PrepaidHotspotAdminGrantDialog";
 
 const PAGE_SIZE = 20;
 
@@ -60,6 +60,10 @@ interface Payment {
   notes?: string | null;
   status: string;
   created_at: string;
+}
+interface HotspotReconnectResult {
+  status: string;
+  message: string;
 }
 type StatusFilter = "all" | "active" | "expired" | "suspended" | "online";
 
@@ -679,7 +683,23 @@ function ExtendUserDialog({
 /* ══════════════════════════════ Page ══════════════════════════════ */
 export default function PrepaidUsers() {
   const qc = useQueryClient();
-  const reconnectMutation = useReconnectPrepaidHotspot();
+  const reconnectMutation = {
+    mutateAsync: async ({ id }: { id: number }): Promise<HotspotReconnectResult> => {
+      const token = getAdminApiToken();
+      if (!token) throw new Error("Your admin session has expired. Sign in again before reconnecting.");
+      const response = await fetch(apiUrl(`/api/customers/${id}/hotspot-reconnect`), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ adminId: ADMIN_ID }),
+      });
+      const result = await parseJsonResponse<HotspotReconnectResult & { error?: string }>(response);
+      if (!response.ok) throw new Error(result.message || result.error || "The Hotspot device could not be reconnected.");
+      return result;
+    },
+  };
 
   const { data: customers = [], isLoading } = useQuery<Customer[]>({
     queryKey: ["prepaid_customers", ADMIN_ID],
@@ -808,6 +828,7 @@ export default function PrepaidUsers() {
   const [adjustingExpiryUser, setAdjustingExpiryUser] = useState<Customer | null>(null);
   const [rechargePickerOpen, setRechargePickerOpen] = useState(false);
   const [addingVlanUser, setAddingVlanUser] = useState(false);
+  const [grantingHotspotUser, setGrantingHotspotUser] = useState(false);
   const [rechargeTargetId, setRechargeTargetId] = useState("");
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
@@ -1166,8 +1187,12 @@ export default function PrepaidUsers() {
       <style>{`
         @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
         .prepaid-page{width:100%;max-width:1500px}
-        .prepaid-modal-backdrop{position:fixed;inset:0;z-index:1000;background:rgba(2,6,23,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px}
+        .prepaid-modal-backdrop{position:fixed;inset:0;z-index:1000;background:rgba(2,6,23,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto}
         .prepaid-modal{width:100%;max-width:560px;background:var(--isp-card);border:1px solid var(--isp-border);border-radius:14px;padding:20px;box-shadow:0 24px 70px rgba(0,0,0,.48)}
+        .prepaid-admin-grant-modal{display:flex;flex-direction:column;max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);overflow:hidden}
+        .prepaid-admin-grant-content{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-right:2px}
+        .prepaid-admin-grant-modal>.prepaid-modal-heading,.prepaid-admin-grant-modal>.prepaid-modal-actions{flex-shrink:0}
+        .prepaid-admin-grant-modal>.prepaid-modal-actions{padding-top:12px;border-top:1px solid var(--isp-border)}
         .prepaid-small-modal{max-width:390px}
         .prepaid-modal-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px}
         .prepaid-modal-heading h2{margin:0;color:var(--isp-text);font-size:1rem}
@@ -1176,6 +1201,7 @@ export default function PrepaidUsers() {
         .prepaid-form-grid label,.prepaid-small-modal label{display:flex;flex-direction:column;gap:6px;color:var(--isp-text-muted);font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
         .prepaid-small-modal input{width:100%;box-sizing:border-box;padding:10px;border-radius:7px;background:var(--isp-input-bg);border:1px solid var(--isp-border);color:var(--isp-text);font:inherit;font-size:.85rem}
         .prepaid-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
+        @media(max-width:420px){.prepaid-admin-grant-modal .prepaid-modal-actions{display:grid;grid-template-columns:1fr}.prepaid-admin-grant-modal .prepaid-modal-actions button{justify-content:center}}
         .prepaid-primary-button,.prepaid-secondary-button{display:inline-flex;align-items:center;gap:6px;border-radius:7px;padding:9px 13px;font:700 .75rem inherit;cursor:pointer}
         .prepaid-primary-button{border:1px solid var(--isp-accent);background:var(--isp-accent);color:#fff}
         .prepaid-secondary-button{border:1px solid var(--isp-border);background:transparent;color:var(--isp-text-muted)}
@@ -1233,6 +1259,13 @@ export default function PrepaidUsers() {
         .prepaid-reconnect-button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:27px;padding:4px 8px;border:1px solid var(--isp-accent-border);border-radius:6px;background:var(--isp-accent-glow);color:var(--isp-accent-strong);font:700 .68rem inherit;cursor:pointer;white-space:nowrap}
         .prepaid-reconnect-button:hover:not(:disabled){background:var(--isp-accent);color:#fff}
         .prepaid-reconnect-button:disabled{opacity:.55;cursor:wait}
+        .prepaid-action-button{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-height:27px;padding:4px 7px;border:1px solid var(--isp-border);border-radius:6px;background:var(--isp-inner-card);font:700 .66rem inherit;cursor:pointer;white-space:nowrap}
+        .prepaid-action-button:disabled{opacity:.48;cursor:not-allowed}
+        .prepaid-action-button:focus-visible{outline:2px solid var(--isp-accent);outline-offset:2px}
+        .prepaid-action-button:hover:not(:disabled){filter:brightness(1.1)}
+        .prepaid-action-button--extend{border-color:rgba(192,132,252,.45);background:rgba(192,132,252,.1);color:#c084fc}
+        .prepaid-action-button--pause{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.1);color:#d97706}
+        .prepaid-action-button--resume{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.1);color:#16a34a}
         .prepaid-reconnect-button:focus-visible{outline:2px solid var(--isp-accent);outline-offset:2px}
         @media(max-width:1150px){.prepaid-table-shell .prepaid-col-optional{display:none}.prepaid-table-shell table{min-width:820px!important}}
         @media(max-width:900px){.prepaid-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -1271,6 +1304,18 @@ export default function PrepaidUsers() {
             await qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
             setActionError("");
             setActionNotice("VLAN prepaid user added and applied to the existing VLAN service.");
+          }}
+        />
+      )}
+      {grantingHotspotUser && (
+        <PrepaidHotspotAdminGrantDialog
+          plans={plans}
+          routers={routers}
+          onClose={() => setGrantingHotspotUser(false)}
+          onCreated={async () => {
+            await qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
+            setActionError("");
+            setActionNotice("The 30-day Hotspot admin grant was applied to MikroTik. No payment transaction was created.");
           }}
         />
       )}
@@ -1390,6 +1435,22 @@ export default function PrepaidUsers() {
             }}
           >
             <PlusCircle size={13} /> Add VLAN user
+          </button>
+          <button
+            type="button"
+            onClick={() => setGrantingHotspotUser(true)}
+            title="Create a tenant-scoped 30-day Hotspot account without recording a sale"
+            style={{
+              ...BTN("var(--isp-green)"),
+              ...(!plans.some(plan =>
+                plan.type.toLowerCase() === "hotspot"
+                && plan.router_id != null
+                && plan.port_id == null
+                && plan.is_active === true,
+              ) ? { opacity: 0.65 } : {}),
+            }}
+          >
+            <Wifi size={13} /> Grant Hotspot access
           </button>
         </div>
 
@@ -1674,7 +1735,7 @@ export default function PrepaidUsers() {
                           className={`prepaid-plain-status ${online ? "prepaid-plain-status--online" : "prepaid-plain-status--offline"}`}
                           title="Based on the latest RouterOS session; the last saved status is kept while the router is loading or unavailable."
                         >
-                          {online ? "Connected" : "Not connected"}
+                          {online ? "Online" : "Offline"}
                         </span>
                       </td>
                       <td className="prepaid-col-optional" style={{ ...TD, fontSize: "0.68rem", fontVariantNumeric: "tabular-nums" }}>{online ? "Online" : fmtTableDateTime(user.last_seen ?? (expired ? user.expires_at : null))}</td>
@@ -1703,12 +1764,31 @@ export default function PrepaidUsers() {
                           )}
                           <button title="Edit user" aria-label={`Edit ${username}`} onClick={() => setEditingUser(user)} disabled={actionBusy === user.id}
                             style={{ ...iconButton("#60a5fa"), opacity: actionBusy === user.id ? 0.5 : 1 }}><Edit3 size={13} /></button>
-                          <button title="Extend access" aria-label={`Extend ${username}`} onClick={() => setExtendingUser(user)} disabled={actionBusy === user.id}
-                            style={iconButton("#c084fc")}><PlusCircle size={13} /></button>
+                          <button type="button" title="Extend access" aria-label={`Extend ${username}`} onClick={() => setExtendingUser(user)} disabled={actionBusy === user.id}
+                            className="prepaid-action-button prepaid-action-button--extend"><PlusCircle size={12} /><span>Extend</span></button>
                           <button title="Adjust access time" aria-label={`Adjust access time for ${username}`} onClick={() => setAdjustingExpiryUser(user)} disabled={actionBusy === user.id}
                             style={iconButton("#a78bfa")}><CalendarDays size={13} /></button>
-                          <button title={user.status === "active" ? "Disable user" : "Enable user"} aria-label={`${user.status === "active" ? "Disable" : "Enable"} ${username}`} onClick={() => void handleStatus(user, user.status === "active" ? "suspended" : "active")} disabled={actionBusy === user.id}
-                            style={iconButton(user.status === "active" ? "#f59e0b" : "#22c55e")}>{user.status === "active" ? <Power size={13} /> : <CheckCircle2 size={13} />}</button>
+                          <button
+                            type="button"
+                            title={user.status === "suspended" ? "Resume this user's access" : "Pause this user's access"}
+                            aria-label={`${user.status === "suspended" ? "Resume" : "Pause"} ${username}`}
+                            onClick={() => {
+                              const resume = user.status === "suspended";
+                              const nextStatus = resume ? "active" : "suspended";
+                              const action = resume ? "Resume" : "Pause";
+                              const explanation = resume
+                                ? "Access will return only if the plan is still valid and has remaining data."
+                                : "This suspends the account and disconnects its active session; it does not extend the plan.";
+                              if (window.confirm(`${action} ${username}? ${explanation}`)) {
+                                void handleStatus(user, nextStatus);
+                              }
+                            }}
+                            disabled={actionBusy === user.id || isCustomerExpired(user) || !["active", "suspended"].includes(user.status)}
+                            className={`prepaid-action-button ${user.status === "suspended" ? "prepaid-action-button--resume" : "prepaid-action-button--pause"}`}
+                          >
+                            {user.status === "suspended" ? <CheckCircle2 size={12} /> : <Power size={12} />}
+                            <span>{user.status === "suspended" ? "Resume" : "Pause"}</span>
+                          </button>
                           <button title="Delete user" aria-label={`Delete ${username}`} onClick={() => void handleDelete(user)} disabled={actionBusy === user.id}
                             style={iconButton("#ef4444")}><Trash2 size={13} /></button>
                         </div>
