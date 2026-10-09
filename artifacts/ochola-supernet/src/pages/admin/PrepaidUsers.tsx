@@ -654,25 +654,35 @@ function ExtendUserDialog({
 }: { user: Customer; onClose: () => void; onExtend: (days: number) => Promise<void> }) {
   const [days, setDays] = useState("30");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const submit = async () => {
     const value = Number(days);
     if (!Number.isInteger(value) || value <= 0 || value > 3650) return;
+    setError("");
     setSaving(true);
-    try { await onExtend(value); } finally { setSaving(false); }
+    try {
+      await onExtend(value);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Could not extend this user's access.");
+    } finally {
+      setSaving(false);
+    }
   };
   return (
-    <div className="prepaid-modal-backdrop" onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="prepaid-modal-backdrop" onClick={event => { if (event.target === event.currentTarget && !saving) onClose(); }}>
       <div className="prepaid-modal prepaid-small-modal" role="dialog" aria-modal="true" aria-labelledby="extend-prepaid-user-title">
         <div className="prepaid-modal-heading">
           <div><h2 id="extend-prepaid-user-title">Extend access</h2><p>{purchaseUsername(user)}</p></div>
-          <button type="button" onClick={onClose} style={iconButton("#94a3b8")} aria-label="Close extend dialog"><X size={15} /></button>
+          <button type="button" onClick={onClose} disabled={saving} style={iconButton("#94a3b8")} aria-label="Close extend dialog"><X size={15} /></button>
         </div>
-        <label>Additional days<input autoFocus type="number" min="1" max="3650" value={days} onChange={event => setDays(event.target.value)} /></label>
+        <label>Additional days<input autoFocus type="number" min="1" max="3650" value={days} disabled={saving} onChange={event => setDays(event.target.value)} /></label>
         <p className="prepaid-help">The new expiry is calculated from the current expiry date, or from now if the account has already expired.</p>
+        {saving && <p role="status" aria-live="polite" className="prepaid-help">Applying the extension to the router and account record…</p>}
+        {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.75rem", marginTop: 12 }}>{error}</div>}
         <div className="prepaid-modal-actions">
-          <button type="button" onClick={onClose} className="prepaid-secondary-button">Cancel</button>
-          <button type="button" onClick={() => void submit()} disabled={saving} className="prepaid-primary-button">
-            {saving ? <Loader2 size={13} className="prepaid-spin" /> : <PlusCircle size={13} />} Extend
+          <button type="button" onClick={onClose} disabled={saving} className="prepaid-secondary-button">Cancel</button>
+          <button type="button" onClick={() => void submit()} disabled={saving || !Number.isInteger(Number(days)) || Number(days) < 1 || Number(days) > 3650} className="prepaid-primary-button">
+            {saving ? <Loader2 size={13} className="prepaid-spin" /> : <PlusCircle size={13} />} {saving ? "Applying…" : "Extend"}
           </button>
         </div>
       </div>
@@ -1024,14 +1034,8 @@ export default function PrepaidUsers() {
   }
 
   async function handleExtend(user: Customer, days: number) {
-    const current = user.expires_at && !isExpired(user.expires_at) ? new Date(user.expires_at) : new Date();
-    current.setDate(current.getDate() + days);
-    try {
-      await updateUser(user, { expires_at: current.toISOString() });
-      setExtendingUser(null);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : "Could not extend this user.");
-    }
+    await updateUser(user, { extend_days: days });
+    setExtendingUser(null);
   }
 
   async function handleStatus(user: Customer, status: "active" | "suspended") {

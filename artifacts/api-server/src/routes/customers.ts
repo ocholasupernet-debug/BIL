@@ -86,7 +86,10 @@ import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
 import { saveCustomerEditWithRouter } from "../lib/customer-edit-consistency.js";
 import { withCustomerEditLock } from "../lib/customer-edit-lock.js";
-import { customerStatusForExpiryEdit } from "../lib/customer-expiry-edit.js";
+import {
+  calculateCustomerExtensionExpiry,
+  customerStatusForExpiryEdit,
+} from "../lib/customer-expiry-edit.js";
 import {
   findHotspotAdminGrantMatches,
   hotspotAdminGrantExpiry,
@@ -1517,7 +1520,7 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
   const {
     adminId, ispId, name, phone, email, planId, plan_id, routerId, router_id, portId, port_id,
     type, ipAddress, ip_address, username, pppoe_username, mac_address, status, expiryDate, expires_at,
-    password, fup_limit_mb,
+    password, fup_limit_mb, extend_days,
   } = req.body;
   if (
     password !== undefined
@@ -1549,7 +1552,14 @@ router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> =
 
   let normalizedExpiry: string | null | undefined;
   try {
-    normalizedExpiry = asOptionalIso(expiryDate !== undefined ? expiryDate : expires_at);
+    if (extend_days !== undefined) {
+      if (expiryDate !== undefined || expires_at !== undefined || status !== undefined) {
+        return { status: 400, body: { error: "An extension must be submitted by itself; do not combine it with a manual expiry or status change." } };
+      }
+      normalizedExpiry = calculateCustomerExtensionExpiry(current.expires_at, extend_days);
+    } else {
+      normalizedExpiry = asOptionalIso(expiryDate !== undefined ? expiryDate : expires_at);
+    }
   } catch (error) {
     return { status: 400, body: { error: error instanceof Error ? error.message : "Invalid expiry date" } };
   }
