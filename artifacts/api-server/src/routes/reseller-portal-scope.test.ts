@@ -1032,8 +1032,17 @@ test("signed reseller portal requests stay within their assigned service", async
       status: "completed",
       payment_method: "loyalty_points",
     };
+    const expiredPreviousAccount = {
+      ...assignedCustomer,
+      id: 801,
+      name: "Expired loyalty customer",
+      username: "expired-hotspot-account",
+      password: "expired-hotspot-password",
+      status: "expired",
+      expires_at: "2025-01-01T00:00:00.000Z",
+    };
     transactions = [loyaltyTransaction];
-    customers = [];
+    customers = [expiredPreviousAccount];
     routerOperations.length = 0;
     clearRequests();
     includeRouterFixture = true;
@@ -1053,16 +1062,21 @@ test("signed reseller portal requests stay within their assigned service", async
         device_authorization?: string;
       };
       assert.equal(body.ok, true);
-      assert.equal(customers.length, 1, "one points redemption creates one prepaid account");
-      assert.equal(loyaltyTransaction.customer_id, customers[0]?.id,
+      assert.equal(customers.length, 2, "points redemption creates a fresh account instead of reusing an expired row");
+      assert.equal(expiredPreviousAccount.username, "expired-hotspot-account");
+      const createdCustomer = customers.find(row => Number(row.id) === Number(loyaltyTransaction.customer_id));
+      assert.ok(createdCustomer, "the redemption transaction links to its newly created account");
+      assert.equal(loyaltyTransaction.customer_id, createdCustomer?.id,
         "the points transaction is linked to the created prepaid account");
-      assert.equal(body.credentials?.username, customers[0]?.username);
-      assert.equal(body.credentials?.password, customers[0]?.password);
+      assert.match(String(createdCustomer?.username ?? ""), /^LOYALTY-/,
+        "loyalty-funded usernames are clearly marked for admins");
+      assert.equal(body.credentials?.username, createdCustomer?.username);
+      assert.equal(body.credentials?.password, createdCustomer?.password);
       assert.equal(body.connected, true, "the assigned account follows the same RouterOS login path as M-Pesa");
       assert.equal(typeof body.device_authorization, "string");
       assert.ok(dbRequests.some(row => row.table === "claim_prepaid_hotspot_transaction_account"
         && row.method === "POST"));
-      const createdUsername = String(customers[0]?.username ?? "");
+      const createdUsername = String(createdCustomer?.username ?? "");
       assert.ok(createdUsername);
       assert.ok(routerOperations.some(row => row.name === "upsertUser" && row.username === createdUsername));
       assert.ok(routerOperations.some(row => row.name === "connectUser" && row.username === createdUsername),

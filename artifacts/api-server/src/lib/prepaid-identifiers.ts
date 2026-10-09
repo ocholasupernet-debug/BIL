@@ -36,18 +36,25 @@ function randomPrepaidSuffix(): string {
  * Callers that need deterministic output in tests may provide an explicit
  * suffix such as "G6:48".
  */
-export function prepaidHotspotUsername(phone: unknown, _macAddress?: unknown, explicitSuffix?: unknown): string {
+export function prepaidHotspotUsername(
+  phone: unknown,
+  _macAddress?: unknown,
+  explicitSuffix?: unknown,
+  identifierTag?: unknown,
+): string {
   const normalizedPhone = normalisePrepaidPhone(phone);
   if (!normalizedPhone) return "";
   const requestedSuffix = String(explicitSuffix ?? "").trim().toUpperCase();
   const suffix = /^[A-Z0-9]{2}:[A-Z0-9]{2}$/.test(requestedSuffix)
     ? requestedSuffix
     : randomPrepaidSuffix();
-  return `${normalizedPhone}-${suffix}`;
+  const tag = String(identifierTag ?? "").trim().toUpperCase();
+  const prefix = tag === "LOYALTY" ? `${tag}-` : "";
+  return `${prefix}${normalizedPhone}-${suffix}`;
 }
 
 export function isPrepaidHotspotUsername(value: unknown): boolean {
-  return typeof value === "string" && /^\d{9,15}-(?:[A-Z0-9]{2}:[A-Z0-9]{2}(?:-[a-zA-Z0-9_-]+)?|[0-9A-F]{2}:[0-9A-F]{2}(?:-[a-zA-Z0-9_-]+)?)$/i.test(value.trim());
+  return typeof value === "string" && /^(?:LOYALTY-)?\d{9,15}-(?:[A-Z0-9]{2}:[A-Z0-9]{2}(?:-[a-zA-Z0-9_-]+)?|[0-9A-F]{2}:[0-9A-F]{2}(?:-[a-zA-Z0-9_-]+)?)$/i.test(value.trim());
 }
 
 /** Keep the existing login and suffix stable unless the contact phone actually changes. */
@@ -61,7 +68,8 @@ export function prepaidHotspotUsernameForEdit(
   const username = String(currentUsername ?? "").trim();
   if (username && normalisePrepaidPhone(currentPhone) === phone) return username;
   if (isPrepaidHotspotUsername(username)) {
-    return `${phone}-${username.slice(username.indexOf("-") + 1)}`;
+    const match = /^(LOYALTY-)?\d{9,15}-(.+)$/i.exec(username);
+    if (match) return `${match[1] ? "LOYALTY-" : ""}${phone}-${match[2]}`;
   }
   return prepaidHotspotUsername(phone);
 }

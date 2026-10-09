@@ -4,6 +4,7 @@ import {
   hotspotPlanProfileName,
   isPrepaidHotspotUsername,
   prepaidHotspotUsername,
+  prepaidHotspotUsernameForEdit,
 } from "./prepaid-identifiers.js";
 
 test("uses a distinct XX:XX suffix when a phone is reused", () => {
@@ -21,6 +22,17 @@ test("generates a random-looking suffix when none is supplied", () => {
   const username = prepaidHotspotUsername("0712345678", "AA:BB:CC:DD:EE:FF");
   assert.match(username, /^254712345678-[A-Z0-9]{2}:[A-Z0-9]{2}$/);
   assert.equal(isPrepaidHotspotUsername(username), true);
+});
+
+test("labels loyalty-funded usernames and preserves the label when the phone is edited", () => {
+  const username = prepaidHotspotUsername("0712345678", "AA:BB:CC:DD:EE:FF", "G6:48", "LOYALTY");
+
+  assert.equal(username, "LOYALTY-254712345678-G6:48");
+  assert.equal(isPrepaidHotspotUsername(username), true);
+  assert.equal(
+    prepaidHotspotUsernameForEdit(username, "0712345678", "0711111111"),
+    "LOYALTY-254711111111-G6:48",
+  );
 });
 
 test("uses the same normalized profile name as plan sync", () => {

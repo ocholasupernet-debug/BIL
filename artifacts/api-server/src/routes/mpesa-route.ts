@@ -2926,7 +2926,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
    * Keep the RouterOS identifier readable. Every new payment receives a new
    * random username, even when the phone and device are reused. Only a retry
    * of this same checkout may reuse the customer already linked to its
-   * transaction.
+   * transaction. Loyalty-funded accounts use a visible LOYALTY- prefix.
    */
   const linkedCustomers = transaction.customer_id
      ? await sbSelect<{
@@ -2988,7 +2988,12 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
    let hotspotUsername = reusableCustomer?.username?.trim() || "";
    if (!hotspotUsername) {
      for (let attempt = 0; attempt < 12; attempt += 1) {
-       const candidate = prepaidHotspotUsername(paymentPhone, mac);
+        const candidate = prepaidHotspotUsername(
+          paymentPhone,
+          mac,
+          undefined,
+          transaction.payment_method === "loyalty_points" ? "LOYALTY" : undefined,
+        );
        const collision = await sbSelect<{ id: number }>(
          "isp_customers",
           `admin_id=eq.${customerAdminId}&type=eq.hotspot&username=eq.${encodeURIComponent(candidate)}&select=id&limit=1`,
