@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
+import { useReconnectPrepaidHotspot, type HotspotReconnectResult } from "@workspace/api-client-react";
 import {
   Loader2, RefreshCw, Wifi, Network, Globe,
   Users, CheckCircle2, XCircle, Clock, AlertTriangle,
@@ -9,8 +10,8 @@ import {
   X, Phone, Mail, CalendarDays, Server, Edit3, PlusCircle,
   Power, Trash2, MoreHorizontal, Database, Save, RotateCw,
 } from "lucide-react";
-import { apiUrl, parseJsonResponse } from "@/lib/api-client";
-import { fetchAdminRouterContext, type AdminContextRouter } from "@/lib/admin-router-context";
+import { adminApiFetch, apiUrl, parseJsonResponse } from "@/lib/api-client";
+import { fetchAdminRouterContext, fetchAdminRouterManagementContext } from "@/lib/admin-router-context";
 import { mergeCustomerServiceIdentities } from "@/lib/customer-identities";
 import { getCustomerServiceStatus } from "@/lib/customer-service-status";
 import {
@@ -233,40 +234,39 @@ function Avt({ name, id }: { name?: string | null; id: number }) {
 
 /* ══════════════════════════════ Fetch helpers ══════════════════════════════ */
 async function fetchCustomers(): Promise<Customer[]> {
-  const { data, error } = await supabase
-    .from("isp_customers")
-    .select("*")
-    .eq("admin_id", ADMIN_ID)
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return (data ?? []) as Customer[];
+  const response = await adminApiFetch(`/api/customers?adminId=${ADMIN_ID}`, { cache: "no-store" });
+  const result = await response.json() as Customer[] | { error?: string };
+  if (!response.ok || !Array.isArray(result)) {
+    throw new Error(!Array.isArray(result) && result.error ? result.error : "Prepaid users could not be loaded.");
+  }
+  return result.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
 }
 async function fetchPlans(): Promise<Plan[]> {
-  const { data } = await supabase
-    .from("isp_plans")
-    .select("id,name,type,price,speed_down,speed_up,validity,validity_days,validity_unit,data_limit_mb,router_id,port_id,is_active")
-    .eq("admin_id", ADMIN_ID)
-    .is("owner_reseller_id", null);
-  return (data ?? []) as Plan[];
+  return (await fetchAdminRouterContext()).plans
+    .filter(plan => !plan.owner_reseller_id)
+    .map(plan => plan as unknown as Plan);
 }
 async function fetchRouters(): Promise<Router[]> {
-  return (await fetchAdminRouterContext()).routers.map(router => ({
+  const { routers } = await fetchAdminRouterManagementContext();
+  return routers
+    .filter(router => !["setup", "awaiting_ports", "awaiting_sync", "awaiting_connection"].includes(router.status))
+    .map(router => ({
     ...router,
     bridge_ip: router.bridge_ip,
-  }));
+    })) as unknown as Router[];
 }
 async function fetchPayments(customerIds: number[]): Promise<Payment[]> {
   if (!customerIds.length) return [];
-  const { data, error } = await supabase
-    .from("isp_transactions")
-    .select("id,customer_id,plan_id,amount,payment_method,reference,mpesa_receipt,notes,status,created_at")
-    .eq("admin_id", ADMIN_ID)
-    .not("payment_method", "in", "(mpesa_registration,manual_registration,mpesa_platform_billing)")
-    .in("customer_id", customerIds)
-    .in("status", ["completed", "paid", "success"])
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  return (data ?? []) as Payment[];
+  const response = await adminApiFetch(`/api/transactions?adminId=${ADMIN_ID}`, { cache: "no-store" });
+  const result = await response.json() as Payment[] | { error?: string };
+  if (!response.ok || !Array.isArray(result)) {
+    throw new Error(!Array.isArray(result) && result.error ? result.error : "Payment history could not be loaded.");
+  }
+  const ids = new Set(customerIds);
+  return result.filter(payment =>
+    payment.customer_id != null && ids.has(payment.customer_id)
+    && ["completed", "paid", "success"].includes(String(payment.status).toLowerCase()),
+  );
 }
 
 function iconButton(color: string): React.CSSProperties {

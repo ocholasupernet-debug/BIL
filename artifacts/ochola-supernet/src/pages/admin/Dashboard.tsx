@@ -36,10 +36,11 @@ import {
   ADMIN_ID,
   getAdminDisplayName,
   getAdminApiToken,
-  supabase,
   type DbRouter,
   type DbTransaction,
 } from "@/lib/supabase";
+import { adminApiFetch } from "@/lib/api-client";
+import { fetchAdminRouterContext, fetchAdminRouterManagementContext } from "@/lib/admin-router-context";
 import { fmtMoney, getCurrencySymbol } from "@/lib/utils";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 import { transactionDisplayId } from "@/lib/transaction-reference";
@@ -157,13 +158,10 @@ function fmtSince(iso: string | null | undefined): string {
 }
 
 async function fetchRouters(): Promise<DbRouter[]> {
-  const { data, error } = await supabase
-    .from("isp_routers")
-    .select("*")
-    .eq("admin_id", ADMIN_ID)
-    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
-  if (error) throw error;
-  return data ?? [];
+  const { routers } = await fetchAdminRouterManagementContext();
+  return routers.filter(router =>
+    !["setup", "awaiting_ports", "awaiting_sync", "awaiting_connection"].includes(router.status),
+  ) as unknown as DbRouter[];
 }
 
 type CustomerBasic = {
@@ -187,35 +185,30 @@ type CustomerBasic = {
 type CustomerPlanScope = { id: number; router_id: number | null; port_id: number | null };
 
 async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
-  const { data, error } = await supabase
-    .from("isp_customers")
-    .select("id,type,status,created_at,updated_at,expires_at,depletion_reason,plan_id,router_id,port_id,mac_address,phone,pppoe_username,username,ip_address,service_online")
-    .eq("admin_id", ADMIN_ID);
-  if (error) throw error;
-  return data ?? [];
+  const response = await adminApiFetch(`/api/customers?adminId=${ADMIN_ID}`, { cache: "no-store" });
+  const result = await response.json() as CustomerBasic[] | { error?: string };
+  if (!response.ok || !Array.isArray(result)) {
+    throw new Error(!Array.isArray(result) && result.error ? result.error : "Customer data could not be loaded.");
+  }
+  return result;
 }
 
 async function fetchCustomerPlanScopes(): Promise<CustomerPlanScope[]> {
-  const { data, error } = await supabase
-    .from("isp_plans")
-    .select("id,router_id,port_id")
-    .eq("admin_id", ADMIN_ID)
-    .is("owner_reseller_id", null);
-  if (error) throw error;
-  return data ?? [];
+  const context = await fetchAdminRouterContext();
+  return context.plans
+    .filter(plan => !plan.owner_reseller_id)
+    .map(plan => ({ id: plan.id, router_id: plan.router_id ?? null, port_id: plan.port_id ?? null }));
 }
 
 async function fetchTransactions(customerIds: number[]): Promise<DbTransaction[]> {
   if (customerIds.length === 0) return [];
-  const { data, error } = await supabase
-    .from("isp_transactions")
-    .select("*")
-    .in("customer_id", customerIds)
-    .not("payment_method", "in", "(mpesa_registration,manual_registration,mpesa_platform_billing)")
-    .order("created_at", { ascending: false })
-    .limit(50);
-  if (error) throw error;
-  return data ?? [];
+  const response = await adminApiFetch(`/api/transactions?adminId=${ADMIN_ID}`, { cache: "no-store" });
+  const result = await response.json() as DbTransaction[] | { error?: string };
+  if (!response.ok || !Array.isArray(result)) {
+    throw new Error(!Array.isArray(result) && result.error ? result.error : "Transaction data could not be loaded.");
+  }
+  const ids = new Set(customerIds);
+  return result.filter(transaction => transaction.customer_id != null && ids.has(transaction.customer_id)).slice(0, 50);
 }
 
 type PaymentSettingsResponse = {

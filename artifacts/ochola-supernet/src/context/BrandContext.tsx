@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { supabase, ADMIN_ID, isLoggedIn } from "@/lib/supabase";
+import { ADMIN_ID, isLoggedIn } from "@/lib/supabase";
 import { setAdminCurrency, setAdminCountryLocal } from "@/lib/utils";
+import { adminApiFetch } from "@/lib/api-client";
 
 export interface Brand {
   ispName:      string;   // e.g. "OcholaSupernet"
@@ -57,16 +58,11 @@ export function BrandProvider({ children }: { children: React.ReactNode }) {
 
     (async () => {
       try {
-        const { data, error } = await supabase
-          .from("isp_admins")
-          .select("name, fullname, email, phone, area, username, subdomain, currency")
-          .eq("id", adminId)
-          .maybeSingle();
-
-        if (error || !data) throw error ?? new Error("no row");
-
+        const response = await adminApiFetch("/api/admin/profile", { cache: "no-store" });
+        const result = await response.json() as { ok?: boolean; profile?: Record<string, string | null>; error?: string };
+        if (!response.ok || !result.ok || !result.profile) throw new Error(result.error || "Profile unavailable");
         /* derive domain from subdomain field or email */
-        const row = data as Record<string, string>;
+        const row = result.profile;
         let domain = row.subdomain || "";
         if (!domain && row.email) {
           domain = row.email.split("@")[1] || "";

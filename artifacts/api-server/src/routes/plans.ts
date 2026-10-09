@@ -136,7 +136,7 @@ async function planContextRows(
     sbSelect<Record<string, unknown>>("isp_bandwidth", `admin_id=eq.${context.tenantId}&select=*&order=created_at.asc`),
     sbSelect<Record<string, unknown>>(
       "isp_routers",
-      `admin_id=eq.${context.tenantId}&status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,admin_id,name,host,model,bridge_ip,vpn_ip,status,router_username,router_secret&order=name.asc`,
+      `admin_id=eq.${context.tenantId}&status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=*&order=name.asc`,
     ),
     sbSelect<Record<string, unknown>>(
       "isp_reseller_ports",

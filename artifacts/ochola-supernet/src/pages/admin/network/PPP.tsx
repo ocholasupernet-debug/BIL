@@ -2,7 +2,8 @@ import React, { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { supabase, ADMIN_ID } from "@/lib/supabase";
+import { ADMIN_ID } from "@/lib/supabase";
+import { fetchAdminRouterManagementContext } from "@/lib/admin-router-context";
 import {
   Users, Activity, Layers, Search, Plus, Trash2, Edit2,
   Eye, EyeOff, RefreshCw, Loader2, Check, X, AlertTriangle,
@@ -49,13 +50,10 @@ function fmtBytes(b: number): string {
 
 /* ── router fetch ── */
 async function fetchRouters(): Promise<DbRouter[]> {
-  const { data } = await supabase
-    .from("isp_routers")
-    .select("id,name,host,bridge_ip,status,router_username,router_secret")
-    .eq("admin_id", ADMIN_ID)
-    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
-    .order("name");
-  return (data ?? []) as DbRouter[];
+  const { routers } = await fetchAdminRouterManagementContext();
+  return routers.filter(router =>
+    !["setup", "awaiting_ports", "awaiting_sync", "awaiting_connection"].includes(router.status),
+  ) as DbRouter[];
 }
 
 /* ── API helpers ── */

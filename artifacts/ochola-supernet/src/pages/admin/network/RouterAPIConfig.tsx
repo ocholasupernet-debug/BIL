@@ -4,8 +4,10 @@ import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import {
   getAdminApiToken, getAdminRole, getSelectedTenantId,
-  supabase, ADMIN_ID,
+  ADMIN_ID,
 } from "@/lib/supabase";
+import { adminApiFetch } from "@/lib/api-client";
+import { fetchAdminRouterManagementContext } from "@/lib/admin-router-context";
 import {
   Settings, CheckCircle2, XCircle, Loader2, Eye, EyeOff,
   Plus, Edit2, Save, Wifi, WifiOff, Clock, AlertTriangle, X,
@@ -852,12 +854,7 @@ export default function RouterAPIConfig() {
   const { data: routers = [], isLoading } = useQuery<DbRouter[]>({
     queryKey: ["routers_api_config"],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("isp_routers")
-        .select("id,admin_id,name,host,ip_address,bridge_ip,vpn_ip,proxy_ip,bridge_interface,main_bridge_interface,router_secret,router_username,api_port,description,model,ros_version,status,last_seen,created_at,updated_at")
-        .eq("admin_id", ADMIN_ID)
-        .order("name");
-      return (data ?? []) as DbRouter[];
+      return (await fetchAdminRouterManagementContext()).routers as unknown as DbRouter[];
     },
   });
 
@@ -874,12 +871,19 @@ export default function RouterAPIConfig() {
       const target = routers.find(router => router.id === id);
       /* A temporary self-install record is promoted only by its server-side
          sync + ports + heartbeat lifecycle, never by an admin test action. */
-      await supabase.from("isp_routers").update({
+      const saveResponse = await adminApiFetch(`/api/routers/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
         ...(!isPendingSetup(target?.status)
-          ? { status: j.ok ? "online" : "offline", last_seen: new Date().toISOString() }
+          ? { status: j.ok ? "online" : "offline" }
           : {}),
         ...(j.rosVersion ? { ros_version: j.rosVersion } : {}),
-       }).eq("id", id).eq("admin_id", ADMIN_ID);
+        }),
+      });
+      if (!saveResponse.ok) {
+        const result = await saveResponse.json().catch(() => ({})) as { error?: string };
+        throw new Error(result.error || "Router status could not be saved.");
+      }
 
       qc.invalidateQueries({ queryKey: ["routers_api_config"] });
     } catch {

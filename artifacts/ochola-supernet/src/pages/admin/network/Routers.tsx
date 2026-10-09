@@ -2,7 +2,9 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { supabase, ADMIN_ID, type DbRouter } from "@/lib/supabase";
+import { ADMIN_ID, type DbRouter } from "@/lib/supabase";
+import { adminApiFetch } from "@/lib/api-client";
+import { fetchAdminRouterManagementContext } from "@/lib/admin-router-context";
 import { RouterUserSnapshotModal } from "./RouterUserSnapshotModal";
 import {
   Loader2, RefreshCw, Search, Plus, Clock, RotateCcw,
@@ -27,14 +29,10 @@ async function fetchRouters(): Promise<DbRouter[]> {
   /* Setup records belong to the installer workflow until the final
      management-VPN and bridge verification succeeds. They must not appear
      in the account's normal router list before that gate. */
-  const { data, error } = await supabase
-    .from("isp_routers")
-    .select("*")
-    .eq("admin_id", ADMIN_ID)
-    .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
-    .order("id", { ascending: false });
-  if (error) throw error;
-  return data ?? [];
+  const { routers } = await fetchAdminRouterManagementContext();
+  return (routers.filter(router =>
+    !["setup", "awaiting_ports", "awaiting_sync", "awaiting_connection"].includes(router.status),
+  ) as unknown as DbRouter[]).sort((a, b) => Number(b.id) - Number(a.id));
 }
 
 /* Classify a router ping error and return a short label + fix commands */
@@ -848,9 +846,9 @@ export default function Routers() {
     setEditError(null);
     try {
       const routerName = editForm.name.trim() || editRouter.name;
-      const { error } = await supabase
-        .from("isp_routers")
-        .update({
+      const response = await adminApiFetch(`/api/routers/${editRouter.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
           name:             routerName,
           host:             editForm.host.trim()             || editRouter.host,
           bridge_ip:        editForm.bridge_ip.trim()        || null,
@@ -861,10 +859,12 @@ export default function Routers() {
           router_secret:    routerName,
           coordinates:      editForm.coordinates.trim()      || null,
           coverage:         editForm.coverage.trim()         || null,
-          updated_at:       new Date().toISOString(),
-        })
-        .eq("id", editRouter.id);
-      if (error) throw error;
+        }),
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(result.error || "Router settings could not be saved.");
+      }
       qc.invalidateQueries({ queryKey: ["isp_routers"] });
       setEditRouter(null);
     } catch (e: any) {
@@ -1036,7 +1036,7 @@ export default function Routers() {
     setDeleteState(prev => ({ ...prev, [r.id]: "deleting" }));
     setDeleteError(prev => ({ ...prev, [r.id]: "" }));
     try {
-      const res = await fetch(`/api/routers/${r.id}?adminId=${encodeURIComponent(String(ADMIN_ID))}`, { method: "DELETE" });
+      const res = await adminApiFetch(`/api/routers/${r.id}?adminId=${encodeURIComponent(String(ADMIN_ID))}`, { method: "DELETE" });
       if (!res.ok) {
         let msg = `Delete failed (HTTP ${res.status})`;
         try { const body = await res.json(); if (body?.error) msg = body.error; } catch {}

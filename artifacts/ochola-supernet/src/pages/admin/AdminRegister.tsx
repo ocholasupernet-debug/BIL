@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { Building2, Phone, UserRound, Mail, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles, Copy, RefreshCw, WalletCards, Network, Plug } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { apiUrl } from "@/lib/api-client";
 import { INITIAL_ADMIN_PASSWORD, INITIAL_ADMIN_USERNAME } from "@/lib/initial-admin-credentials";
 import { Logo } from "@/components/Logo";
 
@@ -170,13 +170,15 @@ export default function AdminRegister() {
 
     companyDebounceRef.current = setTimeout(async () => {
       setCheckingCompany(true);
-      const { data } = await supabase
-        .from("isp_admins")
-        .select("id")
-        .ilike("subdomain", slug)
-        .limit(1);
-      setCheckingCompany(false);
-      setCompanyAvailable(!data || data.length === 0);
+      try {
+        const response = await fetch(apiUrl(`/api/auth/company-availability?subdomain=${encodeURIComponent(slug)}`), { cache: "no-store" });
+        const result = await response.json() as { ok?: boolean; available?: boolean };
+        setCompanyAvailable(response.ok && result.ok ? result.available === true : null);
+      } catch {
+        setCompanyAvailable(null);
+      } finally {
+        setCheckingCompany(false);
+      }
     }, 600);
 
     return () => { if (companyDebounceRef.current) clearTimeout(companyDebounceRef.current); };

@@ -6,7 +6,8 @@ import {
   ShieldCheck, Ticket, Upload, UserRound, Wifi, X,
 } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
-import { supabase, ADMIN_ID as AUTH_ADMIN_ID, getSelectedTenantId, type DbRouter } from "@/lib/supabase";
+import { ADMIN_ID as AUTH_ADMIN_ID, getSelectedTenantId, type DbRouter } from "@/lib/supabase";
+import { fetchAdminRouterManagementContext } from "@/lib/admin-router-context";
 import {
   DEFAULT_PPPOE_COLORS, PPPoELogin, type PppoePortalSettings,
 } from "@/pages/portal/PPPoELogin";
@@ -247,14 +248,10 @@ export default function PPPoESettings() {
   const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
     queryKey: ["routers_for_pppoe_settings", ADMIN_ID],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_routers")
-        .select("id,name,host,admin_id")
-        .eq("admin_id", ADMIN_ID)
-        .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
-        .order("name");
-      if (error) throw error;
-      return (data ?? []) as DbRouter[];
+      const { routers } = await fetchAdminRouterManagementContext();
+      return routers.filter(router =>
+        !["setup", "awaiting_ports", "awaiting_sync", "awaiting_connection"].includes(router.status),
+      ) as unknown as DbRouter[];
     },
   });
 

@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { sbSelect, sbUpdate, sbDelete, sbInsert } from "../lib/supabase-client.js";
+import { sbSelect, sbSelectStrict, sbUpdate, sbDelete, sbInsert } from "../lib/supabase-client.js";
 import { pingRouter, detectBridgeInterfaces, fetchBridgePortLayout } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activity-log.js";
@@ -109,6 +109,39 @@ async function listTenantRouters(req: Request, res: Response): Promise<void> {
 
 router.get("/routers", requireAdmin(), listTenantRouters);
 router.get("/files/routers", requireAdmin(), listTenantRouters);
+
+router.get("/routers/admin-context", requireAdmin(), async (req: Request, res: Response): Promise<void> => {
+  const account = await authenticatedAccount(req);
+  if (!account || account.role === "reseller") {
+    res.status(403).json({ ok: false, error: "Router management details are only available to ISP administrators." });
+    return;
+  }
+  const adminId = await authenticatedTenantAdminId(req);
+  if (adminId < 1) {
+    res.status(401).json({ ok: false, error: "An active ISP administrator is required." });
+    return;
+  }
+  try {
+    const rows = await sbSelectStrict<Record<string, unknown>>(
+      "isp_routers",
+      `admin_id=eq.${adminId}&select=*&order=created_at.asc`,
+    );
+    const permittedFields = new Set([
+      "id", "admin_id", "name", "host", "ip_address", "bridge_ip", "vpn_ip", "proxy_ip",
+      "bridge_interface", "main_bridge_interface", "router_secret", "router_username",
+      "description", "model", "serial", "ros_version", "api_port", "status", "last_seen",
+      "last_connected_host", "router_uptime", "uptime_at", "created_at", "updated_at",
+      "pppoe_mode", "coordinates", "coverage",
+    ]);
+    const routers = rows.map(row => Object.fromEntries(
+      Object.entries(row).filter(([key]) => permittedFields.has(key)),
+    ));
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, routers });
+  } catch {
+    res.status(503).json({ ok: false, error: "Router management records could not be loaded." });
+  }
+});
 
 type InstallRouter = {
   id: number;
@@ -405,22 +438,34 @@ router.post("/admin/router/default-pools", requireAdmin(), async (req, res): Pro
   }
 });
 
-router.post("/routers", async (req, res): Promise<void> => {
-  const { adminId = 1, ispId, name, host, ipAddress, model, rosVersion, apiPort, router_username, apiUsername, router_secret, apiPassword, bridge_ip, status } = req.body;
-  const effectiveAdminId = adminId || ispId || 1;
+router.post("/routers", requireAdmin(), async (req, res): Promise<void> => {
+  const account = await authenticatedAccount(req);
+  const effectiveAdminId = await authenticatedTenantAdminId(req);
+  const { name, host, ipAddress, model, rosVersion, router_username, apiUsername, router_secret, apiPassword, bridge_ip, status } = req.body;
+  if (!account || account.role === "reseller" || effectiveAdminId < 1) {
+    res.status(403).json({ ok: false, error: "Only an authorized ISP administrator can add routers." });
+    return;
+  }
   if (!name || !host) {
     res.status(400).json({ error: "name and host are required" });
     return;
   }
   const routerName = String(name).trim();
+  const requestedRouterSecret = typeof router_secret === "string"
+    ? router_secret
+    : typeof apiPassword === "string" ? apiPassword : routerName;
+  if (requestedRouterSecret.length < 6) {
+    res.status(400).json({ error: "A router password must have at least 6 characters." });
+    return;
+  }
   const [r] = await sbInsert<Record<string, unknown>>("isp_routers", {
     admin_id:         effectiveAdminId,
     name:             routerName,
     host:             host || ipAddress || "",
     model:            model ?? null,
     ros_version:      rosVersion ?? null,
-    router_username:  routerName,
-    router_secret:    routerName,
+    router_username:  router_username ?? apiUsername ?? routerName,
+    router_secret:    requestedRouterSecret,
     bridge_ip:        bridge_ip ?? null,
     status:           status ?? "offline",
   });
@@ -436,9 +481,27 @@ router.post("/routers", async (req, res): Promise<void> => {
   res.status(201).json(r);
 });
 
-router.patch("/routers/:id", async (req, res): Promise<void> => {
-  const id = req.params.id;
-  const { name, host, ipAddress, model, rosVersion, status, router_username, apiUsername, router_secret, apiPassword, bridge_ip, proxy_ip } = req.body;
+router.patch("/routers/:id", requireAdmin(), async (req, res): Promise<void> => {
+  const account = await authenticatedAccount(req);
+  const adminId = await authenticatedTenantAdminId(req);
+  const id = Number(req.params.id);
+  if (!account || account.role === "reseller" || adminId < 1 || !Number.isSafeInteger(id) || id <= 0) {
+    res.status(403).json({ ok: false, error: "Only an authorized ISP administrator can update this router." });
+    return;
+  }
+  const ownedRows = await sbSelect<{ id: number; admin_id: number; name: string }>(
+    "isp_routers",
+    `id=eq.${id}&admin_id=eq.${adminId}&select=id,admin_id,name&limit=1`,
+  );
+  if (!ownedRows[0]) {
+    res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+    return;
+  }
+  const {
+    name, host, ipAddress, model, rosVersion, status, router_username, apiUsername,
+    router_secret, apiPassword, bridge_ip, vpn_ip, proxy_ip, bridge_interface,
+    main_bridge_interface, description, coordinates, coverage,
+  } = req.body;
   const requestedRouterSecret = router_secret !== undefined ? router_secret : apiPassword;
   if (
     requestedRouterSecret !== undefined
@@ -461,20 +524,25 @@ router.patch("/routers/:id", async (req, res): Promise<void> => {
   if (router_secret  !== undefined) updates.router_secret   = router_secret;
   if (apiPassword    !== undefined) updates.router_secret   = apiPassword;
   if (bridge_ip      !== undefined) updates.bridge_ip       = bridge_ip;
+  if (vpn_ip         !== undefined) updates.vpn_ip          = vpn_ip;
   if (proxy_ip       !== undefined) updates.proxy_ip        = proxy_ip;
-  const [r] = await sbUpdate<Record<string, unknown>>("isp_routers", `id=eq.${id}`, updates);
+  if (bridge_interface !== undefined) updates.bridge_interface = bridge_interface;
+  if (main_bridge_interface !== undefined) updates.main_bridge_interface = main_bridge_interface;
+  if (description    !== undefined) updates.description     = description;
+  if (coordinates    !== undefined) updates.coordinates     = coordinates;
+  if (coverage       !== undefined) updates.coverage        = coverage;
+  const [r] = await sbUpdate<Record<string, unknown>>("isp_routers", `id=eq.${id}&admin_id=eq.${adminId}`, updates);
   if (!r) { res.status(404).json({ error: "Router not found" }); return; }
-  const adminIdForLog = req.body?.adminId ?? req.query.adminId ?? 1;
-  void logActivity({ adminId: Number(adminIdForLog), type: "router", action: "updated", subject: String(updates.name ?? id), details: updates });
+  void logActivity({ adminId, type: "router", action: "updated", subject: String(updates.name ?? ownedRows[0].name), details: { fields: Object.keys(updates) } });
   res.json(r);
 });
 
-router.delete("/routers/:id", async (req, res): Promise<void> => {
-  const id = parseInt(req.params.id, 10);
-  const adminId = parseInt(String(req.query.adminId ?? req.body?.adminId ?? ""), 10);
-  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
-  if (!Number.isInteger(adminId) || adminId < 1) {
-    res.status(400).json({ error: "adminId query param is required" });
+router.delete("/routers/:id", requireAdmin(), async (req, res): Promise<void> => {
+  const account = await authenticatedAccount(req);
+  const adminId = await authenticatedTenantAdminId(req);
+  const id = parseInt(String(req.params.id), 10);
+  if (!account || account.role === "reseller" || isNaN(id) || !Number.isInteger(adminId) || adminId < 1) {
+    res.status(403).json({ ok: false, error: "Only an authorized ISP administrator can delete this router." });
     return;
   }
 
