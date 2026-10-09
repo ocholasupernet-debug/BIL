@@ -1233,6 +1233,13 @@ export default function PrepaidUsers() {
         .prepaid-reconnect-button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:27px;padding:4px 8px;border:1px solid var(--isp-accent-border);border-radius:6px;background:var(--isp-accent-glow);color:var(--isp-accent-strong);font:700 .68rem inherit;cursor:pointer;white-space:nowrap}
         .prepaid-reconnect-button:hover:not(:disabled){background:var(--isp-accent);color:#fff}
         .prepaid-reconnect-button:disabled{opacity:.55;cursor:wait}
+        .prepaid-action-button{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-height:27px;padding:4px 7px;border:1px solid var(--isp-border);border-radius:6px;background:var(--isp-inner-card);font:700 .66rem inherit;cursor:pointer;white-space:nowrap}
+        .prepaid-action-button:disabled{opacity:.48;cursor:not-allowed}
+        .prepaid-action-button:focus-visible{outline:2px solid var(--isp-accent);outline-offset:2px}
+        .prepaid-action-button:hover:not(:disabled){filter:brightness(1.1)}
+        .prepaid-action-button--extend{border-color:rgba(192,132,252,.45);background:rgba(192,132,252,.1);color:#c084fc}
+        .prepaid-action-button--pause{border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.1);color:#d97706}
+        .prepaid-action-button--resume{border-color:rgba(34,197,94,.4);background:rgba(34,197,94,.1);color:#16a34a}
         .prepaid-reconnect-button:focus-visible{outline:2px solid var(--isp-accent);outline-offset:2px}
         @media(max-width:1150px){.prepaid-table-shell .prepaid-col-optional{display:none}.prepaid-table-shell table{min-width:820px!important}}
         @media(max-width:900px){.prepaid-filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -1674,7 +1681,7 @@ export default function PrepaidUsers() {
                           className={`prepaid-plain-status ${online ? "prepaid-plain-status--online" : "prepaid-plain-status--offline"}`}
                           title="Based on the latest RouterOS session; the last saved status is kept while the router is loading or unavailable."
                         >
-                          {online ? "Connected" : "Not connected"}
+                          {online ? "Online" : "Offline"}
                         </span>
                       </td>
                       <td className="prepaid-col-optional" style={{ ...TD, fontSize: "0.68rem", fontVariantNumeric: "tabular-nums" }}>{online ? "Online" : fmtTableDateTime(user.last_seen ?? (expired ? user.expires_at : null))}</td>
@@ -1703,12 +1710,31 @@ export default function PrepaidUsers() {
                           )}
                           <button title="Edit user" aria-label={`Edit ${username}`} onClick={() => setEditingUser(user)} disabled={actionBusy === user.id}
                             style={{ ...iconButton("#60a5fa"), opacity: actionBusy === user.id ? 0.5 : 1 }}><Edit3 size={13} /></button>
-                          <button title="Extend access" aria-label={`Extend ${username}`} onClick={() => setExtendingUser(user)} disabled={actionBusy === user.id}
-                            style={iconButton("#c084fc")}><PlusCircle size={13} /></button>
+                          <button type="button" title="Extend access" aria-label={`Extend ${username}`} onClick={() => setExtendingUser(user)} disabled={actionBusy === user.id}
+                            className="prepaid-action-button prepaid-action-button--extend"><PlusCircle size={12} /><span>Extend</span></button>
                           <button title="Adjust access time" aria-label={`Adjust access time for ${username}`} onClick={() => setAdjustingExpiryUser(user)} disabled={actionBusy === user.id}
                             style={iconButton("#a78bfa")}><CalendarDays size={13} /></button>
-                          <button title={user.status === "active" ? "Disable user" : "Enable user"} aria-label={`${user.status === "active" ? "Disable" : "Enable"} ${username}`} onClick={() => void handleStatus(user, user.status === "active" ? "suspended" : "active")} disabled={actionBusy === user.id}
-                            style={iconButton(user.status === "active" ? "#f59e0b" : "#22c55e")}>{user.status === "active" ? <Power size={13} /> : <CheckCircle2 size={13} />}</button>
+                          <button
+                            type="button"
+                            title={user.status === "suspended" ? "Resume this user's access" : "Pause this user's access"}
+                            aria-label={`${user.status === "suspended" ? "Resume" : "Pause"} ${username}`}
+                            onClick={() => {
+                              const resume = user.status === "suspended";
+                              const nextStatus = resume ? "active" : "suspended";
+                              const action = resume ? "Resume" : "Pause";
+                              const explanation = resume
+                                ? "Access will return only if the plan is still valid and has remaining data."
+                                : "This suspends the account and disconnects its active session; it does not extend the plan.";
+                              if (window.confirm(`${action} ${username}? ${explanation}`)) {
+                                void handleStatus(user, nextStatus);
+                              }
+                            }}
+                            disabled={actionBusy === user.id || isCustomerExpired(user) || !["active", "suspended"].includes(user.status)}
+                            className={`prepaid-action-button ${user.status === "suspended" ? "prepaid-action-button--resume" : "prepaid-action-button--pause"}`}
+                          >
+                            {user.status === "suspended" ? <CheckCircle2 size={12} /> : <Power size={12} />}
+                            <span>{user.status === "suspended" ? "Resume" : "Pause"}</span>
+                          </button>
                           <button title="Delete user" aria-label={`Delete ${username}`} onClick={() => void handleDelete(user)} disabled={actionBusy === user.id}
                             style={iconButton("#ef4444")}><Trash2 size={13} /></button>
                         </div>
