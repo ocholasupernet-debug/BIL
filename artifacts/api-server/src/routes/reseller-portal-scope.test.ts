@@ -1021,6 +1021,58 @@ test("signed reseller portal requests stay within their assigned service", async
     }
   });
 
+  await t.test("loyalty-point activation creates and links its prepaid Hotspot account", async () => {
+    const loyaltyTransaction = {
+      ...assignedTransaction,
+      id: 710,
+      customer_id: null,
+      mpesa_receipt: null,
+      reference: "LOYALTY-00000000-0000-4000-8000-000000000001",
+      amount: 0,
+      status: "completed",
+      payment_method: "loyalty_points",
+    };
+    transactions = [loyaltyTransaction];
+    customers = [];
+    routerOperations.length = 0;
+    clearRequests();
+    includeRouterFixture = true;
+    try {
+      const activation = await request("/api/mpesa/hotspot-mac-access", {
+        method: "POST",
+        body: {
+          checkout_id: loyaltyTransaction.reference,
+          mac_address: assignedCustomer.mac_address,
+        },
+      });
+      assert.equal(activation.status, 200, await activation.clone().text());
+      const body = await activation.json() as {
+        ok: boolean;
+        credentials?: { username: string; password: string };
+        connected?: boolean;
+        device_authorization?: string;
+      };
+      assert.equal(body.ok, true);
+      assert.equal(customers.length, 1, "one points redemption creates one prepaid account");
+      assert.equal(loyaltyTransaction.customer_id, customers[0]?.id,
+        "the points transaction is linked to the created prepaid account");
+      assert.equal(body.credentials?.username, customers[0]?.username);
+      assert.equal(body.credentials?.password, customers[0]?.password);
+      assert.equal(body.connected, true, "the assigned account follows the same RouterOS login path as M-Pesa");
+      assert.equal(typeof body.device_authorization, "string");
+      assert.ok(dbRequests.some(row => row.table === "claim_prepaid_hotspot_transaction_account"
+        && row.method === "POST"));
+      const createdUsername = String(customers[0]?.username ?? "");
+      assert.ok(createdUsername);
+      assert.ok(routerOperations.some(row => row.name === "upsertUser" && row.username === createdUsername));
+      assert.ok(routerOperations.some(row => row.name === "connectUser" && row.username === createdUsername),
+        "the generated prepaid account is signed into the hotspot");
+      assert.ok(routerOperations.filter(row => row.server).every(row => row.server === "HS_RS19_VLAN143"));
+    } finally {
+      includeRouterFixture = false;
+    }
+  });
+
   await t.test("parallel retries for one paid checkout reuse a single Hotspot username", async () => {
     const concurrentTransaction = {
       ...assignedTransaction,

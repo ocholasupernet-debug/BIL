@@ -935,7 +935,11 @@ function HotspotLoginView({
 
   const [pollTimedOut, setPollTimedOut] = useState(false);
 
-  const bindPaidHotspotAccess = useCallback(async (activeCheckoutId: string, retryRouter = false): Promise<boolean> => {
+  const bindPaidHotspotAccess = useCallback(async (
+    activeCheckoutId: string,
+    retryRouter = false,
+    targetMacAddress = deviceMacAddress,
+  ): Promise<boolean> => {
     setAccessRetrying(true);
     try {
       const accessResponse = await hotspotPortalFetch(hotspotApiUrl("/api/mpesa/hotspot-mac-access"), {
@@ -947,7 +951,7 @@ function HotspotLoginView({
           ...(adminId ? { adminId } : {}),
           ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
           ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
-          mac_address: deviceMacAddress,
+          mac_address: targetMacAddress,
           device_name: deviceName,
           ...(!retryRouter && paymentMode !== "tv" && (portalContext.linkLogin || portalContext.linkOrig)
             ? { portal_login_handoff: true }
@@ -1037,6 +1041,10 @@ function HotspotLoginView({
     loginCredentialsStorageKey,
     paymentMode,
     portalContext.ip,
+    portalContext.linkLogin,
+    portalContext.linkOrig,
+    portalScope.portId,
+    portalScope.routerId,
     rememberTvDevice,
     savedTvDevices,
     savedTvDevicesStorageKey,
@@ -1413,7 +1421,7 @@ function HotspotLoginView({
       setPortalHandoffReady(false);
       bindingInFlight.current = true;
       // Binding failure keeps the checkout on the attempt, so a retry binds it again and never debits twice.
-      const bound = await bindPaidHotspotAccess(checkout);
+      const bound = await bindPaidHotspotAccess(checkout, false, macAddress);
       if (bound) loyaltyAttemptsRef.current.delete(attemptId);
     } catch (error) {
       setPayError(error instanceof Error ? error.message : "Points redemption could not be completed.");
