@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, KeyRound, Loader2, UserRound, Wifi, X } from "lucide-react";
 import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-client";
@@ -78,6 +78,7 @@ export function PrepaidHotspotAdminGrantDialog({
   const [result, setResult] = useState<GrantResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const grantContentRef = useRef<HTMLDivElement>(null);
 
   const directHotspotPlans = useMemo(
     () => plans.filter(plan =>
@@ -90,6 +91,10 @@ export function PrepaidHotspotAdminGrantDialog({
   );
   const selectedPlan = directHotspotPlans.find(plan => String(plan.id) === planId);
   const selectedMatch = matches.find(match => String(match.id) === selectedMatchId);
+
+  useEffect(() => {
+    if (result) grantContentRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [result]);
 
   const inputStyle: React.CSSProperties = {
     width: "100%",
@@ -223,7 +228,14 @@ export function PrepaidHotspotAdminGrantDialog({
   }
 
   async function grantExistingAccount() {
-    if (!selectedMatch || !selectedPlan) return;
+    if (!selectedMatch?.eligible) {
+      setError(selectedMatch?.reason ?? "Select an eligible matching Hotspot account before applying the grant.");
+      return;
+    }
+    if (!selectedPlan) {
+      setError("Select an active direct Hotspot plan before applying the grant.");
+      return;
+    }
     setError("");
     setResult(null);
     setSaving(true);
@@ -283,7 +295,7 @@ export function PrepaidHotspotAdminGrantDialog({
 
         {!result ? (
           <>
-            <div className="prepaid-admin-grant-content">
+            <div className="prepaid-admin-grant-content" ref={grantContentRef}>
               <div className="prepaid-form-grid">
                 <label>
                   Customer name
@@ -379,10 +391,19 @@ export function PrepaidHotspotAdminGrantDialog({
             <div className="prepaid-modal-actions">
               <button type="button" onClick={onClose} disabled={saving} className="prepaid-secondary-button">Cancel</button>
               {matches.length > 0 ? (
-                <button type="button" onClick={() => void grantExistingAccount()} disabled={saving || !selectedMatch?.eligible || !selectedPlan} className="prepaid-primary-button">
-                  {saving ? <Loader2 size={13} className="prepaid-spin" /> : <CheckCircle2 size={13} />}
-                  Apply grant to selected account
-                </button>
+                <>
+                  {!saving && (!selectedMatch?.eligible || !selectedPlan) && (
+                    <span role="status" style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem", marginRight: "auto" }}>
+                      {!selectedMatch?.eligible
+                        ? selectedMatch?.reason ?? "Select an eligible matching account above."
+                        : "Choose an active Hotspot plan for this router."}
+                    </span>
+                  )}
+                  <button type="button" onClick={() => void grantExistingAccount()} disabled={saving || !selectedMatch?.eligible || !selectedPlan} className="prepaid-primary-button">
+                    {saving ? <Loader2 size={13} className="prepaid-spin" /> : <CheckCircle2 size={13} />}
+                    {saving ? "Applying grant to MikroTik…" : "Apply grant to selected account"}
+                  </button>
+                </>
               ) : (
                 <button type="button" onClick={() => void checkAndGrant()} disabled={!canSubmit} className="prepaid-primary-button">
                   {saving ? <Loader2 size={13} className="prepaid-spin" /> : <Wifi size={13} />}
@@ -393,7 +414,7 @@ export function PrepaidHotspotAdminGrantDialog({
           </>
         ) : (
           <>
-            <div className="prepaid-admin-grant-content">
+            <div className="prepaid-admin-grant-content" ref={grantContentRef}>
               <div role="status" aria-live="polite" style={{ display: "grid", gap: 12, marginTop: 14 }}>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "0.8rem", border: "1px solid rgba(34,197,94,.38)", borderRadius: 10, background: "rgba(34,197,94,.08)" }}>
                   <span style={{ display: "grid", placeItems: "center", flex: "0 0 34px", width: 34, height: 34, borderRadius: "50%", color: "var(--isp-green)", background: "rgba(34,197,94,.16)" }}>
