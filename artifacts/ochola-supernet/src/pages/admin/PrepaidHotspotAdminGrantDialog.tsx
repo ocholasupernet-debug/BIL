@@ -47,6 +47,7 @@ interface GrantResult {
   connectionMessage: string;
   connected: boolean;
   created: boolean;
+  listRefreshWarning?: string;
 }
 
 function localDate(value: string) {
@@ -140,12 +141,23 @@ export function PrepaidHotspotAdminGrantDialog({
   }
 
   async function finishGrant(grant: Omit<GrantResult, "connectionMessage" | "connected">) {
-    await onCreated();
+    setResult({
+      ...grant,
+      connectionMessage: "MikroTik confirmed the grant. Checking the TV connection…",
+      connected: false,
+    });
+    let listRefreshWarning: string | undefined;
+    try {
+      await onCreated();
+    } catch {
+      listRefreshWarning = "The grant succeeded, but the Prepaid Users list could not refresh. Reload the page to see the updated account.";
+    }
     const connection = await reconnect(grant.customerId);
     setResult({
       ...grant,
       connectionMessage: connection.message,
       connected: connection.connected,
+      ...(listRefreshWarning ? { listRefreshWarning } : {}),
     });
   }
 
@@ -382,14 +394,25 @@ export function PrepaidHotspotAdminGrantDialog({
         ) : (
           <>
             <div className="prepaid-admin-grant-content">
-              <div role="status" style={{ display: "grid", gap: 12, marginTop: 14 }}>
-                <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-green)", fontWeight: 700 }}>
-                  <CheckCircle2 size={18} />
-                  {result.created ? "New prepaid account created" : "Existing prepaid account updated"}
+              <div role="status" aria-live="polite" style={{ display: "grid", gap: 12, marginTop: 14 }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", padding: "0.8rem", border: "1px solid rgba(34,197,94,.38)", borderRadius: 10, background: "rgba(34,197,94,.08)" }}>
+                  <span style={{ display: "grid", placeItems: "center", flex: "0 0 34px", width: 34, height: 34, borderRadius: "50%", color: "var(--isp-green)", background: "rgba(34,197,94,.16)" }}>
+                    <CheckCircle2 size={20} />
+                  </span>
+                  <span style={{ display: "grid", gap: 3 }}>
+                    <strong style={{ color: "var(--isp-green)", fontSize: "0.9rem" }}>Hotspot access granted successfully</strong>
+                    <span style={{ color: "var(--isp-text-muted)", fontSize: "0.72rem" }}>
+                      {result.created ? "A new prepaid account was created." : "The existing prepaid account was updated."}
+                    </span>
+                  </span>
                 </div>
-                <p style={{ margin: 0, color: "var(--isp-text-muted)", fontSize: "0.78rem" }}>
-                  MikroTik confirmed the 30-day {selectedPlan?.name ?? "Hotspot"} grant. Expires {localDate(result.expiresAt)}. {result.connectionMessage}
+                <p style={{ margin: 0, color: "var(--isp-text-muted)", fontSize: "0.78rem", lineHeight: 1.5 }}>
+                  MikroTik confirmed the 30-day {selectedPlan?.name ?? "Hotspot"} grant. Expires {localDate(result.expiresAt)}.
                 </p>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "0.65rem 0.75rem", border: `1px solid ${result.connected ? "rgba(34,197,94,.32)" : "var(--isp-border)"}`, borderRadius: 8, color: result.connected ? "var(--isp-green)" : "var(--isp-text-muted)", fontSize: "0.76rem" }}>
+                  <Wifi size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                  <span>{result.connected ? "The TV is connected to the internet." : result.connectionMessage}</span>
+                </div>
                 <div style={{ display: "grid", gap: 8, padding: "0.8rem", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-input-bg)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text)", fontSize: "0.78rem" }}>
                     <UserRound size={14} /> <strong>Username:</strong> <span>{result.username}</span>
@@ -400,6 +423,11 @@ export function PrepaidHotspotAdminGrantDialog({
                     </div>
                   )}
                 </div>
+                {result.listRefreshWarning && (
+                  <div role="alert" style={{ padding: "0.65rem 0.75rem", border: "1px solid rgba(245,158,11,.4)", borderRadius: 8, background: "rgba(245,158,11,.08)", color: "#fbbf24", fontSize: "0.74rem" }}>
+                    {result.listRefreshWarning}
+                  </div>
+                )}
                 {!result.connected && (
                   <p className="prepaid-help" style={{ margin: 0 }}>
                     The prepaid account is active even though no live session was confirmed. Keep the TV connected to this router and use its existing Hotspot sign-in if it does not connect automatically.
