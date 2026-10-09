@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
-import { useReconnectPrepaidHotspot, type HotspotReconnectResult } from "@workspace/api-client-react";
 import {
   Loader2, RefreshCw, Wifi, Network, Globe,
   Users, CheckCircle2, XCircle, Clock, AlertTriangle,
@@ -25,6 +24,7 @@ import { usePrepaidLiveQueries } from "@/lib/prepaid-live-queries";
 import { PrepaidSyncReport, type PrepaidSyncResult } from "@/components/ui/PrepaidSyncReport";
 import { syncActiveAccountsToRouter } from "@/lib/prepaid-sync";
 import { transactionDisplayId } from "@/lib/transaction-reference";
+import { PrepaidHotspotAdminGrantDialog } from "./PrepaidHotspotAdminGrantDialog";
 
 const PAGE_SIZE = 20;
 
@@ -60,6 +60,10 @@ interface Payment {
   notes?: string | null;
   status: string;
   created_at: string;
+}
+interface HotspotReconnectResult {
+  status: string;
+  message: string;
 }
 type StatusFilter = "all" | "active" | "expired" | "suspended" | "online";
 
@@ -679,7 +683,23 @@ function ExtendUserDialog({
 /* ══════════════════════════════ Page ══════════════════════════════ */
 export default function PrepaidUsers() {
   const qc = useQueryClient();
-  const reconnectMutation = useReconnectPrepaidHotspot();
+  const reconnectMutation = {
+    mutateAsync: async ({ id }: { id: number }): Promise<HotspotReconnectResult> => {
+      const token = getAdminApiToken();
+      if (!token) throw new Error("Your admin session has expired. Sign in again before reconnecting.");
+      const response = await fetch(apiUrl(`/api/customers/${id}/hotspot-reconnect`), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ adminId: ADMIN_ID }),
+      });
+      const result = await parseJsonResponse<HotspotReconnectResult & { error?: string }>(response);
+      if (!response.ok) throw new Error(result.message || result.error || "The Hotspot device could not be reconnected.");
+      return result;
+    },
+  };
 
   const { data: customers = [], isLoading } = useQuery<Customer[]>({
     queryKey: ["prepaid_customers", ADMIN_ID],
@@ -808,6 +828,7 @@ export default function PrepaidUsers() {
   const [adjustingExpiryUser, setAdjustingExpiryUser] = useState<Customer | null>(null);
   const [rechargePickerOpen, setRechargePickerOpen] = useState(false);
   const [addingVlanUser, setAddingVlanUser] = useState(false);
+  const [grantingHotspotUser, setGrantingHotspotUser] = useState(false);
   const [rechargeTargetId, setRechargeTargetId] = useState("");
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
@@ -1281,6 +1302,18 @@ export default function PrepaidUsers() {
           }}
         />
       )}
+      {grantingHotspotUser && (
+        <PrepaidHotspotAdminGrantDialog
+          plans={plans}
+          routers={routers}
+          onClose={() => setGrantingHotspotUser(false)}
+          onCreated={async () => {
+            await qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
+            setActionError("");
+            setActionNotice("The 30-day Hotspot admin grant was applied to MikroTik. No payment transaction was created.");
+          }}
+        />
+      )}
       {adjustingExpiryUser && (
         <AdjustExpiryDialog
           user={adjustingExpiryUser}
@@ -1397,6 +1430,22 @@ export default function PrepaidUsers() {
             }}
           >
             <PlusCircle size={13} /> Add VLAN user
+          </button>
+          <button
+            type="button"
+            onClick={() => setGrantingHotspotUser(true)}
+            title="Create a tenant-scoped 30-day Hotspot account without recording a sale"
+            style={{
+              ...BTN("var(--isp-green)"),
+              ...(!plans.some(plan =>
+                plan.type.toLowerCase() === "hotspot"
+                && plan.router_id != null
+                && plan.port_id == null
+                && plan.is_active === true,
+              ) ? { opacity: 0.65 } : {}),
+            }}
+          >
+            <Wifi size={13} /> Grant Hotspot access
           </button>
         </div>
 

@@ -36,6 +36,7 @@ import {
   connectHotspotUser,
   reconnectHotspotUserByMac,
   ensureHotspotUserProfile,
+  requireHotspotUserProfile,
   removeHotspotIpBinding,
   removeHotspotUserExpiry,
   removeHotspotUserRateQueue,
@@ -86,6 +87,14 @@ import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-
 import { saveCustomerEditWithRouter } from "../lib/customer-edit-consistency.js";
 import { withCustomerEditLock } from "../lib/customer-edit-lock.js";
 import { customerStatusForExpiryEdit } from "../lib/customer-expiry-edit.js";
+import {
+  findHotspotAdminGrantMatches,
+  hotspotAdminGrantExpiry,
+  hotspotAdminGrantUsername,
+  normalizeHotspotGrantMac,
+  type HotspotAdminGrantCustomer,
+  type HotspotAdminGrantPlanScope,
+} from "../lib/prepaid-hotspot-admin-grant.js";
 import {
   formatVoucherDuration,
   normalizeHotspotMac,
@@ -364,6 +373,7 @@ async function reconcileCustomerAccess(
   options: {
     allowInactivePlan?: boolean;
     restoreIdentity?: boolean;
+    preserveHotspotUsername?: boolean;
     skipRadius?: boolean;
     onRouterMutation?: () => Promise<void>;
     onRadiusIdentity?: (exists: boolean) => void;
@@ -417,6 +427,8 @@ async function reconcileCustomerAccess(
   if (planType === "hotspot") {
     if (options.restoreIdentity) {
       nextName = String(updates.username ?? current.username ?? "").trim();
+    } else if (options.preserveHotspotUsername) {
+      nextName = String(updates.username ?? currentName).trim();
     } else {
       nextName = prepaidHotspotUsernameForEdit(currentName, current.phone, updates.phone ?? current.phone);
     }
@@ -983,6 +995,301 @@ router.post("/customers/:id/hotspot-reconnect", requireAdmin(), async (req, res)
     res.status(503).json({
       error: "Could not safely reconnect this device. Check the account and router connection, then retry.",
       status: "router_unavailable",
+    });
+  }
+});
+
+router.post("/customers/hotspot-admin-grant", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const account = await authenticatedAccount(req);
+  const name = String(req.body?.name ?? "").trim();
+  const phone = String(req.body?.phone ?? "").trim();
+  const routerId = positivePortalId(req.body?.routerId);
+  const planId = positivePortalId(req.body?.planId);
+  const macAddress = normalizeHotspotGrantMac(req.body?.macAddress);
+  if (!adminId || !account) {
+    res.status(401).json({ error: "A valid signed-in administrator is required." });
+    return;
+  }
+  if (account.role === "reseller") {
+    res.status(403).json({ error: "This admin grant is available to the ISP account owner only." });
+    return;
+  }
+  if (!name || name.length > 100 || phone.length > 40 || !routerId || !planId || !macAddress) {
+    res.status(400).json({ error: "Enter a customer name, a valid device MAC, a router, and an active Hotspot plan." });
+    return;
+  }
+
+  const tenantId = account.parent_id ?? account.id;
+  const plan = await loadScopedCustomerPlan(account, planId, "hotspot", routerId, null);
+  if (
+    !plan
+    || normalizePlanServiceType(plan.type) !== "hotspot"
+    || plan.router_id !== routerId
+    || plan.port_id !== null
+  ) {
+    res.status(400).json({ error: "Choose an active direct Hotspot plan assigned to the selected router." });
+    return;
+  }
+  const routerRow = (await sbSelectStrict<RouterRow>(
+    "isp_routers",
+    `id=eq.${routerId}&admin_id=eq.${tenantId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+  ))[0];
+  if (!routerRow) {
+    res.status(404).json({ error: "The selected router is not available to this ISP account." });
+    return;
+  }
+
+  const username = hotspotAdminGrantUsername(routerId, macAddress);
+  const credentials = routerCredentials(routerRow);
+  const customerSelect = "id,name,phone,mac_address,username,password,type,plan_id,router_id,port_id,status,expires_at";
+  const readAllGrantRows = async <T extends { id: number }>(
+    table: string,
+    scope: string,
+    select: string,
+  ): Promise<T[]> => {
+    const rows: T[] = [];
+    let afterId = 0;
+    for (let page = 0; page < 50; page += 1) {
+      const batch = await sbSelectStrict<T>(
+        table,
+        `${scope}&id=gt.${afterId}&select=${select}&order=id.asc&limit=1000`,
+      );
+      rows.push(...batch);
+      if (batch.length < 1000) return rows;
+      const nextId = batch[batch.length - 1]?.id;
+      if (!Number.isSafeInteger(nextId) || nextId <= afterId) {
+        throw new Error("The safe duplicate scan did not advance through records. No account was created.");
+      }
+      afterId = nextId;
+    }
+    throw new Error("This account has too many records for a complete safe duplicate check. No account was created.");
+  };
+  const readMatches = async () => {
+    const [customers, plans] = await Promise.all([
+      readAllGrantRows<HotspotAdminGrantCustomer>("isp_customers", `admin_id=eq.${adminId}`, customerSelect),
+      readAllGrantRows<HotspotAdminGrantPlanScope>("isp_plans", `admin_id=eq.${tenantId}`, "id,type,router_id,port_id"),
+    ]);
+    return findHotspotAdminGrantMatches(customers, plans, { routerId, macAddress, name });
+  };
+  const sendMatches = (matches: Awaited<ReturnType<typeof readMatches>>) => {
+    res.status(409).json({
+      code: "HOTSPOT_ADMIN_GRANT_MATCHES",
+      error: "Matching Hotspot records already exist. Select one eligible account to update instead of creating a duplicate.",
+      matches: matches.map(({ password: _password, ...match }) => match),
+    });
+  };
+
+  let pending: CustomerRow | undefined;
+  let routerMutationAttempted = false;
+  let hadRadiusBefore = false;
+  let radiusMutationAttempted = false;
+  let paidHotspotBindingSnapshot: PaidHotspotBindingSnapshot | null = null;
+  const profile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
+  const expiresAt = hotspotAdminGrantExpiry();
+  const password = randomBytes(24).toString("base64url");
+
+  try {
+    const matches = await readMatches();
+    if (matches.length) {
+      sendMatches(matches);
+      return;
+    }
+
+    const conflictingDbUsername = await sbSelectStrict<{ id: number; admin_id: number }>(
+      "isp_customers",
+      `username=eq.${encodeURIComponent(username)}&select=id,admin_id&limit=1`,
+    );
+    if (conflictingDbUsername.length) {
+      res.status(409).json({
+        code: "HOTSPOT_ADMIN_GRANT_USERNAME_CONFLICT",
+        error: "The generated device login is already assigned to another account. Resolve that record before granting access.",
+      });
+      return;
+    }
+    await assertRadiusTargetEmptyStrict(username);
+
+    const routerUsers = await fetchHotspotUserList(credentials);
+    const routerConflicts = routerUsers.filter(user =>
+      user.name.trim().toLowerCase() === username.toLowerCase()
+      || normalizeHotspotGrantMac(user.macAddress) === macAddress,
+    );
+    if (routerConflicts.length) {
+      res.status(409).json({
+        code: "HOTSPOT_ADMIN_GRANT_ROUTER_CONFLICT",
+        error: "MikroTik already has a Hotspot login for this device or generated username, but no matching prepaid record was found. Review the router account before granting access.",
+        routerUsernames: Array.from(new Set(routerConflicts.map(user => user.name).filter(Boolean))),
+      });
+      return;
+    }
+    if (await getPaidHotspotBindingSnapshot(credentials, { name: username, macAddress })) {
+      res.status(409).json({
+        code: "HOTSPOT_ADMIN_GRANT_BINDING_CONFLICT",
+        error: "MikroTik has a managed device binding for this login already. Select or repair its prepaid account before granting access.",
+      });
+      return;
+    }
+    await requireHotspotUserProfile(credentials, profile);
+
+    try {
+      [pending] = await sbInsertStrict<CustomerRow>("isp_customers", {
+        admin_id: adminId,
+        name,
+        phone: phone || null,
+        mac_address: macAddress,
+        username,
+        password,
+        type: "hotspot",
+        plan_id: plan.id,
+        router_id: routerId,
+        port_id: null,
+        ip_address: null,
+        status: "provisioning",
+        expires_at: expiresAt,
+        fup_limit_mb: null,
+      });
+    } catch (error) {
+      if (error instanceof SupabaseHttpError && error.status === 409) {
+        const concurrentMatches = await readMatches();
+        if (concurrentMatches.length) {
+          sendMatches(concurrentMatches);
+          return;
+        }
+        res.status(409).json({
+          code: "HOTSPOT_ADMIN_GRANT_USERNAME_CONFLICT",
+          error: "Another request claimed this device login first. Refresh Prepaid Users and select the existing account.",
+        });
+        return;
+      }
+      throw error;
+    }
+    if (!pending?.id) throw new Error("The pending prepaid account could not be confirmed.");
+
+    const customerFilter = `id=eq.${pending.id}&admin_id=eq.${adminId}&select=*&limit=1`;
+    const updates: Record<string, unknown> = { status: "active" };
+    const previousFields: Record<string, unknown> = { status: "provisioning" };
+    const saved = await withCustomerEditLock(adminId, pending.id, async assertLock =>
+      saveCustomerEditWithRouter({
+        applyRouter: async markMutation => {
+          const result = await reconcileCustomerAccess(pending!, updates, adminId, {
+            preserveHotspotUsername: true,
+            onRouterMutation: async () => {
+              markMutation();
+              routerMutationAttempted = true;
+              await assertLock();
+            },
+            onRadiusIdentity: exists => { hadRadiusBefore = exists; },
+            onRadiusMutation: () => { radiusMutationAttempted = true; },
+            onPaidHotspotBindingSnapshot: snapshot => { paidHotspotBindingSnapshot = snapshot; },
+            assertLock,
+          });
+          await assertLock();
+          if (!result.routerSynced) throw new Error("MikroTik did not confirm the Hotspot account update.");
+          const confirmedUsers = (await fetchHotspotUserList(credentials)).filter(user => user.name === username);
+          if (
+            confirmedUsers.length !== 1
+            || confirmedUsers[0].disabled
+            || confirmedUsers[0].profile !== profile
+          ) {
+            throw new Error("MikroTik did not confirm exactly one enabled Hotspot login with the selected plan profile.");
+          }
+          return result;
+        },
+        restoreRouter: async () => {
+          await assertLock();
+          const attempted = { ...pending!, ...updates } as CustomerRow;
+          const restored = await reconcileCustomerAccess(attempted, previousFields, adminId, {
+            allowInactivePlan: true,
+            restoreIdentity: true,
+            skipRadius: true,
+            paidHotspotBindingSnapshot,
+            onRouterMutation: assertLock,
+            assertLock,
+          });
+          if (!restored.routerSynced) throw new Error("The pending MikroTik account could not be disabled.");
+          if (radiusMutationAttempted && !hadRadiusBefore) {
+            await assertLock();
+            await removeRadiusCustomerStrict(username);
+          }
+        },
+        saveRecord: async () => {
+          await assertLock();
+          const [row] = await sbUpdateStrict<CustomerRow>("isp_customers", customerFilter, updates);
+          if (!row || !customerFieldsMatch(row, updates)) {
+            throw new Error("The prepaid record did not confirm the admin grant.");
+          }
+          return row;
+        },
+        readRecord: async () => (await sbSelectStrict<CustomerRow>("isp_customers", customerFilter))[0],
+        matchesRequested: row => customerFieldsMatch(row, updates),
+        matchesBefore: row => customerFieldsMatch(row, previousFields),
+        confirmedRejected: error => error instanceof SupabaseHttpError
+          && [400, 401, 403, 404, 409, 422].includes(error.status),
+      }),
+    );
+
+    void logActivity({
+      adminId,
+      type: "customer",
+      action: "admin_hotspot_grant",
+      subject: name,
+      details: {
+        customerId: pending.id,
+        username,
+        routerId,
+        planId: plan.id,
+        grantDays: 30,
+        expiresAt,
+        macAddress,
+        paymentCreated: false,
+      },
+    });
+    res.status(201).json({
+      ok: true,
+      customerId: saved.row.id,
+      name: saved.row.name,
+      username,
+      password,
+      routerName: saved.router.routerName,
+      expiresAt,
+      mikrotikSynced: saved.router.routerSynced,
+      connectionStatus: "not_checked",
+      message: "The 30-day Hotspot admin grant was saved and confirmed on MikroTik. No payment transaction was created.",
+    });
+  } catch (error) {
+    logger.error(
+      { err: error, adminId, routerId, planId, customerId: pending?.id, routerMutationAttempted },
+      "[customers/hotspot-admin-grant] provisioning failed",
+    );
+    if (pending?.id && routerMutationAttempted) {
+      try {
+        await withCustomerEditLock(adminId, pending.id, async assertLock => {
+          await assertLock();
+          await reconcileHotspotUserAccess(credentials, {
+            name: username,
+            password,
+            profile,
+            comment: username,
+            expiresAt,
+            enabled: false,
+            macAddress,
+            resetCounters: false,
+          });
+          await assertLock();
+        });
+        if (radiusMutationAttempted && !hadRadiusBefore) {
+          await removeRadiusCustomerStrict(username);
+        }
+      } catch (cleanupError) {
+        logger.error(
+          { err: cleanupError, adminId, routerId, customerId: pending.id, username },
+          "[customers/hotspot-admin-grant] safe disable failed",
+        );
+      }
+    }
+    res.status(503).json({
+      error: error instanceof Error ? error.message : "The Hotspot admin grant could not be confirmed.",
+      ...(pending?.id ? { customerId: pending.id, username, retryable: true } : {}),
     });
   }
 });
