@@ -1117,6 +1117,13 @@ function HotspotLoginView({
     }
   }, [adminId, checkoutId, deviceMacAddress, portalScope.portId, portalScope.routerId]);
 
+  const retryExistingPaidAccess = useCallback(() => {
+    if (!checkoutId || bindingInFlight.current) return;
+    // Reuse the paid checkout and its existing account; the API revalidates entitlement.
+    bindingInFlight.current = true;
+    void bindPaidHotspotAccess(checkoutId, true);
+  }, [bindPaidHotspotAccess, checkoutId]);
+
   useEffect(() => {
     if (!checkoutId || paymentConfirmed || paymentFailed) return;
     setPollTimedOut(false);
@@ -1725,6 +1732,11 @@ function HotspotLoginView({
     }
   };
 
+  const openAlreadyPaidReconnect = () => {
+    setTroubleshootDialogOpen(true);
+    void handleTroubleshoot();
+  };
+
   useEffect(() => {
     if (HOTSPOT_RUNTIME_CONFIG.previewOnly || !adminId || !portalContext.mac) return;
     const lookupKey = `${adminId}:${portalContext.mac}`;
@@ -2154,10 +2166,19 @@ function HotspotLoginView({
            border-bottom: 1px solid rgba(255,255,255,0.08);
         }
 
-        .hp-logo { display: flex; align-items: center; gap: 12px; }
+         .hp-logo { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
          .hp-logo-image { width: 128px; height: 54px; object-fit: contain; flex: 0 0 auto; display: block; }
         .hp-logo-sub { font-size: 11px; color: rgba(255,255,255,0.4); font-weight: 500; }
+         .hp-brand-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 700; }
 
+         .hp-header-actions { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
+         .hp-header-reconnect {
+           display: inline-flex; align-items: center; min-height: 36px;
+           color: var(--isp-accent); font-size: 12px; font-weight: 700;
+           white-space: nowrap; text-decoration: none; border-radius: 5px;
+         }
+         .hp-header-reconnect:hover { color: #fff; text-decoration: underline; }
+         .hp-header-reconnect:focus-visible { outline: 2px solid var(--isp-accent); outline-offset: 3px; }
         .hp-status {
           display: flex; align-items: center; gap: 7px;
           padding: 6px 14px; border-radius: 100px;
@@ -2798,6 +2819,8 @@ function HotspotLoginView({
          @media (max-width: 560px) {
            .hp-header { padding: 0 14px; }
            .hp-logo-sub { display: none; }
+           .hp-header-actions { gap: 8px; }
+           .hp-header-reconnect { font-size: 11px; }
            .hp-status { padding: 6px 10px; }
            .hp-main { padding: 42px 14px 56px; }
            .hp-tabs { gap: 2px; }
@@ -2814,6 +2837,11 @@ function HotspotLoginView({
             .hp-troubleshoot-modal-actions { flex-direction: column; }
             .hp-troubleshoot-modal-action { width: 100%; }
          }
+          @media (max-width: 400px) {
+            .hp-logo-image { width: 72px; height: 42px; }
+            .hp-brand-name { max-width: 92px; }
+            .hp-status { display: none; }
+          }
           @media (prefers-reduced-motion: reduce) {
             .hp-troubleshoot-card::before, .hp-troubleshoot-card::after,
             .hp-troubleshoot-dialog-ambient { animation: none !important; }
@@ -2843,6 +2871,15 @@ function HotspotLoginView({
               <button
                 className="hp-tv-dismiss"
                 style={{ marginBottom: 8 }}
+                disabled={accessRetrying}
+                onClick={retryExistingPaidAccess}
+              >
+                {accessRetrying ? "Reconnecting…" : "Reconnect this TV"}
+              </button>
+              <p className="hp-tv-expiry">Reconnect uses the same paid package; no new purchase is made.</p>
+              <button
+                className="hp-tv-dismiss"
+                style={{ marginBottom: 8 }}
                 onClick={() => {
                   setShowTvSuccess(false);
                   void checkTvPackageStatus();
@@ -2866,11 +2903,26 @@ function HotspotLoginView({
               {portalLogoUrl
                 ? <img className="hp-logo-image" src={portalLogoUrl} alt={`${portalDisplayName} logo`} />
                 : <div className="hp-brand-mark" aria-hidden="true"><Wifi size={21} strokeWidth={2.2} /></div>}
-              <div className="hp-brand-name">{portalDisplayName}</div>
+              <div className="hp-brand-name" title={portalDisplayName}>{portalDisplayName}</div>
             </div>
-            <div className="hp-status">
-              <span className="hp-status-dot" />
-              Online
+            <div className="hp-header-actions">
+              <a
+                className="hp-header-reconnect"
+                href="#troubleshoot"
+                aria-label="Already paid? Sign in or reconnect this device"
+                aria-controls="hp-troubleshoot-dialog"
+                aria-haspopup="dialog"
+                onClick={event => {
+                  event.preventDefault();
+                  openAlreadyPaidReconnect();
+                }}
+              >
+                Already paid?
+              </a>
+              <div className="hp-status">
+                <span className="hp-status-dot" />
+                Online
+              </div>
             </div>
           </header>
         )}
@@ -3182,26 +3234,33 @@ function HotspotLoginView({
                               : <><Tv size={15} /> Check TV package</>}
                           </button>
                         )}
+                        {isTvMode && checkoutId && (
+                          <button
+                            type="button"
+                            className="hp-btn hp-btn-ghost"
+                            disabled={accessRetrying || tvDiagnosticLoading}
+                            style={{ width: "auto", display: "inline-flex", padding: "10px 24px", margin: "0 6px 10px" }}
+                            onClick={retryExistingPaidAccess}
+                          >
+                            {accessRetrying
+                              ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Reconnecting…</>
+                              : <><Wifi size={15} /> Reconnect this TV</>}
+                          </button>
+                        )}
                         <button className="hp-btn hp-btn-ghost" disabled={accessRetrying || portalHandoffReady || (isTvMode && tvDiagnosticLoading)} style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
                           onClick={() => {
-                            if (isTvMode && (tvDiagnostic?.status === "device_not_seen" || tvDiagnostic?.status === "router_unavailable" || tvDiagnostic?.status === "router_check_partial")) {
-                              void checkTvPackageStatus();
-                              return;
-                            }
                             const destination = portalContext.linkOrig || portalContext.linkLogin;
                             if (accessReady && isTvMode) {
                               setShowTvSuccess(true);
                               return;
                             }
                             if (accessReady && /^https?:\/\//i.test(destination)) window.location.assign(destination);
-                            else if (checkoutId && !accessRetrying) { bindingInFlight.current = true; void bindPaidHotspotAccess(checkoutId, true); }
+                            else retryExistingPaidAccess();
                           }}>
                           {accessReady ? (isTvMode ? "Show login confirmation" : "Continue online")
                             : portalHandoffReady ? "Connecting…"
                               : accessRetrying ? "Retrying connection…"
-                                : isTvMode && tvDiagnostic?.status === "device_not_seen" ? "Check TV again"
-                                  : isTvMode && (tvDiagnostic?.status === "router_unavailable" || tvDiagnostic?.status === "router_check_partial") ? "Check connection again"
-                                    : isTvMode ? "Retry TV sign-in" : "Retry connection"}
+                                : isTvMode ? "Retry TV sign-in" : "Retry connection"}
                         </button>
                       </>
                     ) : paymentFailed ? (
@@ -3662,7 +3721,7 @@ function HotspotLoginView({
             </div>
           )}
 
-          {portalCards.connectionSupport && troubleshootDialogOpen && (
+          {troubleshootDialogOpen && (
             <div
               className="hp-troubleshoot-overlay"
               role="presentation"
@@ -3672,6 +3731,7 @@ function HotspotLoginView({
             >
               <div
                 ref={troubleshootDialogRef}
+                id="hp-troubleshoot-dialog"
                 className="hp-troubleshoot-dialog"
                 data-state="open"
                 role="dialog"

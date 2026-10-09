@@ -78,6 +78,17 @@
 
     .hdr{position:fixed;top:0;left:0;right:0;z-index:50;height:64px;background:rgba(13,4,21,.8);border-bottom:1px solid rgba(255,255,255,.07);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
     .hdr-inner{max-width:1280px;margin:0 auto;padding:0 1.5rem;height:100%;display:flex;align-items:center;justify-content:space-between}
+    .already-paid-link{display:inline-flex;align-items:center;min-height:36px;color:rgba(240,171,252,.95);font-size:.8125rem;font-weight:700;white-space:nowrap;text-decoration:none}
+    .already-paid-link:hover{text-decoration:underline;color:#fff}
+    .already-paid-link:focus-visible{outline:2px solid rgba(240,171,252,.9);outline-offset:3px;border-radius:3px}
+    @media(max-width:520px){
+      .hdr-inner{padding:0 .875rem;gap:.5rem}
+      #portalNameHeader{max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .already-paid-link{font-size:.75rem}
+      #portalHeaderPhone{padding:.375rem .5rem!important;font-size:.6875rem!important}
+      #portalHeaderPhoneText{max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    }
+    @media(max-width:420px){#portalHeaderPhone{display:none!important}}
 
     .grid-bg{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,black,transparent)}
 
@@ -108,6 +119,7 @@
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:.75rem">
+      <a id="alreadyPaidReconnect" class="already-paid-link" href="#troubleshootModule" aria-controls="troubleshootModule" aria-haspopup="dialog" onclick="openTroubleshootModule();return false">Already paid? Sign in</a>
       <a id="portalHeaderPhone" href="#" style="display:none;align-items:center;gap:.375rem;background:rgba(192,38,211,.15);border:1px solid rgba(192,38,211,.3);color:rgba(240,171,252,.9);font-size:.8125rem;font-weight:500;padding:.375rem .875rem;border-radius:9999px;text-decoration:none;transition:background .2s">
         <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 5.25v1.5z"/></svg>
          <span id="portalHeaderPhoneText"></span>
@@ -494,7 +506,7 @@ var COLORS=[
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="";
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
-   var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalPaidLoginHandoff=false;
+   var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalAutoReconnectStartedAt=0, portalPaidLoginHandoff=false;
    var portalMpesaVerifyBusy=false;
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var ROUTER_NAS_IDENTIFIER="$(identity)";
@@ -1030,8 +1042,17 @@ function checkPortalExpiryOnLanding(){
     notice.hidden=false;
   }).catch(function(){});
 }
-function schedulePortalAutoReconnect(delay){
-  if(portalAutoReconnectDone||portalAutoReconnectAttempts>=5)return;
+ var PORTAL_AUTO_RECONNECT_MAX_ATTEMPTS=10;
+ var PORTAL_AUTO_RECONNECT_WINDOW_MS=120000;
+ function portalAutoReconnectCanRetry(){
+  return portalAutoReconnectAttempts<PORTAL_AUTO_RECONNECT_MAX_ATTEMPTS
+    &&(!portalAutoReconnectStartedAt||Date.now()-portalAutoReconnectStartedAt<PORTAL_AUTO_RECONNECT_WINDOW_MS);
+ }
+ function portalAutoReconnectRetryDelay(){
+  return Math.min(1000*Math.pow(2,Math.min(Math.max(portalAutoReconnectAttempts-1,0),4)),10000);
+ }
+ function schedulePortalAutoReconnect(delay){
+  if(portalAutoReconnectDone||!portalAutoReconnectCanRetry())return;
   if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
   portalAutoReconnectTimer=setTimeout(function(){
     portalAutoReconnectTimer=0;
@@ -1041,6 +1062,7 @@ function schedulePortalAutoReconnect(delay){
 function attemptPortalAutoReconnect(){
   if(PORTAL_PREVIEW_ONLY||portalPaidLoginHandoff||portalAutoReconnectDone||portalAutoReconnectBusy
     ||PORTAL_ADMIN_ID<1||!DEVICE_MAC||PORTAL_QUERY.get("page")==="troubleshoot")return;
+  if(!portalAutoReconnectStartedAt)portalAutoReconnectStartedAt=Date.now();
   portalAutoReconnectBusy=true;
   portalAutoReconnectAttempts+=1;
   fetch(apiUrl("/api/customers/hotspot-troubleshoot"),{
@@ -1066,15 +1088,15 @@ function attemptPortalAutoReconnect(){
       return;
     }
     if(data.status==="expired"||data.status==="depleted")return;
-    if(portalAutoReconnectAttempts<5){
+    if(portalAutoReconnectCanRetry()){
       var retryable=data.retryable===true||result.statusCode===409||result.statusCode>=500
         ||data.status==="active"||data.status==="unavailable"||data.status==="not_found";
-      if(retryable)schedulePortalAutoReconnect([700,1800,4000,8000][portalAutoReconnectAttempts-1]||8000);
+      if(retryable)schedulePortalAutoReconnect(portalAutoReconnectRetryDelay());
     }
   }).catch(function(){
     portalAutoReconnectBusy=false;
-    if(portalAutoReconnectAttempts<5){
-      schedulePortalAutoReconnect([700,1800,4000,8000][portalAutoReconnectAttempts-1]||8000);
+    if(portalAutoReconnectCanRetry()){
+      schedulePortalAutoReconnect(portalAutoReconnectRetryDelay());
     }
   });
 }
@@ -1084,6 +1106,7 @@ function retryPortalAutoReconnectOnReturn(){
   if(now-portalAutoReconnectEventAt<5000)return;
   portalAutoReconnectEventAt=now;
   portalAutoReconnectAttempts=0;
+  portalAutoReconnectStartedAt=now;
   if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
   portalAutoReconnectTimer=0;
   attemptPortalAutoReconnect();
