@@ -258,7 +258,7 @@ export function PrepaidHotspotAdminGrantDialog({
       className="prepaid-modal-backdrop"
       onClick={event => { if (event.target === event.currentTarget && !saving) onClose(); }}
     >
-      <div className="prepaid-modal" role="dialog" aria-modal="true" aria-labelledby="hotspot-admin-grant-title">
+      <div className="prepaid-modal prepaid-admin-grant-modal" role="dialog" aria-modal="true" aria-labelledby="hotspot-admin-grant-title">
         <div className="prepaid-modal-heading">
           <div>
             <h2 id="hotspot-admin-grant-title">Grant Hotspot access</h2>
@@ -271,97 +271,99 @@ export function PrepaidHotspotAdminGrantDialog({
 
         {!result ? (
           <>
-            <div className="prepaid-form-grid">
-              <label>
-                Customer name
-                <input autoFocus style={inputStyle} value={name} maxLength={100} onChange={event => { setName(event.target.value); setMatches([]); setSelectedMatchId(""); }} />
-              </label>
-              <label>
-                Phone number (optional)
-                <input style={inputStyle} type="tel" value={phone} maxLength={40} onChange={event => setPhone(event.target.value)} />
-              </label>
-              <label style={{ gridColumn: "1 / -1" }}>
-                TV device MAC address
-                <input
-                  style={inputStyle}
-                  autoCapitalize="characters"
-                  autoComplete="off"
-                  placeholder="38:BE:AB:7F:16:A4"
-                  value={macAddress}
-                  onChange={event => { setMacAddress(event.target.value.toUpperCase()); setMatches([]); setSelectedMatchId(""); }}
-                />
-                <span className="prepaid-help">This associates the prepaid record with the TV. Router login is still required for the device to authenticate.</span>
-              </label>
-              <label>
-                Router
-                <select style={inputStyle} value={routerId} onChange={event => { setRouterId(event.target.value); setPlanId(""); setMatches([]); }}>
-                  <option value="">Choose a router</option>
-                  {routers.map(router => <option key={router.id} value={router.id}>{router.name}</option>)}
-                </select>
-              </label>
-              <label>
-                Direct Hotspot plan
-                <select style={inputStyle} value={planId} onChange={event => setPlanId(event.target.value)}>
-                  <option value="">Choose a plan</option>
-                  {directHotspotPlans.map(plan => (
-                    <option key={plan.id} value={plan.id}>
-                      {plan.name} · {plan.speed_down} {plan.speed_down_unit ?? "Mbps"} · {plan.speed_up} {plan.speed_up_unit ?? "Mbps"}
-                    </option>
-                  ))}
-                </select>
-                {directHotspotPlans.length === 0 && routerId && (
-                  <span className="prepaid-help">No active direct Hotspot plan is assigned to this router.</span>
-                )}
-              </label>
-              <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "flex-start", padding: "0.65rem 0.75rem", border: "1px solid var(--isp-border)", borderRadius: 8, color: "var(--isp-text-muted)", fontSize: "0.74rem" }}>
-                <Wifi size={15} style={{ flexShrink: 0, marginTop: 1, color: "var(--isp-accent)" }} />
-                Grant length is fixed at 30 days. A matching account is selected for in-place update; duplicate records are never created automatically.
-              </div>
-            </div>
-
-            {matches.length > 0 && (
-              <section aria-label="Matching Hotspot accounts" style={{ marginTop: 14, display: "grid", gap: 8 }}>
-                <div style={{ fontSize: "0.76rem", fontWeight: 700, color: "var(--isp-text)" }}>
-                  Existing matching records
+            <div className="prepaid-admin-grant-content">
+              <div className="prepaid-form-grid">
+                <label>
+                  Customer name
+                  <input autoFocus style={inputStyle} value={name} maxLength={100} onChange={event => { setName(event.target.value); setMatches([]); setSelectedMatchId(""); }} />
+                </label>
+                <label>
+                  Phone number (optional)
+                  <input style={inputStyle} type="tel" value={phone} maxLength={40} onChange={event => setPhone(event.target.value)} />
+                </label>
+                <label style={{ gridColumn: "1 / -1" }}>
+                  TV device MAC address
+                  <input
+                    style={inputStyle}
+                    autoCapitalize="characters"
+                    autoComplete="off"
+                    placeholder="38:BE:AB:7F:16:A4"
+                    value={macAddress}
+                    onChange={event => { setMacAddress(event.target.value.toUpperCase()); setMatches([]); setSelectedMatchId(""); }}
+                  />
+                  <span className="prepaid-help">This associates the prepaid record with the TV. Router login is still required for the device to authenticate.</span>
+                </label>
+                <label>
+                  Router
+                  <select style={inputStyle} value={routerId} onChange={event => { setRouterId(event.target.value); setPlanId(""); setMatches([]); }}>
+                    <option value="">Choose a router</option>
+                    {routers.map(router => <option key={router.id} value={router.id}>{router.name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  Direct Hotspot plan
+                  <select style={inputStyle} value={planId} onChange={event => setPlanId(event.target.value)}>
+                    <option value="">Choose a plan</option>
+                    {directHotspotPlans.map(plan => (
+                      <option key={plan.id} value={plan.id}>
+                        {plan.name} · {plan.speed_down} {plan.speed_down_unit ?? "Mbps"} · {plan.speed_up} {plan.speed_up_unit ?? "Mbps"}
+                      </option>
+                    ))}
+                  </select>
+                  {directHotspotPlans.length === 0 && routerId && (
+                    <span className="prepaid-help">No active direct Hotspot plan is assigned to this router.</span>
+                  )}
+                </label>
+                <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "flex-start", padding: "0.65rem 0.75rem", border: "1px solid var(--isp-border)", borderRadius: 8, color: "var(--isp-text-muted)", fontSize: "0.74rem" }}>
+                  <Wifi size={15} style={{ flexShrink: 0, marginTop: 1, color: "var(--isp-accent)" }} />
+                  Grant length is fixed at 30 days. A matching account is selected for in-place update; duplicate records are never created automatically.
                 </div>
-                {matches.map(match => (
-                  <label
-                    key={match.id}
-                    style={{
-                      display: "flex",
-                      gap: 9,
-                      alignItems: "flex-start",
-                      padding: "0.7rem",
-                      borderRadius: 8,
-                      border: `1px solid ${selectedMatchId === String(match.id) ? "var(--isp-accent)" : "var(--isp-border)"}`,
-                      opacity: match.eligible ? 1 : 0.62,
-                      fontSize: "0.74rem",
-                    }}
-                  >
-                    <input
-                      type="radio"
-                      name="hotspot-grant-existing"
-                      disabled={!match.eligible || saving}
-                      checked={selectedMatchId === String(match.id)}
-                      onChange={() => setSelectedMatchId(String(match.id))}
-                    />
-                    <span style={{ minWidth: 0 }}>
-                      <strong style={{ display: "block", color: "var(--isp-text)" }}>
-                        {match.username || "Missing username"} · #{match.id}
-                      </strong>
-                      <span style={{ display: "block", color: "var(--isp-text-muted)" }}>
-                        {match.name || "Unnamed"} · {match.status} · expiry {match.expires_at ? localDate(match.expires_at) : "not set"}
+              </div>
+
+              {matches.length > 0 && (
+                <section aria-label="Matching Hotspot accounts" style={{ marginTop: 14, display: "grid", gap: 8 }}>
+                  <div style={{ fontSize: "0.76rem", fontWeight: 700, color: "var(--isp-text)" }}>
+                    Existing matching records
+                  </div>
+                  {matches.map(match => (
+                    <label
+                      key={match.id}
+                      style={{
+                        display: "flex",
+                        gap: 9,
+                        alignItems: "flex-start",
+                        padding: "0.7rem",
+                        borderRadius: 8,
+                        border: `1px solid ${selectedMatchId === String(match.id) ? "var(--isp-accent)" : "var(--isp-border)"}`,
+                        opacity: match.eligible ? 1 : 0.62,
+                        fontSize: "0.74rem",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="hotspot-grant-existing"
+                        disabled={!match.eligible || saving}
+                        checked={selectedMatchId === String(match.id)}
+                        onChange={() => setSelectedMatchId(String(match.id))}
+                      />
+                      <span style={{ minWidth: 0 }}>
+                        <strong style={{ display: "block", color: "var(--isp-text)" }}>
+                          {match.username || "Missing username"} · #{match.id}
+                        </strong>
+                        <span style={{ display: "block", color: "var(--isp-text-muted)" }}>
+                          {match.name || "Unnamed"} · {match.status} · expiry {match.expires_at ? localDate(match.expires_at) : "not set"}
+                        </span>
+                        {match.reason && <span style={{ display: "block", color: "#fca5a5", marginTop: 3 }}>{match.reason}</span>}
                       </span>
-                      {match.reason && <span style={{ display: "block", color: "#fca5a5", marginTop: 3 }}>{match.reason}</span>}
-                    </span>
-                  </label>
-                ))}
-                <p className="prepaid-help" style={{ margin: 0 }}>
-                  Choosing an eligible record updates that account in place and keeps its login credentials. Records on another router or with a different MAC must be resolved separately.
-                </p>
-              </section>
-            )}
-            {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.75rem", marginTop: 12 }}>{error}</div>}
+                    </label>
+                  ))}
+                  <p className="prepaid-help" style={{ margin: 0 }}>
+                    Choosing an eligible record updates that account in place and keeps its login credentials. Records on another router or with a different MAC must be resolved separately.
+                  </p>
+                </section>
+              )}
+              {error && <div role="alert" style={{ color: "#fca5a5", fontSize: "0.75rem", marginTop: 12 }}>{error}</div>}
+            </div>
             <div className="prepaid-modal-actions">
               <button type="button" onClick={onClose} disabled={saving} className="prepaid-secondary-button">Cancel</button>
               {matches.length > 0 ? (
@@ -379,29 +381,31 @@ export function PrepaidHotspotAdminGrantDialog({
           </>
         ) : (
           <>
-            <div role="status" style={{ display: "grid", gap: 12, marginTop: 14 }}>
-              <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-green)", fontWeight: 700 }}>
-                <CheckCircle2 size={18} />
-                {result.created ? "New prepaid account created" : "Existing prepaid account updated"}
-              </div>
-              <p style={{ margin: 0, color: "var(--isp-text-muted)", fontSize: "0.78rem" }}>
-                MikroTik confirmed the 30-day {selectedPlan?.name ?? "Hotspot"} grant. Expires {localDate(result.expiresAt)}. {result.connectionMessage}
-              </p>
-              <div style={{ display: "grid", gap: 8, padding: "0.8rem", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-input-bg)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text)", fontSize: "0.78rem" }}>
-                  <UserRound size={14} /> <strong>Username:</strong> <span>{result.username}</span>
+            <div className="prepaid-admin-grant-content">
+              <div role="status" style={{ display: "grid", gap: 12, marginTop: 14 }}>
+                <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-green)", fontWeight: 700 }}>
+                  <CheckCircle2 size={18} />
+                  {result.created ? "New prepaid account created" : "Existing prepaid account updated"}
                 </div>
-                {result.password && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text)", fontSize: "0.78rem", overflowWrap: "anywhere" }}>
-                    <KeyRound size={14} /> <strong>New password:</strong> <code>{result.password}</code>
+                <p style={{ margin: 0, color: "var(--isp-text-muted)", fontSize: "0.78rem" }}>
+                  MikroTik confirmed the 30-day {selectedPlan?.name ?? "Hotspot"} grant. Expires {localDate(result.expiresAt)}. {result.connectionMessage}
+                </p>
+                <div style={{ display: "grid", gap: 8, padding: "0.8rem", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-input-bg)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text)", fontSize: "0.78rem" }}>
+                    <UserRound size={14} /> <strong>Username:</strong> <span>{result.username}</span>
                   </div>
+                  {result.password && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--isp-text)", fontSize: "0.78rem", overflowWrap: "anywhere" }}>
+                      <KeyRound size={14} /> <strong>New password:</strong> <code>{result.password}</code>
+                    </div>
+                  )}
+                </div>
+                {!result.connected && (
+                  <p className="prepaid-help" style={{ margin: 0 }}>
+                    The prepaid account is active even though no live session was confirmed. Keep the TV connected to this router and use its existing Hotspot sign-in if it does not connect automatically.
+                  </p>
                 )}
               </div>
-              {!result.connected && (
-                <p className="prepaid-help" style={{ margin: 0 }}>
-                  The prepaid account is active even though no live session was confirmed. Keep the TV connected to this router and use its existing Hotspot sign-in if it does not connect automatically.
-                </p>
-              )}
             </div>
             <div className="prepaid-modal-actions">
               <button type="button" onClick={onClose} className="prepaid-primary-button">Done</button>

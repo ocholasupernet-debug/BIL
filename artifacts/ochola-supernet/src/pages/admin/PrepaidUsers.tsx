@@ -1187,8 +1187,12 @@ export default function PrepaidUsers() {
       <style>{`
         @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
         .prepaid-page{width:100%;max-width:1500px}
-        .prepaid-modal-backdrop{position:fixed;inset:0;z-index:1000;background:rgba(2,6,23,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px}
+        .prepaid-modal-backdrop{position:fixed;inset:0;z-index:1000;background:rgba(2,6,23,.72);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto}
         .prepaid-modal{width:100%;max-width:560px;background:var(--isp-card);border:1px solid var(--isp-border);border-radius:14px;padding:20px;box-shadow:0 24px 70px rgba(0,0,0,.48)}
+        .prepaid-admin-grant-modal{display:flex;flex-direction:column;max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);overflow:hidden}
+        .prepaid-admin-grant-content{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-right:2px}
+        .prepaid-admin-grant-modal>.prepaid-modal-heading,.prepaid-admin-grant-modal>.prepaid-modal-actions{flex-shrink:0}
+        .prepaid-admin-grant-modal>.prepaid-modal-actions{padding-top:12px;border-top:1px solid var(--isp-border)}
         .prepaid-small-modal{max-width:390px}
         .prepaid-modal-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px}
         .prepaid-modal-heading h2{margin:0;color:var(--isp-text);font-size:1rem}
@@ -1197,6 +1201,7 @@ export default function PrepaidUsers() {
         .prepaid-form-grid label,.prepaid-small-modal label{display:flex;flex-direction:column;gap:6px;color:var(--isp-text-muted);font-size:.7rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
         .prepaid-small-modal input{width:100%;box-sizing:border-box;padding:10px;border-radius:7px;background:var(--isp-input-bg);border:1px solid var(--isp-border);color:var(--isp-text);font:inherit;font-size:.85rem}
         .prepaid-modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}
+        @media(max-width:420px){.prepaid-admin-grant-modal .prepaid-modal-actions{display:grid;grid-template-columns:1fr}.prepaid-admin-grant-modal .prepaid-modal-actions button{justify-content:center}}
         .prepaid-primary-button,.prepaid-secondary-button{display:inline-flex;align-items:center;gap:6px;border-radius:7px;padding:9px 13px;font:700 .75rem inherit;cursor:pointer}
         .prepaid-primary-button{border:1px solid var(--isp-accent);background:var(--isp-accent);color:#fff}
         .prepaid-secondary-button{border:1px solid var(--isp-border);background:transparent;color:var(--isp-text-muted)}
