@@ -3,6 +3,14 @@ import { randomBytes, X509Certificate } from "node:crypto";
 import { RouterOSAPI } from "node-routeros";
 import { logger } from "./logger";
 import {
+  cachedRouterReadProfile,
+  classifyRouterReadProfile,
+  rememberRouterReadProfile,
+  routerProfileCacheKey,
+  shouldCacheRouterReadProfile,
+  type RouterReadProfile,
+} from "./router-resource-profile.js";
+import {
   ROUTER_MANAGEMENT_VPN,
   ROUTER_MANAGEMENT_VPN_BACKUP,
   ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT,
@@ -572,6 +580,88 @@ async function withReadConn<T>(
 
   if (lastError instanceof Error) throw lastError;
   throw new Error("RouterOS API commands failed for all configured accounts");
+}
+
+const ROUTER_RESOURCE_PROFILE_PROPLIST =
+  "version,uptime,board-name,cpu-load,free-memory,total-memory,cpu-count,cpu-frequency";
+
+interface RouterReadProfileResult {
+  profile: RouterReadProfile;
+  resourceRows?: Record<string, string>[];
+}
+
+const routerReadProfileProbes = new Map<string, Promise<RouterReadProfileResult>>();
+
+async function routerReadProfile(
+  conn: RouterOSAPI,
+  creds: RouterCredentials,
+  requestTimeoutMs: number,
+  propagatePermissionErrors = false,
+): Promise<RouterReadProfileResult> {
+  const key = routerProfileCacheKey(creds);
+  const cached = cachedRouterReadProfile(key);
+  if (cached) return { profile: cached };
+
+  const probeKey = `${key}|${propagatePermissionErrors ? "fallback" : "standard"}`;
+  const pending = routerReadProfileProbes.get(probeKey);
+  if (pending) return pending;
+
+  const probe = (async (): Promise<RouterReadProfileResult> => {
+    try {
+      const resourceRows = await withTimeout(
+        conn.write([
+          "/system/resource/print",
+          `=.proplist=${ROUTER_RESOURCE_PROFILE_PROPLIST}`,
+        ]),
+        requestTimeoutMs,
+      ) as Record<string, string>[];
+      const row = Array.isArray(resourceRows) ? resourceRows[0] : undefined;
+      const profile = classifyRouterReadProfile(row);
+      if (shouldCacheRouterReadProfile(row)) {
+        rememberRouterReadProfile(key, profile);
+      }
+      return { profile, resourceRows: Array.isArray(resourceRows) ? resourceRows : [] };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        propagatePermissionErrors
+        && /not enough permissions|permission denied|not permitted|policy/i.test(message)
+      ) {
+        throw error;
+      }
+      logger.debug(
+        { errorType: error instanceof Error ? error.constructor.name : "unknown" },
+        "RouterOS hardware profile unavailable; using standard read behavior",
+      );
+      return { profile: "standard" };
+    }
+  })();
+  routerReadProfileProbes.set(probeKey, probe);
+  try {
+    return await probe;
+  } finally {
+    if (routerReadProfileProbes.get(probeKey) === probe) {
+      routerReadProfileProbes.delete(probeKey);
+    }
+  }
+}
+
+function rememberReadProfileFromResource(
+  creds: RouterCredentials,
+  resourceRows: Record<string, string>[],
+): void {
+  const row = Array.isArray(resourceRows) ? resourceRows[0] : undefined;
+  if (shouldCacheRouterReadProfile(row)) {
+    rememberRouterReadProfile(routerProfileCacheKey(creds), classifyRouterReadProfile(row));
+  }
+}
+
+function routerReadCommand(
+  profile: RouterReadProfile,
+  path: string,
+  proplist: string,
+): string[] {
+  return profile === "low-resource" ? [path, `=.proplist=${proplist}`] : [path];
 }
 
 /* ─── Managed-service reset (never touches management/network resources) ─── */
@@ -1681,15 +1771,32 @@ export async function pingRouter(creds: RouterCredentials): Promise<RouterPingRe
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const caBase = `${ROUTER_HTTPS_CERTIFICATE_NAME}-bootstrap`;
     const caFileName = `${caBase}.txt`;
+    const readProfile = await routerReadProfile(conn, creds, ms, true);
+    let identRows: Record<string, string>[];
+    let resRows: Record<string, string>[];
 
-    const identRows = await withTimeout(
-      conn.write(["/system/identity/print", "=.proplist=name"]),
-      ms,
-    ) as Record<string, string>[];
-    const resRows = await withTimeout(
-      conn.write(["/system/resource/print", "=.proplist=uptime,version,board-name,cpu-load,free-memory"]),
-      ms,
-    ) as Record<string, string>[];
+    if (readProfile.resourceRows) {
+      resRows = readProfile.resourceRows;
+      identRows = await withTimeout(
+        conn.write(["/system/identity/print", "=.proplist=name"]),
+        ms,
+      ) as Record<string, string>[];
+    } else if (readProfile.profile === "low-resource") {
+      identRows = await withTimeout(
+        conn.write(["/system/identity/print", "=.proplist=name"]),
+        ms,
+      ) as Record<string, string>[];
+      resRows = await withTimeout(
+        conn.write(["/system/resource/print", `=.proplist=${ROUTER_RESOURCE_PROFILE_PROPLIST}`]),
+        ms,
+      ) as Record<string, string>[];
+    } else {
+      [identRows, resRows] = await Promise.all([
+        withTimeout(conn.write(["/system/identity/print"]), ms) as Promise<Record<string, string>[]>,
+        withTimeout(conn.write(["/system/resource/print"]), ms) as Promise<Record<string, string>[]>,
+      ]);
+    }
+    rememberReadProfileFromResource(creds, resRows);
 
     const id  = identRows[0] ?? {};
     const res = resRows[0]   ?? {};
@@ -4514,14 +4621,16 @@ export async function fetchWireless(
 }> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const { profile } = await routerReadProfile(conn, creds, ms);
 
     let ifaceRows: Record<string, string>[];
     try {
       ifaceRows = await withTimeout(
-        conn.write([
+        conn.write(routerReadCommand(
+          profile,
           "/interface/wireless/print",
-          "=.proplist=.id,name,ssid,disabled,band,channel,mac-address,security-profile,mode,master-interface,comment",
-        ]),
+          ".id,name,ssid,disabled,band,channel,mac-address,security-profile,mode,master-interface,comment",
+        )),
         ms,
       ) as Record<string, string>[];
     } catch (error) {
@@ -4569,10 +4678,11 @@ export async function fetchWireless(
     }
 
     const profileRows = await withTimeout(
-      conn.write([
+      conn.write(routerReadCommand(
+        profile,
         "/interface/wireless/security-profiles/print",
-        "=.proplist=.id,name,wpa2-pre-shared-key,authentication-types,mode",
-      ]),
+        ".id,name,wpa2-pre-shared-key,authentication-types,mode",
+      )),
       ms,
     ) as Record<string, string>[];
     const rawInterfaces = Array.isArray(ifaceRows) ? ifaceRows : [];
@@ -5262,11 +5372,13 @@ export async function fetchInterfaces(
 ): Promise<RouterInterface[]> {
   return withConn(creds, async (conn) => {
     const requestMs = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const { profile } = await routerReadProfile(conn, creds, requestMs);
     const rows = (await withTimeout(
-      conn.write([
+      conn.write(routerReadCommand(
+        profile,
         "/interface/print",
-        "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
-      ]),
+        ".id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
+      )),
       requestMs
     )) as Record<string, string>[];
     return (Array.isArray(rows) ? rows : []).map((r) => ({
@@ -5334,13 +5446,16 @@ export async function fetchRouterLiveData(
   const requestMs = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
 
   try {
+    const { profile } = await routerReadProfile(conn, creds, requestMs);
+
     /* Hotspot users */
     let hotspotUsersAvailable = true;
     const hotspotRows = await withTimeout(
-      conn.write([
+      conn.write(routerReadCommand(
+        profile,
         "/ip/hotspot/active/print",
-        "=.proplist=.id,user,address,mac-address,uptime,bytes-in,bytes-out,server",
-      ]),
+        ".id,user,address,mac-address,uptime,bytes-in,bytes-out,server",
+      )),
       requestMs
     ).catch(e => {
       hotspotUsersAvailable = false;
@@ -5351,10 +5466,7 @@ export async function fetchRouterLiveData(
     /* Hotspot active rows are per-session; user rows retain package totals
        across reconnects and are the quota/accounting source. */
     const hotspotUserCounterRows = await withTimeout(
-      conn.write([
-        "/ip/hotspot/user/print",
-        "=.proplist=name,bytes-in,bytes-out",
-      ]),
+      conn.write(["/ip/hotspot/user/print", "=.proplist=name,bytes-in,bytes-out"]),
       requestMs,
     ).catch(e => {
       logger.warn({ err: e.message }, "hotspot user counter fetch failed");
@@ -5364,10 +5476,11 @@ export async function fetchRouterLiveData(
     /* PPPoE sessions */
     let pppoeUsersAvailable = true;
     const pppoeRows = await withTimeout(
-      conn.write([
+      conn.write(routerReadCommand(
+        profile,
         "/ppp/active/print",
-        "=.proplist=.id,name,address,uptime,bytes-in,bytes-out,service",
-      ]),
+        ".id,name,address,uptime,bytes-in,bytes-out,service",
+      )),
       requestMs
     ).catch(e => {
       pppoeUsersAvailable = false;
@@ -5391,10 +5504,11 @@ export async function fetchRouterLiveData(
 
     /* Interfaces */
     const ifaceRows = await withTimeout(
-      conn.write([
+      conn.write(routerReadCommand(
+        profile,
         "/interface/print",
-        "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
-      ]),
+        ".id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
+      )),
       requestMs
     ).catch(e => { logger.warn({ err: e.message }, "interface fetch failed"); return [] as Record<string, string>[]; });
 
@@ -5522,8 +5636,9 @@ export async function detectBridgeInterfaces(
 ): Promise<{ bridgeInterfaces: string[]; detectedBridgeInterface: string | null }> {
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const { profile } = await routerReadProfile(conn, creds, ms);
     const rows = (await withTimeout(
-      conn.write(["/interface/bridge/print", "=.proplist=name"]),
+      conn.write(routerReadCommand(profile, "/interface/bridge/print", "name")),
       ms
     )) as Record<string, string>[];
     const names = rows.map(r => r.name).filter(Boolean);
@@ -5599,40 +5714,81 @@ export async function testConnection(
   try {
     const probeResult = await withReadConn(creds, async (conn, connectedHost) => {
       const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+        const readProfile = await routerReadProfile(conn, creds, ms, true);
+        const lowResource = readProfile.profile === "low-resource";
+        let identRows: Record<string, string>[];
+        let resourceRows: Record<string, string>[];
+        let bridgeRows: Record<string, string>[] = [];
+        let routerboardRows: Record<string, string>[] = [];
 
-      /* Identity and resource are required to call this a verified API check.
-         Bridge/routerboard details are optional across RouterOS models. */
-      const identRows = await withTimeout(
-        conn.write(["/system/identity/print", "=.proplist=name"]),
-        ms,
-      ) as Record<string, string>[];
-      const resourceRows = await withTimeout(
-        conn.write(["/system/resource/print", "=.proplist=version,board-name"]),
-        ms,
-      ) as Record<string, string>[];
+        const readIdentity = () => withTimeout(
+          conn.write(lowResource
+            ? ["/system/identity/print", "=.proplist=name"]
+            : ["/system/identity/print"]),
+          ms,
+        ) as Promise<Record<string, string>[]>;
+        const readResource = () => withTimeout(
+          conn.write(lowResource
+            ? ["/system/resource/print", `=.proplist=${ROUTER_RESOURCE_PROFILE_PROPLIST}`]
+            : ["/system/resource/print"]),
+          ms,
+        ) as Promise<Record<string, string>[]>;
+        const readBridges = () => withTimeout(
+          conn.write(lowResource
+            ? ["/interface/bridge/print", "=.proplist=name"]
+            : ["/interface/bridge/print"]),
+          ms,
+        ) as Promise<Record<string, string>[]>;
+        const readRouterboard = () => withTimeout(
+          conn.write(lowResource
+            ? ["/system/routerboard/print", "=.proplist=model"]
+            : ["/system/routerboard/print"]),
+          ms,
+        ) as Promise<Record<string, string>[]>;
+
+        /* Identity/resource are required; bridge/routerboard details are
+           optional. A low-resource router runs these reads one at a time. */
+        if (readProfile.resourceRows) {
+          resourceRows = readProfile.resourceRows;
+          if (lowResource) {
+            identRows = await readIdentity();
+            try { bridgeRows = await readBridges(); } catch { /* optional */ }
+            try { routerboardRows = await readRouterboard(); } catch { /* optional */ }
+          } else {
+            const [identityResult, bridgeResult, routerboardResult] = await Promise.allSettled([
+              readIdentity(),
+              readBridges(),
+              readRouterboard(),
+            ]);
+            if (identityResult.status === "rejected") throw identityResult.reason;
+            identRows = identityResult.value;
+            bridgeRows = bridgeResult.status === "fulfilled" ? bridgeResult.value : [];
+            routerboardRows = routerboardResult.status === "fulfilled" ? routerboardResult.value : [];
+          }
+        } else if (lowResource) {
+          identRows = await readIdentity();
+          resourceRows = await readResource();
+          try { bridgeRows = await readBridges(); } catch { /* optional */ }
+          try { routerboardRows = await readRouterboard(); } catch { /* optional */ }
+        } else {
+          const [identityResult, resourceResult, bridgeResult, routerboardResult] = await Promise.allSettled([
+            readIdentity(),
+            readResource(),
+            readBridges(),
+            readRouterboard(),
+          ]);
+          if (identityResult.status === "rejected") throw identityResult.reason;
+          if (resourceResult.status === "rejected") throw resourceResult.reason;
+          identRows = identityResult.value;
+          resourceRows = resourceResult.value;
+          bridgeRows = bridgeResult.status === "fulfilled" ? bridgeResult.value : [];
+          routerboardRows = routerboardResult.status === "fulfilled" ? routerboardResult.value : [];
+        }
+        rememberReadProfileFromResource(creds, resourceRows);
       const routerIdentity = identRows[0]?.name;
       const rosVersion = resourceRows[0]?.version;
       if (!routerIdentity || !rosVersion) {
         throw new Error("RouterOS API connected but did not return identity and version.");
-      }
-
-      let bridgeRows: Record<string, string>[] = [];
-      try {
-        bridgeRows = await withTimeout(
-          conn.write(["/interface/bridge/print", "=.proplist=name"]),
-          ms,
-        ) as Record<string, string>[];
-      } catch {
-        // Bridge inventory is optional for API connectivity verification.
-      }
-      let routerboardRows: Record<string, string>[] = [];
-      try {
-        routerboardRows = await withTimeout(
-          conn.write(["/system/routerboard/print", "=.proplist=model"]),
-          ms,
-        ) as Record<string, string>[];
-      } catch {
-        // Some RouterOS devices do not expose routerboard details.
       }
 
       const model = routerboardRows[0]?.model
@@ -8352,18 +8508,47 @@ export async function fetchRouterSecurityState(
 ): Promise<RouterSecurityState> {
   return withConn(creds, async (conn, connectedHost) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const { profile } = await routerReadProfile(conn, creds, ms);
     const read = (path: string) => withTimeout(
       conn.write([path]),
       ms,
     ) as Promise<Record<string, string>[]>;
 
-    const firewallFilter = await read("/ip/firewall/filter/print");
-    const firewallNat = await read("/ip/firewall/nat/print");
-    const firewallMangle = await read("/ip/firewall/mangle/print");
-    const firewallRaw = await read("/ip/firewall/raw/print");
-    const addresses = await read("/ip/address/print");
-    const routes = await read("/ip/route/print");
-    const bridgePorts = await read("/interface/bridge/port/print");
+    let firewallFilter: Record<string, string>[];
+    let firewallNat: Record<string, string>[];
+    let firewallMangle: Record<string, string>[];
+    let firewallRaw: Record<string, string>[];
+    let addresses: Record<string, string>[];
+    let routes: Record<string, string>[];
+    let bridgePorts: Record<string, string>[];
+
+    if (profile === "low-resource") {
+      firewallFilter = await read("/ip/firewall/filter/print");
+      firewallNat = await read("/ip/firewall/nat/print");
+      firewallMangle = await read("/ip/firewall/mangle/print");
+      firewallRaw = await read("/ip/firewall/raw/print");
+      addresses = await read("/ip/address/print");
+      routes = await read("/ip/route/print");
+      bridgePorts = await read("/interface/bridge/port/print");
+    } else {
+      [
+        firewallFilter,
+        firewallNat,
+        firewallMangle,
+        firewallRaw,
+        addresses,
+        routes,
+        bridgePorts,
+      ] = await Promise.all([
+        read("/ip/firewall/filter/print"),
+        read("/ip/firewall/nat/print"),
+        read("/ip/firewall/mangle/print"),
+        read("/ip/firewall/raw/print"),
+        read("/ip/address/print"),
+        read("/ip/route/print"),
+        read("/interface/bridge/port/print"),
+      ]);
+    }
 
     return {
       firewallFilter,
@@ -8387,22 +8572,34 @@ export async function fetchBridgePortLayout(
 ): Promise<BridgePortLayout> {
   return withReadConn(creds, async (conn, connectedHost) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const { profile } = await routerReadProfile(conn, creds, ms, true);
+    let ifaceRows: Record<string, string>[];
+    let bridgeRows: Record<string, string>[];
+    let bpRows: Record<string, string>[];
 
-    const ifaceRows = await withTimeout(
-      conn.write([
-        "/interface/print",
-        "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
-      ]),
-      ms,
-    ) as Record<string, string>[];
-    const bridgeRows = await withTimeout(
-      conn.write(["/interface/bridge/print", "=.proplist=name,running"]),
-      ms,
-    ) as Record<string, string>[];
-    const bpRows = await withTimeout(
-      conn.write(["/interface/bridge/port/print", "=.proplist=.id,bridge,interface"]),
-      ms,
-    ) as Record<string, string>[];
+    if (profile === "low-resource") {
+      ifaceRows = await withTimeout(
+        conn.write([
+          "/interface/print",
+          "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
+        ]),
+        ms,
+      ) as Record<string, string>[];
+      bridgeRows = await withTimeout(
+        conn.write(["/interface/bridge/print", "=.proplist=name,running"]),
+        ms,
+      ) as Record<string, string>[];
+      bpRows = await withTimeout(
+        conn.write(["/interface/bridge/port/print", "=.proplist=.id,bridge,interface"]),
+        ms,
+      ) as Record<string, string>[];
+    } else {
+      [ifaceRows, bridgeRows, bpRows] = await Promise.all([
+        withTimeout(conn.write(["/interface/print"]), ms) as Promise<Record<string, string>[]>,
+        withTimeout(conn.write(["/interface/bridge/print"]), ms) as Promise<Record<string, string>[]>,
+        withTimeout(conn.write(["/interface/bridge/port/print"]), ms) as Promise<Record<string, string>[]>,
+      ]);
+    }
 
     const interfaces: RouterInterface[] = (Array.isArray(ifaceRows) ? ifaceRows : []).map(r => ({
       id:         r[".id"]         ?? "",
@@ -8437,26 +8634,68 @@ export async function fetchRouterLoadBalancingInventory(
 ): Promise<RouterLoadBalancingInventory> {
   return withReadConn(creds, async (conn, connectedHost) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const readProfile = await routerReadProfile(conn, creds, ms, true);
     const read = (path: string, proplist?: string) => withTimeout(
       conn.write(proplist ? [path, `=.proplist=${proplist}`] : [path]),
       ms,
     ) as Promise<Record<string, string>[]>;
-    const ifaceRows = await read(
-      "/interface/print",
-      ".id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
-    );
-    const bridgeRows = await read("/interface/bridge/print", "name,running");
-    const bridgePortRows = await read("/interface/bridge/port/print");
-    const addressRows = await read("/ip/address/print", "interface,address,dynamic,comment");
-    const pppoeRows = await read("/interface/pppoe-client/print", "name,interface,comment,disabled");
-    const dhcpRows = await read("/ip/dhcp-client/print", "name,interface,comment,disabled,status");
-    const vlanRows = await read("/interface/vlan/print", "name,interface,vlan-id,comment,disabled");
-    const ovpnRows = await read(
-      "/interface/ovpn-client/print",
-      ".id,name,connect-to,user,comment,disabled,running",
-    );
-    const bridgeSettingsRows = await read("/interface/bridge/settings/print", "use-ip-firewall");
-    const resourceRows = await read("/system/resource/print", "version");
+    let ifaceRows: Record<string, string>[];
+    let bridgeRows: Record<string, string>[];
+    let bridgePortRows: Record<string, string>[];
+    let addressRows: Record<string, string>[];
+    let pppoeRows: Record<string, string>[];
+    let dhcpRows: Record<string, string>[];
+    let vlanRows: Record<string, string>[];
+    let ovpnRows: Record<string, string>[];
+    let bridgeSettingsRows: Record<string, string>[];
+    let resourceRows: Record<string, string>[];
+
+    if (readProfile.profile === "low-resource") {
+      ifaceRows = await read(
+        "/interface/print",
+        ".id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
+      );
+      bridgeRows = await read("/interface/bridge/print", "name,running");
+      bridgePortRows = await read("/interface/bridge/port/print");
+      addressRows = await read("/ip/address/print", "interface,address,dynamic,comment");
+      pppoeRows = await read("/interface/pppoe-client/print", "name,interface,comment,disabled");
+      dhcpRows = await read("/ip/dhcp-client/print", "name,interface,comment,disabled,status");
+      vlanRows = await read("/interface/vlan/print", "name,interface,vlan-id,comment,disabled");
+      ovpnRows = await read(
+        "/interface/ovpn-client/print",
+        ".id,name,connect-to,user,comment,disabled,running",
+      );
+      bridgeSettingsRows = await read("/interface/bridge/settings/print", "use-ip-firewall");
+      resourceRows = readProfile.resourceRows
+        ?? await read("/system/resource/print", "version");
+    } else {
+      const [interfaces, bridges, bridgePorts, addresses, pppoeClients, dhcpClients, vlans, ovpnClients, bridgeSettings, resources] =
+        await Promise.all([
+          read("/interface/print"),
+          read("/interface/bridge/print"),
+          read("/interface/bridge/port/print"),
+          read("/ip/address/print"),
+          read("/interface/pppoe-client/print"),
+          read("/ip/dhcp-client/print"),
+          read("/interface/vlan/print"),
+          read("/interface/ovpn-client/print"),
+          read("/interface/bridge/settings/print"),
+          readProfile.resourceRows
+            ? Promise.resolve(readProfile.resourceRows)
+            : read("/system/resource/print"),
+        ]);
+      ifaceRows = interfaces;
+      bridgeRows = bridges;
+      bridgePortRows = bridgePorts;
+      addressRows = addresses;
+      pppoeRows = pppoeClients;
+      dhcpRows = dhcpClients;
+      vlanRows = vlans;
+      ovpnRows = ovpnClients;
+      bridgeSettingsRows = bridgeSettings;
+      resourceRows = resources;
+    }
+    rememberReadProfileFromResource(creds, resourceRows);
 
     const interfaces: RouterInterface[] = (Array.isArray(ifaceRows) ? ifaceRows : []).map(r => ({
       id:         r[".id"]         ?? "",

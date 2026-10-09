@@ -12,6 +12,8 @@ import {
   upsertHotspotUser,
   resolveHotspotClientIpByMac,
   fetchBridgePortLayout,
+  fetchInterfaces,
+  detectBridgeInterfaces,
   fetchRouterLoadBalancingInventory,
   pingRouter,
   readRouterSystemIdentity,
@@ -431,6 +433,15 @@ test("RouterOS read-only checks fall back after a permission-denied probe", asyn
         if (username === savedAccount) {
           throw new Error("not enough permissions (RouterOS 7 policy)");
         }
+        if (command[0] === "/system/resource/print") {
+          return [{
+            version: "6.49.16",
+            "board-name": "hAP lite",
+            "total-memory": "33554432",
+            "cpu-count": "1",
+            "cpu-frequency": "650",
+          }];
+        }
         if (command[0] === "/interface/print") {
           return [{ ".id": "*1", name: "wlan2", type: "wlan", running: "true" }];
         }
@@ -451,11 +462,15 @@ test("RouterOS read-only checks fall back after a permission-denied probe", asyn
       assert.equal(maxActiveWrites, 1);
       const managementCommands = commands.filter(({ username }) => username === managementAccount);
       assert.deepEqual(managementCommands.map(({ command }) => command[0]), [
+        "/system/resource/print",
         "/interface/print",
         "/interface/bridge/print",
         "/interface/bridge/port/print",
       ]);
-      assert.equal(managementCommands[0]?.command[1], "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte");
+      assert.equal(
+        managementCommands[1]?.command[1],
+        "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
+      );
       assert.deepEqual(result.interfaces.map(item => item.name), ["wlan2"]);
       assert.deepEqual(result.bridges.map(item => item.name), ["hotspot-bridge"]);
       assert.deepEqual(
@@ -479,7 +494,109 @@ test("RouterOS read-only checks fall back after a permission-denied probe", asyn
   });
 });
 
-test("load-balancing inventory limits columns and reads router tables one at a time", async () => {
+test("standard routers retain parallel full bridge reads", async () => {
+  let activeWrites = 0;
+  let maxActiveWrites = 0;
+  await withMockRouterApi(async (_username, command) => {
+    activeWrites++;
+    maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 4));
+      if (command[0] === "/system/resource/print") {
+        return [{
+          version: "7.16.2",
+          "board-name": "CCR2004-16G-2S+",
+          "total-memory": "1073741824",
+          "cpu-count": "4",
+          "cpu-frequency": "1700",
+        }];
+      }
+      return [];
+    } finally {
+      activeWrites--;
+    }
+  }, async ({ port, commands }) => {
+    await fetchBridgePortLayout(routerCredentials(port));
+
+    assert.equal(maxActiveWrites, 3);
+    assert.deepEqual(commands.map(({ command }) => command[0]), [
+      "/system/resource/print",
+      "/interface/print",
+      "/interface/bridge/print",
+      "/interface/bridge/port/print",
+    ]);
+    assert.ok(commands.slice(1).every(({ command }) => command.length === 1));
+  });
+});
+
+test("concurrent router reads share a single hardware-profile probe", async () => {
+  const commands: string[][] = [];
+  await withMockRouterApi((_username, command) => {
+    commands.push(command);
+    if (command[0] === "/system/resource/print") {
+      return [{
+        "board-name": "hAP lite",
+        "total-memory": "33554432",
+        "cpu-count": "1",
+        "cpu-frequency": "650",
+      }];
+    }
+    return [];
+  }, async ({ port }) => {
+    const credentials = routerCredentials(port);
+    await Promise.all([
+      fetchInterfaces(credentials),
+      detectBridgeInterfaces(credentials),
+    ]);
+
+    assert.equal(commands.filter(command => command[0] === "/system/resource/print").length, 1);
+    assert.equal(
+      commands.find(command => command[0] === "/interface/print")?.[1],
+      "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
+    );
+    assert.equal(
+      commands.find(command => command[0] === "/interface/bridge/print")?.[1],
+      "=.proplist=name",
+    );
+  });
+});
+
+test("hAP Lite wireless inventory requests only fields used by the Hotspot UI", async () => {
+  const commands: string[][] = [];
+  await withMockRouterApi((_username, command) => {
+    commands.push(command);
+    if (command[0] === "/system/resource/print") {
+      return [{
+        "board-name": "hAP lite",
+        "total-memory": "33554432",
+        "cpu-count": "1",
+        "cpu-frequency": "650",
+      }];
+    }
+    if (command[0] === "/interface/wireless/print") {
+      return [{ ".id": "*1", name: "wlan1", ssid: "Main", "security-profile": "default" }];
+    }
+    if (command[0] === "/interface/wireless/security-profiles/print") {
+      return [{ ".id": "*2", name: "default", "authentication-types": "wpa2-psk", mode: "dynamic-keys" }];
+    }
+    return [];
+  }, async ({ port }) => {
+    const result = await fetchWireless(routerCredentials(port));
+
+    assert.equal(result.interfaces.length, 1);
+    assert.equal(result.profiles.length, 1);
+    assert.equal(
+      commands.find(command => command[0] === "/interface/wireless/print")?.[1],
+      "=.proplist=.id,name,ssid,disabled,band,channel,mac-address,security-profile,mode,master-interface,comment",
+    );
+    assert.equal(
+      commands.find(command => command[0] === "/interface/wireless/security-profiles/print")?.[1],
+      "=.proplist=.id,name,wpa2-pre-shared-key,authentication-types,mode",
+    );
+  });
+});
+
+test("low-resource load-balancing inventory limits columns and reads router tables one at a time", async () => {
   let activeWrites = 0;
   let maxActiveWrites = 0;
   await withMockRouterApi(async (_username, command) => {
@@ -487,7 +604,15 @@ test("load-balancing inventory limits columns and reads router tables one at a t
     maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
     try {
       await new Promise(resolve => setTimeout(resolve, 2));
-      if (command[0] === "/system/resource/print") return [{ version: "6.49.16" }];
+      if (command[0] === "/system/resource/print") {
+        return [{
+          version: "6.49.16",
+          "board-name": "hAP lite",
+          "total-memory": "33554432",
+          "cpu-count": "1",
+          "cpu-frequency": "650",
+        }];
+      }
       return [];
     } finally {
       activeWrites--;
@@ -498,6 +623,7 @@ test("load-balancing inventory limits columns and reads router tables one at a t
     assert.equal(result.routerVersion, "6.49.16");
     assert.equal(maxActiveWrites, 1);
     assert.deepEqual(commands.map(({ command }) => command[0]), [
+      "/system/resource/print",
       "/interface/print",
       "/interface/bridge/print",
       "/interface/bridge/port/print",
@@ -507,13 +633,15 @@ test("load-balancing inventory limits columns and reads router tables one at a t
       "/interface/vlan/print",
       "/interface/ovpn-client/print",
       "/interface/bridge/settings/print",
-      "/system/resource/print",
     ]);
     assert.equal(
-      commands[0]?.command[1],
+      commands[1]?.command[1],
       "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
     );
-    assert.equal(commands[9]?.command[1], "=.proplist=version");
+    assert.equal(
+      commands[0]?.command[1],
+      "=.proplist=version,uptime,board-name,cpu-load,free-memory,total-memory,cpu-count,cpu-frequency",
+    );
   });
 });
 
@@ -585,6 +713,7 @@ test("wireless inventory falls back to RouterOS WiFi and maps its read-only fiel
     assert.equal(result.interfaces[1]?.disabled, true);
     assert.equal(result.interfaces[1]?.managedByApp, true);
     assert.deepEqual(commands.map(command => command[0]), [
+      "/system/resource/print",
       "/interface/wireless/print",
       "/interface/wifi/print",
     ]);
@@ -601,7 +730,10 @@ test("wireless inventory does not hide legacy permission errors with WiFi fallba
       fetchWireless(routerCredentials(port), 7),
       /not enough permissions/,
     );
-    assert.deepEqual(commands.map(command => command[0]), ["/interface/wireless/print"]);
+    assert.deepEqual(commands.map(command => command[0]), [
+      "/system/resource/print",
+      "/interface/wireless/print",
+    ]);
   });
 });
 

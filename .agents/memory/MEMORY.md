@@ -58,6 +58,7 @@
 - [OpenVPN setup-script compatibility](openvpn-setup-script-compatibility.md) — Preserve literal `dh none` and escape Bash indirect expansion when generating scripts inside TypeScript templates.
 - [Router installer stale files](router-installer-stale-files.md) — Verify the dynamic installer revision and no-store response before treating repeated RouterOS output as current.
 - [RouterOS API timeout events](routeros-api-timeout-events.md) — Guard post-connect node-routeros error events; route-level catches alone cannot prevent API process termination.
+- [Low-resource MikroTik reads](hap-lite-low-resource.md) — Only positively classified hAP Lite/low-resource hardware gets serialized, narrow reads; standard routers keep the normal path.
 - [Router installer token](router-installer-token.md) — Keep the router API password separate from the short-lived token used by VPN bootstrap URLs.
 - [WhatsApp secure setup links](whatsapp-setup-link.md) — Put one-time setup tokens in URL fragments so they stay out of HTTP requests, logs, and referrers.
 - [WhatsApp webhook retries](whatsapp-webhook-retries.md) — Acknowledge completed duplicates, but request provider retry while another handler still owns the event.
