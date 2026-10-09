@@ -9,6 +9,15 @@ PORTAL_REFRESH_MARKER="$PROJECT_DIR/deploy/portal-refresh-once.json"
 VLAN_INSPECTION_MARKER="$PROJECT_DIR/deploy/vlan-200-inspection-once.json"
 VLAN_PROVISION_RETRY_MARKER="$PROJECT_DIR/deploy/vlan-200-provisioning-retry-once.json"
 
+case "${DEPLOY_SKIP_ROUTER_ONESHOTS:-false}" in
+  1|true|TRUE|yes|YES)
+    if [ "$PORTAL_REFRESH_ONLY" != "1" ]; then
+      echo "Skipping scoped one-time RouterOS actions for this application-only deployment."
+      exit 0
+    fi
+    ;;
+esac
+
 if [ "$PORTAL_REFRESH_ONLY" = "1" ]; then
   if [ ! -f "$PORTAL_REFRESH_MARKER" ]; then
     echo "ERROR: Portal-only deployment requested, but its portal refresh marker is missing." >&2

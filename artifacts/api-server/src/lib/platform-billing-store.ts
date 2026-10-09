@@ -1,7 +1,8 @@
 /**
- * Billing-only Supabase access. Replit can supply BILLING_SUPABASE_SERVICE_KEY
- * without enabling service-role access in the shared API client. Existing VPS
- * installations using the global service-role name remain compatible.
+ * Privileged Supabase access for platform billing and protected platform settings.
+ * Replit can supply BILLING_SUPABASE_SERVICE_KEY without enabling service-role
+ * access in the shared API client. Existing VPS deployments using the global
+ * service-role name remain compatible.
  */
 type BillingTable = "platform_billing_config" | "platform_billing_invoices" | "revenue_ledger";
 
@@ -37,6 +38,39 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T[]> {
 
 export function billingSelect<T>(table: BillingTable, query: string): Promise<T[]> {
   return request<T>(`${table}?${query}`);
+}
+
+/** Private platform-wide settings use this isolated service-role access path. */
+export function platformSecureSettingsConfigured(): boolean {
+  try {
+    credentials();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function platformSecureSettingsSelect<T>(query: string): Promise<T[]> {
+  return request<T>(`platform_secure_settings?${query}`);
+}
+
+export function platformSecureSettingsInsert<T>(payload: Record<string, unknown>): Promise<T[]> {
+  return request<T>("platform_secure_settings", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function platformSecureSettingsUpsert<T>(
+  conflictColumn: string,
+  payload: Record<string, unknown>,
+): Promise<T[]> {
+  return request<T>(`platform_secure_settings?on_conflict=${encodeURIComponent(conflictColumn)}`, {
+    method: "POST",
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify(payload),
+  });
 }
 
 /** Insert once on the unique account/period constraint; never merge over a paid invoice. */

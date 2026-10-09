@@ -8,10 +8,14 @@ import path from "path";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "crypto";
 import { logger } from "./logger.js";
 import {
+  platformSecureSettingsConfigured,
+  platformSecureSettingsInsert,
+  platformSecureSettingsSelect,
+  platformSecureSettingsUpsert,
+} from "./platform-billing-store.js";
+import {
   sbSelect,
-  sbUpsertStrict,
   supabaseConfigured,
-  supabaseServiceRoleConfigured,
 } from "./supabase-client.js";
 
 const DATA_DIR  = path.resolve(process.cwd(), "data");
@@ -86,7 +90,7 @@ function scrubLegacyDarajaSecrets(): void {
 
 const DARAJA_SETTINGS_ID = "global_daraja";
 
-interface EncryptedDarajaSettings {
+export interface EncryptedDarajaSettings {
   id: string;
   ciphertext: string;
   iv: string;
@@ -165,19 +169,128 @@ function decryptMpesaSettings(record: EncryptedDarajaSettings): MpesaSettings {
   return normaliseMpesaSettings(JSON.parse(decrypted) as Partial<MpesaSettings>);
 }
 
-function hasDarajaCredentials(settings: MpesaSettings): boolean {
-  return !!(settings.consumerKey && settings.consumerSecret && settings.passkey);
+export class MpesaSettingsUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MpesaSettingsUnavailableError";
+  }
 }
 
-/** Loads Daraja configuration from encrypted Supabase storage. */
+function hasCompleteDarajaSettings(settings: MpesaSettings): boolean {
+  return !!(settings.consumerKey && settings.consumerSecret && settings.shortcode && settings.passkey);
+}
+
+function emptyMpesaSettings(): MpesaSettings {
+  return {
+    consumerKey: "",
+    consumerSecret: "",
+    shortcode: "",
+    passkey: "",
+    callbackUrl: "",
+    env: "sandbox",
+    tillNumber: "",
+  };
+}
+
+function submittedValue(value: unknown): string {
+  return typeof value === "string" && value.trim() !== "**hidden**" ? value.trim() : "";
+}
+
+/**
+ * The encrypted Super Admin record is authoritative. Keep saved credentials
+ * when a caller submits blank fields or the UI's masked-secret placeholder.
+ */
+export function mergeMpesaSettingsPreservingCredentials(
+  current: MpesaSettings,
+  incoming: Partial<MpesaSettings>,
+): MpesaSettings {
+  const normalised = normaliseMpesaSettings(incoming);
+  const keepOrReplace = (field: keyof Pick<MpesaSettings, "consumerKey" | "consumerSecret" | "shortcode" | "passkey">): string =>
+    submittedValue(incoming[field]) ? normalised[field] : current[field];
+
+  return {
+    consumerKey: keepOrReplace("consumerKey"),
+    consumerSecret: keepOrReplace("consumerSecret"),
+    shortcode: keepOrReplace("shortcode"),
+    passkey: keepOrReplace("passkey"),
+    callbackUrl: normalised.callbackUrl || current.callbackUrl,
+    env: incoming.env === "production" || incoming.env === "sandbox" ? incoming.env : current.env,
+    // A blank Till is an intentional way to remove the optional destination.
+    tillNumber: typeof incoming.tillNumber === "string" ? normalised.tillNumber : current.tillNumber,
+  };
+}
+
+export interface MpesaSettingsWriteAdapter {
+  readCurrent(): Promise<EncryptedDarajaSettings | null>;
+  decrypt(record: EncryptedDarajaSettings): MpesaSettings;
+  archive(record: EncryptedDarajaSettings): Promise<void>;
+  write(settings: MpesaSettings): Promise<void>;
+}
+
+/** Shared fail-closed persistence flow, exported so its no-overwrite rule is testable. */
+export async function persistMpesaSettingsSafely(
+  incoming: MpesaSettings,
+  storage: MpesaSettingsWriteAdapter,
+): Promise<void> {
+  const record = await storage.readCurrent();
+  let current = emptyMpesaSettings();
+  if (record) {
+    try {
+      current = storage.decrypt(record);
+    } catch {
+      throw new MpesaSettingsUnavailableError(
+        "Saved Super Admin Daraja settings could not be decrypted by this API. No changes were saved and the encrypted record was left intact. Verify this server uses the same SESSION_SECRET that was used when the settings were saved.",
+      );
+    }
+  }
+
+  const next = mergeMpesaSettingsPreservingCredentials(current, incoming);
+  if (record) await storage.archive(record);
+  await storage.write(next);
+}
+
+async function archiveEncryptedMpesaSettings(record: EncryptedDarajaSettings): Promise<void> {
+  const archived = await platformSecureSettingsInsert<EncryptedDarajaSettings>({
+    id: `${DARAJA_SETTINGS_ID}_backup_${Date.now()}_${randomUUID()}`,
+    ciphertext: record.ciphertext,
+    iv: record.iv,
+    auth_tag: record.auth_tag,
+    updated_at: new Date().toISOString(),
+  });
+  if (!archived[0]) {
+    throw new MpesaSettingsUnavailableError(
+      "The existing encrypted Daraja settings could not be backed up. No changes were saved.",
+    );
+  }
+}
+
+/** Loads the single global Daraja configuration managed by Super Admin. */
 export async function getMpesaSettings(): Promise<MpesaSettings> {
   const bootstrap = bootstrapMpesaSettings();
-  if (!supabaseConfigured || !encryptionKey()) return bootstrap;
+  if (!platformSecureSettingsConfigured()) {
+    if (!supabaseConfigured) return bootstrap;
+    throw new MpesaSettingsUnavailableError(
+      "Super Admin Daraja settings require the server-only Supabase service key. No settings were changed.",
+    );
+  }
+  if (!encryptionKey()) {
+    throw new MpesaSettingsUnavailableError(
+      "Super Admin Daraja settings are unavailable because SESSION_SECRET is missing on this API. No settings were changed.",
+    );
+  }
 
-  const rows = await sbSelect<EncryptedDarajaSettings>(
-    "platform_secure_settings",
-    `id=eq.${DARAJA_SETTINGS_ID}&select=id,ciphertext,iv,auth_tag&limit=1`,
-  );
+  let rows: EncryptedDarajaSettings[];
+  try {
+    rows = await platformSecureSettingsSelect<EncryptedDarajaSettings>(
+      `id=eq.${DARAJA_SETTINGS_ID}&select=id,ciphertext,iv,auth_tag&limit=1`,
+    );
+  } catch (err) {
+    logger.error({ err }, "[settings-store] could not load global Daraja settings");
+    throw new MpesaSettingsUnavailableError(
+      "Super Admin Daraja settings could not be loaded from secure storage. No settings were changed.",
+    );
+  }
+
   const record = rows[0];
   if (record) {
     try {
@@ -186,51 +299,72 @@ export async function getMpesaSettings(): Promise<MpesaSettings> {
       return settings;
     } catch (err) {
       logger.error({ err }, "[settings-store] could not decrypt Daraja settings");
-      return normaliseMpesaSettings({
-        shortcode: bootstrap.shortcode,
-        callbackUrl: bootstrap.callbackUrl,
-        env: bootstrap.env,
-        tillNumber: bootstrap.tillNumber,
-      });
+      throw new MpesaSettingsUnavailableError(
+        "Saved Super Admin Daraja settings could not be decrypted by this API. No settings were changed. Verify that this server uses the same SESSION_SECRET that was used when the settings were saved.",
+      );
     }
   }
 
-  if (hasDarajaCredentials(bootstrap)) {
-    try {
-      await saveMpesaSettings(bootstrap);
-      logger.info("[settings-store] Daraja settings securely bootstrapped to Supabase");
-    } catch (err) {
-      logger.warn({ err }, "[settings-store] Daraja settings bootstrap pending Supabase migration");
-    }
+  if (hasCompleteDarajaSettings(bootstrap)) {
+    // Legacy environment values are only accepted as a one-time bootstrap
+    // after the complete configuration has been persisted centrally.
+    await saveMpesaSettings(bootstrap);
+    logger.info("[settings-store] complete Daraja settings securely bootstrapped to Supabase");
   }
   return bootstrap;
 }
 
-/** Encrypts and saves Daraja configuration to Supabase. */
+/** Archives, merges, encrypts, and saves the global Super Admin Daraja record. */
 export async function saveMpesaSettings(settings: MpesaSettings): Promise<void> {
-  if (!supabaseConfigured) throw new Error("Supabase must be configured to save Daraja settings.");
-  if (!supabaseServiceRoleConfigured) {
-    throw new Error("A Supabase service-role key is required for secure Daraja storage.");
+  if (!platformSecureSettingsConfigured()) {
+    throw new MpesaSettingsUnavailableError(
+      "A server-only Supabase service key is required for secure Daraja storage.",
+    );
   }
   if (!encryptionKey()) {
-    throw new Error("SESSION_SECRET is required to encrypt Daraja settings.");
+    throw new MpesaSettingsUnavailableError("SESSION_SECRET is required to encrypt Daraja settings.");
   }
-  const normalised = normaliseMpesaSettings(settings);
-  const encrypted = encryptMpesaSettings(normalised);
-  const saved = await sbUpsertStrict<EncryptedDarajaSettings>(
-    "platform_secure_settings",
-    "id",
-    { id: DARAJA_SETTINGS_ID, ...encrypted, updated_at: new Date().toISOString() },
-  );
-  if (!saved[0]) {
-    throw new Error("Could not save encrypted Daraja settings to Supabase. Apply the secure settings migration first.");
-  }
+
+  await persistMpesaSettingsSafely(settings, {
+    readCurrent: async () => {
+      try {
+        const rows = await platformSecureSettingsSelect<EncryptedDarajaSettings>(
+          `id=eq.${DARAJA_SETTINGS_ID}&select=id,ciphertext,iv,auth_tag&limit=1`,
+        );
+        return rows[0] ?? null;
+      } catch (err) {
+        logger.error({ err }, "[settings-store] could not verify current Daraja settings before save");
+        throw new MpesaSettingsUnavailableError(
+          "Secure M-Pesa storage could not be checked. No settings were changed; try again when the database is available.",
+        );
+      }
+    },
+    decrypt: record => {
+      try {
+        return decryptMpesaSettings(record);
+      } catch (err) {
+        logger.error({ err }, "[settings-store] refusing to overwrite unreadable Daraja settings");
+        throw err;
+      }
+    },
+    archive: archiveEncryptedMpesaSettings,
+    write: async normalised => {
+      const encrypted = encryptMpesaSettings(normalised);
+      const saved = await platformSecureSettingsUpsert<EncryptedDarajaSettings>(
+        "id",
+        { id: DARAJA_SETTINGS_ID, ...encrypted, updated_at: new Date().toISOString() },
+      );
+      if (!saved[0]) {
+        throw new Error("Could not save encrypted Daraja settings to Supabase. Apply the secure settings migration first.");
+      }
+    },
+  });
   scrubLegacyDarajaSecrets();
-  logger.info("[settings-store] encrypted Daraja settings saved to Supabase");
+  logger.info("[settings-store] encrypted global Daraja settings saved to Supabase");
 }
 
 export function isMpesaConfigured(settings: MpesaSettings): boolean {
-  return !!(settings.consumerKey && settings.consumerSecret && settings.shortcode && settings.passkey);
+  return hasCompleteDarajaSettings(settings);
 }
 
 export type PaymentDestinationType = "bank" | "till" | "paybill";
