@@ -18,7 +18,7 @@ export function isApprovedHotspotAssetDestination(destinationPath: string): bool
     .replaceAll("\\", "/")
     .replace(/^\/+|\/+$/g, "");
   const pathParts = normalised.split("/");
-  return normalised.toLowerCase().startsWith("flash/hotspot/")
-    && pathParts.length > 2
+  return normalised.toLowerCase().startsWith("hotspot/")
+    && pathParts.length > 1
     && pathParts.every(part => part.length > 0 && part !== "." && part !== "..");
 }

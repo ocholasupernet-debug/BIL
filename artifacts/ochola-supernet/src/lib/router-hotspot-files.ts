@@ -62,7 +62,7 @@ async function deployHotspotFiles(
         scope: "hotspot",
         mode,
         portalFileReplacementConsent: mode === "replace",
-        destinationDirectory: "flash/hotspot",
+        destinationDirectory: "hotspot",
       }),
     });
     const queued = await response.json().catch(() => ({})) as DeploymentResponse;

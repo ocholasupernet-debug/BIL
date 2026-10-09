@@ -135,6 +135,37 @@ type AssignedHotspotPortDraft = {
   nasIdentifier: string;
 };
 
+type RouterPortalPreflight = {
+  routerId: number;
+  routerName: string;
+  status: string;
+  primaryProfileCount: number;
+  rootPortalFiles: { login: boolean; redirectLogin: boolean };
+  services: Array<{
+    serverName: string;
+    interfaceName: string;
+    profileName: string;
+    profileResolved: boolean;
+    htmlDirectory: string | null;
+    login: boolean;
+    redirectLogin: boolean;
+    isolatedServiceDirectory: boolean;
+  }>;
+  error?: string;
+};
+
+const PORTAL_PREFLIGHT_LABELS: Record<string, string> = {
+  already_root_hotspot: "Already using hotspot/; no path change is needed.",
+  uses_flash_root: "Using flash/hotspot/; review this router before any migration.",
+  uses_disk1_root: "Using disk1/hotspot/; review this router before any migration.",
+  ambiguous_root_profiles: "Multiple active root profiles; do not update automatically.",
+  no_active_hotspot_service: "No active Hotspot server was found.",
+  active_profile_unresolved: "An active Hotspot server has an unresolved profile.",
+  isolated_service_only: "Only isolated service folders were found; leave them unchanged.",
+  other_directory: "An active Hotspot server uses another directory; review it manually.",
+  unreachable: "Router could not be checked; no changes were made.",
+};
+
 function adminApiHeaders(): Headers {
   const headers = new Headers({ "Content-Type": "application/json" });
   const token = getAdminApiToken();
@@ -919,6 +950,9 @@ export default function HotspotSettings() {
   const [portsLoading, setPortsLoading] = useState(false);
   const [savingPortId, setSavingPortId] = useState<number | null>(null);
   const [deletingPortId, setDeletingPortId] = useState<number | null>(null);
+  const [portalPreflightLoading, setPortalPreflightLoading] = useState(false);
+  const [portalPreflightProgress, setPortalPreflightProgress] = useState({ completed: 0, total: 0 });
+  const [portalPreflightResults, setPortalPreflightResults] = useState<RouterPortalPreflight[]>([]);
 
   useEffect(() => {
     if (appearanceSaving) return;
@@ -1298,9 +1332,9 @@ export default function HotspotSettings() {
       let noticeText = "Hotspot settings saved on this admin workspace.";
 
        const canRefreshPortal = Number.isSafeInteger(routerId) && routerId > 0 && Boolean(adminId);
-       if (canRefreshPortal && !window.confirm(
-         "Save and push the updated Hotspot sign-in page to this router? This adds or replaces only flash/hotspot/login.html and flash/hotspot/rlogin.html. Existing copies are overwritten without an automatic backup; unrelated router files are left unchanged. Continue?",
-       )) {
+        if (canRefreshPortal && !window.confirm(
+          "Push the updated sign-in pages to hotspot/ and switch the router's single active root-level Hotspot profile to use that folder? Existing hotspot/login.html and hotspot/rlogin.html files will be replaced without an automatic backup. Copies under flash/hotspot/ are left untouched. If the router has multiple root-level Hotspot services, the server will make no router changes. Continue?",
+        )) {
          noticeText = "Settings saved. Router portal files were left unchanged.";
        } else if (canRefreshPortal) {
          const html = await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, {
@@ -1329,10 +1363,22 @@ export default function HotspotSettings() {
             html,
             overwrite: true,
             portalFileReplacementConsent: true,
-            destinationDirectory: "flash/hotspot",
+            destinationDirectory: "hotspot",
+            activatePrimaryProfile: true,
           }),
         });
-        let data: { error?: string; detail?: string; hint?: string; destinationPath?: string; warnings?: string[] } = {};
+        let data: {
+          error?: string;
+          detail?: string;
+          hint?: string;
+          destinationPath?: string;
+          warnings?: string[];
+          profileActivation?: {
+            profileName: string;
+            previousDirectory: string;
+            directory: string;
+          };
+        } = {};
         try {
           data = await response.json();
         } catch {
@@ -1345,6 +1391,12 @@ export default function HotspotSettings() {
           throw new Error(serverMessage || `Portal refresh failed (HTTP ${response.status})`);
         }
         noticeText = `Hotspot settings saved and the sign-in pages were pushed to ${selectedRouter?.name || "the selected MikroTik"}.`;
+        if (data.profileActivation) {
+          const previous = data.profileActivation.previousDirectory;
+          noticeText += previous && previous !== "hotspot"
+            ? ` The ${data.profileActivation.profileName} profile now uses hotspot/ (previously ${previous}/).`
+            : ` The ${data.profileActivation.profileName} profile is using hotspot/.`;
+        }
         if (Array.isArray(data.warnings) && data.warnings.length) {
           noticeText += ` ${data.warnings.join(" ")}`;
         }
@@ -1428,7 +1480,7 @@ export default function HotspotSettings() {
       return;
     }
     if (!window.confirm(
-      "Install the approved hotspot files on this router? Existing files will be kept and skipped; only missing files in flash/hotspot will be added.",
+      "Install the approved primary Hotspot files on this router? Existing files will be kept and skipped; only missing files in hotspot/ will be added.",
     )) return;
 
     setInstallingHotspotFiles(true);
@@ -1445,12 +1497,72 @@ export default function HotspotSettings() {
           text: `Hotspot file installation did not complete (${summary}).${detail ? ` ${detail}` : ""}`,
         });
       } else {
-        setNotice({ type: "success", text: `Hotspot files installed: ${result.deployed.length} added, ${result.skipped.length} already present in flash/hotspot.` });
+        setNotice({ type: "success", text: `Hotspot files installed: ${result.deployed.length} added, ${result.skipped.length} already present in hotspot/.` });
       }
     } catch (error) {
       setNotice({ type: "error", text: error instanceof Error ? error.message : "Hotspot files could not be installed." });
     } finally {
       setInstallingHotspotFiles(false);
+    }
+  };
+
+  const handlePortalPreflight = async () => {
+    if (isResellerAccount) return;
+    if (routersLoading) return;
+    if (routers.length === 0) {
+      setNotice({ type: "info", text: "There are no linked routers to check." });
+      return;
+    }
+
+    setPortalPreflightLoading(true);
+    setPortalPreflightResults([]);
+    setPortalPreflightProgress({ completed: 0, total: routers.length });
+    let nextIndex = 0;
+    let completed = 0;
+
+    const scanWorker = async () => {
+      while (nextIndex < routers.length) {
+        const index = nextIndex++;
+        const target = routers[index];
+        const routerTenantId = Number(target.admin_id ?? adminId);
+        let result: RouterPortalPreflight;
+        try {
+          if (!Number.isSafeInteger(routerTenantId) || routerTenantId < 1) {
+            throw new Error("This router has no verified ISP account scope.");
+          }
+          const response = await fetch(
+            `/api/router/${target.id}/hotspot-portal/preflight?adminId=${encodeURIComponent(String(routerTenantId))}`,
+            { method: "GET", headers: adminApiHeaders(), cache: "no-store" },
+          );
+          const data = await parseApiResponse<RouterPortalPreflight>(
+            response,
+            "This router could not be checked.",
+          );
+          if (!response.ok) throw new Error(data.error || "This router could not be checked.");
+          result = data;
+        } catch (error) {
+          result = {
+            routerId: target.id,
+            routerName: target.name || `Router ${target.id}`,
+            status: "unreachable",
+            primaryProfileCount: 0,
+            rootPortalFiles: { login: false, redirectLogin: false },
+            services: [],
+            error: error instanceof Error ? error.message : "Read-only RouterOS check failed.",
+          };
+        }
+        completed += 1;
+        setPortalPreflightProgress({ completed, total: routers.length });
+        setPortalPreflightResults(previous => [...previous, result].sort((a, b) => a.routerName.localeCompare(b.routerName)));
+      }
+    };
+
+    try {
+      await Promise.all(
+        Array.from({ length: Math.min(2, routers.length) }, () => scanWorker()),
+      );
+    } finally {
+      setPortalPreflightLoading(false);
     }
   };
 
@@ -1602,6 +1714,76 @@ export default function HotspotSettings() {
                   </div>
                 )}
               </Field>
+               {!isResellerAccount && (
+                 <div style={{ display: "grid", gap: 10, padding: "12px 0 4px", borderTop: "1px solid var(--isp-border)" }}>
+                   <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                     <button
+                       type="button"
+                       className="hs-btn hs-btn-soft"
+                       onClick={() => void handlePortalPreflight()}
+                       disabled={portalPreflightLoading || routersLoading || routers.length === 0}
+                     >
+                       {portalPreflightLoading
+                         ? <Loader2 size={14} className="animate-spin" />
+                         : <FolderOpen size={14} />}
+                       {portalPreflightLoading
+                         ? `Checking routers ${portalPreflightProgress.completed}/${portalPreflightProgress.total}…`
+                         : `Check portal folders on all routers (${routers.length})`}
+                     </button>
+                     <span style={{ color: "var(--isp-muted)", fontSize: ".72rem" }}>
+                       Read-only check. It will not upload files, change profiles, or disconnect users.
+                     </span>
+                   </div>
+                   {portalPreflightLoading && (
+                     <div className="hs-status hs-status-info" aria-live="polite">
+                       <Loader2 size={14} className="animate-spin" />
+                       Checking at most two routers at a time to keep the scan lightweight.
+                     </div>
+                   )}
+                   {portalPreflightResults.length > 0 && (
+                     <div style={{ display: "grid", gap: 8 }} aria-live="polite">
+                       {portalPreflightResults.map(result => {
+                         const color = result.status === "already_root_hotspot"
+                           ? "#86efac"
+                           : result.status === "uses_flash_root" || result.status === "uses_disk1_root"
+                             ? "#fcd34d"
+                             : result.status === "ambiguous_root_profiles" || result.status === "unreachable"
+                               ? "#fca5a5"
+                               : "#c4b5fd";
+                         return (
+                           <div key={result.routerId} style={{ border: "1px solid var(--isp-border)", borderRadius: 10, padding: "10px 12px", background: "rgba(255,255,255,.025)" }}>
+                             <div style={{ display: "flex", alignItems: "baseline", flexWrap: "wrap", gap: 8 }}>
+                               <strong style={{ color: "var(--isp-text)", fontSize: ".78rem" }}>{result.routerName}</strong>
+                               <span style={{ color, fontSize: ".72rem", fontWeight: 700 }}>
+                                 {PORTAL_PREFLIGHT_LABELS[result.status] ?? result.status}
+                               </span>
+                             </div>
+                             {result.error && <div style={{ color: "#fca5a5", fontSize: ".72rem", marginTop: 5 }}>{result.error}</div>}
+                             {result.status !== "unreachable" && (
+                               <>
+                                 <div style={{ color: "var(--isp-muted)", fontSize: ".7rem", marginTop: 5 }}>
+                                   Root hotspot/ files: login.html {result.rootPortalFiles.login ? "present" : "missing"} · rlogin.html {result.rootPortalFiles.redirectLogin ? "present" : "missing"} · root profiles: {result.primaryProfileCount}
+                                 </div>
+                                 {result.services.length > 0 && (
+                                   <div style={{ display: "grid", gap: 4, marginTop: 7 }}>
+                                     {result.services.map((service, index) => (
+                                       <div key={`${service.interfaceName}-${service.serverName}-${index}`} style={{ color: "var(--isp-muted)", fontSize: ".7rem", overflowWrap: "anywhere" }}>
+                                         {service.serverName} · {service.interfaceName} · {service.profileName} · {service.htmlDirectory ?? "profile unresolved"}
+                                         {service.isolatedServiceDirectory ? " · isolated service; leave unchanged" : ""}
+                                         {service.htmlDirectory ? ` · login ${service.login ? "present" : "missing"} / rlogin ${service.redirectLogin ? "present" : "missing"}` : ""}
+                                       </div>
+                                     ))}
+                                   </div>
+                                 )}
+                               </>
+                             )}
+                           </div>
+                         );
+                       })}
+                     </div>
+                   )}
+                 </div>
+               )}
                {!isResellerAccount && portalTargets.length > 0 && (
                  <Field label="Portal service" help="Preview, download, save, and sync use this exact service's plans and isolated Hotspot folder.">
                    <div className="hs-select-wrap">

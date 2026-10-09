@@ -535,11 +535,28 @@ router.post("/admin/sync", async (req, res): Promise<void> => {
     log(`✓ DNS configured`);
 
     log(`Hotspot profile '${cfg.profileName}'...`);
+    const existingProfiles = await conn.write([
+      "/ip/hotspot/profile/print",
+      `?name=${cfg.profileName}`,
+      "=.proplist=.id,html-directory",
+    ]);
+    const existingProfile = Array.isArray(existingProfiles)
+      ? existingProfiles.find(row => Boolean((row as Record<string, string>)[".id"])) as Record<string, string> | undefined
+      : undefined;
+    const existingHtmlDirectory = String(existingProfile?.["html-directory"] ?? "")
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^\/+|\/+$/g, "");
+    const htmlDirectory = existingHtmlDirectory
+      && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(existingHtmlDirectory)
+      && !existingHtmlDirectory.split("/").some(part => part === "." || part === "..")
+      ? existingHtmlDirectory
+      : "hotspot";
     const profAction = await upsertByFilter(conn, "/ip/hotspot/profile", "name", cfg.profileName, {
       name: cfg.profileName, "hotspot-address": cfg.hotspotIp, "dns-name": cfg.dnsName,
-      "login-by": "http-chap,http-pap", "use-radius": "yes", "html-directory": "flash/hotspot",
+      "login-by": "http-chap,http-pap", "use-radius": "yes", "html-directory": htmlDirectory,
     });
-    log(`✓ Profile ${profAction}`);
+    log(`✓ Profile ${profAction} (portal directory: ${htmlDirectory})`);
 
     log(`IP pool hspool → ${cfg.poolStart}-${cfg.poolEnd}`);
     const poolAction = await upsertByFilter(conn, "/ip/pool", "name", "hspool", { name: "hspool", ranges: `${cfg.poolStart}-${cfg.poolEnd}` });

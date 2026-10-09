@@ -208,7 +208,7 @@ export default function Files() {
   const deployHotspotFiles = async () => {
     if (!selectedRouterId || deployingHotspot) return;
     if (!window.confirm(
-      `Install the approved hotspot files on ${selectedRouter?.name || "this router"}? Existing files will be kept and skipped; only missing files in flash/hotspot will be added.`,
+      `Install the approved primary Hotspot files on ${selectedRouter?.name || "this router"}? Existing files will be kept and skipped; only missing files in hotspot/ will be added.`,
     )) return;
 
     setDeployingHotspot(true);
@@ -295,7 +295,7 @@ export default function Files() {
             Portal update safety
           </div>
           <p style={{ ...mutedText, margin: "0.35rem 0 0" }}>
-            Saving Hotspot Sign In replaces only login.html and rlogin.html in flash/hotspot after you confirm. Other router files are left unchanged. Install remains available here for adding missing approved support files.
+            Saving Hotspot Sign In places the primary login.html and rlogin.html in hotspot/ and points the unique root-level Hotspot profile there after you confirm. Isolated port and reseller portals stay in their own flash/hotspot subfolders. Install remains available here for adding missing approved support files.
           </p>
         </section>
 

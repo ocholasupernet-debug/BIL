@@ -420,21 +420,15 @@ test("export builder source keeps preview/download local-only", async () => {
   assert.doesNotMatch(previewActions, /\/api\/admin\/|\/sync|router.*write/i);
 });
 
-test("deploy UI uses two confirmations and sends generated content through the dedicated route", async () => {
+test("primary Hotspot settings target the root portal folder and request safe profile activation", async () => {
   const source = await readFile(entry, "utf8");
-  const deployStart = source.indexOf("const handleDeploy");
-  const deployEnd = source.indexOf("const handlePreview");
-  assert.ok(deployStart >= 0 && deployEnd > deployStart, "deploy handler is present");
-  const deployActions = source.slice(deployStart, deployEnd);
-
-  assert.equal((deployActions.match(/window\.confirm/g) ?? []).length, 3);
-  assert.match(deployActions, /hotspot-portal\/deploy/);
-  assert.match(deployActions, /deploy\(false\)/);
-  assert.match(deployActions, /deploy\(true\)/);
-  assert.match(deployActions, /status === 409/);
-  assert.doesNotMatch(deployActions, /Super Admin approval|Super Admin must approve/i);
-  assert.match(deployActions, /JSON\.stringify\(\{\s*adminId,\s*html,\s*overwrite,\s*portalFileReplacementConsent: overwrite,\s*destinationDirectory: "flash\/hotspot",?\s*\}\)/);
-  assert.doesNotMatch(deployActions, /routerSecret|routerPassword|paymentSecret|vpnPrivateKey/);
+  assert.match(source, /const handleSave = async \(\) =>/);
+  assert.match(source, /hotspot-portal\/deploy/);
+  assert.match(source, /destinationDirectory: "hotspot"/);
+  assert.match(source, /activatePrimaryProfile: true/);
+  assert.match(source, /single active root-level Hotspot profile/);
+  assert.match(source, /Copies under flash\/hotspot\/ are left untouched/);
+  assert.doesNotMatch(source, /destinationDirectory: "flash\/hotspot"/);
 });
 
 test("generated portal route keeps tenant scope and one-time source cleanup", async () => {
@@ -450,6 +444,10 @@ test("generated portal route keeps tenant scope and one-time source cleanup", as
   assert.match(route, /pendingRouterFileSources\.delete\(token\)/);
   assert.match(route, /overwrite/);
   assert.match(route, /RouterFileExistsError/);
+  assert.match(route, /selectUniquePrimaryHotspotProfile\(servers, profiles\)/);
+  assert.match(route, /ensureRouterFileDirectory\(found\.creds, directory\)/);
+  assert.match(route, /\/ip\/hotspot\/profile\/set/);
+  assert.match(route, /RouterOS could not confirm the profile rollback/);
   assert.doesNotMatch(route, /req\.body\?\.(?:password|secret|routerCredentials)/i);
 
   const sourceHandler = source.slice(source.indexOf('router.get("/router-file-source/:token"'), routeStart);

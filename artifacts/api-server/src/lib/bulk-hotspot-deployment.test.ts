@@ -18,10 +18,11 @@ test("replacement mode is limited to hotspot scope", () => {
   assert.equal(isBulkReplacementScopeAllowed("install", "all"), true);
 });
 
-test("replacement destinations must stay inside flash/hotspot", () => {
-  assert.equal(isApprovedHotspotAssetDestination("flash/hotspot/login.html"), true);
-  assert.equal(isApprovedHotspotAssetDestination("flash\\hotspot\\assets\\portal.css"), true);
-  assert.equal(isApprovedHotspotAssetDestination("flash/hotspot/../router.rsc"), false);
-  assert.equal(isApprovedHotspotAssetDestination("flash/hotspotx/login.html"), false);
-  assert.equal(isApprovedHotspotAssetDestination("flash/hotspot/"), false);
+test("replacement destinations must stay inside the primary hotspot directory", () => {
+  assert.equal(isApprovedHotspotAssetDestination("hotspot/login.html"), true);
+  assert.equal(isApprovedHotspotAssetDestination("hotspot\\assets\\portal.css"), true);
+  assert.equal(isApprovedHotspotAssetDestination("hotspot/../router.rsc"), false);
+  assert.equal(isApprovedHotspotAssetDestination("hotspotx/login.html"), false);
+  assert.equal(isApprovedHotspotAssetDestination("hotspot/"), false);
+  assert.equal(isApprovedHotspotAssetDestination("flash/hotspot/hs_ether2/login.html"), false);
 });

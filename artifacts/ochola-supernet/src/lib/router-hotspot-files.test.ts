@@ -48,7 +48,7 @@ test("hotspot file progress resumes a lost job immediately and retries gateway f
       status: "complete",
       total: 1,
       processed: 1,
-      deployed: [{ sourceName: "login.html", destinationPath: "flash/hotspot/login.html", size: 20 }],
+      deployed: [{ sourceName: "login.html", destinationPath: "hotspot/login.html", size: 20 }],
       skipped: [],
       failed: [],
     }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -58,7 +58,9 @@ test("hotspot file progress resumes a lost job immediately and retries gateway f
     const result = await installHotspotFiles(105, 3, "test-token");
     assert.equal(result.status, "complete");
     assert.equal(result.deployed.length, 1);
-    assert.equal(JSON.parse(requests.find(request => request.method === "POST")?.body ?? "{}").mode, "install");
+      const installBody = JSON.parse(requests.find(request => request.method === "POST")?.body ?? "{}");
+      assert.equal(installBody.mode, "install");
+      assert.equal(installBody.destinationDirectory, "hotspot");
     assert.deepEqual(requests.map(request => request.method), ["POST", "GET", "POST", "GET", "GET"]);
     assert.ok(requests.every(request => request.cache === "no-store"));
     assert.ok(requests.some(request => request.url.includes("/recovered-job?")));
@@ -139,7 +141,7 @@ test("hotspot file progress requeues when the first poll cannot find its job", a
       total: 1,
       processed: 1,
       deployed: [],
-      skipped: [{ sourceName: "login.html", destinationPath: "flash/hotspot/login.html", reason: "already exists" }],
+      skipped: [{ sourceName: "login.html", destinationPath: "hotspot/login.html", reason: "already exists" }],
       failed: [],
     }), { status: 200, headers: { "Content-Type": "application/json" } });
   }) as typeof fetch;
@@ -204,9 +206,9 @@ test("replacement mode survives a lost job and returns added, replaced, skipped,
       status: "complete",
       total: 3,
       processed: 3,
-      deployed: [{ sourceName: "new.css", destinationPath: "flash/hotspot/new.css", size: 30 }],
-      replaced: [{ sourceName: "login.html", destinationPath: "flash/hotspot/login.html", size: 40 }],
-      skipped: [{ sourceName: "extra.js", destinationPath: "flash/hotspot/extra.js", reason: "appeared during deployment; left unchanged" }],
+      deployed: [{ sourceName: "new.css", destinationPath: "hotspot/new.css", size: 30 }],
+      replaced: [{ sourceName: "login.html", destinationPath: "hotspot/login.html", size: 40 }],
+      skipped: [{ sourceName: "extra.js", destinationPath: "hotspot/extra.js", reason: "appeared during deployment; left unchanged" }],
       failed: [],
     }), { status: 200, headers: { "Content-Type": "application/json" } });
   }) as typeof fetch;
@@ -219,7 +221,10 @@ test("replacement mode survives a lost job and returns added, replaced, skipped,
     assert.equal(result.skipped.length, 1);
     assert.equal(result.failed.length, 0);
     assert.equal(postCount, 2);
-    assert.ok(requests.filter(request => request.method === "POST").every(request => JSON.parse(request.body ?? "{}").mode === "replace"));
+    assert.ok(requests.filter(request => request.method === "POST").every(request => {
+      const body = JSON.parse(request.body ?? "{}");
+      return body.mode === "replace" && body.destinationDirectory === "hotspot";
+    }));
   } finally {
     globalThis.fetch = originalFetch;
     if (originalWindow) {

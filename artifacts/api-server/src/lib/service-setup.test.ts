@@ -93,13 +93,8 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /chain=input action=accept in-interface="co-hotspot-bridge-104" protocol=tcp dst-port=53/);
   assert.match(script, /Hotspot masquerade/);
   assert.match(script, /PPPoE masquerade/);
-  assert.match(script, /:local storage ""/);
-  assert.match(script, /name="disk1" && type="directory"/);
-  assert.match(script, /name~"\^disk1\/"/);
-  assert.match(script, /name="flash" && type="directory"/);
-  assert.match(script, /name~"\^flash\/"/);
   assert.match(script, /:local hsdir "hotspot"/);
-  assert.match(script, /:set hsdir \(\$storage \. "\/hotspot"\)/);
+  assert.doesNotMatch(script, /:local storage|:set hsdir \(\$storage/);
   assert.match(script, /dst-path=\(\$hsdir \. "\/login\.html"\) mode=https check-certificate=yes/);
   assert.match(script, /dst-path=\(\$hsdir \. "\/rlogin\.html"\) mode=https check-certificate=yes/);
   assert.match(script, /dst-path=\(\$hsdir \. "\/md5\.js"\) mode=https check-certificate=yes/);

@@ -70,7 +70,11 @@ import {
   routerManagementVpnPortForRouter,
 } from "../lib/router-management-vpn.js";
 import { findEmbeddedHotspotConfig, validateGeneratedHotspotPortal } from "../lib/hotspot-portal-deploy";
-import { selectUniqueActiveHotspotServer } from "../lib/hotspot-portal-target.js";
+import {
+  selectUniqueActiveHotspotServer,
+  selectUniquePrimaryHotspotProfile,
+  summarizeHotspotPortalPreflight,
+} from "../lib/hotspot-portal-target.js";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
@@ -1235,7 +1239,7 @@ router.post("/router/:id/files/deploy", requireAdmin(), async (req, res): Promis
  * The request creates a short-lived server-side job so a large asset set does
  * not stay on an HTTP connection long enough for the reverse proxy to time
  * out. Install mode preserves existing files. Replacement mode is limited to
- * approved Hotspot sources under flash/hotspot.
+ * approved primary Hotspot sources under hotspot/.
  */
 async function runBulkFileDeployment(
   job: BulkDeployJob,
@@ -1487,7 +1491,7 @@ async function runSelfInstallFilePush(
 router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
   const adminId = authenticatedAdminId(req, req.body?.adminId);
-  const destinationDirectory = String(req.body?.destinationDirectory ?? "flash/hotspot")
+  const destinationDirectory = String(req.body?.destinationDirectory ?? "hotspot")
     .trim()
     .replaceAll("\\", "/")
     .replace(/^\/+|\/+$/g, "");
@@ -1505,12 +1509,12 @@ router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): P
     return;
   }
   if (mode === "replace" && !requireHotspotFileReplacementConsent(req, res)) return;
-  if (scope === "hotspot" && destinationDirectory.toLowerCase() !== "flash/hotspot") {
-    res.status(400).json({ error: "Bulk hotspot deployment is restricted to flash/hotspot" });
+  if (scope === "hotspot" && destinationDirectory.toLowerCase() !== "hotspot") {
+    res.status(400).json({ error: "Primary Hotspot deployment is restricted to hotspot/" });
     return;
   }
-  if (scope === "all" && destinationDirectory.toLowerCase() !== "flash/hotspot") {
-    res.status(400).json({ error: "Bulk deployment destination must be flash/hotspot for hotspot assets" });
+  if (scope === "all" && destinationDirectory.toLowerCase() !== "hotspot") {
+    res.status(400).json({ error: "Bulk deployment destination must be hotspot/ for primary Hotspot assets" });
     return;
   }
   if (!isBulkReplacementScopeAllowed(mode, scope)) {
@@ -1537,14 +1541,14 @@ router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): P
     type: source.type,
     sourceName: source.name,
     destinationPath: source.type === "hotspot"
-      ? `flash/hotspot/${source.name.replaceAll("\\", "/").replace(/^\/+/, "")}`
+      ? `hotspot/${source.name.replaceAll("\\", "/").replace(/^\/+/, "")}`
       : source.name,
   }));
   if (mode === "replace" && sources.some(source => (
     source.type !== "hotspot"
     || !isApprovedHotspotAssetDestination(source.destinationPath)
   ))) {
-    res.status(500).json({ error: "An approved Hotspot source resolved outside flash/hotspot" });
+    res.status(500).json({ error: "An approved primary Hotspot source resolved outside hotspot/" });
     return;
   }
   if (sources.length === 0) {
@@ -1579,7 +1583,7 @@ router.post("/router/:id/files/deploy-bulk", requireAdmin(), async (req, res): P
     total: job.total,
     scope,
     mode,
-    destinationDirectory: "flash/hotspot",
+    destinationDirectory: "hotspot",
   });
   void runBulkFileDeployment(job, found.creds, requestOrigin(req));
 });
@@ -1616,6 +1620,53 @@ router.get("/router/:id/files/deploy-bulk/:jobId", requireAdmin(), async (req, r
   });
 });
 
+/* ─── GET /api/router/:id/hotspot-portal/preflight ───────────────────────── */
+/** Read-only inventory of active Hotspot profile paths and portal-file presence. */
+router.get("/router/:id/hotspot-portal/preflight", requireAdmin(), async (req, res): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store, private");
+  const id = parseInt(String(req.params.id), 10);
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found or not assigned to this administrator." });
+    return;
+  }
+
+  try {
+    const [serverRows, profileRows] = await runRouterCommands(found.creds, [
+      ["/ip/hotspot/print", "=.proplist=name,interface,profile,disabled"],
+      ["/ip/hotspot/profile/print", "=.proplist=.id,name,html-directory"],
+    ]);
+    const fileResult = await fetchRouterFiles(found.creds);
+    const preflight = summarizeHotspotPortalPreflight(
+      serverRows,
+      profileRows,
+      fileResult.files.map(file => file.name),
+    );
+
+    res.json({
+      routerId: id,
+      routerName: found.row.name,
+      checkedAt: new Date().toISOString(),
+      ...preflight,
+      services: preflight.services.map(({ profileId, ...service }) => ({
+        ...service,
+        serverName: service.serverName || "(unnamed)",
+        profileName: service.profileName || "(unnamed)",
+        profileResolved: Boolean(profileId),
+      })),
+    });
+  } catch (error) {
+    logger.warn({ err: error, routerId: id, adminId }, "[hotspot-portal-preflight] read-only scan failed");
+    res.status(503).json({
+      error: error instanceof Error ? error.message : "RouterOS read-only preflight failed.",
+    });
+  }
+});
+
 /* ─── POST /api/router/:id/hotspot-portal/deploy ─────────────────────────── */
 /**
  * Deploys the exact tenant-branded HTML generated in the browser. The
@@ -1627,6 +1678,7 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
   const id = parseInt(String(req.params.id), 10);
   const adminId = authenticatedAdminId(req, req.body?.adminId);
   const overwrite = req.body?.overwrite === true;
+  const activatePrimaryProfile = req.body?.activatePrimaryProfile === true;
   const directory = String(req.body?.destinationDirectory ?? "hotspot")
     .trim()
     .replaceAll("\\", "/")
@@ -1644,6 +1696,10 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
     res.status(400).json({ error: "Hotspot portals must be deployed to hotspot, flash/hotspot, or disk1/hotspot" });
     return;
   }
+  if (activatePrimaryProfile && directory.toLowerCase() !== "hotspot") {
+    res.status(400).json({ error: "The primary Hotspot profile can only be moved to the hotspot directory." });
+    return;
+  }
   if (overwrite && !requireHotspotFileReplacementConsent(req, res)) return;
 
   const origin = requestOrigin(req);
@@ -1656,6 +1712,42 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
   if (!found) {
     res.status(404).json({ error: "Router not found or not assigned to this administrator" });
     return;
+  }
+
+  let primaryProfileTarget: ReturnType<typeof selectUniquePrimaryHotspotProfile>["selected"] = null;
+  if (activatePrimaryProfile) {
+    try {
+      const [servers, profiles] = await Promise.all([
+        runRouterCommand(found.creds, [
+          "/ip/hotspot/print",
+          "=.proplist=name,interface,profile,disabled",
+        ]),
+        runRouterCommand(found.creds, [
+          "/ip/hotspot/profile/print",
+          "=.proplist=.id,name,html-directory",
+        ]),
+      ]);
+      const selection = selectUniquePrimaryHotspotProfile(servers, profiles);
+      if (!selection.selected) {
+        const reason = selection.candidates.length
+          ? "More than one active root-level Hotspot service was found."
+          : "No active root-level Hotspot service was found.";
+        res.status(409).json({
+          error: `${reason} No files or profile settings were changed. Use the service-specific Hotspot settings for isolated ports and resellers.`,
+          candidates: selection.candidates.map(candidate => ({
+            server: candidate.serverName,
+            interface: candidate.interfaceName,
+            profile: candidate.profileName,
+            directory: candidate.htmlDirectory,
+          })),
+        });
+        return;
+      }
+      primaryProfileTarget = selection.selected;
+    } catch (err) {
+      routerErrorResponse(res, err);
+      return;
+    }
   }
 
   let walledGarden = {
@@ -1706,6 +1798,7 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
   });
 
   try {
+    await ensureRouterFileDirectory(found.creds, directory);
     const destinationPath = `${directory}/login.html`;
     const roamingDestinationPath = `${directory}/rlogin.html`;
     const sourceUrl = `${origin}/api/router-file-source/${token}`;
@@ -1722,6 +1815,116 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
       overwrite,
       uploadId: roamingToken.slice(0, 16),
     });
+
+    let profileActivation: {
+      profileName: string;
+      serverName: string;
+      interfaceName: string;
+      previousDirectory: string;
+      directory: "hotspot";
+    } | undefined;
+    if (primaryProfileTarget) {
+      const previousDirectory = primaryProfileTarget.htmlDirectory;
+      const profileId = primaryProfileTarget.profileId;
+      let profileSwitchAttempted = false;
+      let rollbackVerified = false;
+      try {
+        const currentProfiles = await runRouterCommand(found.creds, [
+          "/ip/hotspot/profile/print",
+          "=.proplist=.id,name,html-directory",
+        ]);
+        const currentProfile = (Array.isArray(currentProfiles) ? currentProfiles : [])
+          .find(profile => String(profile[".id"] ?? "").trim() === profileId);
+        const currentDirectory = String(currentProfile?.["html-directory"] ?? "hotspot")
+          .trim()
+          .replaceAll("\\", "/")
+          .replace(/^\/+|\/+$/g, "") || "hotspot";
+        if (!currentProfile || currentDirectory.toLowerCase() !== previousDirectory.toLowerCase()) {
+          throw new Error("The Hotspot profile changed during portal upload. The profile was left untouched; retry after checking the active service.");
+        }
+
+        if (currentDirectory.toLowerCase() !== "hotspot") {
+          profileSwitchAttempted = true;
+          await runRouterCommand(found.creds, [
+            "/ip/hotspot/profile/set",
+            `=.id=${profileId}`,
+            "=html-directory=hotspot",
+          ]);
+          const verifiedProfiles = await runRouterCommand(found.creds, [
+            "/ip/hotspot/profile/print",
+            "=.proplist=.id,name,html-directory",
+          ]);
+          const verifiedProfile = (Array.isArray(verifiedProfiles) ? verifiedProfiles : [])
+            .find(profile => String(profile[".id"] ?? "").trim() === profileId);
+          const verifiedDirectory = String(verifiedProfile?.["html-directory"] ?? "")
+            .trim()
+            .replaceAll("\\", "/")
+            .replace(/^\/+|\/+$/g, "");
+          if (verifiedDirectory.toLowerCase() !== "hotspot") {
+            throw new Error("RouterOS did not confirm the primary profile directory change.");
+          }
+        }
+
+        profileActivation = {
+          profileName: primaryProfileTarget.profileName,
+          serverName: primaryProfileTarget.serverName,
+          interfaceName: primaryProfileTarget.interfaceName,
+          previousDirectory,
+          directory: "hotspot",
+        };
+      } catch (profileError) {
+        if (profileSwitchAttempted && previousDirectory.toLowerCase() !== "hotspot") {
+          try {
+            await runRouterCommand(found.creds, [
+              "/ip/hotspot/profile/set",
+              `=.id=${profileId}`,
+              `=html-directory=${previousDirectory}`,
+            ]);
+            const rollbackProfiles = await runRouterCommand(found.creds, [
+              "/ip/hotspot/profile/print",
+              "=.proplist=.id,html-directory",
+            ]);
+            const rollbackProfile = (Array.isArray(rollbackProfiles) ? rollbackProfiles : [])
+              .find(profile => String(profile[".id"] ?? "").trim() === profileId);
+            const rollbackDirectory = String(rollbackProfile?.["html-directory"] ?? "")
+              .trim()
+              .replaceAll("\\", "/")
+              .replace(/^\/+|\/+$/g, "");
+            rollbackVerified = rollbackDirectory.toLowerCase() === previousDirectory.toLowerCase();
+          } catch {
+            rollbackVerified = false;
+          }
+        }
+        const errorMessage = profileError instanceof Error
+          ? profileError.message
+          : "RouterOS returned an unknown profile update error.";
+        logger.error({
+          routerId: id,
+          adminId,
+          profileName: primaryProfileTarget.profileName,
+          previousDirectory,
+          profileSwitchAttempted,
+          rollbackVerified,
+          error: errorMessage,
+        }, "Primary Hotspot profile directory activation failed");
+        res.status(502).json({
+          error: profileSwitchAttempted
+            ? rollbackVerified
+              ? `The portal files were uploaded to hotspot/, but the profile was not changed. ${errorMessage}`
+              : `The portal files were uploaded to hotspot/, but RouterOS could not confirm the profile rollback. Check profile ${primaryProfileTarget.profileName} before further changes.`
+            : `The portal files were uploaded to hotspot/, but this request did not change the active profile. ${errorMessage}`,
+          detail: profileSwitchAttempted
+            ? rollbackVerified
+              ? `The previous directory ${previousDirectory} was restored.`
+              : undefined
+            : "Check the active Hotspot profile before retrying.",
+          destinationPath,
+          roamingDestinationPath,
+        });
+        return;
+      }
+    }
+
     logger.info({
       routerId: id,
       adminId,
@@ -1729,6 +1932,7 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
       roamingDestinationPath,
       replaced: result.replaced,
       size: result.size,
+      profileActivation,
     }, "Generated hotspot portal deployed");
     res.status(201).json({
       ok: true,
@@ -1743,6 +1947,7 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
         { destinationPath: roamingResult.destinationPath, size: roamingResult.size, replaced: roamingResult.replaced },
       ],
       walledGarden,
+      profileActivation,
       warnings: walledGarden.conflicts.length
         ? [`Existing Hotspot deny rules are still blocking: ${walledGarden.conflicts.join(", ")}. Those rules were left unchanged.`]
         : [],

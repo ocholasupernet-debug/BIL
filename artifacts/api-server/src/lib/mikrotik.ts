@@ -1128,7 +1128,7 @@ export async function reconcileGeneratedServiceConfiguration(
     && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(configuredHotspotDirectory)
     && !configuredHotspotDirectory.includes("..")
     ? configuredHotspotDirectory
-    : "flash/hotspot";
+    : "hotspot";
   const profileFields = [
     `=hotspot-address=${hotspotGateway}`,
     `=html-directory=${hotspotDirectory}`,
@@ -7924,13 +7924,7 @@ ${routerOsCompatibilityPreflight(tag)}
 :set serviceError ""
 :local serviceFailures ""
 :local serviceStepFailed false
-:local storage ""
-:if ([:len [/file find where name="disk1" && type="directory"]] > 0) do={ :set storage "disk1" }
-:if ([:len [/file find where name~"^disk1/"]] > 0) do={ :set storage "disk1" }
-:if ([:len [/file find where name="flash" && type="directory"]] > 0) do={ :set storage "flash" }
-:if ([:len [/file find where name~"^flash/"]] > 0) do={ :set storage "flash" }
 :local hsdir "hotspot"
-:if ($storage != "") do={ :set hsdir ($storage . "/hotspot") }
 :put "${tag}: starting Hotspot and PPPoE service setup."
 :put "${tag}: service steps: 1 portal files; 2 bridge; 3 gateways; 4 Hotspot; 5 walled garden; 6 PPPoE; 7 NAT."
 
