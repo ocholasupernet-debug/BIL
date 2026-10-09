@@ -2807,14 +2807,7 @@ function PaymentGatewaysTab() {
   }
   const brand = useBrand();
   const [selectedGw, setSelectedGw] = useState<string | null>(null);
-  const [fields, setFields] = useState<Record<string, Record<string, string>>>(() => {
-    try {
-      const s = localStorage.getItem("ochola_gw_fields");
-      const sanitized = sanitizeCachedGatewayFields(s ? JSON.parse(s) : {});
-      localStorage.setItem("ochola_gw_fields", JSON.stringify(sanitized));
-      return sanitized;
-    } catch { return {}; }
-  });
+  const [fields, setFields] = useState<Record<string, Record<string, string>>>({});
   const [saved, setSaved] = useState<string | null>(null);
   const [savingGateway, setSavingGateway] = useState<string | null>(null);
   const [saveError, setSaveError] = useState("");
@@ -2829,6 +2822,12 @@ function PaymentGatewaysTab() {
   const [routingError, setRoutingError] = useState("");
 
   useEffect(() => {
+    try {
+      localStorage.removeItem("ochola_gw_fields");
+    } catch {}
+  }, []);
+
+  useEffect(() => {
     if (!settingsRequested) return;
     let active = true;
     const load = async () => {
@@ -2840,15 +2839,7 @@ function PaymentGatewaysTab() {
       if (!response.ok || !data.ok) throw new Error(data.error || "Could not load payment gateway settings.");
       const configs = data.configs;
       if (!active || !configs) return;
-      setFields(prev => sanitizeCachedGatewayFields({
-        ...prev,
-        ...Object.fromEntries(
-          Object.entries(configs).map(([gatewayId, config]) => [
-            gatewayId,
-            { ...(prev[gatewayId] || {}), ...config },
-          ]),
-        ),
-      }));
+      setFields(sanitizeCachedGatewayFields(configs));
     };
     void load().catch(cause => {
       if (active) setSaveError(cause instanceof Error ? cause.message : "Could not load payment gateway settings.");
@@ -2899,7 +2890,6 @@ function PaymentGatewaysTab() {
     setSaveError("");
     setSavingGateway(gwId);
     const sanitizedFields = sanitizeCachedGatewayFields(fields);
-    try { localStorage.setItem("ochola_gw_fields", JSON.stringify(sanitizedFields)); } catch {}
     try {
       if (gwId === "bank_stk_push" || gwId === "mpesa_till_push" || gwId === "mpesa_paybill" || gwId === "bank_transfer") {
         const response = await fetch("/api/admin/mpesa-gateway-config", {
