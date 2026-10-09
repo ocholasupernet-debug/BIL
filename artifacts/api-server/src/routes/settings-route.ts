@@ -1,3 +1,311 @@
+/**
+ * Settings management routes
+ *
+ *   GET  /api/settings/mpesa   — return public M-Pesa payment availability
+ *   POST /api/settings/mpesa   — blocked; credential settings are protected
+ *   GET  /api/settings/mpesa/status — returns {configured: boolean}
+ */
+
+import { Router, type IRouter, type Request, type Response } from "express";
+import {
+  deletePaymentDestination,
+  getPaymentDestinations,
+  getMpesaSettings,
+  saveMpesaSettings,
+  savePaymentDestinations,
+  isMpesaConfigured,
+  MpesaSettingsUnavailableError,
+  normaliseRegistrationFee,
+  normaliseRegistrationWhatsappNumber,
+  upsertPaymentDestination,
+  type PaymentDestinationType,
+  type MpesaSettings,
+} from "../lib/settings-store.js";
+import { sbRpc, sbSelect, sbUpdate } from "../lib/supabase-client.js";
+import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
+import { authenticatedAccount, extractToken, validateToken } from "../lib/api-auth.js";
+import { adminHasPermission } from "../lib/platform-permissions.js";
+import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
+import { logger } from "../lib/logger.js";
+import { hasGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
+import {
+  CHECKOUT_READY_GATEWAY_IDS,
+  PAYMENT_GATEWAY_IDS,
+  gatewayConfigMap as routingGatewayConfigMap,
+  hasDarajaAuthFields,
+  paymentCollectionMode,
+  paymentGateway as routingPaymentGateway,
+  publicServiceStatus,
+  servicePaymentConfigMap,
+  isGatewayConfigComplete,
+  isGatewayCheckoutReady,
+  collectionConfig,
+  isDarajaGateway,
+  type PaymentService,
+  type ServicePaymentConfig,
+} from "../lib/payment-routing.js";
+import { resolveResellerGatewayRoute, resellerDestinationConfigured } from "../lib/reseller-payment-gateway.js";
+import {
+  sendPlatformSecurityNotice,
+  sendRegistrationConfirmationEmail,
+} from "../lib/platform-email.js";
+
+const router: IRouter = Router();
+const MPESA_CALLBACK_PATH = "/api/mpesa/callback";
+
+function isSuperAdminRequest(req: Request): boolean {
+  return isActiveSuperAdminToken(String(req.headers["x-sa-token"] ?? ""));
+}
+
+function configuredCallbackUrl(): string {
+  return process.env.MPESA_CALLBACK_URL?.trim() ?? "";
+}
+
+function automaticCallbackUrl(req: Request): string {
+  const configured = configuredCallbackUrl();
+  if (isValidLiveCallback(configured)) return configured;
+
+  const forwardedHost = req.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwardedHost || req.get("host")?.trim();
+  if (!host) return "";
+
+  try {
+    const parsed = new URL(`https://${host}`);
+    if (!parsed.hostname) return "";
+    return `https://${parsed.host}${MPESA_CALLBACK_PATH}`;
+  } catch {
+    return "";
+  }
+}
+
+function isValidLiveCallback(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" &&
+      !!parsed.hostname &&
+      parsed.pathname === MPESA_CALLBACK_PATH;
+  } catch {
+    return false;
+  }
+}
+
+async function requireAdminPaymentChange(req: Request, res: Response, adminId: number): Promise<boolean> {
+  const auth = validateToken(extractToken(req));
+  if (!auth || auth.type !== "a") {
+    res.status(401).json({ ok: false, error: "Your admin session is missing or expired. Sign in again." });
+    return false;
+  }
+  const account = auth.uid === "superadmin" ? null : await accountFromRequest(req);
+  const isConnectedReseller = account?.role === "reseller" && account.parent_id === adminId;
+  if (auth.uid !== "superadmin" && Number(auth.uid) !== adminId && !isConnectedReseller) {
+    res.status(403).json({ ok: false, error: "You can only change payment routing for your own ISP." });
+    return false;
+  }
+  if (auth.uid !== "superadmin") {
+    const actorId = Number(auth.uid);
+    if (!Number.isSafeInteger(actorId) || actorId <= 0) {
+      res.status(403).json({ ok: false, error: "A valid signed-in account is required to manage payment gateways." });
+      return false;
+    }
+    try {
+      if (!(await adminHasPermission(actorId, "Manage Gateways"))) {
+        res.status(403).json({ ok: false, error: "Your role does not have the Manage Gateways permission." });
+        return false;
+      }
+    } catch {
+      res.status(503).json({ ok: false, error: "Permissions could not be verified. Confirm the settings migration has been applied." });
+      return false;
+    }
+    const validGrant = await hasGatewaySettingsGrant({
+      accountId: Number(auth.uid),
+      requestId: String(req.headers["x-whatsapp-gateway-request-id"] ?? ""),
+      grant: String(req.headers["x-whatsapp-gateway-grant"] ?? ""),
+      sessionToken: extractToken(req),
+    });
+    if (!validGrant) {
+      res.status(403).json({
+        ok: false,
+        error: "Verify payment settings access to open or update gateway details.",
+      });
+      return false;
+    }
+  }
+  return true;
+}
+
+function requireSuperAdminReplacementPasscode(req: Request, res: Response): boolean {
+  const replacementPasscode = process.env.SUPERADMIN_PASSWORD?.trim();
+  if (!replacementPasscode) {
+    res.status(503).json({
+      ok: false,
+      error: "Payment settings are temporarily unavailable. Contact support.",
+    });
+    return false;
+  }
+  if (req.body?.replacePassword !== replacementPasscode) {
+    res.status(401).json({
+      ok: false,
+      error: "Changing registration payment settings requires the replacement passcode.",
+    });
+    return false;
+  }
+  return true;
+}
+
+function sendPaymentSettingsWriteFailure(res: Response): void {
+  res.status(503).json({
+    ok: false,
+    error: "Payment settings could not be saved to persistent storage. No change was confirmed; please retry.",
+  });
+}
+
+function isValidCollectionNumber(type: PaymentDestinationType, value: string): boolean {
+  if (type === "bank") return /^[A-Za-z0-9][A-Za-z0-9 -]{2,33}$/.test(value);
+  return /^\d{5,10}$/.test(value);
+}
+
+function getPaymentGateway(value: unknown): string {
+  return typeof value === "string" && PAYMENT_GATEWAY_IDS.has(value) ? value : "mpesa_paybill";
+}
+
+interface BankStkPushConfig {
+  bankName: string;
+  paybillNumber: string;
+  accountNumber: string;
+}
+
+interface MpesaTillPushConfig {
+  tillNumber: string;
+}
+
+interface MpesaPaybillConfig {
+  paybillNumber: string;
+  accountNumber: string;
+}
+
+interface BankTransferConfig {
+  bankName: string;
+  accountName: string;
+  accountNumber: string;
+  branchCode: string;
+  paymentInstructions: string;
+}
+
+type GatewayConfigMap = Record<string, Record<string, string>>;
+
+function gatewayConfigMap(value: unknown): GatewayConfigMap {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, config]) => config && typeof config === "object" && !Array.isArray(config))
+      .map(([gatewayId, config]) => [
+        gatewayId,
+        Object.fromEntries(
+          Object.entries(config as Record<string, unknown>)
+            .filter(([, field]) => typeof field === "string")
+            .map(([field, value]) => [field, (value as string).trim()]),
+        ),
+      ]),
+  );
+}
+
+function bankStkPushConfig(value: unknown): BankStkPushConfig {
+  const config = gatewayConfigMap(value).bank_stk_push ?? {};
+  return {
+    bankName: config.bankName ?? "",
+    paybillNumber: config.paybillNumber || config.merchantIdentifier || config.merchant_identifier || "",
+    accountNumber: config.accountNumber || config.accountReference || config.account_reference || "",
+  };
+}
+
+function mpesaTillPushConfig(value: unknown): MpesaTillPushConfig {
+  const config = gatewayConfigMap(value).mpesa_till_push ?? {};
+  return {
+    tillNumber: config.tillNumber || config.merchantIdentifier || config.merchant_identifier || "",
+  };
+}
+
+function mpesaPaybillConfig(value: unknown): MpesaPaybillConfig {
+  const config = gatewayConfigMap(value).mpesa_paybill ?? {};
+  return {
+    paybillNumber: config.paybillNumber || config.merchantIdentifier || config.merchant_identifier || "",
+    accountNumber: config.accountNumber || config.accountReference || config.account_reference || "",
+  };
+}
+
+function bankTransferConfig(value: unknown): BankTransferConfig {
+  const config = gatewayConfigMap(value).bank_transfer ?? {};
+  return {
+    bankName: config.bankName ?? "",
+    accountName: config.accountName ?? "",
+    accountNumber: config.accountNumber ?? "",
+    branchCode: config.branchCode ?? "",
+    paymentInstructions: config.paymentInstructions ?? "",
+  };
+}
+
+function isBankStkPushConfigured(config: BankStkPushConfig): boolean {
+  return !!(config.bankName && config.paybillNumber && config.accountNumber);
+}
+
+function adminIdFromRequest(req: Request): number | null {
+  const raw = req.query.adminId;
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function positiveQueryId(value: unknown): number | null {
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+async function resellerPortalPaymentStatus(
+  adminId: number | null,
+  routerId: number | null,
+  portId: number | null,
+): Promise<{
+  paymentGateway: string;
+  destinationConfigured: boolean;
+} | null> {
+  if (!adminId || !portId) return null;
+
+  const ports = await sbSelect<{
+    id: number;
+    admin_id: number;
+    router_id: number;
+    assigned_reseller_id: number | null;
+    status: string;
+    link_status: string | null;
+  }>(
+    "isp_reseller_ports",
+    `id=eq.${portId}&admin_id=eq.${adminId}&select=id,admin_id,router_id,assigned_reseller_id,status,link_status&limit=1`,
+  );
+  const port = ports[0];
+  if (
+    !port ||
+    !port.assigned_reseller_id ||
+    port.status !== "active" ||
+    port.link_status !== "active" ||
+    (routerId !== null && port.router_id !== routerId)
+  ) {
+    return null;
+  }
+
+  const route = await resolveResellerGatewayRoute(
+    adminId,
+    port.assigned_reseller_id,
+    port.router_id,
+    port.id,
+  );
+  if (!route) return null;
+
+  const config = route.config;
+
+  return {
+    paymentGateway: route.gateway_type,
+    destinationConfigured: resellerDestinationConfigured(route.gateway_type, config),
+  };
+}
 
 async function accountFromRequest(req: Request) {
   if (!req.authUser) {
