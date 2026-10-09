@@ -494,7 +494,8 @@ for host in vpn.isplatty.org; do
 done
 
 echo "[12/12] Applying scoped one-time RouterOS deployment actions..."
-bash "$PROJECT_DIR/deploy/run-router-one-shots.sh" "$PROJECT_DIR" "$PORTAL_REFRESH_ONLY"
+DEPLOY_SKIP_ROUTER_ONESHOTS="$SKIP_ROUTER_MANAGEMENT_SETUP" \
+  bash "$PROJECT_DIR/deploy/run-router-one-shots.sh" "$PROJECT_DIR" "$PORTAL_REFRESH_ONLY"
 
 if [ "$SKIP_ROUTER_MANAGEMENT_SETUP" != "1" ] &&
    [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then

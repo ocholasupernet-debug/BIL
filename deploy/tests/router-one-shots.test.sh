@@ -69,10 +69,25 @@ bash "$SCRIPT_DIR/run-router-one-shots.sh" "$SKIP_PROJECT" 0
 test "$(wc -l < "$CALL_LOG")" -eq 1
 test ! -f "$SKIP_PROJECT/deploy/skip-live-router-oneshots-once"
 
+APP_ONLY_PROJECT="$TEMP_DIR/app-only"
+make_project "$APP_ONLY_PROJECT"
+: > "$CALL_LOG"
+DEPLOY_SKIP_ROUTER_ONESHOTS=1 bash "$SCRIPT_DIR/run-router-one-shots.sh" "$APP_ONLY_PROJECT" 0
+test ! -s "$CALL_LOG"
+test -f "$APP_ONLY_PROJECT/deploy/portal-refresh-once.json"
+
+# An explicit portal-only deployment remains available even when router
+# management setup is skipped; it must not run VLAN one-shots.
+: > "$CALL_LOG"
+DEPLOY_SKIP_ROUTER_ONESHOTS=1 bash "$SCRIPT_DIR/run-router-one-shots.sh" "$APP_ONLY_PROJECT" 1
+test "$(wc -l < "$CALL_LOG")" -eq 1
+grep -Fq "$APP_ONLY_PROJECT/deploy/refresh-hotspot-portals-once.mjs" "$CALL_LOG"
+
 NORMAL_PROJECT="$TEMP_DIR/normal"
 make_project "$NORMAL_PROJECT"
+: > "$CALL_LOG"
 bash "$SCRIPT_DIR/run-router-one-shots.sh" "$NORMAL_PROJECT" 0
-test "$(wc -l < "$CALL_LOG")" -eq 4
+test "$(wc -l < "$CALL_LOG")" -eq 3
 grep -Fq "$NORMAL_PROJECT/deploy/refresh-hotspot-portals-once.mjs" "$CALL_LOG"
 grep -Fq "$NORMAL_PROJECT/deploy/inspect-vlan-200-once.mjs" "$CALL_LOG"
 grep -Fq "$NORMAL_PROJECT/deploy/retry-vlan-200-provisioning-once.mjs" "$CALL_LOG"

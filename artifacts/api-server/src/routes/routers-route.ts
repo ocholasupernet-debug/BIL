@@ -8,6 +8,7 @@ import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId,
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
+import { routerHealthApiAccountOrder } from "../lib/router-health-api-account-order.js";
 
 const router: IRouter = Router();
 
@@ -706,10 +707,13 @@ export async function sweepAllRouters(): Promise<void> {
       routers.map(async (row) => {
         const host = cleanRouterHost(row.host || row.ip_address || "");
         const discoveredVpnIp = discoverVpnIp(row.name, host, row.bridge_ip, row.vpn_ip);
+        const managementVpnIp = [discoveredVpnIp, host]
+          .find((candidate): candidate is string => isRouterManagementVpnIp(candidate ?? ""));
+        const apiAccounts = routerHealthApiAccountOrder(row.router_username, managementVpnIp);
         const creds = {
           host:     host || discoveredVpnIp || "",
           port:     8728,
-          username: row.router_username   || "admin",
+          ...apiAccounts,
           password: row.router_secret     || "",
           useSSL:   false,
           bridgeIp: discoveredVpnIp,

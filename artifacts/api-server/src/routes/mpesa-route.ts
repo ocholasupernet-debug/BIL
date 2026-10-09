@@ -16,7 +16,12 @@ import { billingSelect } from "../lib/platform-billing-store.js";
 import { logger } from "../lib/logger.js";
 import { sendRegistrationConfirmationEmail } from "../lib/platform-email.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
-import { getMpesaSettings, isMpesaConfigured, type MpesaSettings } from "../lib/settings-store.js";
+import {
+  getMpesaSettings,
+  isMpesaConfigured,
+  MpesaSettingsUnavailableError,
+  type MpesaSettings,
+} from "../lib/settings-store.js";
 import { authenticatedAdminId, extractToken, generatePaymentIntent, requireAdmin, validatePaymentIntent, validateToken } from "../lib/api-auth.js";
 import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { hasGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
@@ -522,21 +527,6 @@ type ResellerPaymentRoute = {
   accountReference: string;
 };
 
-function resellerDarajaSettings(
-  config: Record<string, string>,
-  callbackUrl: string,
-): MpesaSettings {
-  return {
-    consumerKey: config.consumerKey ?? "",
-    consumerSecret: config.consumerSecret ?? "",
-    shortcode: config.businessShortcode ?? config.shortcode ?? "",
-    passkey: config.passkey ?? "",
-    callbackUrl: config.callbackUrl || callbackUrl,
-    env: config.environment === "production" ? "production" : "sandbox",
-    tillNumber: config.tillNumber ?? "",
-  };
-}
-
 async function getResellerPaymentRoute(
   adminId: number,
   planId: number,
@@ -575,7 +565,7 @@ async function getResellerPaymentRoute(
     throw new Error("This reseller link is not active for checkout.");
   }
 
-  const [route, sharedCallbackSettings, legacyRows, legacyAccountRows] = await Promise.all([
+  const [route, platformDarajaSettings, legacyRows, legacyAccountRows] = await Promise.all([
     resolveResellerGatewayRoute(adminId, port.assigned_reseller_id, routerId, portId),
     getMpesaSettings(),
     sbSelectStrict<{
@@ -710,7 +700,9 @@ async function getResellerPaymentRoute(
     portId,
     gatewayRouteId: route?.id ?? null,
     paymentGateway,
-    settings: sharedCallbackSettings,
+    // Reseller rows choose only the collection destination. Daraja API
+    // credentials always come from the encrypted global Super Admin record.
+    settings: platformDarajaSettings,
     bankStkPush,
     mpesaTillPush,
     mpesaPaybill,
@@ -1219,26 +1211,7 @@ export async function processMpesaCallback(
       );
       return saved.length === 1 && saved[0].mpesa_receipt === receipt;
     },
-    getSettings: async transaction => {
-      const metadata = transaction?.payment_metadata;
-      const fields = metadata && typeof metadata === "object" && !Array.isArray(metadata)
-        ? metadata as Record<string, unknown>
-        : {};
-      const source = String(fields.source ?? "");
-      if (source === "reseller_gateway_test" || source === "reseller_daraja_bridge") {
-        const configCiphertext = typeof fields.resellerGatewayConfigCiphertext === "string"
-          ? fields.resellerGatewayConfigCiphertext
-          : "";
-        if (configCiphertext) {
-          const [config, platformSettings] = await Promise.all([
-            Promise.resolve(decryptGatewayConfig(configCiphertext)),
-            getMpesaSettings(),
-          ]);
-          return resellerDarajaSettings(config, platformSettings.callbackUrl);
-        }
-      }
-      return getMpesaSettings();
-    },
+    getSettings: async () => getMpesaSettings(),
     verifyStk: queryDarajaStkResult,
     reactivatePppoeAccess,
     reactivateVlanAccess,
@@ -2086,7 +2059,18 @@ router.post("/mpesa/stkpush", async (req: Request, res: Response): Promise<void>
     return;
   }
 
-  const cfg = await getMpesaSettings();
+  let cfg: MpesaSettings;
+  try {
+    cfg = await getMpesaSettings();
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: error instanceof MpesaSettingsUnavailableError
+        ? error.message
+        : "Global Super Admin M-Pesa settings are temporarily unavailable.",
+    });
+    return;
+  }
   if (!isMpesaConfigured(cfg)) {
     res.status(503).json({
       ok: false,
@@ -2475,11 +2459,27 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     try {
       resellerRoute = await getResellerPaymentRoute(scopedAdminId, requestedPlanId);
     } catch (error) {
-      res.status(409).json({ ok: false, error: error instanceof Error ? error.message : "The reseller payment link is not active." });
+      res.status(error instanceof MpesaSettingsUnavailableError ? 503 : 409).json({
+        ok: false,
+        error: error instanceof Error ? error.message : "The reseller payment link is not active.",
+      });
       return;
     }
   }
-  const cfg = resellerRoute?.settings ?? await getMpesaSettings();
+  let cfg: MpesaSettings;
+  try {
+    // The optional reseller route supplies only its collection destination;
+    // Daraja authentication always resolves to the global Super Admin record.
+    cfg = resellerRoute?.settings ?? await getMpesaSettings();
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: error instanceof MpesaSettingsUnavailableError
+        ? error.message
+        : "Global Super Admin M-Pesa settings are temporarily unavailable.",
+    });
+    return;
+  }
   if (!isMpesaConfigured(cfg)) {
     logger.warn("[mpesa/stk] M-Pesa credentials not configured — returning 503");
     res.status(503).json({
