@@ -1,6 +1,33 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { paymentRouterConnectionCredentials } from "./router-payment-credentials.js";
+import {
+  paymentRouterConnectionCredentials,
+  routerManagementVpnIpFor,
+} from "./router-payment-credentials.js";
+
+test("router management address discovery prefers the currently connected VPN IP", () => {
+  assert.equal(
+    routerManagementVpnIpFor(
+      {
+        name: "Alistwifi1",
+        host: "198.51.100.18",
+        vpn_ip: "10.8.5.16",
+      },
+      [{ cn: "Alistwifi1", vpnIp: "10.8.5.21", realIp: "198.51.100.18" }],
+    ),
+    "10.8.5.21",
+  );
+});
+
+test("router management address discovery falls back to the saved VPN IP", () => {
+  assert.equal(
+    routerManagementVpnIpFor(
+      { name: "Alistwifi1", vpn_ip: "10.8.5.16" },
+      [],
+    ),
+    "10.8.5.16",
+  );
+});
 
 test("payment provisioning prefers the connected management VPN and management API account", () => {
   assert.deepEqual(

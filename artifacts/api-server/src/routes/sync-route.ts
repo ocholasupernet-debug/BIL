@@ -16,6 +16,11 @@ import {
   routerManagementBackupIp,
 } from "../lib/router-management-vpn.js";
 import { routerManagementApiAccountOrder } from "../lib/router-health-api-account-order.js";
+import {
+  formatRouterConnectionError,
+  isRouterApiTransportFailure,
+} from "../lib/router-connection-error.js";
+import { routerManagementVpnIpFor } from "../lib/router-payment-credentials.js";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import { hotspotPlanProfileName } from "../lib/prepaid-identifiers.js";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
@@ -304,7 +309,7 @@ async function connectWithFallback(
     ].filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
     let lastError: unknown;
 
-    for (const apiUsername of usernames) {
+    for (const [usernameIndex, apiUsername] of usernames.entries()) {
       log(`▶ Connecting to ${address}:8728 as '${apiUsername}'...`);
       const candidateConn = makeConn(address, apiUsername, password);
       try {
@@ -314,8 +319,12 @@ async function connectWithFallback(
       } catch (error) {
         lastError = error;
         try { candidateConn.close(); } catch { /* connection may not have opened */ }
-        if (usernames.length > 1) {
-          log(`⚠ API login as '${apiUsername}' failed at ${address}; trying the alternate router account...`);
+        if (usernameIndex < usernames.length - 1) {
+          if (isRouterApiTransportFailure(error)) {
+            log(`⚠ RouterOS did not complete a TCP/API connection at ${address}; skipping another username and trying the next address if available.`);
+            break;
+          }
+          log(`⚠ API authentication as '${apiUsername}' failed at ${address}; trying the alternate router account...`);
         }
       }
     }
@@ -474,27 +483,7 @@ function toSessionTimeout(value: number, unit: string): string {
 
 /* ─── Connection error message ─── */
 function connErr(host: string, rawErr: unknown): string {
-  const msg = rawErr instanceof Error
-    ? rawErr.message
-    : typeof rawErr === "string"
-      ? rawErr
-      : JSON.stringify(rawErr);
-
-  /* A blank or generic message still means a connection problem */
-  const isConnProblem =
-    !msg.trim() ||
-    /timed out|timeout|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|socket hang up/i.test(msg);
-
-  if (isConnProblem) {
-    return (
-      `Cannot reach router at ${host}:8728 — connection timed out or refused. ` +
-      `To fix: 1) In RouterOS open IP → Services → enable "api" (port 8728). ` +
-      `2) Add a firewall rule to allow port 8728 from the VPN interface (e.g. /ip firewall filter add chain=input protocol=tcp dst-port=8728 action=accept). ` +
-      `3) Confirm the router's VPN tunnel IP is reachable from the server.` +
-      (msg.trim() ? ` (raw: ${msg})` : "")
-    );
-  }
-  return msg;
+  return formatRouterConnectionError(host, rawErr);
 }
 
 /* ─── Enrich "not enough permissions" errors with the fix command ─── */
@@ -662,11 +651,11 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
     return;
   }
   const routerRows = await sbSelect<{
-    id: number; host: string | null; bridge_ip: string | null; vpn_ip: string | null;
+    id: number; name: string | null; host: string | null; bridge_ip: string | null; vpn_ip: string | null;
     router_username: string | null; router_secret: string | null;
   }>(
     "isp_routers",
-    `id=eq.${requestedRouterId}&admin_id=eq.${tenantId}&select=id,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    `id=eq.${requestedRouterId}&admin_id=eq.${tenantId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
   );
   if (!routerRows[0]) {
     res.status(403).json({ ok: false, error: "This router does not belong to your connected ISP account." });
@@ -674,13 +663,15 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
   }
   /* Connection details are security-sensitive tenant data. Never allow the
      browser to redirect this operation to an arbitrary router or credential. */
-  host = String(routerRows[0].host ?? "").trim();
-  bridgeIp = [
-    routerRows[0].vpn_ip,
-    routerRows[0].bridge_ip,
+  const routerRow = routerRows[0];
+  const managementVpnIp = routerManagementVpnIpFor(routerRow, readVpnClients());
+  host = managementVpnIp || String(routerRow.host ?? "").trim();
+  bridgeIp = managementVpnIp || [
+    routerRow.vpn_ip,
+    routerRow.bridge_ip,
   ].map(value => String(value ?? "").trim()).find(isRouterManagementVpnIp);
-  username = routerRows[0].router_username || "admin";
-  password = routerRows[0].router_secret || "";
+  username = routerRow.router_username || "admin";
+  password = routerRow.router_secret || "";
   if (!host && !bridgeIp) {
     res.status(404).json({ ok: false, error: "The selected router has no stored host or management VPN address." });
     return;
@@ -746,7 +737,9 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
 
   let conn!: RouterOSAPI;
   try {
-    ({ conn } = await connectWithFallback(host, bridgeIp, username, password, log));
+    ({ conn } = await connectWithFallback(host, bridgeIp, username, password, log, {
+      managementAccountFirst: true,
+    }));
     log(`  pushing ${scopedPlans.length} plan profile(s)\n`);
 
     let created = 0, updated = 0, skipped = 0;

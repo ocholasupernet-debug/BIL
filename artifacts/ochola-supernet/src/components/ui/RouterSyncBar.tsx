@@ -165,7 +165,7 @@ function SyncFailedActions({
   const isAuth     = /login|auth|password|permission|unauthorized|forbidden|invalid token|not authenticated/i.test(error);
   const isVpn      = /ehostunreach|enetunreach|no route|unreachable/i.test(error);
 
-  const errLabel = isTimeout  ? "Port 8728 blocked by firewall"
+  const errLabel = isTimeout  ? "Router / VPN path did not respond"
     : isRefused  ? "API service disabled on router"
     : isAuth     ? "Authentication failed"
     : isVpn      ? "VPN / routing unreachable"
@@ -174,8 +174,9 @@ function SyncFailedActions({
   /* Manual fallback commands — shown only when auto-fix can't connect */
   const showFallback = fixResult && !fixResult.ok && fixResult.canConnect === false;
   const fallbackCmds = [
-    "/ip service enable api",
-    "/ip firewall filter add chain=input protocol=tcp dst-port=8728 src-address=10.8.5.0/24 action=accept place-before=0",
+    "/interface ovpn-client print detail",
+    "/ip service print detail where name=api",
+    "/system resource print",
   ];
 
   return (
