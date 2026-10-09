@@ -57,21 +57,33 @@ test("verification and uncertainty classification", () => {
   assert.equal(redeemOutcomeIsUncertain(401), false);
 });
 
-test("React portal wires credentials into quote and redeem without URLs", () => {
+test("React portal keeps legacy proof on quote recovery but redeems by scoped MAC only", () => {
   const src = readFileSync(new URL("../pages/portal/HotspotLogin.tsx", import.meta.url), "utf8");
-  assert.ok((src.match(/accountCredentialsPayload\(/g) ?? []).length >= 2);
-  assert.ok((src.match(/loyaltyDeviceAuthorizationPayload\(/g) ?? []).length >= 2);
-  assert.ok(src.includes("!loyaltyDeviceAuthorization"));
+  assert.equal((src.match(/accountCredentialsPayload\(/g) ?? []).length, 1);
+  assert.equal((src.match(/loyaltyDeviceAuthorizationPayload\(/g) ?? []).length, 1);
+  const redeem = src.slice(src.indexOf("const handleLoyaltyRedeem"), src.indexOf("const openTvDialog"));
+  const requestBody = redeem.slice(redeem.indexOf("body: JSON.stringify({"), redeem.indexOf("}),\n        }).catch"));
+  assert.ok(requestBody.includes("mac_address: macAddress"));
+  assert.ok(requestBody.includes("idempotency_key: attempt.key"));
+  assert.ok(!requestBody.includes("account_credentials"));
+  assert.ok(!requestBody.includes("device_authorization"));
   assert.ok(src.includes("isVerificationRequired("));
   assert.ok(!/loyalty\/(quote|redeem)\?/.test(src));
 });
 
-test("static portal remembers verified devices after purchase and sends authorization with loyalty requests", () => {
+test("static portal has no redeem credential prompts and reserves saved proof for legacy quote recovery", () => {
   const html = readFileSync(new URL("../../public/hotspot/login.html", import.meta.url), "utf8");
   assert.ok(html.includes("function saveHotspotLoginCredentials("));
   assert.ok((html.match(/saveHotspotLoginCredentials\(/g) ?? []).length >= 4);
-  assert.ok((html.match(/account_credentials/g) ?? []).length >= 2);
+  const redeem = html.slice(html.indexOf("function redeemLoyaltyPoints()"), html.indexOf("function isSupportedPaymentGateway("));
+  assert.ok(!redeem.includes("account_credentials"));
+  assert.ok(!redeem.includes("payload.device_authorization"));
+  assert.ok(html.includes("if(loyCreds)payload.account_credentials="));
   assert.ok(html.includes("device_authorization"));
   assert.match(html, /data\.device_authorization[\s\S]{0,240}saveHotspotLoyaltyDeviceAuthorization/);
   assert.ok(html.includes("loyUncertain"));
+  assert.ok(!html.includes("loyConfirmUser"));
+  assert.ok(!html.includes("loyConfirmPass"));
+  assert.ok(!html.includes("function loyaltyNeedsConfirm("));
+  assert.ok(html.includes("No username or password is needed."));
 });

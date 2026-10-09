@@ -680,7 +680,7 @@ function startPortalLoyaltyBalance(){
 
 /* Points choice inside the package checkout. Server resolves the account from the scoped device MAC; no phone is sent. */
 var loyQuote=null, loyState="idle", loyMode="mpesa", loyToken=0, loyRedeemBusy=false, loyRedeeming=false;
-var loyKeys={}, loyCheckouts={}, loyUncertain={}, loyConfirmNotice="",loyPaidWithPoints=false;
+var loyKeys={}, loyCheckouts={}, loyUncertain={}, loyPaidWithPoints=false;
 function hotspotLoginStorageKey(){
   return ["ochola_hotspot_login_v1",window.location.host||"portal",PORTAL_ADMIN_ID>0?String(PORTAL_ADMIN_ID):"tenant"].map(encodeURIComponent).join(":");
 }
@@ -729,9 +729,6 @@ function readHotspotLoginCredentials(){
 }
 var loyCreds=readHotspotLoginCredentials();
 var loyDeviceAuthorization=readHotspotLoyaltyDeviceAuthorization();
-function loyaltyNeedsConfirm(){
-  return !loyCreds&&!loyDeviceAuthorization&&!(selectedPlan&&loyCheckouts[loyaltyAttemptId(selectedPlan.id)])&&(loyaltyRedeemable()||!!loyaltyPendingCheckout());
-}
 function newLoyaltyKey(){
   if(window.crypto&&typeof window.crypto.randomUUID==="function")return window.crypto.randomUUID();
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,function(ch){var v=Math.floor(Math.random()*16);return (ch==="x"?v:(v&3)|8).toString(16);});
@@ -759,7 +756,7 @@ function loadLoyaltyQuoteForPlan(silent,proofRetried){
       var pd=result.data||{};
       if(result.status===401&&pd.verificationRequired===true&&!proofRetried){
         /* Drop the bad proof and refresh public eligibility once, same nonce, no credentials. */
-        loyCreds=null; clearHotspotLoyaltyDeviceAuthorization(); loyConfirmNotice="Confirm your hotspot account to use points.";
+        loyCreds=null; clearHotspotLoyaltyDeviceAuthorization();
         if(token===loyToken)loadLoyaltyQuoteForPlan(true,true);
         return;
       }
@@ -815,28 +812,14 @@ function redeemLoyaltyPoints(){
   var attempt=loyaltyAttemptId(planId);
   if(loyCheckouts[attempt]){loyRedeemBusy=true;finishLoyaltyAccess(attempt,loyCheckouts[attempt]);return;}
   if(!loyaltyRedeemable()&&!loyUncertain[attempt])return;
-  var typedCreds=null, creds=loyCreds;
-  if(!creds&&!loyDeviceAuthorization){
-    var uEl=document.getElementById("loyConfirmUser"), pEl=document.getElementById("loyConfirmPass");
-    var u=uEl?uEl.value.trim():"", pw=pEl?pEl.value:"";
-    if(!u||!pw){loyConfirmNotice="Enter your hotspot account username and password to use points.";renderModal();return;}
-    creds=typedCreds={username:u,password:pw};
-  }
   if(!loyKeys[attempt])loyKeys[attempt]=newLoyaltyKey();
   if(!PORTAL_DEVICE_MAC||PORTAL_ADMIN_ID<1){stkError="This device could not be identified. Reconnect to the hotspot Wi-Fi and try again.";stkState="error";renderModal();return;}
   loyRedeemBusy=true; loyRedeeming=true; stkError=""; stkState="loading"; renderModal();
   var payload=loyaltyScopePayload(); payload.plan_id=planId; payload.idempotency_key=loyKeys[attempt];
-  if(creds)payload.account_credentials={username:creds.username,password:creds.password};
-  if(loyDeviceAuthorization)payload.device_authorization=loyDeviceAuthorization;
   portalPaymentRequest("/api/hotspot/loyalty/redeem",payload,"Points redemption")
     .catch(function(error){return{ok:false,uncertain:true,data:{error:error&&error.message?error.message:"Points redemption failed before a response was received."}};})
     .then(function(result){
       var d=result.data||{};
-      if(result.status===401&&d.verificationRequired===true){
-        loyCreds=null; clearHotspotLoyaltyDeviceAuthorization(); loyRedeemBusy=false; loyRedeeming=false; stkError="";
-        loyConfirmNotice="We could not confirm that hotspot account. Check the details and try again.";
-        stkState="idle"; renderModal(); return;
-      }
       if(!result.ok||d.ok!==true||!d.checkout_id){
         if(result.uncertain||!result.status||result.status>=500||result.status===408||result.status===429)loyUncertain[attempt]=true;
         /* Key is kept: a retry may be the same uncertain request and the server dedupes it. */
@@ -848,8 +831,6 @@ function redeemLoyaltyPoints(){
       if(typeof d.device_authorization==="string"){
         saveHotspotLoyaltyDeviceAuthorization(d.device_authorization,d.device_authorization_expires_at);
       }
-      if(typedCreds){saveHotspotLoginCredentials(typedCreds);loyCreds=typedCreds;}
-      loyConfirmNotice="";
       return finishLoyaltyAccess(attempt,d.checkout_id);
     });
 }
@@ -1621,21 +1602,16 @@ function renderModal(){
         (mpesaOk?radio("mpesa",'Pay Ksh '+(selectedPlan?selectedPlan.price:"")+' with M-Pesa'):'')+
         '</div>';
     }
-    var confirmHtml=(mode==="points"&&loyaltyNeedsConfirm())?
-      '<div role="group" aria-label="Confirm hotspot account" style="display:grid;gap:.5rem;margin-bottom:1.25rem">'+
-      '<p style="font-size:.78rem;color:rgba(255,255,255,.7)">'+escapePortalText(loyConfirmNotice||"Confirm your hotspot account once on this device to use points.")+'</p>'+
-      '<input id="loyConfirmUser" type="text" autocomplete="username" placeholder="Hotspot username" class="inp" />'+
-      '<input id="loyConfirmPass" type="password" autocomplete="current-password" placeholder="Hotspot password" class="inp" /></div>':'';
     var phoneHtml=mode==="points"?'':
       '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
       '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+escapePortalText(stkPhone)+'" />';
     var noMethod=!mpesaOk&&mode!=="points"&&loyState!=="loading";
     b.innerHTML='<div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.22)">'+
        '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">'+(mode==="points"
-         ?(loyaltyPendingCheckout()?'Your points were already redeemed for this package. Finish setting up your access; no more points will be used.':'Redeem your loyalty points for this package. No phone number or M-Pesa payment is needed.')
+          ?(loyaltyPendingCheckout()?'Your points were already redeemed for this package. Finish setting up your access; no more points will be used.':'Redeem your loyalty points to receive a Hotspot account automatically. No username or password is needed.')
          :noMethod?'No M-Pesa payment method is available for this service, and this device cannot pay with points for this package.'
          :'Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.')+'</p>'+
-      '</div>'+loyHtml+confirmHtml+(noMethod?'':phoneHtml)+
+       '</div>'+loyHtml+(noMethod?'':phoneHtml)+
       '<div id="stkErrBox" style="display:none;margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>'+
       (noMethod?'':'<button onclick="'+(mode==="points"?'redeemLoyaltyPoints()':'sendStk()')+'" '+(identified?'':'disabled')+' class="btn btn-purple btn-full" style="font-size:.875rem;padding:.875rem;opacity:'+(identified?'1':'.5')+'">'+
       (mode==="points"?(loyaltyPendingCheckout()?'Finish access setup':'Redeem '+formatPortalLoyaltyPoints(loyQuote.pointsRequired)+' points'):'Send STK Push &mdash; Ksh '+(selectedPlan?selectedPlan.price:""))+

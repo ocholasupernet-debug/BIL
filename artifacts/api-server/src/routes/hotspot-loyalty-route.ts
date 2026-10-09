@@ -181,8 +181,9 @@ async function deviceAccountPhone(
   } : null;
 }
 
-// A MAC discovers a wallet; credentials authorize the first spend, then a scoped
-// signed device authorization avoids repeated password prompts on that device.
+// Loyalty redemption follows the product's MAC-only authorization policy. Keep
+// this verifier for recovering older pending checkouts that were created under
+// the previous credential-confirmation flow.
 const verificationAttempts = new Map<string, { attempts: number; until: number }>();
 type LoyaltyDeviceAuthContext = {
   adminId: number;
@@ -675,12 +676,13 @@ router.post("/hotspot/loyalty/redeem", async (req, res): Promise<void> => {
       res.status(409).json({ ok: false, error: "This device is not linked to a Hotspot account in this service." });
       return;
     }
-    if (!await verifyLoyaltyAccount(req, res, context)) return;
-    const deviceAuthorization = issueDeviceAuthorization(context, macAddress);
-    if (!deviceAuthorization) {
-      res.status(503).json({ ok: false, error: "Secure device authorization is unavailable. No points were spent; please retry later." });
+    if (!context.deviceAccount || ["suspended", "disabled"].includes(context.deviceAccount.status)) {
+      res.status(409).json({ ok: false, error: "This Hotspot account cannot redeem loyalty points." });
       return;
     }
+    // MAC-only redemption is an explicit product choice. Require a scoped
+    // customer association above, and keep the stored phone server-derived.
+    const deviceAuthorization = issueDeviceAuthorization(context, macAddress);
     const rows = await hotspotLoyaltyOperations.redeem<{
       checkout_id: string;
       points_balance: number | string;
@@ -709,8 +711,10 @@ router.post("/hotspot/loyalty/redeem", async (req, res): Promise<void> => {
       checkout_id: redemption.checkout_id,
       pointsBalance: pointBalance(accounts[0]?.points_balance ?? redemption.points_balance, accounts[0]?.fractional_balance),
       pointsSpent: Number(redemption.points_spent),
-      device_authorization: deviceAuthorization.token,
-      device_authorization_expires_at: deviceAuthorization.expiresAt,
+      ...(deviceAuthorization ? {
+        device_authorization: deviceAuthorization.token,
+        device_authorization_expires_at: deviceAuthorization.expiresAt,
+      } : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";

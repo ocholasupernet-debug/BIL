@@ -16,7 +16,6 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
     router_id: 31, port_id: null, owner_reseller_id: null, is_active: true, client_can_purchase: true };
   let customer: Record<string, unknown> | null = { id: 2, admin_id: 7, phone, mac_address: mac, router_id: 31, port_id: null,
     status: "active", ...credentials };
-  let proofOverride: Record<string, unknown> | null | undefined;
   let balance = 5;
   let fraction = 0;
   let redemptionRule: number | null | undefined = 5;
@@ -31,8 +30,7 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
     const rows = table === "isp_plans" ? [plan]
       : table === "isp_routers" ? [{ id: 31 }]
       : table === "isp_reseller_router_ports" ? [{ assigned_reseller_id: 19 }]
-      : table === "isp_customers" ? query.includes("password") && proofOverride !== undefined
-        ? proofOverride ? [proofOverride] : [] : customer ? [customer] : []
+      : table === "isp_customers" ? customer ? [customer] : []
       : table === "isp_loyalty_accounts" ? [{ points_balance: balance, fractional_balance: fraction }]
       : table === "isp_loyalty_settings" ? [{ kes_per_point: 10 }]
       : table === "isp_loyalty_plan_rules" ? redemptionRule === undefined
@@ -62,8 +60,7 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
   const request = async (path: string, extra: Record<string, unknown> = {}, signed = false) => {
     const response = await fetch(`http://127.0.0.1:${address.port}/api/hotspot/loyalty/${path}`, {
       method: "POST", headers: { "Content-Type": "application/json", ...(signed ? { "x-test-signed-portal": "1" } : {}) },
-      body: JSON.stringify({ adminId: 7, router_id: 31, mac_address: mac,
-        ...(path === "redeem" || extra.idempotency_key ? { account_credentials: credentials } : {}), ...extra }),
+      body: JSON.stringify({ adminId: 7, router_id: 31, mac_address: mac, ...extra }),
     });
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   };
@@ -115,7 +112,7 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
       assert.equal((await request("quote", { plan_id: 41 })).body.canRedeem, false);
       balance = 5;
     });
-    await t.test("typed phone never overrides the device's account or reaches redemption", async () => {
+    await t.test("the scoped device MAC can redeem without credentials and submitted phone cannot choose the wallet", async () => {
       const result = await request("redeem", { plan_id: 41, phone: "254700000099",
         idempotency_key: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" });
       assert.equal(result.status, 200);
@@ -125,19 +122,19 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
       assert.equal(redemptions.at(-1)?.p_phone, phone);
       assert.equal(redemptions.at(-1)?.p_mac_address, mac);
       assert.equal(redemptions.at(-1)?.p_idempotency_key, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+      assert.equal(reads.some(row => row.table === "isp_customers" && row.query.includes("password")), false,
+        "MAC-only redemption must not read Hotspot passwords");
     });
-    await t.test("a remembered device can redeem again without sending the Hotspot password", async () => {
+    await t.test("a later redemption also works without a password or stored device token", async () => {
       const result = await request("redeem", {
         plan_id: 41,
         idempotency_key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        account_credentials: null,
-        device_authorization: rememberedDeviceAuthorization,
       });
       assert.equal(result.status, 200);
       assert.equal(typeof result.body.device_authorization, "string");
       const latestCustomerRead = reads.filter(row => row.table === "isp_customers").at(-1);
       assert.ok(latestCustomerRead);
-      assert.ok(!latestCustomerRead.query.includes("password"), "token verification should not fetch the account password");
+      assert.ok(!latestCustomerRead.query.includes("password"), "MAC-only redemption must not fetch account passwords");
     });
     await t.test("unknown or cross-service device cannot see or spend another balance", async () => {
       const saved = customer;
@@ -203,40 +200,46 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
       paidTransaction = null;
       balance = 5;
     });
-    await t.test("a copied MAC alone cannot spend rewards or recover a checkout", async () => {
-      const key = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-      const before = redemptions.length;
-      for (const account_credentials of [null, { username: credentials.username, password: "incorrect" }]) {
-        const result = await request("redeem", { plan_id: 41, idempotency_key: key, account_credentials });
-        assert.equal(result.status, 401);
-        assert.equal(result.body.verificationRequired, true);
-        const recovery = await request("quote", { plan_id: 41, idempotency_key: key, account_credentials });
-        assert.equal(recovery.status, account_credentials ? 401 : 200);
-        assert.equal(Boolean(recovery.body.pendingCheckoutId), false);
+    await t.test("MAC-only redemption still works when device-token signing is unavailable", async () => {
+      const sessionSecret = process.env.SESSION_SECRET;
+      const tokenSigningSecret = process.env.TOKEN_SIGNING_SECRET;
+      delete process.env.SESSION_SECRET;
+      delete process.env.TOKEN_SIGNING_SECRET;
+      try {
+        const result = await request("redeem", { plan_id: 41,
+          idempotency_key: "eeeeeeee-bbbb-4ccc-8ddd-eeeeeeeeeeee" });
+        assert.equal(result.status, 200);
+        assert.equal(typeof result.body.device_authorization, "undefined");
+        assert.equal(redemptions.at(-1)?.p_phone, phone);
+      } finally {
+        if (sessionSecret === undefined) delete process.env.SESSION_SECRET;
+        else process.env.SESSION_SECRET = sessionSecret;
+        if (tokenSigningSecret === undefined) delete process.env.TOKEN_SIGNING_SECRET;
+        else process.env.TOKEN_SIGNING_SECRET = tokenSigningSecret;
       }
-      assert.equal(redemptions.length, before);
-      await request("quote", { plan_id: 41, idempotency_key: key }); // Correct proof clears the guessing bucket.
     });
-    await t.test("credentials from a different identity or service cannot authorize this wallet", async () => {
-      const key = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    await t.test("disabled and suspended scoped accounts cannot redeem", async () => {
+      const saved = customer;
       const before = redemptions.length;
-      for (const change of [{ id: 99 }, { admin_id: 8 }, { phone: "254700000009" },
-        { router_id: 32 }, { port_id: 43 }, { mac_address: "11:22:33:44:55:66" }, { status: "suspended" }]) {
-        proofOverride = { ...customer, ...change };
-        assert.equal((await request("redeem", { plan_id: 41, idempotency_key: key })).status, 401);
-        proofOverride = undefined;
-        assert.equal((await request("quote", { plan_id: 41, idempotency_key: key })).status, 200);
+      for (const status of ["suspended", "disabled"]) {
+        customer = { ...saved, status };
+        const result = await request("redeem", { plan_id: 41,
+          idempotency_key: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" });
+        assert.equal(result.status, 409);
+        assert.equal(redemptions.length, before);
       }
-      assert.equal(redemptions.length, before);
+      customer = saved;
     });
-    await t.test("expired accounts may buy a new entitlement, but suspended accounts may not", async () => {
+    await t.test("expired accounts may redeem a new entitlement, but suspended accounts may not", async () => {
       const saved = customer;
       customer = { ...saved, status: "expired" };
       assert.equal((await request("quote", { plan_id: 41,
         idempotency_key: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" })).status, 200);
+      assert.equal((await request("redeem", { plan_id: 41,
+        idempotency_key: "cccccccc-bbbb-4ccc-8ddd-eeeeeeeeeeee" })).status, 200);
       customer = { ...saved, status: "suspended" };
       assert.equal((await request("redeem", { plan_id: 41,
-        idempotency_key: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" })).status, 401);
+        idempotency_key: "dddddddd-bbbb-4ccc-8ddd-eeeeeeeeeeee" })).status, 409);
       customer = saved;
     });
     await t.test("database failures are not presented as a zero balance", async () => {
@@ -244,14 +247,9 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
       assert.equal((await request("balance")).status, 503);
       failReads = false;
     });
-    await t.test("repeated wrong passwords are rate limited without a debit", async () => {
-      const key = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-      await request("quote", { plan_id: 41, idempotency_key: key });
+    await t.test("invalid idempotency keys are rejected before points are debited", async () => {
       const before = redemptions.length;
-      for (let i = 0; i < 6; i++) assert.equal((await request("redeem", {
-        plan_id: 41, idempotency_key: key, account_credentials: { ...credentials, password: "incorrect" },
-      })).status, 401);
-      assert.equal((await request("redeem", { plan_id: 41, idempotency_key: key })).status, 429);
+      assert.equal((await request("redeem", { plan_id: 41, idempotency_key: "not-a-uuid" })).status, 400);
       assert.equal(redemptions.length, before);
     });
   } finally {

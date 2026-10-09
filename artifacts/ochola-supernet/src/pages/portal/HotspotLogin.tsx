@@ -29,7 +29,6 @@ import {
   forgetHotspotLoyaltyDeviceAuthorization,
   isVerificationRequired,
   loyaltyDeviceAuthorizationPayload,
-  normalizeConfirmedCredentials,
   readStoredHotspotLoyaltyDeviceAuthorization,
   readStoredHotspotCredentials,
   redeemOutcomeIsUncertain,
@@ -603,9 +602,6 @@ function HotspotLoginView({
   const [loyaltyCreds, setLoyaltyCreds] = useState<HotspotCredentials | null>(
     () => readStoredHotspotCredentials(typeof window !== "undefined" ? window.localStorage : null, hotspotLoginStorageKey(adminId)),
   );
-  const [loyaltyConfirmUser, setLoyaltyConfirmUser] = useState("");
-  const [loyaltyConfirmPass, setLoyaltyConfirmPass] = useState("");
-  const [loyaltyConfirmNotice, setLoyaltyConfirmNotice] = useState("");
   const [loginSession, setLoginSession] = useState<HotspotSession | null>(null);
   const [troubleshootLoading, setTroubleshootLoading] = useState(false);
   const [troubleshootMessage, setTroubleshootMessage] = useState("");
@@ -867,9 +863,8 @@ function HotspotLoginView({
           try {
             forgetHotspotLoyaltyDeviceAuthorization(window.localStorage, loyaltyDeviceAuthorizationStorageKey);
           } catch {}
-          setLoyaltyConfirmNotice("Confirm your hotspot account to use points.");
         }
-        throw new Error("Confirm your hotspot account to use points.");
+        throw new Error("The loyalty balance could not be confirmed.");
       }
       if (!response.ok || data.ok !== true || typeof data.balance !== "number" || typeof data.pointsAwarded !== "number") {
         throw new Error(data.error || "Points could not be checked.");
@@ -1288,9 +1283,6 @@ function HotspotLoginView({
       return attempt?.checkoutId || attempt?.uncertain;
     })(),
   );
-  const needsLoyaltyConfirm = paymentMode === "data" && !loyaltyCreds && !loyaltyDeviceAuthorization
-    && !(selectedPlan && loyaltyAttemptsRef.current.get(`${loyaltyScopeKey}|${selectedPlan.id}`)?.checkoutId)
-    && (loyaltyRedeemable || pendingLoyaltyCheckout);
   const effectiveLoyaltyPayment: "mpesa" | "points" = pendingLoyaltyCheckout
     || (loyaltyRedeemable && (loyaltyPayment === "points" || !mpesaCheckoutAvailable)) ? "points" : "mpesa";
 
@@ -1329,16 +1321,6 @@ function HotspotLoginView({
       loyaltyAttemptsRef.current.set(attemptId, attempt);
     }
     if (!attempt.checkoutId && !attempt.uncertain && !loyaltyRedeemable) return;
-    let creds = loyaltyCreds;
-    let typedCreds = false;
-    if (!creds && !loyaltyDeviceAuthorization && !attempt.checkoutId) {
-      creds = normalizeConfirmedCredentials(loyaltyConfirmUser, loyaltyConfirmPass);
-      typedCreds = Boolean(creds);
-      if (!creds) {
-        setLoyaltyConfirmNotice("Enter your hotspot account username and password to use points.");
-        return;
-      }
-    }
     loyaltyRedeemInFlight.current = true;
     setLoyaltyRedeemLoading(true);
     setPayError(null);
@@ -1352,8 +1334,6 @@ function HotspotLoginView({
             plan_id: plan.id,
             mac_address: macAddress,
             idempotency_key: attempt.key,
-            ...accountCredentialsPayload(creds),
-            ...loyaltyDeviceAuthorizationPayload(loyaltyDeviceAuthorization),
             ...(adminId ? { adminId } : {}),
             ...(loyaltyRouterId ? { router_id: loyaltyRouterId } : {}),
             ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
@@ -1371,16 +1351,6 @@ function HotspotLoginView({
           device_authorization?: string;
           device_authorization_expires_at?: number;
         };
-        if (isVerificationRequired(response.status, result)) {
-          setLoyaltyCreds(null);
-          setLoyaltyDeviceAuthorization(null);
-          try {
-            forgetHotspotLoyaltyDeviceAuthorization(window.localStorage, loyaltyDeviceAuthorizationStorageKey);
-          } catch {}
-          setLoyaltyConfirmPass("");
-          setLoyaltyConfirmNotice("We could not confirm that hotspot account. Check the details and try again.");
-          return;
-        }
         if (!response.ok || !result.ok || !result.checkout_id) {
           if (redeemOutcomeIsUncertain(response.status)) {
             attempt.uncertain = true;
@@ -1402,12 +1372,6 @@ function HotspotLoginView({
           } catch {}
           setLoyaltyDeviceAuthorization(result.device_authorization);
         }
-        if (typedCreds && creds) {
-          storeHotspotCredentials(loginCredentialsStorageKey, creds);
-          setLoyaltyCreds(creds);
-        }
-        setLoyaltyConfirmPass("");
-        setLoyaltyConfirmNotice("");
       }
       setSelectedPlan(plan);
       setLoyaltyPaidWithPoints(true);
@@ -3480,6 +3444,11 @@ function HotspotLoginView({
                                                 </label>}
                                               </div>
                                             )}
+                                            {effectiveLoyaltyPayment === "points" && (
+                                              <p style={{ margin: "9px 0 0", color: "rgba(255,255,255,.68)", lineHeight: 1.45 }}>
+                                                Redeem to assign your Hotspot account automatically. No username or password is needed.
+                                              </p>
+                                            )}
                                           </>
                                         ) : (
                                           <div role="status" style={{ display: "flex", gap: 7, alignItems: "flex-start", lineHeight: 1.45 }}>
@@ -3487,18 +3456,6 @@ function HotspotLoginView({
                                             <span>Points could not be checked. You can still continue with M-Pesa checkout.</span>
                                           </div>
                                         )}
-                                      </div>
-                                    )}
-
-                                    {effectiveLoyaltyPayment === "points" && needsLoyaltyConfirm && (
-                                      <div role="group" aria-label="Confirm hotspot account" style={{ margin: "10px 0", display: "grid", gap: 8 }}>
-                                        <p style={{ fontSize: 12, margin: 0, color: "rgba(255,255,255,.7)" }}>
-                                          {loyaltyConfirmNotice || "Confirm your hotspot account once on this device. Future point redemptions will not ask again."}
-                                        </p>
-                                        <input className="hp-input" type="text" autoComplete="username" placeholder="Hotspot username"
-                                          value={loyaltyConfirmUser} onChange={e => setLoyaltyConfirmUser(e.target.value)} />
-                                        <input className="hp-input" type="password" autoComplete="current-password" placeholder="Hotspot password"
-                                          value={loyaltyConfirmPass} onChange={e => setLoyaltyConfirmPass(e.target.value)} />
                                       </div>
                                     )}
 
@@ -3511,7 +3468,6 @@ function HotspotLoginView({
 
                                     <button type="submit" disabled={effectiveLoyaltyPayment === "points"
                                       ? loyaltyRedeemLoading || !(loyaltyRedeemable || pendingLoyaltyCheckout)
-        || (needsLoyaltyConfirm && !normalizeConfirmedCredentials(loyaltyConfirmUser, loyaltyConfirmPass))
                                       : payLoading || !canAttemptHotspotCheckout(mpesaStatus, HOTSPOT_RUNTIME_CONFIG.previewOnly)} className="hp-btn hp-btn-mpesa">
                                       {effectiveLoyaltyPayment === "points" ? loyaltyRedeemLoading ? (
                                         <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Redeeming points…</>

@@ -24,6 +24,7 @@ function fixture(responder?: Responder) {
   };
   const state = { balance: 5, hasAccount: true, canRedeem: true, pointsRequired: 5 };
   const intervals: Array<{ callback: () => void; ms: number }> = [];
+  const assignments: string[] = [];
   const context = vm.createContext({
     PORTAL_ADMIN_ID: 7, PORTAL_ROUTER_ID: 31, PORTAL_PORT_ID: 0,
     PORTAL_DEVICE_MAC: "AA:BB:CC:DD:EE:FF", PORTAL_PREVIEW_ONLY: false,
@@ -45,7 +46,7 @@ function fixture(responder?: Responder) {
       const r = await responder!(path, body);
       return { ok: r.ok, status: r.status, data: await r.json() };
     },
-    assignPaidHotspotAccess: async () => {},
+    assignPaidHotspotAccess: async (checkoutId: string) => { assignments.push(checkoutId); },
     escapePortalText: (value: string) => value,
     loadPortalLoyaltyBalance: () => {},
     fetch: async (path: string, options: { body: string }) => {
@@ -55,7 +56,7 @@ function fixture(responder?: Responder) {
     },
   });
   vm.runInContext(helpers, context);
-  return { context, requests, title, status, state, intervals, storedValues };
+  return { context, requests, title, status, state, intervals, storedValues, assignments };
 }
 
 test("RouterOS loyalty card automatically loads the MAC balance without a phone or package", async () => {
@@ -104,30 +105,27 @@ test("RouterOS points are not shown for an unidentified device", () => {
 const reply = (status: number, body: unknown) => ({ ok: status < 400, status, json: async () => body });
 const eligible = { ok: true, balance: 5, pointsRequired: 5, pointsAwarded: 0, canRedeem: true, pendingCheckoutId: null };
 
-test("RouterOS trusted-device token skips the account prompt and is refreshed after redemption", async () => {
+test("RouterOS MAC-only loyalty redemption needs no credentials and assigns the plan automatically", async () => {
   const f = fixture(async path => path.endsWith("/redeem")
     ? reply(200, {
       ok: true,
       checkout_id: "LOYALTY-test",
-      device_authorization: "refreshed-device-token",
-      device_authorization_expires_at: Date.now() + 60_000,
     })
     : reply(200, eligible));
   f.context.selectedPlan = { id: 41, name: "Five", price: 5 };
   f.context.loyQuote = { balance: 5, pointsRequired: 5, pointsAwarded: 0, canRedeem: true };
   f.context.loyState = "ready";
-  f.context.loyDeviceAuthorization = "previous-device-token";
+  f.context.loyCreds = null;
+  f.context.loyDeviceAuthorization = "";
   f.context.setLoyaltyMode("points");
-  assert.equal(f.context.loyaltyNeedsConfirm(), false);
   f.context.redeemLoyaltyPoints();
   await tick(); await tick(); await tick();
   const redemption = f.requests.find(row => row.path.endsWith("/redeem"));
   assert.ok(redemption);
-  assert.equal(redemption.body.device_authorization, "previous-device-token");
   assert.equal("account_credentials" in redemption.body, false);
-  assert.equal(f.context.loyDeviceAuthorization, "refreshed-device-token");
+  assert.equal("device_authorization" in redemption.body, false);
   assert.equal(f.context.loyPaidWithPoints, true);
-  assert.ok([...f.storedValues.values()].some(value => value.includes("refreshed-device-token")));
+  assert.deepEqual(f.assignments, ["LOYALTY-test"]);
 });
 
 test("RouterOS quote 401 clears bad proof and refreshes public eligibility once with the same nonce", async () => {
@@ -145,7 +143,6 @@ test("RouterOS quote 401 clears bad proof and refreshes public eligibility once 
   assert.equal(f.requests[1].body.idempotency_key, "nonce-1");
   assert.equal(f.context.loyCreds, null);
   assert.equal(f.context.loyaltyRedeemable(), true);
-  assert.equal(f.context.loyaltyNeedsConfirm(), true);
 });
 
 test("RouterOS network or non-JSON redeem errors stay in points mode and retry with the same key", async () => {
@@ -170,21 +167,19 @@ test("RouterOS network or non-JSON redeem errors stay in points mode and retry w
   assert.equal(redeems[0].body.idempotency_key, redeems[1].body.idempotency_key);
 });
 
-test("RouterOS redeem 401 with wrong or malformed proof prompts for correction without validating on input", async () => {
+test("RouterOS MAC-only redemption has no username/password prompt or credential request", async () => {
   const f = fixture(async path => path.endsWith("/redeem")
-    ? reply(401, { verificationRequired: true, error: "Verification required" })
+    ? reply(200, { ok: true, checkout_id: "LOYALTY-mac-only" })
     : reply(200, eligible));
   f.context.selectedPlan = { id: 41, name: "Five", price: 5 };
-  f.context.loyCreds = { username: "x", password: "y" };
+  f.context.loyCreds = null;
+  f.context.loyDeviceAuthorization = "";
   f.context.loadLoyaltyQuoteForPlan();
   await tick();
   f.context.redeemLoyaltyPoints(); await tick(); await tick();
-  assert.equal(f.context.loyCreds, null);
-  assert.equal(f.context.loyaltyNeedsConfirm(), true);
-  assert.match(f.context.loyConfirmNotice, /could not confirm/);
-  assert.equal(f.requests.filter(r => r.path.endsWith("/redeem")).length, 1);
-  // No further requests happen until the user submits again.
-  await tick();
-  assert.equal(f.requests.filter(r => r.path.endsWith("/redeem")).length, 1);
-  assert.equal(f.context.loyaltyEffectiveMode(), "mpesa");
+  const redemption = f.requests.find(row => row.path.endsWith("/redeem"));
+  assert.ok(redemption);
+  assert.equal("account_credentials" in redemption.body, false);
+  assert.equal("device_authorization" in redemption.body, false);
+  assert.equal(f.context.loyPaidWithPoints, true);
 });
