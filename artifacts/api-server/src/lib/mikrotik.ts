@@ -3405,6 +3405,7 @@ export async function reconcileHotspotUserAccess(
     enabled: boolean;
     limitBytesTotal?: string;
     address?: string | null;
+    updateUserAddress?: boolean;
     macAddress?: string | null;
     rateLimit?: string;
     dataCapMode?: "disconnect" | "throttle";
@@ -3436,7 +3437,11 @@ export async function reconcileHotspotUserAccess(
     profile: opts.profile,
     server: opts.server,
     comment: opts.comment,
-    address: opts.address !== undefined ? opts.address ?? "" : undefined,
+    address: opts.updateUserAddress === false
+      ? undefined
+      : opts.address !== undefined
+        ? opts.address ?? ""
+        : undefined,
     limitBytesTotal: opts.limitBytesTotal,
     disabled: !enabled,
   });

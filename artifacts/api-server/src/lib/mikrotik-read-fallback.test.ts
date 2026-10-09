@@ -1131,6 +1131,74 @@ test("a real RouterOS update failure is not hidden by retrying add", async () =>
   });
 });
 
+test("Hotspot expiry edits preserve an unchanged router user IP assignment", async () => {
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/user/profile/print") {
+      return [{ ".id": "*p1", name: "tv-package" }];
+    }
+    if (command[0] === "/system/clock/print") {
+      return [{ date: "oct/09/2026", time: "12:00:00" }];
+    }
+    if (command[0] === "/system/scheduler/print") return [];
+    if (command[0] === "/ip/hotspot/user/print") {
+      return [{ ".id": "*7", name: "paid-tv-account", server: "all" }];
+    }
+    if (command[0] === "/ip/hotspot/user/set") {
+      if (command.some(parameter => parameter.startsWith("=address="))) {
+        throw new Error("failure: already have user with this IP address");
+      }
+      return [];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    await reconcileHotspotUserAccess(routerCredentials(port), {
+      name: "paid-tv-account",
+      password: "12345",
+      profile: "tv-package",
+      enabled: true,
+      expiresAt: "2027-11-30T12:00:00.000Z",
+      address: "192.168.88.20",
+      updateUserAddress: false,
+      resetCounters: false,
+    });
+
+    const userUpdate = commands.find(({ command }) => command[0] === "/ip/hotspot/user/set")?.command;
+    assert.ok(userUpdate);
+    assert.equal(userUpdate.some(parameter => parameter.startsWith("=address=")), false);
+    assert.ok(commands.some(({ command }) => command[0] === "/system/scheduler/add"));
+  });
+});
+
+test("Hotspot user reconciliation still applies an explicitly changed IP", async () => {
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/user/profile/print") {
+      return [{ ".id": "*p1", name: "tv-package" }];
+    }
+    if (command[0] === "/system/clock/print") {
+      return [{ date: "oct/09/2026", time: "12:00:00" }];
+    }
+    if (command[0] === "/system/scheduler/print") return [];
+    if (command[0] === "/ip/hotspot/user/print") {
+      return [{ ".id": "*7", name: "paid-tv-account", server: "all" }];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    await reconcileHotspotUserAccess(routerCredentials(port), {
+      name: "paid-tv-account",
+      password: "12345",
+      profile: "tv-package",
+      enabled: true,
+      expiresAt: "2027-11-30T12:00:00.000Z",
+      address: "192.168.88.21",
+      updateUserAddress: true,
+      resetCounters: false,
+    });
+
+    const userUpdate = commands.find(({ command }) => command[0] === "/ip/hotspot/user/set")?.command;
+    assert.ok(userUpdate?.includes("=address=192.168.88.21"));
+  });
+});
+
 test("RouterOS hotspot directories use the supported file/add API command", async (t) => {
   await t.test("creates and verifies a missing directory", async () => {
     let created = false;

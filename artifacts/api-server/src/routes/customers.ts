@@ -517,6 +517,8 @@ async function reconcileCustomerAccess(
     const address = String(
       updates.ip_address === undefined ? current.ip_address ?? "" : updates.ip_address ?? "",
     ).trim();
+    const updateHotspotUserAddress = updates.ip_address !== undefined
+      && address !== String(current.ip_address ?? "").trim();
     const rateLimit = routerRateLimit(
       plan.speed_down,
       plan.speed_up,
@@ -655,6 +657,7 @@ async function reconcileCustomerAccess(
         enabled,
         limitBytesTotal,
         address: address || null,
+        updateUserAddress: updateHotspotUserAddress,
         macAddress: String(updates.mac_address ?? current.mac_address ?? "").trim() || null,
         rateLimit,
         dataCapMode: planDataPolicy.dataCapMode,
