@@ -469,7 +469,7 @@ router.get("/admin/payment-gateway", async (req: Request, res: Response): Promis
     return;
   }
   if (!(await requireAdminPaymentChange(req, res, adminId))) return;
-  const settings = await getAdminPaymentSettings(adminId);
+  const settings = await getAdminPaymentSettings(adminId, { useSharedGateway: true });
   res.set("Cache-Control", "no-store").json({
     ok: true,
     settings: { paymentGateway: settings.paymentGateway },
