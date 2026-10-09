@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
-import { supabase } from "@/lib/supabase";
+import { superAdminApiFetch } from "@/lib/api-client";
 import {
   Activity, AlertTriangle, ArrowUpRight, BarChart3, CheckCircle2,
   Database, Gauge, Globe, ReceiptText, RefreshCw, Router, ShieldAlert,
@@ -55,6 +55,12 @@ interface PlatformTransaction {
   paymentMethod: string;
   status: string;
   createdAt: string | null;
+}
+interface PlatformData {
+  admins: AdminRecord[];
+  routers: RouterRecord[];
+  customers: CustomerRecord[];
+  plans: PlanRecord[];
 }
 
 function formatKes(amount: number | undefined): string {
@@ -123,50 +129,26 @@ export default function SuperAdminDashboard() {
   const [lastRefresh, setLastRefresh] = React.useState(() => new Date());
   const [transactionSearch, setTransactionSearch] = React.useState("");
 
-  const adminsQuery = useQuery<AdminRecord[]>({
-    queryKey: ["sa_all_admins"],
+  const platformDataQuery = useQuery<PlatformData>({
+    queryKey: ["sa_platform_data"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_admins")
-        .select("id,name,username,email,is_active,subdomain,role,created_at")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
+      const response = await superAdminApiFetch("/api/super-admin/platform-data", { cache: "no-store" });
+      const result = await response.json() as { ok?: boolean; error?: string } & Partial<PlatformData>;
+      if (!response.ok || !result.ok || !result.admins || !result.routers || !result.customers || !result.plans) {
+        throw new Error(result.error || "Platform reporting data could not be loaded.");
+      }
+      return {
+        admins: result.admins,
+        routers: result.routers,
+        customers: result.customers,
+        plans: result.plans,
+      };
     },
   });
-  const routersQuery = useQuery<RouterRecord[]>({
-    queryKey: ["sa_all_routers"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_routers")
-        .select("id,name,host,status,admin_id")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
-    },
-  });
-  const customersQuery = useQuery<CustomerRecord[]>({
-    queryKey: ["sa_all_customers"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_customers")
-        .select("id,admin_id,is_active")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
-    },
-  });
-  const plansQuery = useQuery<PlanRecord[]>({
-    queryKey: ["sa_all_plans"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_plans")
-        .select("id,admin_id,type")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
-    },
-  });
+  const adminsQuery = { ...platformDataQuery, data: platformDataQuery.data?.admins };
+  const routersQuery = { ...platformDataQuery, data: platformDataQuery.data?.routers };
+  const customersQuery = { ...platformDataQuery, data: platformDataQuery.data?.customers };
+  const plansQuery = { ...platformDataQuery, data: platformDataQuery.data?.plans };
   const incomeQuery = useQuery<PlatformIncomeSummary>({
     queryKey: ["sa_platform_income"],
     queryFn: async () => {

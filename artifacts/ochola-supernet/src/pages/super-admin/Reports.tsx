@@ -1,10 +1,17 @@
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
-import { supabase } from "@/lib/supabase";
+import { superAdminApiFetch } from "@/lib/api-client";
 import { BarChart3, Users, Router, Loader2, TrendingUp, Globe, FileText } from "lucide-react";
 
 const C = { card: "rgba(255,255,255,0.04)", border: "var(--isp-accent-glow)", accent: "var(--isp-accent)", text: "#e2e8f0", muted: "#64748b", sub: "#94a3b8" };
+
+interface ReportsData {
+  admins: Array<{ id: number; name: string | null; is_active: boolean | null; created_at: string | null }>;
+  routers: Array<{ id: number; admin_id: number; status: string | null; created_at: string | null }>;
+  customers: Array<{ id: number; admin_id: number; is_active: boolean | null; type: string; created_at: string | null }>;
+  plans: Array<{ id: number; admin_id: number; type: string; price: number | null }>;
+}
 
 function Kpi({ label, value, sub, color, icon: Icon, loading }: { label: string; value: string | number; sub?: string; color: string; icon: React.ElementType; loading?: boolean }) {
   return (
@@ -24,10 +31,30 @@ function Kpi({ label, value, sub, color, icon: Icon, loading }: { label: string;
 }
 
 export default function SuperAdminReports() {
-  const { data: admins = [], isLoading: la } = useQuery({ queryKey: ["sa_rpt_admins"], queryFn: async () => { const { data } = await supabase.from("isp_admins").select("id,name,is_active,created_at"); return data ?? []; } });
-  const { data: routers = [], isLoading: lr } = useQuery({ queryKey: ["sa_rpt_routers"], queryFn: async () => { const { data } = await supabase.from("isp_routers").select("id,admin_id,status,created_at"); return data ?? []; } });
-  const { data: customers = [], isLoading: lc } = useQuery({ queryKey: ["sa_rpt_customers"], queryFn: async () => { const { data } = await supabase.from("isp_customers").select("id,admin_id,is_active,type,created_at"); return data ?? []; } });
-  const { data: plans = [], isLoading: lp } = useQuery({ queryKey: ["sa_rpt_plans"], queryFn: async () => { const { data } = await supabase.from("isp_plans").select("id,admin_id,type,price"); return data ?? []; } });
+  const { data, isLoading: loading } = useQuery<ReportsData>({
+    queryKey: ["sa_platform_data"],
+    queryFn: async () => {
+      const response = await superAdminApiFetch("/api/super-admin/platform-data", { cache: "no-store" });
+      const result = await response.json() as { ok?: boolean; error?: string } & Partial<ReportsData>;
+      if (!response.ok || !result.ok || !result.admins || !result.routers || !result.customers || !result.plans) {
+        throw new Error(result.error || "Platform reporting data could not be loaded.");
+      }
+      return {
+        admins: result.admins,
+        routers: result.routers,
+        customers: result.customers,
+        plans: result.plans,
+      };
+    },
+  });
+  const admins = data?.admins ?? [];
+  const routers = data?.routers ?? [];
+  const customers = data?.customers ?? [];
+  const plans = data?.plans ?? [];
+  const la = loading;
+  const lr = loading;
+  const lc = loading;
+  const lp = loading;
 
   const activeAdmins = admins.filter(a => a.is_active !== false).length;
   const activeCustomers = customers.filter(c => c.is_active !== false).length;

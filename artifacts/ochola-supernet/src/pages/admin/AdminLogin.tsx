@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from "lucide-react";
-import { clearAdminAuth, clearPasswordSetupToken, setAdminAuth, setPasswordSetupToken, supabase } from "@/lib/supabase";
+import { clearAdminAuth, clearPasswordSetupToken, setAdminAuth, setPasswordSetupToken } from "@/lib/supabase";
+import { apiUrl } from "@/lib/api-client";
 import { getHostSubdomain } from "@/lib/subdomain";
 import { INITIAL_ADMIN_PASSWORD, INITIAL_ADMIN_USERNAME } from "@/lib/initial-admin-credentials";
 import { Logo } from "@/components/Logo";
@@ -52,14 +53,9 @@ export default function AdminLogin() {
     setCompanyLoading(true);
     void (async () => {
       try {
-        const { data } = await supabase
-          .from("isp_admins")
-          .select("id, name, subdomain")
-          .ilike("subdomain", sub)
-          .eq("is_active", true)
-          .limit(1)
-          .maybeSingle();
-        if (data) setCompany(data as CompanyInfo);
+        const response = await fetch(apiUrl(`/api/auth/company-info?subdomain=${encodeURIComponent(sub)}`), { cache: "no-store" });
+        const data = await response.json() as { company?: CompanyInfo | null };
+        if (response.ok && data.company) setCompany(data.company);
       } finally {
         setCompanyLoading(false);
       }

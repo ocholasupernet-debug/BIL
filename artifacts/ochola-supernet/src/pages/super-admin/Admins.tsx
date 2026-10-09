@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
-import { supabase } from "@/lib/supabase";
+import { superAdminApiFetch } from "@/lib/api-client";
 import {
   Users, Plus, Search, Edit2, Trash2, CheckCircle2, XCircle,
   Loader2, Globe, RefreshCw, ToggleLeft, ToggleRight, X, Save,
@@ -79,16 +79,23 @@ export default function SuperAdminAdmins() {
   const { data: admins = [], isLoading } = useQuery<Admin[]>({
     queryKey: ["sa_admins_list"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("isp_admins").select("id,name,username,email,phone,is_active,role,subdomain,created_at").order("id");
-      if (error) throw error;
-      return data ?? [];
+      const response = await superAdminApiFetch("/api/super-admin/admins", { cache: "no-store" });
+      const result = await response.json() as { ok?: boolean; admins?: Admin[]; error?: string };
+      if (!response.ok || !result.ok || !result.admins) {
+        throw new Error(result.error || "Administrator records could not be loaded.");
+      }
+      return result.admins;
     },
   });
 
   const toggleActive = useMutation({
     mutationFn: async ({ id, is_active }: { id: number; is_active: boolean }) => {
-      const { error } = await supabase.from("isp_admins").update({ is_active: !is_active }).eq("id", id);
-      if (error) throw error;
+      const response = await superAdminApiFetch(`/api/super-admin/admins/${id}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_active: !is_active }),
+      });
+      const result = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (!response.ok || !result.ok) throw new Error(result.error || "Administrator status could not be updated.");
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["sa_admins_list"] }); showToast("Status updated"); },
     onError: (e: Error) => showToast(`Error: ${e.message}`, false),
@@ -97,12 +104,8 @@ export default function SuperAdminAdmins() {
   const createAdmin = useMutation({
     mutationFn: async (f: AdminForm) => {
       const slug = makeUniqueSubdomain(f.name, f.subdomain, admins);
-      const response = await fetch("/api/super-admin/admins", {
+      const response = await superAdminApiFetch("/api/super-admin/admins", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-sa-token": localStorage.getItem("ochola_superadmin_token") || "",
-        },
         body: JSON.stringify({ ...f, subdomain: slug }),
       });
       const result = await response.json().catch(() => ({}));
@@ -117,12 +120,8 @@ export default function SuperAdminAdmins() {
   const updateAdmin = useMutation({
     mutationFn: async ({ id, f }: { id: number; f: AdminForm }) => {
       const slug = makeUniqueSubdomain(f.name, f.subdomain, admins, id);
-      const response = await fetch(`/api/super-admin/admins/${id}`, {
+      const response = await superAdminApiFetch(`/api/super-admin/admins/${id}`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "x-sa-token": localStorage.getItem("ochola_superadmin_token") || "",
-        },
         body: JSON.stringify({ ...f, subdomain: slug }),
       });
       const result = await response.json().catch(() => ({}));
@@ -136,8 +135,9 @@ export default function SuperAdminAdmins() {
 
   const deleteAdmin = useMutation({
     mutationFn: async (id: number) => {
-      const { error } = await supabase.from("isp_admins").delete().eq("id", id);
-      if (error) throw error;
+      const response = await superAdminApiFetch(`/api/super-admin/admins/${id}`, { method: "DELETE" });
+      const result = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (!response.ok || !result.ok) throw new Error(result.error || "Administrator could not be deleted.");
     },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["sa_admins_list"] }); setDeleting(null); showToast("Admin deleted"); },
     onError: (e: Error) => showToast(`Error: ${e.message}`, false),

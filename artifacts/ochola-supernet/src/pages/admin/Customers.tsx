@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { StatCard } from "@/components/ui/StatCard";
 import { Badge } from "@/components/ui/badge";
-import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
+import { ADMIN_ID, type DbCustomer } from "@/lib/supabase";
 import {
   Search, Plus, Edit, Trash, Download, Loader2, Users,
   Wifi, Network, Globe, Eye, EyeOff, RefreshCw, X,
@@ -11,7 +11,8 @@ import {
 } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 import { getCurrencySymbol } from "@/lib/utils";
-import { apiUrl, parseJsonResponse } from "@/lib/api-client";
+import { adminApiFetch } from "@/lib/api-client";
+import { fetchAdminRouterContext, fetchAdminRouterManagementContext } from "@/lib/admin-router-context";
 import { getCustomerServiceStatus } from "@/lib/customer-service-status";
 
 /* ══════════════════════════ Types ══════════════════════════ */
@@ -93,27 +94,41 @@ function emptyForm(type: CustomerType = "hotspot"): NewCustomerForm {
 
 /* ══════════════════════════ DB helpers ══════════════════════════ */
 async function fetchCustomers(): Promise<DbCustomer[]> {
-  const { data, error } = await supabase.from("isp_customers").select("*").eq("admin_id", ADMIN_ID).order("created_at", { ascending: false });
-  if (error) throw error;
-  return data ?? [];
+  const response = await adminApiFetch(`/api/customers?adminId=${ADMIN_ID}`, { cache: "no-store" });
+  const result = await response.json() as DbCustomer[] | { error?: string };
+  if (!response.ok || !Array.isArray(result)) {
+    throw new Error(!Array.isArray(result) && result.error ? result.error : "Customers could not be loaded.");
+  }
+  return result.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
 }
 async function fetchPlans(): Promise<PlanLite[]> {
-  const { data, error } = await supabase
-    .from("isp_plans")
-    .select("id,name,type,price,speed_down,speed_up,router_id,port_id")
-    .eq("admin_id", ADMIN_ID)
-    .or("port_id.is.null,type.eq.vlan")
-    .order("type")
-    .order("price");
-  if (error) throw error;
-  return (data ?? []).filter(plan =>
+  const context = await fetchAdminRouterContext();
+  return context.plans
+    .filter(plan =>
     plan.port_id == null ? plan.type !== "vlan" : plan.type === "vlan",
-  );
+    )
+    .sort((a, b) => String(a.type).localeCompare(String(b.type)) || Number(a.price ?? 0) - Number(b.price ?? 0))
+    .map(plan => ({
+      id: plan.id,
+      name: plan.name,
+      type: plan.type,
+      price: Number(plan.price ?? 0),
+      speed_down: Number(plan.speed_down ?? 0),
+      speed_up: Number(plan.speed_up ?? 0),
+      router_id: plan.router_id,
+      port_id: plan.port_id,
+    }));
 }
 async function fetchRouters(): Promise<RouterLite[]> {
-  const { data, error } = await supabase.from("isp_routers").select("id,name,host,status").eq("admin_id", ADMIN_ID).not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
-  if (error) throw error;
-  return data ?? [];
+  const context = await fetchAdminRouterManagementContext();
+  return context.routers
+    .filter(router => !["setup", "awaiting_ports", "awaiting_sync", "awaiting_connection"].includes(router.status))
+    .map(router => ({
+    id: router.id,
+    name: router.name,
+    host: router.host,
+    status: router.status,
+    }));
 }
 
 async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise<void> {
@@ -126,13 +141,8 @@ async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise
     if (!plan || plan.type !== "vlan" || !plan.router_id || !plan.port_id) {
       throw new Error("Select a VLAN plan attached to a router and VLAN service port.");
     }
-    const token = getAdminApiToken();
-    const response = await fetch(apiUrl("/api/customers"), {
+    const response = await adminApiFetch("/api/customers", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
       body: JSON.stringify({
         adminId: ADMIN_ID,
         name: form.name.trim(),
@@ -147,70 +157,41 @@ async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise
         expiryDate: form.expires_at ? new Date(form.expires_at).toISOString() : null,
       }),
     });
-    const payload = await parseJsonResponse<{ error?: string }>(response);
+    const payload = await response.json().catch(() => ({})) as { error?: string };
     if (!response.ok) throw new Error(payload.error || `VLAN customer could not be created (${response.status}).`);
     return;
   }
 
-  // 1. Insert to isp_customers
-  const { error: custErr } = await supabase.from("isp_customers").insert({
-    admin_id:      ADMIN_ID,
-    name:          form.name || null,
-    username:      form.username || null,
-    password:      form.password,
-    email:         form.email || null,
-    phone:         form.phone || null,
-    type:          form.type,
-    plan_id:       form.plan_id || null,
-    status:        "active",
-    ip_address:    form.ip_address || null,
-    mac_address:   form.mac_address || null,
-    pppoe_username: form.type === "pppoe" ? (form.pppoe_username || form.username) : null,
-    expires_at:    form.expires_at ? new Date(form.expires_at).toISOString() : null,
-    custom_fields: form.custom_fields.length > 0
-      ? Object.fromEntries(form.custom_fields.filter(f => f.value.trim()).map(f => [f.name, f.value]))
-      : null,
+  const response = await adminApiFetch("/api/customers", {
+    method: "POST",
+    body: JSON.stringify({
+      adminId: ADMIN_ID,
+      name: form.name.trim(),
+      username: form.username.trim(),
+      password: form.password,
+      email: form.email.trim() || null,
+      phone: form.phone.trim() || null,
+      type: form.type,
+      planId: plan?.id ?? null,
+      ipAddress: form.ip_address.trim() || null,
+      macAddress: form.mac_address.trim() || null,
+      pppoeUsername: form.type === "pppoe" ? (form.pppoe_username.trim() || form.username.trim()) : null,
+      expiryDate: form.expires_at ? new Date(form.expires_at).toISOString() : null,
+      status: "active",
+      staticNetmask: form.subnet_mask || "255.255.255.0",
+      staticGateway: form.gateway_ip.trim() || null,
+      pppoeIpAssign: form.ip_assign,
+      customFields: form.custom_fields.filter(field => field.value.trim()),
+    }),
   });
-  if (custErr) throw custErr;
-
-  // 2. RADIUS: core auth entry
-  const radRows: { username: string; attribute: string; op: string; value: string }[] = [
-    { username: radUsername, attribute: "Cleartext-Password", op: ":=", value: form.password },
-  ];
-
-  // Type-specific RADIUS attributes
-  if (form.type === "static" && form.ip_address) {
-    radRows.push({ username: radUsername, attribute: "Framed-IP-Address",  op: ":=", value: form.ip_address });
-    radRows.push({ username: radUsername, attribute: "Framed-IP-Netmask",  op: ":=", value: form.subnet_mask || "255.255.255.0" });
-    if (form.gateway_ip)
-      radRows.push({ username: radUsername, attribute: "Framed-Route", op: ":=", value: form.gateway_ip });
-  }
-  if (form.type === "pppoe" && form.ip_assign === "static" && form.ip_address) {
-    radRows.push({ username: radUsername, attribute: "Framed-IP-Address", op: ":=", value: form.ip_address });
-  }
-  if (form.type === "hotspot" && form.mac_address) {
-    radRows.push({ username: radUsername, attribute: "Calling-Station-Id", op: ":=", value: form.mac_address });
-  }
-  if (form.expires_at) {
-    radRows.push({ username: radUsername, attribute: "Expiration", op: ":=", value: new Date(form.expires_at).toDateString() });
-  }
-
-  const { error: radErr } = await supabase.from("radcheck").insert(radRows);
-  if (radErr) throw radErr;
-
-  // 3. RADIUS: plan group linkage
-  if (plan) {
-    await supabase.from("radusergroup").insert({ username: radUsername, groupname: plan.name, priority: 1 });
-  }
+  const result = await response.json().catch(() => ({})) as { error?: string };
+  if (!response.ok) throw new Error(result.error || "Customer could not be created.");
 }
 
 async function deleteCustomer(c: DbCustomer): Promise<void> {
-  const radUsername = c.pppoe_username || c.username;
-  await supabase.from("isp_customers").delete().eq("id", c.id).eq("admin_id", ADMIN_ID);
-  if (radUsername) {
-    await supabase.from("radcheck").delete().eq("username", radUsername);
-    await supabase.from("radusergroup").delete().eq("username", radUsername);
-  }
+  const response = await adminApiFetch(`/api/customers/${c.id}?adminId=${ADMIN_ID}`, { method: "DELETE" });
+  const result = await response.json().catch(() => ({})) as { error?: string };
+  if (!response.ok) throw new Error(result.error || "Customer could not be deleted.");
 }
 
 /* ══════════════════════════ Form Field ══════════════════════════ */
@@ -743,8 +724,9 @@ export default function Customers() {
   const { data: adminInfo } = useQuery({
     queryKey: ["admin_info", ADMIN_ID],
     queryFn: async () => {
-      const { data } = await supabase.from("isp_admins").select("name").eq("id", ADMIN_ID).single();
-      return data as { name: string } | null;
+      const response = await adminApiFetch("/api/admin/profile", { cache: "no-store" });
+      const result = await response.json() as { profile?: { name?: string | null } };
+      return result.profile ? { name: result.profile.name ?? "" } : null;
     },
   });
   const companyName = adminInfo?.name ?? "ISP";

@@ -179,11 +179,11 @@ begin
   returning id into v_ledger_id;
 
   if v_ledger_id is not null then
-    update public.isp_loyalty_accounts
-       set points_balance = points_balance + v_award,
+    update public.isp_loyalty_accounts as account
+       set points_balance = account.points_balance + v_award,
            updated_at = now()
-     where admin_id = v_tx.admin_id and phone = v_phone
-     returning points_balance into v_balance;
+     where account.admin_id = v_tx.admin_id and account.phone = v_phone
+     returning account.points_balance into v_balance;
   end if;
   return query select v_award, coalesce(v_balance, 0);
 end;
@@ -389,13 +389,13 @@ begin
     raise exception 'This loyalty debit was already recorded.';
   end if;
 
-  update public.isp_loyalty_accounts
-     set points_balance = points_balance - v_points_required,
+  update public.isp_loyalty_accounts as account
+     set points_balance = account.points_balance - v_points_required,
          updated_at = now()
-   where admin_id = p_admin_id
-     and phone = v_phone
-     and points_balance >= v_points_required
-   returning points_balance into v_account_balance;
+   where account.admin_id = p_admin_id
+     and account.phone = v_phone
+     and account.points_balance >= v_points_required
+   returning account.points_balance into v_account_balance;
   if not found then
     raise exception 'There are not enough loyalty points for this package.';
   end if;

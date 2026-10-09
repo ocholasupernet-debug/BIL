@@ -27,7 +27,7 @@
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
 - [Hotspot chat setting](hotspot-chat-setting.md) — Control Tawk visibility from saved Hotspot Settings and sync through the normal portal flow, not a Multiport bulk action.
 - [Hotspot roaming allowance](hotspot-roaming-allowance.md) — Share one package data allowance across explicitly permitted routers and retain revoked destinations for historical accounting.
-- [Supabase migration runner coverage](supabase-migration-runner.md) — Runtime schema additions must be listed in the deployment migration runner, not only committed as SQL.
+- [Supabase function and migration safety](supabase-migration-runner.md) — Reapply idempotent DB changes, verify live function bodies, and qualify columns that collide with PL/pgSQL output names.
 - [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.
 - [RouterOS empty file queries](routeros-empty-file-queries.md) — Avoid filtered `/file/print` no-match queries; RouterOS may return `!empty` and node-routeros can crash.
 - [RouterOS HotSpot identity variables](routeros-hotspot-identity-macros.md) — Pair supported router-wide identity and per-service server-name macros; do not rely on nas-id.
@@ -101,7 +101,7 @@
 - [VLAN service resource identity](vlan-service-resource-identity.md) — Initial handoff and later hotspot deployment must update the same RouterOS resource family.
 - [Plan service pool binding](plan-service-pool-binding.md) — Plans reference the existing scoped VLAN pool; Hotspot uses address-pool and PPPoE uses remote-address.
 - [Prepaid plan entitlements](prepaid-plan-entitlement.md) — Archive purchased plans; never let deletion clear a buyer's plan link or eligibility.
-- [Hotspot loyalty identity](hotspot-loyalty-balance.md) — MAC discovers the wallet; verified devices get a scoped, expiring token for repeat redemptions without repeated passwords.
+- [Hotspot loyalty identity](hotspot-loyalty-balance.md) — Loyalty redemption is MAC-only within tenant/router/port scope; this is convenient but permits cloned-MAC wallet spending.
 - [Reseller payment routing](reseller-payment-routing.md) — Resolve collection accounts by active VLAN port, router, then reseller default; never fall back to the ISP gateway.
 - [Combined VLAN approval pool order](combined-vlan-approval-pool-order.md) — Create both RouterOS address pools before dependent approval-time VLAN resources.
 - [VLAN handoff portal files](vlan-handoff-portal-files.md) — Direct VLAN provisioning must install login.html and rlogin.html before declaring Hotspot active.

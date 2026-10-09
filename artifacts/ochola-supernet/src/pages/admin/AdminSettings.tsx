@@ -4,6 +4,7 @@ import { useBrand } from "@/context/BrandContext";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { Logo } from "@/components/Logo";
 import { ADMIN_ID, getAdminApiToken, getAdminRole } from "@/lib/supabase";
+import { adminApiFetch } from "@/lib/api-client";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
 import { useTypography } from "@/context/TypographyContext";
 import {
@@ -1580,11 +1581,19 @@ function BillingTab() {
             onClick={async () => {
               setCurrencySaving(true);
               try {
-                const { supabase: sb, ADMIN_ID: aid } = await import("@/lib/supabase");
-                await sb.from("isp_admins").update({ currency }).eq("id", aid);
+                const response = await adminApiFetch("/api/admin/profile/currency", {
+                  method: "PATCH",
+                  body: JSON.stringify({ currency }),
+                });
+                if (!response.ok) {
+                  const result = await response.json().catch(() => ({})) as { error?: string };
+                  throw new Error(result.error || "Currency could not be saved.");
+                }
                 localStorage.setItem("ochola_admin_currency", currency);
                 window.dispatchEvent(new Event("ochola-currency-change"));
-              } catch {}
+              } catch (error) {
+                window.alert(error instanceof Error ? error.message : "Currency could not be saved.");
+              }
               setCurrencySaving(false);
             }}
             disabled={currencySaving}

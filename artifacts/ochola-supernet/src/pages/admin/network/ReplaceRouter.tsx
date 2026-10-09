@@ -3,7 +3,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { supabase, ADMIN_ID } from "@/lib/supabase";
+import { ADMIN_ID } from "@/lib/supabase";
+import { adminApiFetch } from "@/lib/api-client";
+import { fetchAdminRouterManagementContext } from "@/lib/admin-router-context";
 import {
   Server, RotateCcw, Network, Loader2, WifiOff,
   CheckCircle2, AlertCircle, Settings, Eye, EyeOff,
@@ -108,13 +110,19 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
       hour: "2-digit", minute: "2-digit", hour12: true,
     });
     try {
-      await supabase.from("isp_routers").update({
+      const response = await adminApiFetch(`/api/routers/${router.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
         host:             host.trim(),
          router_username:  router.name || user.trim() || "admin",
          router_secret:    router.name || pass,
         description:      `Replaced on ${fmtDate}`,
-        updated_at:       now.toISOString(),
-      }).eq("id", router.id);
+        }),
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(result.error || "Router details could not be saved.");
+      }
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       onSaved();
@@ -142,11 +150,18 @@ function ApiPanel({ router, onSaved }: { router: DbRouter; onSaved: () => void }
       setProbe(data);
       /* ── Auto-save model/version/host into DB after successful probe ── */
       if (data.ok) {
-        const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+        const patch: Record<string, unknown> = {};
         if (data.model)   patch.model       = data.model;
         if (data.version) patch.ros_version = data.version;
         if (!router.host && testHost) patch.host = testHost;
-        await supabase.from("isp_routers").update(patch).eq("id", router.id);
+        const save = await adminApiFetch(`/api/routers/${router.id}`, {
+          method: "PATCH",
+          body: JSON.stringify(patch),
+        });
+        if (!save.ok) {
+          const result = await save.json().catch(() => ({})) as { error?: string };
+          throw new Error(result.error || "Router test passed, but its details could not be saved.");
+        }
         onSaved();
       }
     } catch (e) {
@@ -744,13 +759,10 @@ export default function ReplaceRouter() {
   const { data: routers = [], isLoading } = useQuery<DbRouter[]>({
     queryKey: ["isp_routers_rr3", ADMIN_ID],
     queryFn: async () => {
-      const { data } = await supabase
-        .from("isp_routers")
-        .select("id,name,host,status,model,ros_version,last_seen,bridge_interface,router_username,router_secret,bridge_ip,vpn_ip")
-        .eq("admin_id", ADMIN_ID)
-        .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)")
-        .order("created_at", { ascending: true });
-      return (data ?? []) as DbRouter[];
+      const { routers } = await fetchAdminRouterManagementContext();
+      return routers.filter(router =>
+        !["setup", "awaiting_ports", "awaiting_sync", "awaiting_connection"].includes(router.status),
+      ) as unknown as DbRouter[];
     },
     refetchInterval: 12_000,
   });

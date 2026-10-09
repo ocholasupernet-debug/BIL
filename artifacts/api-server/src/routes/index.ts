@@ -47,6 +47,8 @@ import platformAuthSecurityRouter from "./platform-auth-security-route.js";
 import platformPageAuthRouter from "./platform-page-auth-route.js";
 import superAdminAccountAccessRouter from "./super-admin-account-access-route.js";
 import superAdminAdminsRouter from "./super-admin-admins-route.js";
+import adminDataRouter from "./admin-data-route.js";
+import superAdminDataRouter from "./super-admin-data-route.js";
 
 const router: IRouter = Router();
 
@@ -98,5 +100,7 @@ router.use(dashboardPreferencesRouter);
   router.use(platformPageAuthRouter);
   router.use(superAdminAccountAccessRouter);
   router.use(superAdminAdminsRouter);
+  router.use(superAdminDataRouter);
+  router.use(adminDataRouter);
 
 export default router;

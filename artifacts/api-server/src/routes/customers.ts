@@ -1305,8 +1305,8 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
     adminId, ispId, name, phone, email, planId, type, ipAddress, macAddress,
     status, expiryDate, pppoeUsername, routerId, portId, username: requestedUsername, password: requestedPassword,
   } = req.body;
-  if (!name || !phone) {
-    res.status(400).json({ error: "name and phone are required" });
+  if (!name) {
+    res.status(400).json({ error: "name is required" });
     return;
   }
   const effectiveAdminId = authenticatedAdminId(req, adminId || ispId);
@@ -1500,22 +1500,121 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
     }
   }
 
-  const [row] = await sbInsert<Record<string, unknown>>("isp_customers", {
-    admin_id:       effectiveAdminId,
-    name,
-    phone,
-    email:          email    ?? null,
-    plan_id:        planId   ?? null,
-    type:           type     ?? "hotspot",
-    ip_address:     ipAddress ?? null,
-    mac_address:    macAddress ?? null,
-    status:         status   ?? "active",
-    expires_at:     expiryDate ? new Date(expiryDate).toISOString() : null,
-    pppoe_username: pppoeUsername ?? null,
+  if (!["hotspot", "pppoe", "static"].includes(requestedType)) {
+    res.status(400).json({ error: "Choose a supported customer service type." });
+    return;
+  }
+  if (requestedType === "vlan") {
+    res.status(400).json({ error: "VLAN customer creation requires a VLAN plan and assigned IP." });
+    return;
+  }
+  const radiusUsername = requestedType === "pppoe"
+    ? String(pppoeUsername ?? requestedUsername ?? "").trim()
+    : String(requestedUsername ?? "").trim();
+  const password = String(requestedPassword ?? "");
+  if (!/^[A-Za-z0-9_.:@-]{1,64}$/.test(radiusUsername)) {
+    res.status(400).json({ error: "Enter a valid Hotspot or PPPoE username." });
+    return;
+  }
+  if (password.length < 6 || password.length > 256) {
+    res.status(400).json({ error: "The customer password must contain at least 6 characters." });
+    return;
+  }
+  let normalizedExpiry: string | null = null;
+  try {
+    normalizedExpiry = asOptionalIso(expiryDate) ?? null;
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid expiry date." });
+    return;
+  }
+
+  const customFieldValues: Record<string, string> = {};
+  if (Array.isArray(req.body?.customFields)) {
+    for (const entry of (req.body.customFields as unknown[]).slice(0, 30)) {
+      if (!entry || typeof entry !== "object") continue;
+      const field = entry as Record<string, unknown>;
+      if (typeof field.name !== "string" || typeof field.value !== "string") continue;
+      const key = field.name.trim().slice(0, 80);
+      const value = field.value.trim().slice(0, 1000);
+      if (key && value) customFieldValues[key] = value;
+    }
+  }
+  const radRows: Array<{ username: string; attribute: string; op: string; value: string }> = [
+    { username: radiusUsername, attribute: "Cleartext-Password", op: ":=", value: password },
+  ];
+  if (requestedType === "static" && ipAddress) {
+    radRows.push(
+      { username: radiusUsername, attribute: "Framed-IP-Address", op: ":=", value: String(ipAddress) },
+      { username: radiusUsername, attribute: "Framed-IP-Netmask", op: ":=", value: String(req.body?.staticNetmask ?? "255.255.255.0") },
+    );
+    if (req.body?.staticGateway) {
+      radRows.push({ username: radiusUsername, attribute: "Framed-Route", op: ":=", value: String(req.body.staticGateway) });
+    }
+  }
+  if (requestedType === "pppoe" && req.body?.pppoeIpAssign === "static" && ipAddress) {
+    radRows.push({ username: radiusUsername, attribute: "Framed-IP-Address", op: ":=", value: String(ipAddress) });
+  }
+  if (requestedType === "hotspot" && macAddress) {
+    radRows.push({ username: radiusUsername, attribute: "Calling-Station-Id", op: ":=", value: String(macAddress) });
+  }
+  if (normalizedExpiry) {
+    radRows.push({ username: radiusUsername, attribute: "Expiration", op: ":=", value: new Date(normalizedExpiry).toDateString() });
+  }
+
+  let insertedCustomer: Record<string, unknown> | undefined;
+  try {
+    await assertRadiusTargetEmptyStrict(radiusUsername);
+    [insertedCustomer] = await sbInsertStrict<Record<string, unknown>>("isp_customers", {
+      admin_id: effectiveAdminId,
+      name,
+      username: requestedUsername ? String(requestedUsername).trim() : radiusUsername,
+      password,
+      phone: phone || null,
+      email: email || null,
+      plan_id: plan?.id ?? null,
+      type: requestedType,
+      ip_address: ipAddress || null,
+      mac_address: macAddress || null,
+      status: String(status ?? "active"),
+      expires_at: normalizedExpiry,
+      pppoe_username: requestedType === "pppoe" ? radiusUsername : null,
+      custom_fields: Object.keys(customFieldValues).length ? customFieldValues : null,
+    });
+    if (!insertedCustomer) throw new Error("The customer record was not returned after creation.");
+    await sbInsertStrict("radcheck", radRows);
+    if (plan) {
+      await sbInsertStrict("radusergroup", {
+        username: radiusUsername,
+        groupname: plan.name,
+        priority: 1,
+      });
+    }
+  } catch (error) {
+    const cleanupErrors: string[] = [];
+    if (insertedCustomer) {
+      await removeRadiusCustomerStrict(radiusUsername).catch(cleanupError => cleanupErrors.push(
+        cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+      ));
+      await sbDeleteStrict("isp_customers", `id=eq.${Number(insertedCustomer.id)}&admin_id=eq.${effectiveAdminId}`)
+        .catch(cleanupError => cleanupErrors.push(
+          cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        ));
+    }
+    res.status(503).json({
+      error: `The customer and RADIUS account could not be created consistently: ${
+        error instanceof Error ? error.message : String(error)
+      }${cleanupErrors.length ? ` Cleanup needs attention: ${cleanupErrors.join("; ")}` : ""}`,
+    });
+    return;
+  }
+  void logActivity({
+    adminId: Number(effectiveAdminId),
+    type: "customer",
+    action: "added",
+    subject: String(insertedCustomer.name ?? name),
+    details: { phone: phone ?? null, type: requestedType },
   });
-  if (!row) { res.status(500).json({ error: "Failed to create customer" }); return; }
-  void logActivity({ adminId: Number(effectiveAdminId), type: "customer", action: "added", subject: name, details: { phone, type: type ?? "hotspot" } });
-  res.status(201).json(row);
+  res.status(201).json(insertedCustomer);
 });
 
 router.patch("/customers/:id", requireAdmin(), async (req, res): Promise<void> => {

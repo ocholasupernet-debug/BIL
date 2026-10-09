@@ -17,7 +17,7 @@ Scoped updates over differing live source must be identified as composite releas
 
 **Why:** The live application can include unrelated fixes that are not in the prepared repository branch. Replacing the whole tree would remove those fixes, while labelling the composite as one commit would mislead the next release.
 
-**How to apply:** Stage from verified actual live source, overlay only the requested changes, and record both patch provenance and complete source/artifact hashes. Recheck the source snapshot immediately before promotion. If it changed, reconcile the latest live additions, including shared schema and migration registration changes, rather than relaxing the check or overwriting them.
+**How to apply:** Stage from verified actual live source, overlay only the requested changes, and record both patch provenance and complete source/artifact hashes. Recheck the latest successful deploy SHA after tests/staging and immediately before publishing a release ref or promotion; deployment can advance while preparation is underway. If it changed, reconcile the latest live additions, including shared schema and migration registration changes, rather than relaxing the check or overwriting them.
 
 Preserve retired files left by archive deployments outside active build and test source directories when reconciling a verified VPS snapshot.
 

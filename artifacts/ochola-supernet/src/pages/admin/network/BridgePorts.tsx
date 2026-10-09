@@ -3,7 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
-import { supabase, ADMIN_ID } from "@/lib/supabase";
+import { ADMIN_ID } from "@/lib/supabase";
+import { fetchAdminRouterManagementContext } from "@/lib/admin-router-context";
 import RouterPortMap from "./RouterPortMap";
 import {
   Loader2, RefreshCw, CheckCircle2, AlertTriangle,
@@ -314,14 +315,10 @@ export default function BridgePorts() {
   const { data: sbRouters = [] } = useQuery<SbRouter[]>({
     queryKey: ["sb_routers_bp", ADMIN_ID],
     queryFn: async () => {
-      try {
-        const { data } = await supabase
-          .from("isp_routers")
-          .select("id,name,host,status,router_username,router_secret,bridge_ip,vpn_ip")
-          .eq("admin_id", ADMIN_ID)
-          .not("status", "in", "(setup,awaiting_ports,awaiting_sync,awaiting_connection)");
-        return (data ?? []) as SbRouter[];
-      } catch { return []; }
+      const { routers } = await fetchAdminRouterManagementContext();
+      return routers.filter(router =>
+        !["setup", "awaiting_ports", "awaiting_sync", "awaiting_connection"].includes(router.status),
+      ) as SbRouter[];
     },
     staleTime: 5_000,
     refetchInterval: 15_000,
