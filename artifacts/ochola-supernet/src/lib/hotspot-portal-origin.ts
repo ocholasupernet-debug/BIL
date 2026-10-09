@@ -52,6 +52,11 @@ function configuredPortalOrigin(portalHostname: string, baseDomain: string): str
   return `https://${hostname}`;
 }
 
+export function hotspotPostLoginDestination(portalHostname: string, baseDomain: string): string {
+  const origin = configuredPortalOrigin(portalHostname, baseDomain);
+  return origin ? `${origin}/` : "";
+}
+
 export async function resolveHotspotPortalApiOrigin(
   portalHostname: string,
   tenantApiBase: string,

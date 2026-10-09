@@ -2322,10 +2322,23 @@ function routerLoginPassword(password){
   if(hasChallenge&&typeof MD5==="function")return MD5(chapId+password+challenge);
   return password;
 }
+function configuredPostLoginDestination(){
+  var raw=String(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.postLoginUrl||"").trim();
+  if(!raw)return "";
+  try{
+    var destination=new URL(raw);
+    if(destination.protocol!=="https:"||!destination.hostname||destination.username||destination.password
+      ||destination.pathname!=="/"||destination.search||destination.hash)return "";
+    return destination.origin+"/";
+  }catch(e){return "";}
+}
 function doLogin(form){
   var btn=document.getElementById("loginBtn");
   var pass=document.getElementById("loginPass");
   if(!pass||!pass.value)return false;
+  var dstField=form&&form.querySelector?form.querySelector('input[name="dst"]'):null;
+  var postLoginDestination=configuredPostLoginDestination();
+  if(dstField&&postLoginDestination)dstField.value=postLoginDestination;
   var loginUserEl=document.getElementById("loginUser");
   if(loginUserEl&&loginUserEl.value.trim())saveHotspotLoginCredentials({username:loginUserEl.value.trim(),password:pass.value});
   btn.innerHTML=SPINNER+" Connecting…"; btn.style.opacity=".65";

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  hotspotPostLoginDestination,
   hotspotApiOriginFromTenantContext,
   resolveHotspotPortalApiOrigin,
 } from "./hotspot-portal-origin.js";
@@ -10,6 +11,12 @@ test("normalizes the tenant-resolved public API origin", () => {
     hotspotApiOriginFromTenantContext("https://come.isplatty.org/"),
     "https://come.isplatty.org",
   );
+});
+
+test("creates a safe HTTPS post-login destination from the configured tenant hostname", () => {
+  assert.equal(hotspotPostLoginDestination("ocholasupernet.org", "isplatty.org"), "https://ocholasupernet.org/");
+  assert.equal(hotspotPostLoginDestination("come", "isplatty.org"), "https://come.isplatty.org/");
+  assert.equal(hotspotPostLoginDestination("bad..example.com", "isplatty.org"), "");
 });
 
 test("uses a custom portal hostname only after its app health endpoint responds", async () => {

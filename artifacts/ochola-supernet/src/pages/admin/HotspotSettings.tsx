@@ -43,6 +43,7 @@ import {
 } from "@/lib/hotspot-portal-target";
 import {
   hotspotApiOriginFromTenantContext,
+  hotspotPostLoginDestination,
   resolveHotspotPortalApiOrigin,
 } from "@/lib/hotspot-portal-origin";
 import {
@@ -368,6 +369,7 @@ type ExportConfig = {
   portId: number;
   previewOnly: boolean;
   apiBase: string;
+  postLoginUrl: string;
   plans: PortalPlan[];
   ispName: string;
   tagline: string;
@@ -424,7 +426,7 @@ function makeExportConfig(
   adminId: number,
   apiBase: string,
   plans: PortalPlan[],
-  appearance: { portalBackground?: unknown; portalPackageShape?: unknown; portalLayout?: unknown } = {},
+  appearance: { portalBackground?: unknown; portalPackageShape?: unknown; portalLayout?: unknown; postLoginUrl?: unknown } = {},
   portId = 0,
   previewOnly = false,
 ): ExportConfig {
@@ -437,6 +439,7 @@ function makeExportConfig(
     portId: Number.isSafeInteger(Number(portId)) && Number(portId) > 0 ? Number(portId) : 0,
     previewOnly,
     apiBase,
+    postLoginUrl: typeof appearance.postLoginUrl === "string" ? appearance.postLoginUrl : "",
     plans,
     ispName: safeText(settings.ispName, DEFAULT_SETTINGS.ispName),
     tagline: safeText(settings.tagline, DEFAULT_SETTINGS.tagline),
@@ -522,6 +525,7 @@ export async function buildPortalHtml(
   const appearance = {
     ...resolvedAppearance,
     apiBase,
+    postLoginUrl: hotspotPostLoginDestination(settings.portalHostname, PUBLIC_BASE_DOMAIN),
     portalBackground: safePortalBackground(appearanceOverride.portalBackground ?? resolvedAppearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearanceOverride.portalPackageShape ?? resolvedAppearance.portalPackageShape),
     portalLayout: normalizeHotspotPortalLayout(
@@ -1662,7 +1666,7 @@ export default function HotspotSettings() {
               <Field label="ISP name" help="Used in the page title, header, footer, and downloaded filename.">
                 <input className="hs-input" value={settings.ispName} maxLength={80} onChange={event => update("ispName", event.target.value)} placeholder="Your ISP name" />
               </Field>
-               <Field label="Customer portal hostname" help="Saved for this tenant and embedded in the portal. A custom host is used only when its API health check passes; otherwise the tenant API address is used. Saving syncs the selected router’s sign-in files after confirmation but does not change DNS or RouterOS service configuration.">
+                <Field label="Customer portal hostname" help="After successful Hotspot sign-in, customers are sent to this hostname. Portal API calls use a custom host only when its health check passes; otherwise they use the tenant API address. Saving syncs the selected router’s sign-in files after confirmation but does not change DNS or RouterOS service configuration.">
                  <input className="hs-input" value={settings.portalHostname} maxLength={253} onChange={event => update("portalHostname", event.target.value)} placeholder="wifi.example.com" inputMode="url" />
                </Field>
                 <Field label="Tawk.to live chat and calling" help="When enabled, the widget loads only on ocholasupernet.isplatty.org. Save & sync updates the selected router’s portal and adds missing allow rules. Turning it off leaves those rules in place.">

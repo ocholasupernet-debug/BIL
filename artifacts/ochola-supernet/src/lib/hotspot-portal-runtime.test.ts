@@ -59,6 +59,20 @@ test("voucher redemption in the standalone portal records a prepaid account befo
   assert.doesNotMatch(portalTemplate, /name="sendin3" id="voucherForm" action=/);
 });
 
+test("RouterOS login keeps its login action and uses the configured tenant hostname after authentication", () => {
+  const exporter = readFileSync(
+    new URL("../pages/admin/HotspotSettings.tsx", import.meta.url),
+    "utf8",
+  );
+  const loginHandler = portalTemplate.match(/function doLogin\(form\)\{([\s\S]*?)\n\}/)?.[1] ?? "";
+  assert.match(portalTemplate, /action="\$\(link-login-only\)"/);
+  assert.match(portalTemplate, /name="dst"\s+value="\$\(link-orig\)"/);
+  assert.match(exporter, /postLoginUrl: hotspotPostLoginDestination\(settings\.portalHostname, PUBLIC_BASE_DOMAIN\)/);
+  assert.match(loginHandler, /configuredPostLoginDestination\(\)/);
+  assert.match(loginHandler, /dstField\.value=postLoginDestination/);
+  assert.match(portalTemplate, /if\(typeof doLogin==="function"&&doLogin\(form\)\)form\.submit\(\)/);
+});
+
 test("the captive portal reconnects a valid device session and keeps payment handoff separate", () => {
   assert.match(portalTemplate, /function attemptPortalAutoReconnect\(\)/);
   assert.match(portalTemplate, /action:"login"/);
