@@ -12,6 +12,7 @@ import {
   upsertHotspotUser,
   resolveHotspotClientIpByMac,
   fetchBridgePortLayout,
+  fetchRouterLoadBalancingInventory,
   pingRouter,
   readRouterSystemIdentity,
   testConnection,
@@ -420,24 +421,41 @@ test("RouterOS read-only checks fall back after a permission-denied probe", asyn
   });
 
   await t.test("read-only bridge verification falls back to the management account", async () => {
-    await withMockRouterApi((username, command) => {
-      if (username === savedAccount) {
-        throw new Error("not enough permissions (RouterOS 7 policy)");
+    let activeWrites = 0;
+    let maxActiveWrites = 0;
+    await withMockRouterApi(async (username, command) => {
+      activeWrites++;
+      maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+      try {
+        await new Promise(resolve => setTimeout(resolve, 2));
+        if (username === savedAccount) {
+          throw new Error("not enough permissions (RouterOS 7 policy)");
+        }
+        if (command[0] === "/interface/print") {
+          return [{ ".id": "*1", name: "wlan2", type: "wlan", running: "true" }];
+        }
+        if (command[0] === "/interface/bridge/print") {
+          return [{ name: "hotspot-bridge", running: "true" }];
+        }
+        if (command[0] === "/interface/bridge/port/print") {
+          return [{ ".id": "*2", bridge: "hotspot-bridge", interface: "wlan2" }];
+        }
+        return [];
+      } finally {
+        activeWrites--;
       }
-      if (command[0] === "/interface/print") {
-        return [{ ".id": "*1", name: "wlan2", type: "wlan", running: "true" }];
-      }
-      if (command[0] === "/interface/bridge/print") {
-        return [{ name: "hotspot-bridge", running: "true" }];
-      }
-      if (command[0] === "/interface/bridge/port/print") {
-        return [{ ".id": "*2", bridge: "hotspot-bridge", interface: "wlan2" }];
-      }
-      return [];
     }, async ({ port, connectedUsers, commands }) => {
       const result = await fetchBridgePortLayout(routerCredentials(port, [managementAccount]));
 
       assert.deepEqual(connectedUsers, [savedAccount, managementAccount]);
+      assert.equal(maxActiveWrites, 1);
+      const managementCommands = commands.filter(({ username }) => username === managementAccount);
+      assert.deepEqual(managementCommands.map(({ command }) => command[0]), [
+        "/interface/print",
+        "/interface/bridge/print",
+        "/interface/bridge/port/print",
+      ]);
+      assert.equal(managementCommands[0]?.command[1], "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte");
       assert.deepEqual(result.interfaces.map(item => item.name), ["wlan2"]);
       assert.deepEqual(result.bridges.map(item => item.name), ["hotspot-bridge"]);
       assert.deepEqual(
@@ -458,6 +476,44 @@ test("RouterOS read-only checks fall back after a permission-denied probe", asyn
       assert.match(result.error ?? "", /not enough permissions/);
       assert.deepEqual(connectedUsers, [savedAccount]);
     });
+  });
+});
+
+test("load-balancing inventory limits columns and reads router tables one at a time", async () => {
+  let activeWrites = 0;
+  let maxActiveWrites = 0;
+  await withMockRouterApi(async (_username, command) => {
+    activeWrites++;
+    maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+    try {
+      await new Promise(resolve => setTimeout(resolve, 2));
+      if (command[0] === "/system/resource/print") return [{ version: "6.49.16" }];
+      return [];
+    } finally {
+      activeWrites--;
+    }
+  }, async ({ port, commands }) => {
+    const result = await fetchRouterLoadBalancingInventory(routerCredentials(port));
+
+    assert.equal(result.routerVersion, "6.49.16");
+    assert.equal(maxActiveWrites, 1);
+    assert.deepEqual(commands.map(({ command }) => command[0]), [
+      "/interface/print",
+      "/interface/bridge/print",
+      "/interface/bridge/port/print",
+      "/ip/address/print",
+      "/interface/pppoe-client/print",
+      "/ip/dhcp-client/print",
+      "/interface/vlan/print",
+      "/interface/ovpn-client/print",
+      "/interface/bridge/settings/print",
+      "/system/resource/print",
+    ]);
+    assert.equal(
+      commands[0]?.command[1],
+      "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
+    );
+    assert.equal(commands[9]?.command[1], "=.proplist=version");
   });
 });
 

@@ -1682,10 +1682,14 @@ export async function pingRouter(creds: RouterCredentials): Promise<RouterPingRe
     const caBase = `${ROUTER_HTTPS_CERTIFICATE_NAME}-bootstrap`;
     const caFileName = `${caBase}.txt`;
 
-    const [identRows, resRows] = await Promise.all([
-      withTimeout(conn.write(["/system/identity/print"]), ms) as Promise<Record<string, string>[]>,
-      withTimeout(conn.write(["/system/resource/print"]), ms) as Promise<Record<string, string>[]>,
-    ]);
+    const identRows = await withTimeout(
+      conn.write(["/system/identity/print", "=.proplist=name"]),
+      ms,
+    ) as Record<string, string>[];
+    const resRows = await withTimeout(
+      conn.write(["/system/resource/print", "=.proplist=uptime,version,board-name,cpu-load,free-memory"]),
+      ms,
+    ) as Record<string, string>[];
 
     const id  = identRows[0] ?? {};
     const res = resRows[0]   ?? {};
@@ -4514,7 +4518,10 @@ export async function fetchWireless(
     let ifaceRows: Record<string, string>[];
     try {
       ifaceRows = await withTimeout(
-        conn.write(["/interface/wireless/print"]),
+        conn.write([
+          "/interface/wireless/print",
+          "=.proplist=.id,name,ssid,disabled,band,channel,mac-address,security-profile,mode,master-interface,comment",
+        ]),
         ms,
       ) as Record<string, string>[];
     } catch (error) {
@@ -4562,7 +4569,10 @@ export async function fetchWireless(
     }
 
     const profileRows = await withTimeout(
-      conn.write(["/interface/wireless/security-profiles/print"]),
+      conn.write([
+        "/interface/wireless/security-profiles/print",
+        "=.proplist=.id,name,wpa2-pre-shared-key,authentication-types,mode",
+      ]),
       ms,
     ) as Record<string, string>[];
     const rawInterfaces = Array.isArray(ifaceRows) ? ifaceRows : [];
@@ -4683,10 +4693,14 @@ export async function createWirelessVirtualAp(
       } catch (error) {
         /* A write error may mean RouterOS applied the interface before the
            connection failed. Re-read before attempting cleanup. */
-        const [profiles, currentInterfaces] = await Promise.all([
-          withTimeout(conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]), ms) as Promise<Record<string, string>[]>,
-          withTimeout(conn.write(["/interface/wireless/print"]), ms) as Promise<Record<string, string>[]>,
-        ]);
+        const profiles = await withTimeout(
+          conn.write(["/interface/wireless/security-profiles/print", `?name=${profileName}`]),
+          ms,
+        ) as Record<string, string>[];
+        const currentInterfaces = await withTimeout(
+          conn.write(["/interface/wireless/print"]),
+          ms,
+        ) as Record<string, string>[];
         const created = profiles.find(row => row.name === profileName);
         const inUse = currentInterfaces.some(row => row["security-profile"] === profileName);
         if (created?.[".id"] && !inUse) {
@@ -5249,7 +5263,10 @@ export async function fetchInterfaces(
   return withConn(creds, async (conn) => {
     const requestMs = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const rows = (await withTimeout(
-      conn.write(["/interface/print"]),
+      conn.write([
+        "/interface/print",
+        "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
+      ]),
       requestMs
     )) as Record<string, string>[];
     return (Array.isArray(rows) ? rows : []).map((r) => ({
@@ -5320,7 +5337,10 @@ export async function fetchRouterLiveData(
     /* Hotspot users */
     let hotspotUsersAvailable = true;
     const hotspotRows = await withTimeout(
-      conn.write(["/ip/hotspot/active/print"]),
+      conn.write([
+        "/ip/hotspot/active/print",
+        "=.proplist=.id,user,address,mac-address,uptime,bytes-in,bytes-out,server",
+      ]),
       requestMs
     ).catch(e => {
       hotspotUsersAvailable = false;
@@ -5344,7 +5364,10 @@ export async function fetchRouterLiveData(
     /* PPPoE sessions */
     let pppoeUsersAvailable = true;
     const pppoeRows = await withTimeout(
-      conn.write(["/ppp/active/print"]),
+      conn.write([
+        "/ppp/active/print",
+        "=.proplist=.id,name,address,uptime,bytes-in,bytes-out,service",
+      ]),
       requestMs
     ).catch(e => {
       pppoeUsersAvailable = false;
@@ -5368,7 +5391,10 @@ export async function fetchRouterLiveData(
 
     /* Interfaces */
     const ifaceRows = await withTimeout(
-      conn.write(["/interface/print"]),
+      conn.write([
+        "/interface/print",
+        "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
+      ]),
       requestMs
     ).catch(e => { logger.warn({ err: e.message }, "interface fetch failed"); return [] as Record<string, string>[]; });
 
@@ -5497,7 +5523,7 @@ export async function detectBridgeInterfaces(
   return withConn(creds, async (conn) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
     const rows = (await withTimeout(
-      conn.write(["/interface/bridge/print"]),
+      conn.write(["/interface/bridge/print", "=.proplist=name"]),
       ms
     )) as Record<string, string>[];
     const names = rows.map(r => r.name).filter(Boolean);
@@ -5576,23 +5602,37 @@ export async function testConnection(
 
       /* Identity and resource are required to call this a verified API check.
          Bridge/routerboard details are optional across RouterOS models. */
-      const [identResult, resourceResult, bridgeResult, routerboardResult] = await Promise.allSettled([
-        withTimeout(conn.write(["/system/identity/print"]), ms) as Promise<Record<string, string>[]>,
-        withTimeout(conn.write(["/system/resource/print"]), ms) as Promise<Record<string, string>[]>,
-        withTimeout(conn.write(["/interface/bridge/print"]), ms) as Promise<Record<string, string>[]>,
-        withTimeout(conn.write(["/system/routerboard/print"]), ms) as Promise<Record<string, string>[]>,
-      ]);
-      if (identResult.status === "rejected") throw identResult.reason;
-      if (resourceResult.status === "rejected") throw resourceResult.reason;
-
-      const identRows = identResult.value;
-      const resourceRows = resourceResult.value;
-      const bridgeRows = bridgeResult.status === "fulfilled" ? bridgeResult.value : [];
-      const routerboardRows = routerboardResult.status === "fulfilled" ? routerboardResult.value : [];
+      const identRows = await withTimeout(
+        conn.write(["/system/identity/print", "=.proplist=name"]),
+        ms,
+      ) as Record<string, string>[];
+      const resourceRows = await withTimeout(
+        conn.write(["/system/resource/print", "=.proplist=version,board-name"]),
+        ms,
+      ) as Record<string, string>[];
       const routerIdentity = identRows[0]?.name;
       const rosVersion = resourceRows[0]?.version;
       if (!routerIdentity || !rosVersion) {
         throw new Error("RouterOS API connected but did not return identity and version.");
+      }
+
+      let bridgeRows: Record<string, string>[] = [];
+      try {
+        bridgeRows = await withTimeout(
+          conn.write(["/interface/bridge/print", "=.proplist=name"]),
+          ms,
+        ) as Record<string, string>[];
+      } catch {
+        // Bridge inventory is optional for API connectivity verification.
+      }
+      let routerboardRows: Record<string, string>[] = [];
+      try {
+        routerboardRows = await withTimeout(
+          conn.write(["/system/routerboard/print", "=.proplist=model"]),
+          ms,
+        ) as Record<string, string>[];
+      } catch {
+        // Some RouterOS devices do not expose routerboard details.
       }
 
       const model = routerboardRows[0]?.model
@@ -8317,23 +8357,13 @@ export async function fetchRouterSecurityState(
       ms,
     ) as Promise<Record<string, string>[]>;
 
-    const [
-      firewallFilter,
-      firewallNat,
-      firewallMangle,
-      firewallRaw,
-      addresses,
-      routes,
-      bridgePorts,
-    ] = await Promise.all([
-      read("/ip/firewall/filter/print"),
-      read("/ip/firewall/nat/print"),
-      read("/ip/firewall/mangle/print"),
-      read("/ip/firewall/raw/print"),
-      read("/ip/address/print"),
-      read("/ip/route/print"),
-      read("/interface/bridge/port/print"),
-    ]);
+    const firewallFilter = await read("/ip/firewall/filter/print");
+    const firewallNat = await read("/ip/firewall/nat/print");
+    const firewallMangle = await read("/ip/firewall/mangle/print");
+    const firewallRaw = await read("/ip/firewall/raw/print");
+    const addresses = await read("/ip/address/print");
+    const routes = await read("/ip/route/print");
+    const bridgePorts = await read("/interface/bridge/port/print");
 
     return {
       firewallFilter,
@@ -8358,11 +8388,21 @@ export async function fetchBridgePortLayout(
   return withReadConn(creds, async (conn, connectedHost) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
 
-    const [ifaceRows, bridgeRows, bpRows] = await Promise.all([
-      withTimeout(conn.write(["/interface/print"]),             ms) as Promise<Record<string, string>[]>,
-      withTimeout(conn.write(["/interface/bridge/print"]),      ms) as Promise<Record<string, string>[]>,
-      withTimeout(conn.write(["/interface/bridge/port/print"]), ms) as Promise<Record<string, string>[]>,
-    ]);
+    const ifaceRows = await withTimeout(
+      conn.write([
+        "/interface/print",
+        "=.proplist=.id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
+      ]),
+      ms,
+    ) as Record<string, string>[];
+    const bridgeRows = await withTimeout(
+      conn.write(["/interface/bridge/print", "=.proplist=name,running"]),
+      ms,
+    ) as Record<string, string>[];
+    const bpRows = await withTimeout(
+      conn.write(["/interface/bridge/port/print", "=.proplist=.id,bridge,interface"]),
+      ms,
+    ) as Record<string, string>[];
 
     const interfaces: RouterInterface[] = (Array.isArray(ifaceRows) ? ifaceRows : []).map(r => ({
       id:         r[".id"]         ?? "",
@@ -8397,23 +8437,26 @@ export async function fetchRouterLoadBalancingInventory(
 ): Promise<RouterLoadBalancingInventory> {
   return withReadConn(creds, async (conn, connectedHost) => {
     const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-    const read = (path: string) => withTimeout(
-      conn.write([path]),
+    const read = (path: string, proplist?: string) => withTimeout(
+      conn.write(proplist ? [path, `=.proplist=${proplist}`] : [path]),
       ms,
     ) as Promise<Record<string, string>[]>;
-    const [ifaceRows, bridgeRows, bridgePortRows, addressRows, pppoeRows, dhcpRows, vlanRows, ovpnRows, bridgeSettingsRows, resourceRows] =
-      await Promise.all([
-        read("/interface/print"),
-        read("/interface/bridge/print"),
-        read("/interface/bridge/port/print"),
-        read("/ip/address/print"),
-        read("/interface/pppoe-client/print"),
-        read("/ip/dhcp-client/print"),
-        read("/interface/vlan/print"),
-        read("/interface/ovpn-client/print"),
-        read("/interface/bridge/settings/print"),
-        read("/system/resource/print"),
-      ]);
+    const ifaceRows = await read(
+      "/interface/print",
+      ".id,name,type,running,disabled,mac-address,comment,tx-byte,rx-byte",
+    );
+    const bridgeRows = await read("/interface/bridge/print", "name,running");
+    const bridgePortRows = await read("/interface/bridge/port/print");
+    const addressRows = await read("/ip/address/print", "interface,address,dynamic,comment");
+    const pppoeRows = await read("/interface/pppoe-client/print", "name,interface,comment,disabled");
+    const dhcpRows = await read("/ip/dhcp-client/print", "name,interface,comment,disabled,status");
+    const vlanRows = await read("/interface/vlan/print", "name,interface,vlan-id,comment,disabled");
+    const ovpnRows = await read(
+      "/interface/ovpn-client/print",
+      ".id,name,connect-to,user,comment,disabled,running",
+    );
+    const bridgeSettingsRows = await read("/interface/bridge/settings/print", "use-ip-firewall");
+    const resourceRows = await read("/system/resource/print", "version");
 
     const interfaces: RouterInterface[] = (Array.isArray(ifaceRows) ? ifaceRows : []).map(r => ({
       id:         r[".id"]         ?? "",
