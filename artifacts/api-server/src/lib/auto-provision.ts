@@ -35,6 +35,8 @@ import {
 } from "./mikrotik";
 import { logger } from "./logger";
 import { isRouterManagementVpnIp } from "./router-vpn-ip.js";
+import { readVpnClients } from "./vpn-status.js";
+import { paymentRouterConnectionCredentials } from "./router-payment-credentials.js";
 import { hotspotPlanProfileName, prepaidHotspotUsername, routerRateLimit, isPrepaidHotspotUsername } from "./prepaid-identifiers.js";
 import { planValiditySeconds } from "./plan-validity.js";
 import { normalizePlanServiceType } from "./plan-service-type.js";
@@ -687,14 +689,7 @@ export async function autoProvision(opts: {
     return { ok: false, error: msg };
   }
 
-  const creds = {
-    host:     router.host?.trim() || router.vpn_ip?.trim() || "",
-    port:     8728,
-    username: router.router_username || "admin",
-    password: router.router_secret  || "",
-    useSSL:   false,
-    bridgeIp: router.vpn_ip?.trim() || router.bridge_ip?.trim() || undefined,
-  };
+  const creds = paymentRouterConnectionCredentials(router, readVpnClients());
 
   /* ── 4. Provision on router ── */
   const generatedHotspotUsername = prepaidHotspotUsername(customer.phone || phone, customer.mac_address);

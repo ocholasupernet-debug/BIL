@@ -15,3 +15,7 @@ export function routerHealthApiAccountOrder(
     ...(saved !== ROUTER_MANAGEMENT_API_USERNAME ? { alternateUsernames: [saved] } : {}),
   };
 }
+
+// Shared by router health and VPN-scoped RouterOS operations that need the
+// same management-account-first policy.
+export const routerManagementApiAccountOrder = routerHealthApiAccountOrder;

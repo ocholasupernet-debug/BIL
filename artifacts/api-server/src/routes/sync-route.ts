@@ -15,6 +15,7 @@ import {
   ROUTER_MANAGEMENT_API_USERNAME,
   routerManagementBackupIp,
 } from "../lib/router-management-vpn.js";
+import { routerManagementApiAccountOrder } from "../lib/router-health-api-account-order.js";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import { hotspotPlanProfileName } from "../lib/prepaid-identifiers.js";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
@@ -287,17 +288,43 @@ async function connectWithFallback(
   username: string,
   password: string,
   log: (msg: string) => void,
-): Promise<{ conn: RouterOSAPI; via: string }> {
+  options: { managementAccountFirst?: boolean } = {},
+): Promise<{ conn: RouterOSAPI; via: string; username: string }> {
   const validVpnIp = vpnIp && isRouterManagementVpnIp(vpnIp) ? vpnIp : undefined;
   const primary = host || validVpnIp || "";
   if (!primary) throw new Error("No public host or management VPN IP provided");
 
-  log(`▶ Connecting to ${primary}:8728 as '${username || "admin"}'...`);
-  const conn = makeConn(primary, username, password);
+  const connectAt = async (address: string): Promise<{ conn: RouterOSAPI; via: string; username: string }> => {
+    const accountOrder = options.managementAccountFirst && isRouterManagementVpnIp(address)
+      ? routerManagementApiAccountOrder(username, address)
+      : { username: username.trim() || "admin" };
+    const usernames = [
+      accountOrder.username,
+      ...(accountOrder.alternateUsernames ?? []),
+    ].filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
+    let lastError: unknown;
+
+    for (const apiUsername of usernames) {
+      log(`▶ Connecting to ${address}:8728 as '${apiUsername}'...`);
+      const candidateConn = makeConn(address, apiUsername, password);
+      try {
+        await withTimeout(candidateConn.connect(), 12000);
+        log(`✓ Connected via ${address}`);
+        return { conn: candidateConn, via: address, username: apiUsername };
+      } catch (error) {
+        lastError = error;
+        try { candidateConn.close(); } catch { /* connection may not have opened */ }
+        if (usernames.length > 1) {
+          log(`⚠ API login as '${apiUsername}' failed at ${address}; trying the alternate router account...`);
+        }
+      }
+    }
+
+    throw lastError ?? new Error(`Unable to connect to ${address}:8728`);
+  };
+
   try {
-    await withTimeout(conn.connect(), 12000);
-    log(`✓ Connected via ${primary}`);
-    return { conn, via: primary };
+    return await connectAt(primary);
   } catch (firstErr) {
     const candidates = [
       validVpnIp && validVpnIp !== primary ? validVpnIp : "",
@@ -310,14 +337,10 @@ async function connectWithFallback(
     let lastError: unknown = firstErr;
     for (const fallback of candidates) {
       log(`⚠ ${primary} unreachable, trying management VPN ${fallback}...`);
-      const conn2 = makeConn(fallback, username, password);
       try {
-        await withTimeout(conn2.connect(), 12000);
-        log(`✓ Connected via management VPN ${fallback}`);
-        return { conn: conn2, via: fallback };
+        return await connectAt(fallback);
       } catch (error) {
         lastError = error;
-        try { conn2.close(); } catch { /* ignore */ }
       }
     }
     throw lastError;
@@ -1113,12 +1136,16 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
   let conn!: RouterOSAPI;
   try {
     let connectedHost = host || bridgeIp || "";
-    ({ conn, via: connectedHost } = await connectWithFallback(host, bridgeIp, username, password, log));
+    const connected = await connectWithFallback(host, bridgeIp, username, password, log, {
+      managementAccountFirst: true,
+    });
+    conn = connected.conn;
+    connectedHost = connected.via;
     const routerCredentials: RouterCredentials = {
       host: connectedHost,
       bridgeIp: bridgeIp || undefined,
       port: 8728,
-      username: username || "admin",
+      username: connected.username,
       password: password || "",
     };
     log(`  pushing ${users.length} user(s)\n`);
