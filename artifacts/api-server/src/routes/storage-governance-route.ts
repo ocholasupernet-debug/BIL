@@ -667,6 +667,17 @@ const worker = setInterval(() => {
 worker.unref?.();
 void processDueCleanupRequests();
 
+router.get("/super-admin/storage/physical-summary", async (req, res): Promise<void> => {
+  if (!isSuperAdmin(req, res)) return;
+  try {
+    const physicalSources = await loadPhysicalMeasurements();
+    res.json({ ok: true, physicalSources });
+  } catch (error) {
+    logger.error({ err: error }, "[super-admin/storage] physical summary load failed");
+    res.status(503).json({ ok: false, error: "Physical storage readings are unavailable." });
+  }
+});
+
 router.get("/super-admin/storage", async (req, res): Promise<void> => {
   if (!isSuperAdmin(req, res)) return;
   try {

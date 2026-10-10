@@ -2,12 +2,13 @@ import React, { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
-import { superAdminApiFetch } from "@/lib/api-client";
+import { supabase } from "@/lib/supabase";
 import {
   Activity, AlertTriangle, ArrowUpRight, BarChart3, CheckCircle2,
-  Database, Gauge, Globe, ReceiptText, RefreshCw, Router, ShieldAlert,
+  Database, Gauge, Globe, HardDrive, ReceiptText, RefreshCw, Router, ShieldAlert,
   Users, XCircle,
 } from "lucide-react";
+import { formatBinaryBytes } from "@/lib/formatBinaryBytes";
 
 interface AdminRecord {
   id: number;
@@ -56,11 +57,16 @@ interface PlatformTransaction {
   status: string;
   createdAt: string | null;
 }
-interface PlatformData {
-  admins: AdminRecord[];
-  routers: RouterRecord[];
-  customers: CustomerRecord[];
-  plans: PlanRecord[];
+interface PhysicalStorageSource {
+  source: string;
+  status: "available" | "partial" | "unavailable" | "stale";
+  freeBytes: number | null;
+  usedBytes: number | null;
+  capacityBytes: number | null;
+  measuredAt: string | null;
+}
+interface PhysicalStorageSummary {
+  physicalSources: PhysicalStorageSource[];
 }
 
 function formatKes(amount: number | undefined): string {
@@ -129,26 +135,50 @@ export default function SuperAdminDashboard() {
   const [lastRefresh, setLastRefresh] = React.useState(() => new Date());
   const [transactionSearch, setTransactionSearch] = React.useState("");
 
-  const platformDataQuery = useQuery<PlatformData>({
-    queryKey: ["sa_platform_data"],
+  const adminsQuery = useQuery<AdminRecord[]>({
+    queryKey: ["sa_all_admins"],
     queryFn: async () => {
-      const response = await superAdminApiFetch("/api/super-admin/platform-data", { cache: "no-store" });
-      const result = await response.json() as { ok?: boolean; error?: string } & Partial<PlatformData>;
-      if (!response.ok || !result.ok || !result.admins || !result.routers || !result.customers || !result.plans) {
-        throw new Error(result.error || "Platform reporting data could not be loaded.");
-      }
-      return {
-        admins: result.admins,
-        routers: result.routers,
-        customers: result.customers,
-        plans: result.plans,
-      };
+      const { data, error } = await supabase
+        .from("isp_admins")
+        .select("id,name,username,email,is_active,subdomain,role,created_at")
+        .order("id");
+      if (error) throw error;
+      return data ?? [];
     },
   });
-  const adminsQuery = { ...platformDataQuery, data: platformDataQuery.data?.admins };
-  const routersQuery = { ...platformDataQuery, data: platformDataQuery.data?.routers };
-  const customersQuery = { ...platformDataQuery, data: platformDataQuery.data?.customers };
-  const plansQuery = { ...platformDataQuery, data: platformDataQuery.data?.plans };
+  const routersQuery = useQuery<RouterRecord[]>({
+    queryKey: ["sa_all_routers"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("isp_routers")
+        .select("id,name,host,status,admin_id")
+        .order("id");
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+  const customersQuery = useQuery<CustomerRecord[]>({
+    queryKey: ["sa_all_customers"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("isp_customers")
+        .select("id,admin_id,is_active")
+        .order("id");
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+  const plansQuery = useQuery<PlanRecord[]>({
+    queryKey: ["sa_all_plans"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("isp_plans")
+        .select("id,admin_id,type")
+        .order("id");
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
   const incomeQuery = useQuery<PlatformIncomeSummary>({
     queryKey: ["sa_platform_income"],
     queryFn: async () => {
@@ -178,6 +208,21 @@ export default function SuperAdminDashboard() {
     },
     refetchInterval: 60_000,
   });
+  const storageSummaryQuery = useQuery<PhysicalStorageSummary>({
+    queryKey: ["sa_vps_storage_summary"],
+    queryFn: async () => {
+      const token = localStorage.getItem("ochola_superadmin_token") || "";
+      const response = await fetch("/api/super-admin/storage/physical-summary", {
+        headers: { "x-sa-token": token },
+      });
+      const result = await response.json() as { ok?: boolean; error?: string; physicalSources?: PhysicalStorageSource[] };
+      if (!response.ok || !result.ok || !result.physicalSources) {
+        throw new Error(result.error || "Could not load VPS disk availability.");
+      }
+      return { physicalSources: result.physicalSources };
+    },
+    staleTime: 60_000,
+  });
 
   const admins = adminsQuery.data ?? [];
   const routers = routersQuery.data ?? [];
@@ -189,7 +234,8 @@ export default function SuperAdminDashboard() {
     if (!needle) return platformTransactions;
     return platformTransactions.filter(transaction => String(transaction.transactionId).includes(needle));
   }, [platformTransactions, transactionSearch]);
-  const hasError = adminsQuery.isError || routersQuery.isError || customersQuery.isError || plansQuery.isError || incomeQuery.isError || platformTransactionsQuery.isError;
+  const hasError = adminsQuery.isError || routersQuery.isError || customersQuery.isError || plansQuery.isError || incomeQuery.isError || platformTransactionsQuery.isError || storageSummaryQuery.isError;
+  const vpsDisk = storageSummaryQuery.data?.physicalSources.find(source => source.source === "vps_filesystem");
 
   const activeAdmins = admins.filter((admin) => admin.is_active !== false).length;
   const inactiveAdmins = admins.filter((admin) => admin.is_active === false);
@@ -231,6 +277,7 @@ export default function SuperAdminDashboard() {
       plansQuery.refetch(),
       incomeQuery.refetch(),
       platformTransactionsQuery.refetch(),
+      storageSummaryQuery.refetch(),
     ]).then(() => setLastRefresh(new Date()));
   };
 
@@ -500,6 +547,39 @@ export default function SuperAdminDashboard() {
               )}
               <div style={{ padding: "0 17px 16px", textAlign: "right" }}>
                 <Link className="sa-table-link" href="/super-admin/routers">Open router management <ArrowUpRight size={12} /></Link>
+              </div>
+            </section>
+
+            <section className="sa-card">
+              <CardHeading icon={HardDrive} title="VPS storage" description="Physical server disk reading" />
+              {storageSummaryQuery.isLoading ? (
+                <div className="sa-empty" role="status">Loading VPS disk reading…</div>
+              ) : storageSummaryQuery.isError ? (
+                <div className="sa-empty">VPS disk reading is unavailable. Open Storage Governance to review.</div>
+              ) : !vpsDisk || vpsDisk.freeBytes === null ? (
+                <div className="sa-empty">No VPS filesystem reading is available.</div>
+              ) : (
+                <div style={{ padding: "0 17px 14px" }}>
+                  <div className="sa-list-row">
+                    <div className="sa-list-main">
+                      <HardDrive size={14} color={vpsDisk.status === "available" ? "#34d399" : "#fbbf24"} />
+                      <p className="sa-list-name">Disk free</p>
+                    </div>
+                    <span className="sa-list-state">{formatBinaryBytes(vpsDisk.freeBytes)}</span>
+                  </div>
+                  <p className="sa-list-meta" style={{ margin: "8px 0 0" }}>
+                    {vpsDisk.status === "available" ? "Current reading" : `Last reading · ${vpsDisk.status}`}
+                    {vpsDisk.measuredAt ? ` · ${new Date(vpsDisk.measuredAt).toLocaleString("en-KE", { dateStyle: "medium", timeStyle: "short" })}` : ""}
+                  </p>
+                  {vpsDisk.capacityBytes !== null && (
+                    <p className="sa-list-meta" style={{ margin: "4px 0 0" }}>
+                      {formatBinaryBytes(vpsDisk.usedBytes)} used of {formatBinaryBytes(vpsDisk.capacityBytes)}
+                    </p>
+                  )}
+                </div>
+              )}
+              <div style={{ padding: "0 17px 14px", textAlign: "right" }}>
+                <Link className="sa-table-link" href="/super-admin/storage">Open Storage Governance <ArrowUpRight size={12} /></Link>
               </div>
             </section>
 

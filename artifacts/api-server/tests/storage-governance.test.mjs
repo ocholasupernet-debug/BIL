@@ -45,6 +45,8 @@ test("cleanup scope is explicitly limited to aged migration artifacts", () => {
 
 test("API routes keep Super Admin and tenant recovery boundaries separate", () => {
   assert.match(route, /isSuperAdmin\(req, res\)/);
+  assert.match(route, /router\.get\("\/super-admin\/storage\/physical-summary"/);
+  assert.match(route, /const physicalSources = await loadPhysicalMeasurements\(\)/);
   assert.match(route, /requireAdmin\(\)/);
   assert.match(route, /request\.admin_id !== adminId/);
   assert.match(route, /confirmation !== "DELETE"/);
@@ -100,6 +102,15 @@ test("physical storage telemetry uses authoritative sources and keeps failures e
   assert.match(storageUi, /warningPercent/);
   assert.match(storageUi, /Capacity warning is active/);
   assert.match(storageUi, /are sent once until usage falls back below the threshold/);
+});
+
+test("Super Admin overview reads only the protected physical VPS storage summary", async () => {
+  const dashboard = await readFile("../ochola-supernet/src/pages/super-admin/Dashboard.tsx", "utf8");
+  assert.match(dashboard, /\/api\/super-admin\/storage\/physical-summary/);
+  assert.match(dashboard, /source\.source === "vps_filesystem"/);
+  assert.match(dashboard, /Disk free/);
+  assert.match(dashboard, /Last reading/);
+  assert.match(dashboard, /href="\/super-admin\/storage"/);
 });
 
 test("Super Admin capacity inbox distinguishes unread warnings and supports acknowledgement", () => {
