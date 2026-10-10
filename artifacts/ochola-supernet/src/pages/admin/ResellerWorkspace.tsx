@@ -936,7 +936,7 @@ function MetricBarChart({ items, valueKey, suffix = "" }: {
             className="reseller-chart-bar"
             title={`${item.label}: ${value.toLocaleString("en-KE", { maximumFractionDigits: 1 })}${suffix}`}
             aria-label={`${item.label}: ${value.toLocaleString("en-KE", { maximumFractionDigits: 1 })}${suffix}`}
-            style={{ width: "100%", maxWidth: 38, height: `${Math.max(8, (value / max) * 92)}px`, borderRadius: "7px 7px 3px 3px", background: "linear-gradient(180deg, var(--isp-accent), rgba(217,104,53,.35))" }}
+            style={{ width: "100%", maxWidth: 38, height: `${value > 0 ? Math.max(8, (value / max) * 92) : 2}px`, borderRadius: "7px 7px 3px 3px", background: "var(--isp-accent)" }}
           />
           <div style={{ color: "var(--isp-text-muted)", fontSize: 10, textAlign: "center" }}>{item.label}</div>
         </div>;
@@ -950,7 +950,7 @@ function HorizontalMetricBars({ items, suffix = "" }: { items: Array<{ label: st
   return <div style={{ display: "grid", gap: 12 }}>
     {items.length ? items.map((item) => <div key={item.label}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, color: "var(--isp-text)", fontSize: 12, fontWeight: 750 }}><span>{item.label}</span><span>{item.value.toLocaleString("en-KE", { maximumFractionDigits: 1 })}{suffix}</span></div>
-      <div style={{ height: 7, marginTop: 6, borderRadius: 999, background: "var(--isp-input-bg)", overflow: "hidden" }}><div style={{ width: `${Math.max(3, (item.value / max) * 100)}%`, height: "100%", borderRadius: 999, background: "var(--isp-accent)" }} /></div>
+      <div style={{ height: 7, marginTop: 6, borderRadius: 999, background: "var(--isp-input-bg)", overflow: "hidden" }}><div style={{ width: `${max > 0 ? Math.max(0, (item.value / max) * 100) : 0}%`, height: "100%", borderRadius: 999, background: "var(--isp-accent)" }} /></div>
     </div>) : <div style={{ color: "var(--isp-text-muted)", fontSize: 13 }}>No data available yet.</div>}
   </div>;
 }
@@ -1077,21 +1077,21 @@ function ResellerDashboard() {
         </div>
         <div style={{ display: "grid", gap: 16 }}>
         <Notice error={error} success={success} />
-         <div className="reseller-stat-grid">
+         <div className="reseller-stat-grid reseller-stat-grid--revenue">
              {[
-             { label: "Income today", value: moneyOrZero(revenue?.incomeToday), icon: Gauge, tone: "slate" },
-             { label: "Income this month", value: moneyOrZero(revenue?.incomeMonth), icon: WalletCards, tone: "green" },
-             { label: "Total transactions", value: String(revenue?.totalTransactions ?? 0), icon: ReceiptText, tone: "amber" },
-             { label: "Total revenue", value: moneyOrZero(revenue?.totalRevenue), icon: Banknote, tone: "rust" },
-          ].map(({ label, value, icon: Icon, tone }) => <div key={label} className={`reseller-stat-card reseller-stat-card--${tone}`}><Icon size={18} aria-hidden="true" /><div className="reseller-metric-label">{label}</div><div className="reseller-metric-value">{value}</div></div>)}
+              { label: "Income today", value: moneyOrZero(revenue?.incomeToday), detail: "Since midnight", icon: Gauge, tone: "slate" },
+              { label: "Income this month", value: moneyOrZero(revenue?.incomeMonth), detail: "Month to date", icon: WalletCards, tone: "green" },
+              { label: "Total transactions", value: String(revenue?.totalTransactions ?? 0), detail: "All time", icon: ReceiptText, tone: "amber" },
+              { label: "Total revenue", value: moneyOrZero(revenue?.totalRevenue), detail: "All time", icon: Banknote, tone: "rust" },
+           ].map(({ label, value, detail, icon: Icon, tone }) => <div key={label} className={`reseller-stat-card reseller-stat-card--${tone}`}><Icon size={18} aria-hidden="true" /><div className="reseller-metric-label">{label}</div><div className="reseller-metric-value">{data && revenue ? value : "—"}</div><div className="reseller-metric-detail">{detail}</div></div>)}
         </div>
-         <div className="reseller-stat-grid">
+          <div className="reseller-stat-grid reseller-stat-grid--customers">
            {[
-             { label: "Total users", value: String(users?.total ?? 0), icon: Users, tone: "teal" },
-             { label: "Active users", value: String(users?.active ?? 0), icon: PlayCircle, tone: "green" },
-             { label: "Expired users", value: String(users?.expired ?? 0), icon: PauseCircle, tone: "amber" },
-             { label: "Online on assigned router", value: String(telemetry?.totals.onlineUsers ?? 0), icon: RouterIcon, tone: "teal" },
-           ].map(({ label, value, icon: Icon, tone }) => <div key={label} className={`reseller-stat-card reseller-stat-card--${tone}`}><Icon size={18} aria-hidden="true" /><div className="reseller-metric-label">{label}</div><div className="reseller-metric-value">{value}</div></div>)}
+              { label: "Total users", value: users ? String(users.total) : "—", detail: "Current account base", icon: Users, tone: "teal" },
+              { label: "Active users", value: users ? String(users.active) : "—", detail: "Current service status", icon: PlayCircle, tone: "green" },
+              { label: "Expired users", value: users ? String(users.expired) : "—", detail: "Current service status", icon: PauseCircle, tone: "amber" },
+              { label: "Online on assigned router", value: telemetry ? String(telemetry.totals.onlineUsers) : "—", detail: "Live session count", icon: RouterIcon, tone: "teal" },
+            ].map(({ label, value, detail, icon: Icon, tone }) => <div key={label} className={`reseller-stat-card reseller-stat-card--${tone}`}><Icon size={18} aria-hidden="true" /><div className="reseller-metric-label">{label}</div><div className="reseller-metric-value">{value}</div><div className="reseller-metric-detail">{detail}</div></div>)}
          </div>
         <div style={{ ...cardStyle, borderColor: "rgba(217,104,53,.35)" }}>
              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}><div><div style={{ fontSize: 18, fontWeight: 850, color: "var(--isp-text)" }}>{port?.handoff_mode === "isp_router" ? "ISP router / XPON handoff" : port?.handoff_mode === "vlan_services" ? "VLAN Hotspot + PPPoE service" : "Assigned interface"}</div><div style={{ color: "var(--isp-text-muted)", fontSize: 13, marginTop: 5 }}>{port?.handoff_mode === "isp_router" ? "Connect your XPON router to the assigned ISP-router handoff. No MikroTik package or reseller-side RouterOS setup is required." : port?.handoff_mode === "vlan_services" ? "Use the service selector to switch between all VLANs assigned to your reseller account. Each service keeps its own gateway, packages, and RouterOS resources." : "Only the router connected to your assigned port is shown here."}</div></div><ShieldCheck color="var(--isp-accent)" /></div>
@@ -1136,28 +1136,46 @@ function ResellerDashboard() {
               </div>
             </section>
           ) : null}
-         <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 16 }}>
-           <section style={cardStyle}>
-             <div style={{ color: "var(--isp-text)", fontWeight: 850 }}>Monthly registered customers</div>
-             <div style={{ color: "var(--isp-text-muted)", fontSize: 12, margin: "4px 0 10px" }}>Customers registered in the last six months.</div>
+          <section className="reseller-analytics-section">
+            <div className="reseller-analytics-heading">
+              <div>
+                <div className="reseller-eyebrow">CUSTOMER & USAGE INSIGHTS</div>
+                <h2>Service activity</h2>
+              </div>
+              <p>Account-scoped metrics returned for your reseller workspace.</p>
+            </div>
+          <div className="reseller-analytics-grid">
+            <section className="reseller-analytics-card" style={cardStyle}>
+              <div className="reseller-analytics-title">Monthly registered customers</div>
+              <div className="reseller-analytics-caption">Registered-customer counts for the returned six-month window.</div>
              <MetricBarChart items={analytics?.registeredCustomersByMonth ?? []} valueKey="count" />
            </section>
-           <section style={cardStyle}>
-             <div style={{ color: "var(--isp-text)", fontWeight: 850 }}>Users by access type</div>
-             <div style={{ color: "var(--isp-text-muted)", fontSize: 12, margin: "4px 0 18px" }}>Current customers in your reseller account.</div>
+            <section className="reseller-analytics-card" style={cardStyle}>
+              <div className="reseller-analytics-title">Current users by access type</div>
+              <div className="reseller-analytics-caption">Customer counts in your account; not a live-session split.</div>
              <HorizontalMetricBars items={accessTypes} />
            </section>
-           <section style={cardStyle}>
-             <div style={{ color: "var(--isp-text)", fontWeight: 850 }}>Monthly data consumption</div>
-             <div style={{ color: "var(--isp-text-muted)", fontSize: 12, margin: "4px 0 10px" }}>Current recorded usage grouped by customer registration month.</div>
+            <section className="reseller-analytics-card" style={cardStyle}>
+              <div className="reseller-analytics-title">Recorded usage by registration cohort</div>
+              <div className="reseller-analytics-caption">Usage grouped by customer registration month, not a month-by-month usage history.</div>
              <MetricBarChart items={analytics?.consumptionByMonth ?? []} valueKey="dataUsedMb" suffix=" MB" />
            </section>
-           <section style={cardStyle}>
-             <div style={{ color: "var(--isp-text)", fontWeight: 850 }}>Top 5 data consumers</div>
-             <div style={{ color: "var(--isp-text-muted)", fontSize: 12, margin: "4px 0 18px" }}>Highest recorded usage across your customers.</div>
+            <section className="reseller-analytics-card" style={cardStyle}>
+              <div className="reseller-analytics-title">Top recorded data consumers</div>
+              <div className="reseller-analytics-caption">Highest usage values included in the returned customer ranking.</div>
              <HorizontalMetricBars items={(analytics?.topConsumers ?? []).map((item) => ({ label: `${item.name} · ${item.type}`, value: item.dataUsedMb }))} suffix=" MB" />
            </section>
+            <section className="reseller-analytics-card" style={cardStyle}>
+              <div className="reseller-analytics-title">Latest payment outcomes</div>
+              <div className="reseller-analytics-caption">Status mix for the latest {Math.min(data?.sales.length ?? 0, 100)} returned sales records; this is not a full historical total.</div>
+              <HorizontalMetricBars items={[
+                { label: "Completed", value: data?.sales.filter((sale) => sale.status.toLowerCase() === "completed").length ?? 0 },
+                { label: "Pending", value: data?.sales.filter((sale) => sale.status.toLowerCase() === "pending").length ?? 0 },
+                { label: "Other / failed", value: data?.sales.filter((sale) => !["completed", "pending"].includes(sale.status.toLowerCase())).length ?? 0 },
+              ]} />
+            </section>
          </div>
+          </section>
          <form onSubmit={provisionClient} style={cardStyle}>
            <div style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 800 }}><WalletCards size={18} color="var(--isp-accent)" /> Record a paid client session</div>
             <p style={{ color: "var(--isp-text-muted)", fontSize: 13, lineHeight: 1.5 }}>Record a confirmed payment using the gateway routed to the selected VLAN port, its router, or your reseller default ({paymentGateway}). Service-mode ports also receive a child queue; ISP-router handoffs record the paid session for the ISP-controlled router.</p>

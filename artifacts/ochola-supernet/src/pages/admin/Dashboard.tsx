@@ -182,7 +182,7 @@ type CustomerBasic = {
   ip_address: string | null;
   service_online: boolean | null;
 };
-type CustomerPlanScope = { id: number; router_id: number | null; port_id: number | null };
+type CustomerPlanScope = { id: number; name: string; type: string; router_id: number | null; port_id: number | null };
 
 async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
   const response = await adminApiFetch(`/api/customers?adminId=${ADMIN_ID}`, { cache: "no-store" });
@@ -197,7 +197,13 @@ async function fetchCustomerPlanScopes(): Promise<CustomerPlanScope[]> {
   const context = await fetchAdminRouterContext();
   return context.plans
     .filter(plan => !plan.owner_reseller_id)
-    .map(plan => ({ id: plan.id, router_id: plan.router_id ?? null, port_id: plan.port_id ?? null }));
+    .map(plan => ({
+      id: plan.id,
+      name: plan.name,
+      type: plan.type,
+      router_id: plan.router_id ?? null,
+      port_id: plan.port_id ?? null,
+    }));
 }
 
 async function fetchTransactions(customerIds: number[]): Promise<DbTransaction[]> {
@@ -539,6 +545,10 @@ export default function Dashboard() {
     () => Object.fromEntries(customerPlanScopes.map(plan => [plan.id, plan])),
     [customerPlanScopes],
   );
+  const customerPlanNameMap = useMemo(
+    () => new Map(customerPlanScopes.map(plan => [plan.id, plan.name])),
+    [customerPlanScopes],
+  );
   const uniqueServiceCustomers = useMemo(
     () => mergeCustomerServiceIdentities(customers, customerPlanScopeMap),
     [customers, customerPlanScopeMap],
@@ -563,6 +573,38 @@ export default function Dashboard() {
   ).length;
   const activeUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "active").length;
   const expiredUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "expired").length;
+  const currentPlanAdoption = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const customer of uniqueServiceCustomers) {
+      if (getCustomerServiceStatus(customer) !== "active" || customer.plan_id == null) continue;
+      const planName = customerPlanNameMap.get(customer.plan_id);
+      if (!planName) continue;
+      counts.set(planName, (counts.get(planName) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label))
+      .slice(0, 5);
+  }, [uniqueServiceCustomers, customerPlanNameMap]);
+  const nairobiDateKey = (date: Date) => {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Africa/Nairobi",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(date);
+    const part = (type: string) => parts.find(item => item.type === type)?.value ?? "";
+    return `${part("year")}-${part("month")}-${part("day")}`;
+  };
+  const todayInNairobi = nairobiDateKey(now);
+  const expiringToday = useMemo(() => uniqueServiceCustomers
+    .filter(customer => {
+      if (!customer.expires_at || getCustomerServiceStatus(customer) !== "active") return false;
+      const expiry = new Date(customer.expires_at);
+      return Number.isFinite(expiry.getTime()) && nairobiDateKey(expiry) === todayInNairobi;
+    })
+    .sort((a, b) => Date.parse(a.expires_at!) - Date.parse(b.expires_at!))
+    .slice(0, 6), [uniqueServiceCustomers, todayInNairobi]);
   const serviceCountsLoading = customersLoading || customerPlanScopesLoading;
   const serviceCountsUnavailable = (customersError && customers.length === 0)
     || (customerPlanScopesError && customerPlanScopes.length === 0);
@@ -593,10 +635,11 @@ export default function Dashboard() {
   })), [customers, now]);
   const maxCount = Math.max(...monthlyData.map((month) => month.count), 1);
   const userInsights = useMemo(() => [
-    { label: "Hotspot", count: customers.filter((customer) => customer.type === "hotspot").length, color: "var(--dashboard-accent, var(--isp-accent))" },
-    { label: "PPPoE", count: customers.filter((customer) => customer.type === "pppoe").length, color: "#8879b7" },
-    { label: "Static", count: customers.filter((customer) => customer.type === "static").length, color: "var(--isp-green)" },
-  ], [customers]);
+    { label: "Hotspot", count: uniqueServiceCustomers.filter((customer) => prepaidServiceType(customer.type) === "hotspot").length, color: "var(--dashboard-accent, var(--isp-accent))" },
+    { label: "PPPoE", count: uniqueServiceCustomers.filter((customer) => prepaidServiceType(customer.type) === "pppoe").length, color: "#8879b7" },
+    { label: "VLAN", count: uniqueServiceCustomers.filter((customer) => prepaidServiceType(customer.type) === "vlan").length, color: "#0f9d78" },
+    { label: "Static", count: uniqueServiceCustomers.filter((customer) => prepaidServiceType(customer.type) === "static").length, color: "#d28b36" },
+  ], [uniqueServiceCustomers]);
   const routerOptions: { key: number | "all"; label: string; online: boolean | null }[] = [
     { key: "all", label: "All routers", online: null },
     ...routers.map((router) => ({ key: router.id, label: router.name, online: routerOnline(router) })),
@@ -908,7 +951,7 @@ export default function Dashboard() {
             <div className={`panel-heading ${chartMinimized ? "panel-heading--quiet" : ""}`}>
               <div className="panel-title">
                 <span className="panel-title-icon panel-title-icon--soft"><Users size={16} /></span>
-                <div><h2>Monthly registered customers</h2><p>New accounts in {now.getFullYear()}</p></div>
+                <div><h2>Monthly registered customers</h2><p>Customer records by creation date · {now.getFullYear()}</p></div>
               </div>
               <div className="panel-actions">
                 <button
@@ -991,26 +1034,98 @@ export default function Dashboard() {
             </section>
             <section className="section-card insight-card">
               <div className="panel-heading panel-heading--compact">
-                <div className="panel-title"><span className="panel-title-icon panel-title-icon--soft"><Activity size={16} /></span><h2>Users by access type</h2></div>
+                <div className="panel-title"><span className="panel-title-icon panel-title-icon--soft"><Activity size={16} /></span><div><h2>Customer base now</h2><p>Unique service identities · current status and access mix</p></div></div>
               </div>
               <div className="insight-content">
+                {serviceCountsLoading ? (
+                  <div className="dashboard-loading"><Loader2 size={16} className="animate-spin" /> Loading customer profile…</div>
+                ) : serviceCountsUnavailable ? (
+                  <div className="dashboard-empty"><CircleAlert size={17} /><span>Customer profile is unavailable.</span></div>
+                ) : <>
                 <DonutChart insights={userInsights} />
                 <div className="insight-legend">
                   {userInsights.map((segment) => {
-                    const total = userInsights.reduce((sum, insight) => sum + insight.count, 0);
                     return (
                       <div className="insight-row" key={segment.label}>
                         <span className="insight-swatch" style={{ background: segment.color }} />
                         <span>{segment.label}</span>
                         <strong>{segment.count}</strong>
-                        <small>{total > 0 ? Math.round((segment.count / total) * 100) : 0}%</small>
                       </div>
                     );
                   })}
                 </div>
+                <div className="dashboard-base-status" aria-label="Current service status counts">
+                  <div><span>Active service</span><strong>{activeUsers.toLocaleString()}</strong></div>
+                  <div><span>Expired service</span><strong>{expiredUsers.toLocaleString()}</strong></div>
+                </div>
+                </>}
               </div>
             </section>
           </div>
+        </div>
+
+        <div className="dashboard-section-kicker" role="heading" aria-level={2}>
+          Customer watchlist
+          <span>Current active plan adoption and accounts due to expire today · EAT</span>
+        </div>
+        <div className="dashboard-watchlist-grid">
+          <section className="section-card dashboard-watchlist-card">
+            <div className="panel-heading panel-heading--compact">
+              <div className="panel-title">
+                <span className="panel-title-icon panel-title-icon--soft"><Ticket size={16} /></span>
+                <div><h2>Most used plans</h2><p>Active, deduplicated service identities by assigned plan</p></div>
+              </div>
+              <Link href="/admin/packages" className="panel-link">Packages <ArrowUpRight size={13} /></Link>
+            </div>
+            {serviceCountsLoading ? (
+              <div className="dashboard-loading"><Loader2 size={16} className="animate-spin" /> Loading plan assignments…</div>
+            ) : serviceCountsUnavailable ? (
+              <div className="dashboard-empty"><CircleAlert size={17} /><span>Plan assignments are unavailable.</span></div>
+            ) : currentPlanAdoption.length ? (
+              <div className="dashboard-watchlist-list">
+                {currentPlanAdoption.map((item, index) => {
+                  const max = currentPlanAdoption[0]?.value || 1;
+                  return (
+                    <div className="dashboard-watchlist-plan" key={item.label}>
+                      <div className="dashboard-watchlist-plan-label"><span>{index + 1}. {item.label}</span><strong>{item.value}</strong></div>
+                      <div className="dashboard-watchlist-track"><i style={{ width: `${Math.max(4, item.value / max * 100)}%` }} /></div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="dashboard-empty"><Ticket size={17} /><span>No active accounts have a matching plan assignment.</span></div>
+            )}
+          </section>
+          <section className="section-card dashboard-watchlist-card">
+            <div className="panel-heading panel-heading--compact">
+              <div className="panel-title">
+                <span className="panel-title-icon panel-title-icon--soft"><CalendarDays size={16} /></span>
+                <div><h2>Expiring today</h2><p>Active accounts with an expiry date today in East Africa Time</p></div>
+              </div>
+              <Link href="/admin/customers" className="panel-link">Customers <ArrowUpRight size={13} /></Link>
+            </div>
+            {serviceCountsLoading ? (
+              <div className="dashboard-loading"><Loader2 size={16} className="animate-spin" /> Checking expiry dates…</div>
+            ) : serviceCountsUnavailable ? (
+              <div className="dashboard-empty"><CircleAlert size={17} /><span>Expiry information is unavailable.</span></div>
+            ) : expiringToday.length ? (
+              <div className="dashboard-watchlist-list">
+                {expiringToday.map(customer => (
+                  <div className="dashboard-expiry-row" key={customer.id}>
+                    <span className="dashboard-expiry-mark" aria-hidden="true" />
+                    <div className="dashboard-expiry-identity">
+                      <strong>{customer.username || customer.pppoe_username || customer.phone || `Account ${customer.id}`}</strong>
+                      <small>{customerPlanNameMap.get(customer.plan_id ?? -1) || (customer.type || "Service")} · {customer.type || "account"}</small>
+                    </div>
+                    <time dateTime={customer.expires_at!}>{new Date(customer.expires_at!).toLocaleTimeString("en-KE", { hour: "2-digit", minute: "2-digit", timeZone: "Africa/Nairobi" })}</time>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="dashboard-empty"><CircleCheck size={17} /><span>No active accounts are due to expire today.</span></div>
+            )}
+          </section>
         </div>
 
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>

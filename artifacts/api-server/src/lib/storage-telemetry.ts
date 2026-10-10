@@ -201,6 +201,32 @@ export async function measureSupabaseStorage(): Promise<StorageTelemetry> {
   }
 }
 
+export function explainVpsDiskFailure(result: { error?: string; stderr: string }): string {
+  const diagnostic = `${result.error ?? ""}\n${result.stderr}`.toLowerCase();
+  if (/timed?\s*out|timeout/.test(diagnostic)) {
+    return "VPS SSH check timed out. Check that the VPS is reachable from the API server on SSH port 22.";
+  }
+  if (/permission denied|authentication failed|no supported authentication methods|all configured vps ssh keys failed/.test(diagnostic)) {
+    return "VPS SSH authentication failed. Check the configured VPS SSH user and key.";
+  }
+  if (/could not resolve hostname|name or service not known|temporary failure in name resolution/.test(diagnostic)) {
+    return "The VPS hostname could not be resolved from the API server. Check the VPS host setting and DNS.";
+  }
+  if (/connection refused/.test(diagnostic)) {
+    return "The VPS refused the SSH connection. Check that SSH is listening on port 22 and allows the API server.";
+  }
+  if (/no route to host|network is unreachable/.test(diagnostic)) {
+    return "The API server has no network route to the VPS. Check VPS reachability and firewall rules.";
+  }
+  if (/spawn ssh.*enoent|ssh: not found/.test(diagnostic)) {
+    return "The API server does not have an SSH client available for VPS telemetry.";
+  }
+  if (/\b(df|awk):/.test(diagnostic) || /invalid option/.test(diagnostic)) {
+    return "The VPS was reached, but its filesystem usage command failed. Check that df and awk are available on the VPS.";
+  }
+  return "The VPS filesystem check failed over SSH. Check SSH connectivity and the remote disk-usage command.";
+}
+
 export async function measureVpsDisk(): Promise<StorageTelemetry> {
   if (!vpsSshConfigured()) {
     return unavailable("vps_filesystem", "filesystem_df", "VPS SSH telemetry is not configured.");
@@ -214,7 +240,7 @@ export async function measureVpsDisk(): Promise<StorageTelemetry> {
     { timeoutMs: STORAGE_REQUEST_TIMEOUT_MS },
   );
   if (!result.ok) {
-    return unavailable("vps_filesystem", "filesystem_df", "VPS filesystem usage is unavailable.");
+    return unavailable("vps_filesystem", "filesystem_df", explainVpsDiskFailure(result));
   }
   const values = result.stdout.trim().split(/\s+/).map(Number);
   const [capacityBytes, usedBytes, freeBytes] = values;
