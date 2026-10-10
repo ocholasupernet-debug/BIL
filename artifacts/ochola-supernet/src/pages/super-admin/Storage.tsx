@@ -304,6 +304,7 @@ export default function SuperAdminStorage() {
 
   const adminsById = useMemo(() => new Map((data?.usage ?? []).map(admin => [admin.id, admin])), [data]);
   const selectedAdmin = selectedAdminId ? adminsById.get(selectedAdminId) : null;
+  const vpsDisk = data?.measurement.physicalSources.find(source => source.source === "vps_filesystem");
   const selectedCandidates = (data?.candidates ?? []).filter(candidate => selectedCandidateIds.includes(candidate.id));
   const pendingRequests = (data?.requests ?? []).filter(request => request.status === "pending" || request.status === "processing");
   const history = (data?.requests ?? []).filter(request => request.status !== "pending" && request.status !== "processing");
@@ -462,9 +463,18 @@ export default function SuperAdminStorage() {
         ) : data && (
           <>
             <div className="storage-stat-grid">
-              <StatCard label="Measured in use" value={formatBytes(data.totalUsedBytes)} detail={data.measurement.tenantRowPayload.status === "available" ? `Tenant row estimate · ${formatDate(data.measurement.tenantRowPayload.measuredAt)}` : "Tenant estimate unavailable"} icon={Database} color={data.totalUsedBytes === null ? C.amber : C.accent} />
-              <StatCard label="Platform capacity" value={formatBytes(data.capacityBytes)} detail={data.capacityBytes === null ? "Configure a capacity budget below" : `${data.usagePercent?.toFixed(1)}% · ${data.capacity.source} · ${formatDate(data.capacity.measuredAt)}`} icon={HardDrive} color={data.capacityBytes === null ? C.amber : C.accent} />
-              <StatCard label="Storage left" value={formatBytes(data.freeBytes)} detail={data.freeSpace.source ? `${data.freeSpace.source} · ${formatDate(data.freeSpace.measuredAt)}` : "Remaining capacity is unknown"} icon={ShieldCheck} color={data.freeBytes === null ? C.amber : C.green} />
+              <StatCard label="Tenant data estimate" value={formatBytes(data.totalUsedBytes)} detail={data.measurement.tenantRowPayload.status === "available" ? `Tenant row estimate · ${formatDate(data.measurement.tenantRowPayload.measuredAt)}` : "Tenant estimate unavailable"} icon={Database} color={data.totalUsedBytes === null ? C.amber : C.accent} />
+              <StatCard label="Tenant capacity budget" value={formatBytes(data.capacityBytes)} detail={data.capacityBytes === null ? "Configure a tenant-data budget below" : `${data.usagePercent?.toFixed(1)}% of configured budget · ${formatDate(data.capacity.measuredAt)}`} icon={HardDrive} color={data.capacityBytes === null ? C.amber : C.accent} />
+              <StatCard label="Tenant budget remaining" value={formatBytes(data.freeBytes)} detail={data.freeBytes === null ? "Remaining tenant budget is unknown" : `Based on tenant row estimates · ${formatDate(data.freeSpace.measuredAt)}`} icon={ShieldCheck} color={data.freeBytes === null ? C.amber : C.green} />
+              <StatCard
+                label="VPS disk free"
+                value={vpsDisk?.freeBytes == null ? "Unavailable" : formatBytes(vpsDisk.freeBytes)}
+                detail={vpsDisk
+                  ? `${vpsDisk.status === "available" ? "Actual VPS filesystem" : `Last reading · ${vpsDisk.status}`} · ${formatDate(vpsDisk.measuredAt)}`
+                  : "No VPS filesystem reading"}
+                icon={HardDrive}
+                color={vpsDisk?.status === "available" ? C.green : C.amber}
+              />
               <StatCard label="Cleanup candidates" value={String(data.candidates.length)} detail={`Aged migration items · ${data.measurement.retentionDays}+ days`} icon={Trash2} color={data.candidates.length > 0 ? C.amber : C.green} />
             </div>
 
@@ -572,7 +582,7 @@ export default function SuperAdminStorage() {
               <div className="storage-capacity-heading" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
                 <div>
                   <h2 style={{ margin: 0, color: C.text, fontSize: 14 }}>Platform capacity</h2>
-                  <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 11 }}>Set the real storage budget used to calculate “Storage left”.</p>
+                  <p style={{ margin: "4px 0 0", color: C.muted, fontSize: 11 }}>Set a tenant-data budget for estimates and alerts. This is separate from the actual VPS disk capacity and free space shown above.</p>
                 </div>
                 <div className="storage-capacity-controls" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <input className="storage-technical" value={capacityGb} onChange={event => setCapacityGb(event.target.value)} inputMode="decimal" placeholder="e.g. 250" aria-label="Platform capacity in gigabytes" style={{ width: 110, background: C.input, border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", color: C.text, fontSize: 12 }} />

@@ -86,6 +86,10 @@ test("physical storage telemetry uses authoritative sources and keeps failures e
   assert.match(route, /Provider capacity/);
   assert.match(route, /Unavailable sources are never included/);
   assert.match(storageUi, /Connected physical storage sources/);
+  assert.match(storageUi, /label="VPS disk free"/);
+  assert.match(storageUi, /data\?\.measurement\.physicalSources\.find\(source => source\.source === "vps_filesystem"\)/);
+  assert.match(storageUi, /Tenant budget remaining/);
+  assert.match(storageUi, /separate from the actual VPS disk capacity and free space/);
   assert.match(storageUi, /sourceLabel/);
   assert.match(storageUi, /readings become stale after/);
   assert.match(storageUi, /statusColor/);
