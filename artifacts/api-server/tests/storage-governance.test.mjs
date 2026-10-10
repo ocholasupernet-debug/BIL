@@ -60,7 +60,8 @@ test("physical storage telemetry uses authoritative sources and keeps failures e
   assert.match(telemetry, /storage\/v1\/bucket/);
   assert.match(telemetry, /storage_object_bytes/);
   assert.match(telemetry, /df -B1/);
-  assert.match(telemetry, /VPS filesystem usage is unavailable/);
+  assert.match(telemetry, /VPS filesystem check failed over SSH/);
+  assert.match(telemetry, /VPS SSH authentication failed/);
   assert.match(route, /measureSupabaseDatabase/);
   assert.match(route, /measureSupabaseStorage/);
   assert.match(route, /measureVpsDisk/);
