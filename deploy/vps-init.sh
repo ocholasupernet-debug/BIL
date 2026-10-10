@@ -21,7 +21,7 @@ echo ""
 # ── 1. System packages ────────────────────────────────────
 echo "[1/8] Installing system dependencies..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq git curl ufw nginx certbot python3-certbot-nginx openvpn easy-rsa iptables-persistent
+sudo apt-get install -y -qq git curl ufw nginx certbot python3-certbot-nginx openvpn easy-rsa iptables-persistent postgresql-client
 
 # ── 2. Node.js 20 ─────────────────────────────────────────
 echo "[2/8] Installing Node.js 20..."

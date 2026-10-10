@@ -109,6 +109,40 @@ NODE
   )
 }
 
+ensure_pg_dump_available() {
+  if command -v pg_dump >/dev/null 2>&1; then
+    echo "      ✓ PostgreSQL backup client available: $(pg_dump --version)"
+    return 0
+  fi
+
+  echo "      ! pg_dump is missing; attempting to install the PostgreSQL client..."
+  if command -v apt-get >/dev/null 2>&1; then
+    if [ "$(id -u)" -eq 0 ]; then
+      if ! apt-get update -qq || ! DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client; then
+        echo "      ! PostgreSQL client installation failed; backups will remain unavailable."
+        return 0
+      fi
+    elif command -v sudo >/dev/null 2>&1; then
+      if ! sudo apt-get update -qq || ! sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client; then
+        echo "      ! PostgreSQL client installation failed; backups will remain unavailable."
+        return 0
+      fi
+    else
+      echo "      ! Cannot install PostgreSQL client without root or sudo; backups will remain unavailable."
+      return 0
+    fi
+  else
+    echo "      ! apt-get is unavailable; install the PostgreSQL client to enable backups."
+    return 0
+  fi
+
+  if command -v pg_dump >/dev/null 2>&1; then
+    echo "      ✓ PostgreSQL backup client installed: $(pg_dump --version)"
+  else
+    echo "      ! PostgreSQL client installation did not provide pg_dump; backups will remain unavailable."
+  fi
+}
+
 # 1. Use the release delivered by GitHub Actions, or pull latest code when
 #    this script is run manually on the VPS.
 if [ "${DEPLOY_FROM_ARCHIVE:-0}" = "1" ]; then
@@ -127,6 +161,7 @@ fi
 # archive release. Set DEPLOY_FORCE_INSTALL=1 when package manifests or the
 # lockfile changed and a fresh registry install is required.
 echo "[2/7] Preparing dependencies..."
+ensure_pg_dump_available
 if [ "${DEPLOY_FORCE_INSTALL:-0}" != "1" ] &&
    { [ "${DEPLOY_SKIP_INSTALL:-0}" = "1" ] || [ "${DEPLOY_FROM_ARCHIVE:-0}" = "1" ]; }; then
   if [ ! -x "$PROJECT_DIR/artifacts/ochola-supernet/node_modules/.bin/vite" ] ||
@@ -494,8 +529,7 @@ for host in vpn.isplatty.org; do
 done
 
 echo "[12/12] Applying scoped one-time RouterOS deployment actions..."
-DEPLOY_SKIP_ROUTER_ONESHOTS="$SKIP_ROUTER_MANAGEMENT_SETUP" \
-  bash "$PROJECT_DIR/deploy/run-router-one-shots.sh" "$PROJECT_DIR" "$PORTAL_REFRESH_ONLY"
+bash "$PROJECT_DIR/deploy/run-router-one-shots.sh" "$PROJECT_DIR" "$PORTAL_REFRESH_ONLY"
 
 if [ "$SKIP_ROUTER_MANAGEMENT_SETUP" != "1" ] &&
    [ -f "$PROJECT_DIR/deploy/verify-router-management-vps.sh" ]; then

@@ -7,6 +7,8 @@ const route = await readFile("src/routes/admin-settings-route.ts", "utf8");
 const templates = await readFile("src/lib/message-templates.ts", "utf8");
 const runner = await readFile("scripts/apply-deployment-migrations.mjs", "utf8");
 const backupsUi = await readFile("../ochola-supernet/src/pages/super-admin/Backups.tsx", "utf8");
+const vpsDeploy = await readFile("../../deploy/deploy.sh", "utf8");
+const vpsInit = await readFile("../../deploy/vps-init.sh", "utf8");
 
 test("admin settings migration creates durable and service-role-only storage", () => {
   for (const table of ["isp_message_templates", "platform_role_permissions", "platform_backup_jobs"]) {
@@ -45,6 +47,13 @@ test("backup UI reports server scheduler health instead of claiming a static con
   assert.match(backupsUi, /Durable filesystem storage is active/);
   assert.match(backupsUi, /Retention:/);
   assert.doesNotMatch(backupsUi, /Automatic Schedule: Not configured/);
+});
+
+test("VPS bootstrap and releases provision the pg_dump backup dependency", () => {
+  assert.match(vpsInit, /postgresql-client/);
+  assert.match(vpsDeploy, /ensure_pg_dump_available/);
+  assert.match(vpsDeploy, /pg_dump --version/);
+  assert.match(vpsDeploy, /apt-get install -y -qq postgresql-client/);
 });
 
 test("delivery lookup has an enabled-template fallback and variable rendering", () => {
