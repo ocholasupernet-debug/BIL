@@ -35,22 +35,34 @@ async function fetchTransactionOverview(): Promise<TransactionOverview> {
 
 /* ─── Date helpers ─── */
 function toDateStr(d: Date) {
-  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Africa/Nairobi",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find(item => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+function shiftDateKey(key: string, days: number) {
+  const [year, month, day] = key.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days, 12)).toISOString().slice(0, 10);
 }
 function isoWeekKey(d: Date): string {
-  const tmp = new Date(d);
-  tmp.setHours(0, 0, 0, 0);
-  tmp.setDate(tmp.getDate() + 3 - ((tmp.getDay() + 6) % 7));
-  const week1 = new Date(tmp.getFullYear(), 0, 4);
-  const wn = 1 + Math.round(((tmp.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
-  return `${tmp.getFullYear()}-W${String(wn).padStart(2, "0")}`;
+  const [year, month, day] = toDateStr(d).split("-").map(Number);
+  const tmp = new Date(Date.UTC(year, month - 1, day));
+  tmp.setUTCDate(tmp.getUTCDate() + 3 - ((tmp.getUTCDay() + 6) % 7));
+  const week1 = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 4));
+  const wn = 1 + Math.round(((tmp.getTime() - week1.getTime()) / 86400000 - 3 + ((week1.getUTCDay() + 6) % 7)) / 7);
+  return `${tmp.getUTCFullYear()}-W${String(wn).padStart(2, "0")}`;
 }
 function monthKey(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  return toDateStr(d).slice(0, 7);
 }
 function fmtMonth(key: string) {
   const [y, m] = key.split("-");
-  return new Date(Number(y), Number(m) - 1, 1).toLocaleString("default", { month: "short", year: "2-digit" });
+  return new Date(Date.UTC(Number(y), Number(m) - 1, 1, 12)).toLocaleString("default", { month: "short", year: "2-digit", timeZone: "UTC" });
 }
 function fmtWeek(key: string) {
   return key.replace("-", " ");
@@ -138,18 +150,18 @@ export default function TransactionGraphs() {
 
   /* Use only completed transactions for revenue numbers */
   const completed = useMemo(() =>
-    txns.filter(t => t.status === "completed"),
+    txns.filter(t => ["completed", "paid", "success"].includes(String(t.status).trim().toLowerCase())),
     [txns]);
 
   /* ─── Comparison windows ─── */
   const todayStr     = toDateStr(now);
-  const yesterday    = new Date(now); yesterday.setDate(now.getDate() - 1);
-  const yesterdayStr = toDateStr(yesterday);
+  const yesterdayStr = shiftDateKey(todayStr, -1);
   const thisWeekKey  = isoWeekKey(now);
-  const lastWeekDate = new Date(now); lastWeekDate.setDate(now.getDate() - 7);
+  const lastWeekDate = new Date(`${shiftDateKey(todayStr, -7)}T12:00:00Z`);
   const lastWeekKey  = isoWeekKey(lastWeekDate);
   const thisMonthKey = monthKey(now);
-  const lastMonthDate = new Date(now); lastMonthDate.setMonth(now.getMonth() - 1);
+  const [thisYear, thisMonth] = todayStr.split("-").map(Number);
+  const lastMonthDate = new Date(Date.UTC(thisYear, thisMonth - 2, 1, 12));
   const lastMonthKey = monthKey(lastMonthDate);
 
   const sumWhere = (fn: (t: DbTransaction) => boolean) =>
@@ -167,9 +179,7 @@ export default function TransactionGraphs() {
     const map: Record<string, number> = {};
     const days: string[] = [];
     for (let i = 29; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(now.getDate() - i);
-      const k = toDateStr(d);
+      const k = shiftDateKey(todayStr, -i);
       map[k] = 0;
       days.push(k);
     }
@@ -178,15 +188,14 @@ export default function TransactionGraphs() {
       if (k in map) map[k] += t.amount;
     });
     return days.map(k => ({ label: fmtDay(k), total: map[k] }));
-  }, [completed]);
+  }, [completed, todayStr]);
 
   /* ─── Weekly chart — last 12 weeks ─── */
   const weeklyData = useMemo(() => {
     const map: Record<string, number> = {};
     const weeks: string[] = [];
     for (let i = 11; i >= 0; i--) {
-      const d = new Date(now);
-      d.setDate(now.getDate() - i * 7);
+      const d = new Date(`${shiftDateKey(todayStr, -i * 7)}T12:00:00Z`);
       const k = isoWeekKey(d);
       if (!map[k]) { map[k] = 0; weeks.push(k); }
     }
@@ -197,14 +206,15 @@ export default function TransactionGraphs() {
     const seen = new Set<string>();
     return weeks.filter(k => { if (seen.has(k)) return false; seen.add(k); return true; })
       .map(k => ({ label: fmtWeek(k), total: map[k] }));
-  }, [completed]);
+  }, [completed, todayStr]);
 
   /* ─── Monthly chart — last 12 months ─── */
   const monthlyData = useMemo(() => {
     const map: Record<string, number> = {};
     const months: string[] = [];
+    const [currentYear, currentMonth] = todayStr.split("-").map(Number);
     for (let i = 11; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const d = new Date(Date.UTC(currentYear, currentMonth - 1 - i, 1, 12));
       const k = monthKey(d);
       map[k] = 0;
       months.push(k);
@@ -214,7 +224,7 @@ export default function TransactionGraphs() {
       if (k in map) map[k] += t.amount;
     });
     return months.map(k => ({ label: fmtMonth(k), total: map[k] }));
-  }, [completed]);
+  }, [completed, todayStr]);
 
   /* ─── By Router (current month) ─── */
   const routerPieData = useMemo(() => {
