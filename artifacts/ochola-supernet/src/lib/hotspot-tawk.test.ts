@@ -12,6 +12,11 @@ test("Tawk is loaded only after chat-account authentication and signs in the sta
   assert.match(portal, /Your previous chat history is ready/);
   assert.match(portal, /hotspot-chat-register/);
   assert.match(portal, /hotspot-chat-login/);
+  assert.match(portal, /ochola_hotspot_chat_remember_v1_/);
+  assert.match(portal, /authenticate\("resume",savedToken\)/);
+  assert.match(portal, /payload\.rememberToken=rememberToken/);
+  assert.match(portal, /deviceMac:deviceMac/);
+  assert.match(portal, /Your password is never saved here/);
   assert.match(portal, /hotspot-chat-password"\)\.value=""/);
   assert.match(verifyPortal, /Tawk\.to must remain opt-in through Hotspot Settings/);
   assert.doesNotMatch(portal, /window\.Tawk_API\.login\(\{[^}]*macAddress/);

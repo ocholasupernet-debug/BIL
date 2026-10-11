@@ -2545,14 +2545,16 @@ else{
 </script>
 <div id="hotspot-chat-account" hidden style="position:fixed;right:16px;bottom:18px;z-index:9998;width:min(340px,calc(100vw - 32px));box-sizing:border-box;padding:16px;border:1px solid #d7e0ea;border-radius:14px;background:#fff;color:#172033;box-shadow:0 12px 36px #10243b30;font:14px system-ui,sans-serif">
   <strong style="display:block;margin-bottom:5px">Customer support chat</strong>
-  <p style="margin:0 0 12px;color:#64748b;font-size:12px">Create a chat account once, then sign in again to continue your conversation.</p>
-  <label style="display:block;margin:8px 0 4px;font-size:12px;font-weight:600" for="hotspot-chat-username">Chat username</label>
-  <input id="hotspot-chat-username" autocomplete="username" maxlength="32" style="box-sizing:border-box;width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px">
-  <label style="display:block;margin:8px 0 4px;font-size:12px;font-weight:600" for="hotspot-chat-password">Chat password</label>
-  <input id="hotspot-chat-password" type="password" autocomplete="current-password" minlength="8" maxlength="128" style="box-sizing:border-box;width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px">
-  <div style="display:flex;gap:8px;margin-top:12px">
-    <button id="hotspot-chat-register" type="button" style="flex:1;padding:10px;border:0;border-radius:8px;background:#0b74e5;color:#fff;font-weight:700">Create account</button>
-    <button id="hotspot-chat-login" type="button" style="flex:1;padding:10px;border:1px solid #0b74e5;border-radius:8px;background:#fff;color:#0b74e5;font-weight:700">Continue</button>
+  <p style="margin:0 0 12px;color:#64748b;font-size:12px">Your chat sign-in is remembered on this device. Your password is never saved here.</p>
+  <div id="hotspot-chat-credentials">
+    <label style="display:block;margin:8px 0 4px;font-size:12px;font-weight:600" for="hotspot-chat-username">Chat username</label>
+    <input id="hotspot-chat-username" autocomplete="username" maxlength="32" style="box-sizing:border-box;width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px">
+    <label style="display:block;margin:8px 0 4px;font-size:12px;font-weight:600" for="hotspot-chat-password">Chat password</label>
+    <input id="hotspot-chat-password" type="password" autocomplete="current-password" minlength="8" maxlength="128" style="box-sizing:border-box;width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px">
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button id="hotspot-chat-register" type="button" style="flex:1;padding:10px;border:0;border-radius:8px;background:#0b74e5;color:#fff;font-weight:700">Create account</button>
+      <button id="hotspot-chat-login" type="button" style="flex:1;padding:10px;border:1px solid #0b74e5;border-radius:8px;background:#fff;color:#0b74e5;font-weight:700">Continue</button>
+    </div>
   </div>
   <p id="hotspot-chat-message" role="status" aria-live="polite" style="margin:10px 0 0;color:#475569;font-size:12px"></p>
 </div>
@@ -2575,7 +2577,11 @@ else{
 
     var panel=document.getElementById("hotspot-chat-account");
     var message=document.getElementById("hotspot-chat-message");
+    var credentials=document.getElementById("hotspot-chat-credentials");
     var widgetStarted=false;
+    var adminId=Number(config.adminId);
+    var rememberKey="ochola_hotspot_chat_remember_v1_"+String(adminId);
+    var deviceMac=typeof ROUTER_MAC==="string"?ROUTER_MAC:"";
     panel.hidden=false;
     function startWidget(identity){
       if(widgetStarted)return;
@@ -2583,7 +2589,7 @@ else{
       window.Tawk_API=window.Tawk_API||{};
       window.Tawk_API.onLoad=function(){
         window.Tawk_API.login({userId:identity.userId,hash:identity.hash},function(error){
-          if(error){message.textContent="Chat sign-in failed. Check your details and try again.";return;}
+          if(error){widgetStarted=false;message.textContent="Chat sign-in failed. Check your details and try again.";return;}
           message.textContent="Signed in. Your previous chat history is ready.";
           panel.hidden=true;
         });
@@ -2598,27 +2604,45 @@ else{
       if(firstScript&&firstScript.parentNode)firstScript.parentNode.insertBefore(tawkScript,firstScript);
       else document.head.appendChild(tawkScript);
     }
-    function authenticate(action){
-      var username=document.getElementById("hotspot-chat-username").value.trim();
-      var password=document.getElementById("hotspot-chat-password").value;
+    function authenticate(action,rememberToken){
+      var username=action==="resume"?"":document.getElementById("hotspot-chat-username").value.trim();
+      var password=action==="resume"?"":document.getElementById("hotspot-chat-password").value;
       var apiBase=String(config.apiBase||"");
-      if(!username||!password){message.textContent="Enter your chat username and password.";return;}
-      message.textContent=action==="register"?"Creating your chat account…":"Signing in…";
+      if(action!=="resume"&&(!username||!password)){message.textContent="Enter your chat username and password.";return;}
+      message.textContent=action==="resume"?"Restoring your saved chat sign-in…":action==="register"?"Creating your chat account…":"Signing in…";
+      var payload={action:action,adminId:adminId,deviceMac:deviceMac};
+      if(action==="resume")payload.rememberToken=rememberToken;
+      else{payload.username=username;payload.password=password;}
       fetch(apiBase.replace(/\/+$/,"")+"/api/public/hotspot-chat/auth",{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({action:action,adminId:Number(config.adminId),username:username,password:password})
-      }).then(function(response){return response.json().then(function(data){return {ok:response.ok,data:data};});})
+        body:JSON.stringify(payload)
+      }).then(function(response){return response.json().then(function(data){return {ok:response.ok,status:response.status,data:data};});})
         .then(function(result){
           document.getElementById("hotspot-chat-password").value="";
           if(!result.ok||!result.data||!result.data.identity){
+            if(action==="resume"){
+              if(result.status===401){try{localStorage.removeItem(rememberKey);}catch(_){}}
+              credentials.hidden=false;
+            }
             message.textContent=result.data&&result.data.error||"Chat sign-in is temporarily unavailable.";
             return;
           }
+          if(result.data.rememberToken){try{localStorage.setItem(rememberKey,result.data.rememberToken);}catch(_){}}
+          if(action==="resume")message.textContent="Saved chat account restored.";
           startWidget(result.data.identity);
-        }).catch(function(){message.textContent="Could not reach chat sign-in. Check your connection and retry.";});
+        }).catch(function(){
+          if(action==="resume")credentials.hidden=false;
+          message.textContent=action==="resume"?"Could not reach chat sign-in. Your saved sign-in is kept; check your connection and retry.":"Could not reach chat sign-in. Check your connection and retry.";
+        });
     }
     document.getElementById("hotspot-chat-register").addEventListener("click",function(){authenticate("register");});
     document.getElementById("hotspot-chat-login").addEventListener("click",function(){authenticate("login");});
+    var savedToken="";
+    try{savedToken=localStorage.getItem(rememberKey)||"";}catch(_){}
+    if(savedToken){
+      credentials.hidden=true;
+      authenticate("resume",savedToken);
+    }
   }
 })();
 </script>

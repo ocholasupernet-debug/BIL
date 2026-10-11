@@ -3,9 +3,12 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   createTawkIdentity,
+  createChatRememberToken,
   hashChatPassword,
   normalizeChatUsername,
+  normalizeRouterMac,
   verifyChatPassword,
+  verifyChatRememberToken,
 } from "./hotspot-chat-account.js";
 
 test("chat usernames are normalized and constrained", () => {
@@ -32,6 +35,21 @@ test("Tawk identity is stable per account and signed server-side", () => {
   assert.equal(first.userId, "account-uuid");
   assert.notEqual(first.hash, otherKey.hash);
   assert.match(first.hash, /^[a-f0-9]{64}$/);
+});
+
+test("remember-device tokens are signed, tenant-scoped, MAC-bound, and expire", () => {
+  const now = Date.UTC(2026, 9, 11);
+  const mac = normalizeRouterMac("fe:9f:05:d6:cf:de");
+  assert.equal(mac, "FE9F05D6CFDE");
+  const token = createChatRememberToken("server-only-key", 42, 7, mac!, now);
+  assert.deepEqual(verifyChatRememberToken("server-only-key", token, 7, mac!, now), { accountId: 42 });
+  assert.equal(verifyChatRememberToken("server-only-key", token, 8, mac!, now), null);
+  assert.equal(verifyChatRememberToken("server-only-key", token, 7, "001122334455", now), null);
+  assert.equal(verifyChatRememberToken("wrong-key", token, 7, mac!, now), null);
+  assert.equal(verifyChatRememberToken("server-only-key", `${token}x`, 7, mac!, now), null);
+  assert.equal(normalizeRouterMac("not-a-mac"), null);
+  const expired = createChatRememberToken("server-only-key", 42, 7, mac!, now - 366 * 24 * 60 * 60 * 1000);
+  assert.equal(verifyChatRememberToken("server-only-key", expired, 7, mac!, now), null);
 });
 
 test("chat accounts are tenant-scoped, private to service_role, and migration is registered", () => {
