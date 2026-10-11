@@ -53,7 +53,7 @@ import {
 } from "../lib/portal-assets.js";
 import { vlanCustomerQueuePresence } from "../lib/vlan-customer-queue.js";
 import { generateVpsOvpnSetupScript, describeVpnArchitecture } from "../lib/vpn-utils";
-import { sbInsert, sbSelect, sbSelectStrict, sbUpdate, supabaseConfigured } from "../lib/supabase-client";
+import { sbDelete, sbInsert, sbSelect, sbSelectStrict, sbUpdate, sbUpsertStrict, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
@@ -3103,6 +3103,9 @@ router.get("/router/:id/traffic", async (req, res): Promise<void> => {
 });
 
 /* ─── GET /api/router/:id/live ─────────────────────────────────────────── */
+const dashboardUsageWriteAt = new Map<string, number>();
+const dashboardUsagePruneAt = new Map<number, number>();
+const dashboardUsageReadCache = new Map<string, { at: number; rows: Array<{ router_id: number; sampled_at: string; upload_bytes: number; download_bytes: number }> }>();
 router.get("/admin/dashboard/telemetry", requireAdmin(), async (req, res): Promise<void> => {
   const account = await authenticatedAccount(req);
   const tenantId = await authenticatedTenantAdminId(req);
@@ -3226,10 +3229,75 @@ router.get("/admin/dashboard/telemetry", requireAdmin(), async (req, res): Promi
       pppoe: total.pppoe + (entry.live?.pppoeUsers.length ?? 0),
     }), { hotspot: 0, pppoe: 0 });
     const totals = account.role === "reseller" || portId !== null || resellerId !== null ? filteredTotals : globalTotals;
+    const sampleHour = new Date();
+    sampleHour.setUTCMinutes(0, 0, 0);
+    const usageScopeKey = account.role === "reseller"
+      ? `reseller:${account.id}:port:${portId ?? "all"}`
+      : `port:${portId ?? "all"}:reseller:${resellerId ?? "all"}`;
+    const sampleRows = liveResults.flatMap(({ router, live }) => {
+      if (!live) return [];
+      const routerPorts = scopedPorts.filter((port) => port.router_id === router.id);
+      const shouldScopeToPorts = account.role === "reseller" || portId !== null || resellerId !== null;
+      const aliases = new Set(routerPorts.flatMap((port) => {
+        const reseller = port.reseller_id ?? port.assigned_reseller_id ?? "";
+        return [
+          port.interface_name.toLowerCase(),
+          `hs_${port.interface_name}`.toLowerCase(),
+          `pppoe_${port.interface_name}`.toLowerCase(),
+          `reseller_${reseller}`.toLowerCase(),
+          `reseller_${reseller}_${port.interface_name}`.toLowerCase(),
+        ];
+      }));
+      const hotspotSessions = shouldScopeToPorts
+        ? live.hotspotUsers.filter((user) => aliases.has(user.server.toLowerCase()))
+        : live.hotspotUsers;
+      const pppoeSessions = shouldScopeToPorts
+        ? live.pppoeUsers.filter((user) => aliases.has(user.service.toLowerCase()))
+        : live.pppoeUsers;
+      // RouterOS bytes-in are client uploads received by the router; bytes-out
+      // are downloads sent to clients. These are live-session counters only.
+      const uploadBytes = [...hotspotSessions, ...pppoeSessions]
+        .reduce((sum, session) => sum + Math.max(0, Number(session.bytesIn) || 0), 0);
+      const downloadBytes = [...hotspotSessions, ...pppoeSessions]
+        .reduce((sum, session) => sum + Math.max(0, Number(session.bytesOut) || 0), 0);
+      return [{ account_id: account.id, router_id: router.id, scope_key: usageScopeKey, sampled_at: sampleHour.toISOString(), upload_bytes: uploadBytes, download_bytes: downloadBytes }];
+    });
+    const dueSamples = sampleRows.filter((sample) => {
+      const key = `${account.id}:${sample.scope_key}:${sample.router_id}`;
+      const lastWrite = dashboardUsageWriteAt.get(key) ?? 0;
+      if (Date.now() - lastWrite < 5 * 60 * 1000) return false;
+      dashboardUsageWriteAt.set(key, Date.now());
+      return true;
+    });
+    await Promise.all(dueSamples.map((sample) =>
+      sbUpsertStrict("dashboard_usage_samples", "account_id,router_id,scope_key,sampled_at", sample)
+        .catch((error) => logger.warn({ accountId: account.id, routerId: sample.router_id, error: String(error) }, "dashboard usage sample could not be stored")),
+    ));
+    const lastPruned = dashboardUsagePruneAt.get(account.id) ?? 0;
+    if (Date.now() - lastPruned >= 24 * 60 * 60 * 1000) {
+      dashboardUsagePruneAt.set(account.id, Date.now());
+      void sbDelete(
+        "dashboard_usage_samples",
+        `account_id=eq.${account.id}&sampled_at=lt.${encodeURIComponent(new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString())}`,
+      ).catch((error) => logger.warn({ accountId: account.id, error: String(error) }, "old dashboard usage samples could not be pruned"));
+    }
+    const sampleRouterIds = scopedRouters.map((router) => router.id);
+    const usageCacheKey = `${account.id}:${usageScopeKey}:${sampleRouterIds.sort((a, b) => a - b).join(",")}`;
+    const cachedUsage = dashboardUsageReadCache.get(usageCacheKey);
+    let usageSamples = cachedUsage && Date.now() - cachedUsage.at < 60_000 ? cachedUsage.rows : null;
+    if (!usageSamples && sampleRouterIds.length) {
+      usageSamples = await sbSelect<{ router_id: number; sampled_at: string; upload_bytes: number; download_bytes: number }>(
+        "dashboard_usage_samples",
+        `account_id=eq.${account.id}&scope_key=eq.${encodeURIComponent(usageScopeKey)}&router_id=in.(${sampleRouterIds.join(",")})&sampled_at=gte.${encodeURIComponent(new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString())}&select=router_id,sampled_at,upload_bytes,download_bytes&order=sampled_at.asc&limit=10000`,
+      );
+      dashboardUsageReadCache.set(usageCacheKey, { at: Date.now(), rows: usageSamples });
+    }
+    usageSamples ??= [];
 
     res.json({
       ok: true,
       fetchedAt: new Date().toISOString(),
+      usageSamples,
       totals: {
         hotspotActive: totals.hotspot,
         pppoeActive: totals.pppoe,

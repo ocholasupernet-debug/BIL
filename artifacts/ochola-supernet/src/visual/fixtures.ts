@@ -42,6 +42,12 @@ const routers = [
 
 const telemetry = {
   totals: { hotspotActive: 12, pppoeActive: 8, onlineUsers: 20 },
+  usageSamples: Array.from({ length: 5 }, (_, index) => ({
+    router_id: 41,
+    sampled_at: new Date(now - (4 - index) * 60 * 60_000).toISOString(),
+    upload_bytes: (index + 1) * 5_000_000,
+    download_bytes: (index + 1) * 18_000_000,
+  })),
   rows: [
     {
       portId: 61, routerId: 41, interfaceName: "ether3-North", resellerId: 91,

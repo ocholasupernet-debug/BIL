@@ -99,7 +99,10 @@ function runChecks(page: VisualPage, expectedTheme: "light" | "dark"): CheckResu
       return { status: "pending", errors };
     }
     if (document.querySelector(".reseller-dashboard [role=alert]")) errors.push("Reseller dashboard fixture requests failed.");
-    if (!checkTooltip(page)) errors.push("Reseller chart bars are missing tooltip labels.");
+    if (
+      document.querySelectorAll(".usage-insight-card").length < 3 ||
+      document.querySelectorAll(".usage-insight-bar-group[title]").length < 30
+    ) errors.push("Reseller data-usage charts are missing sampled bars or tooltip labels.");
   } else {
     const cards = document.querySelectorAll(".storage-stat-card").length;
     if (cards < 4 || document.querySelector(".storage-page .recharts-line") === null) {

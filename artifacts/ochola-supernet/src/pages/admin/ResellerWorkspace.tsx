@@ -5,6 +5,7 @@ import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID, getAdminApiToken, getAdminRole } from "@/lib/supabase";
 import { parseJsonResponse } from "@/lib/api-client";
 import { NetworkTabs } from "./network/NetworkTabs";
+import { DataUsageInsights, type UsageSample } from "@/components/dashboard/DataUsageInsights";
 
 type RouterOption = { id: number; name: string; status?: string };
 type PortOption = { name: string; type: string; running: boolean; assigned: boolean; macAddress?: string };
@@ -49,6 +50,7 @@ type ResellerResponse = {
 };
 type ResellerTelemetry = {
   totals: { hotspotActive: number; pppoeActive: number; onlineUsers: number };
+  usageSamples?: UsageSample[];
 };
 type ResellerPaymentSettings = {
   paymentGateway: string;
@@ -1136,6 +1138,7 @@ function ResellerDashboard() {
               </div>
             </section>
           ) : null}
+          <DataUsageInsights samples={telemetry?.usageSamples ?? []} />
           <section className="reseller-analytics-section">
             <div className="reseller-analytics-heading">
               <div>
@@ -1154,11 +1157,6 @@ function ResellerDashboard() {
               <div className="reseller-analytics-title">Current users by access type</div>
               <div className="reseller-analytics-caption">Customer counts in your account; not a live-session split.</div>
              <HorizontalMetricBars items={accessTypes} />
-           </section>
-            <section className="reseller-analytics-card" style={cardStyle}>
-              <div className="reseller-analytics-title">Recorded usage by registration cohort</div>
-              <div className="reseller-analytics-caption">Usage grouped by customer registration month, not a month-by-month usage history.</div>
-             <MetricBarChart items={analytics?.consumptionByMonth ?? []} valueKey="dataUsedMb" suffix=" MB" />
            </section>
             <section className="reseller-analytics-card" style={cardStyle}>
               <div className="reseller-analytics-title">Top recorded data consumers</div>

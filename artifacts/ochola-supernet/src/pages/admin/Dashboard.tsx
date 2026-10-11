@@ -1,6 +1,7 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
+import { DataUsageInsights, type UsageSample } from "@/components/dashboard/DataUsageInsights";
 import {
   Activity,
   ArrowUpRight,
@@ -113,6 +114,7 @@ type TelemetryRow = {
 
 type TelemetryResponse = {
   totals: { hotspotActive: number; pppoeActive: number; onlineUsers: number };
+  usageSamples?: UsageSample[];
   rows: TelemetryRow[];
   filters: {
     routers: { id: number; name: string; status: string }[];
@@ -856,6 +858,7 @@ export default function Dashboard() {
           )}
         </section>
 
+        <DataUsageInsights samples={telemetry?.usageSamples ?? []} />
         <section className="section-card" aria-label="Network telemetry overview" style={{ marginTop: "1rem" }}>
           <div className="panel-heading">
             <div className="panel-title">
