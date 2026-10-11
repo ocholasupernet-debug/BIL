@@ -48,6 +48,7 @@ import {
   removeHotspotUser,
   removePPPSecretByName,
   fetchPPPSecrets,
+  fetchPPPProfiles,
   getPaidHotspotBindingSnapshot,
   reconcilePaidHotspotBinding,
   type PaidHotspotBindingSnapshot,
@@ -1560,15 +1561,23 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
         return;
       }
       creds = routerCredentials(router);
+      const pppProfileName = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
 
-      const [usernameRows, pppoeUsernameRows, radiusExists, pppSecrets] = await Promise.all([
+      const [usernameRows, pppoeUsernameRows, radiusExists, pppSecrets, pppProfiles] = await Promise.all([
         sbSelectStrict<{ id: number }>("isp_customers", `admin_id=eq.${effectiveAdminId}&username=eq.${encodeURIComponent(username)}&select=id&limit=1`),
         sbSelectStrict<{ id: number }>("isp_customers", `admin_id=eq.${effectiveAdminId}&pppoe_username=eq.${encodeURIComponent(username)}&select=id&limit=1`),
         hasRadiusCustomerStrict(username),
         fetchPPPSecrets(creds),
+        fetchPPPProfiles(creds),
       ]);
       if (usernameRows[0] || pppoeUsernameRows[0] || radiusExists || pppSecrets.some(secret => secret.name === username)) {
         res.status(409).json({ error: "That PPPoE username is already in use. Choose a unique username." });
+        return;
+      }
+      if (!pppProfiles.some(profile => profile.name === pppProfileName)) {
+        res.status(409).json({
+          error: `The PPPoE profile "${pppProfileName}" is missing on ${router.name}. Sync this plan to the router, then retry.`,
+        });
         return;
       }
 
@@ -1595,7 +1604,7 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
       await addPPPSecret(creds, {
         name: username,
         password,
-        profile: plan.name,
+        profile: pppProfileName,
         service: "pppoe",
         comment: `ISP customer ${effectiveAdminId}:${customerId}`,
         ...(String(ipAddress ?? "").trim() ? { remoteAddress: String(ipAddress).trim() } : {}),
