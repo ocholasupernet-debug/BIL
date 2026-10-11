@@ -4071,7 +4071,19 @@ router.post("/router/:id/ppp/secrets", async (req, res): Promise<void> => {
   const found = await getRouterCreds(id);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {
-    await addPPPSecret(found.creds, { name, password, profile, service, comment });
+    const selectedService = typeof service === "string" ? service : "any";
+    const selectedProfile = typeof profile === "string" && profile.trim() ? profile.trim() : "default";
+    if (selectedService === "pppoe") {
+      const profiles = await fetchPPPProfiles(found.creds);
+      const pppProfile = profiles.find(row => row.name === selectedProfile);
+      if (!pppProfile?.remoteAddress.trim()) {
+        res.status(400).json({
+          error: `PPP profile "${selectedProfile}" has no remote IP pool. Choose a profile with a configured address pool before creating a PPPoE user.`,
+        });
+        return;
+      }
+    }
+    await addPPPSecret(found.creds, { name, password, profile: selectedProfile, service: selectedService, comment });
     res.json({ ok: true, message: `PPP secret '${name}' created` });
   } catch (err) { routerErrorResponse(res, err); }
 });

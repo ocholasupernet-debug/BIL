@@ -1575,9 +1575,16 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
         res.status(409).json({ error: "That PPPoE username is already in use. Choose a unique username." });
         return;
       }
-      if (!pppProfiles.some(profile => profile.name === pppProfileName)) {
+      const selectedPppProfile = pppProfiles.find(profile => profile.name === pppProfileName);
+      if (!selectedPppProfile) {
         res.status(409).json({
           error: `The PPPoE profile "${pppProfileName}" is missing on ${router.name}. Sync this plan to the router, then retry.`,
+        });
+        return;
+      }
+      if (!String(ipAddress ?? "").trim() && !selectedPppProfile.remoteAddress.trim()) {
+        res.status(409).json({
+          error: `The PPPoE plan profile "${pppProfileName}" has no remote IP pool on ${router.name}. Configure and sync the plan's IP pool before creating the account.`,
         });
         return;
       }
