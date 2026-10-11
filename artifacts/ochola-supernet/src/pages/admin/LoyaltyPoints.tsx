@@ -13,6 +13,7 @@ type LoyaltyPlan = {
   redemptionPoints: number | null;
 };
 type LoyaltyUser = {
+  deviceMac: string;
   phone: string;
   name: string;
   points: number;
@@ -83,7 +84,7 @@ export default function LoyaltyPoints() {
   });
   const users = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return (context?.users ?? []).filter(user => !needle || `${user.name} ${user.phone}`.toLowerCase().includes(needle));
+    return (context?.users ?? []).filter(user => !needle || `${user.name} ${user.deviceMac} ${user.phone}`.toLowerCase().includes(needle));
   }, [context?.users, search]);
   const ratio = context?.settings.kesPerPoint;
 
@@ -137,7 +138,7 @@ export default function LoyaltyPoints() {
               </div>
               <div style={{ ...cardStyle, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}><div style={{ width: 36, height: 36, borderRadius: 10, display: "grid", placeItems: "center", background: "color-mix(in srgb, var(--isp-accent) 12%, var(--isp-card))", color: "var(--isp-accent)" }}><Users size={18} /></div><span style={{ fontWeight: 750 }}>Customer balances</span></div>
-                <div style={{ marginTop: 15, display: "flex", alignItems: "baseline", gap: 8 }}><strong style={{ fontSize: "2rem", letterSpacing: "-.04em" }}>{fmt(context.users.length)}</strong><span style={{ fontSize: ".82rem", color: "var(--isp-text-muted)" }}>Hotspot phone accounts</span></div>
+                <div style={{ marginTop: 15, display: "flex", alignItems: "baseline", gap: 8 }}><strong style={{ fontSize: "2rem", letterSpacing: "-.04em" }}>{fmt(context.users.length)}</strong><span style={{ fontSize: ".82rem", color: "var(--isp-text-muted)" }}>Hotspot device wallets</span></div>
                 <div style={{ borderTop: "1px solid var(--isp-border)", marginTop: 15, paddingTop: 13, color: "var(--isp-text-muted)", fontSize: ".79rem", display: "flex", justifyContent: "space-between" }}><span>Points held across accounts</span><strong style={{ color: "var(--isp-text)" }}>{fmt(context.users.reduce((sum, user) => sum + (Number(user.points) || 0), 0))}</strong></div>
               </div>
             </section>
@@ -154,12 +155,12 @@ export default function LoyaltyPoints() {
 
             <section style={cardStyle}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
-                <div><div style={{ display: "flex", gap: 9, alignItems: "center" }}><Users size={18} color="var(--isp-accent)" /><h2 style={{ margin: 0, fontSize: "1rem" }}>Customer point balances</h2></div><p style={{ color: "var(--isp-text-muted)", fontSize: ".78rem", margin: "5px 0 0" }}>Balances and Hotspot account counts across this tenant.</p></div>
-                <label style={{ position: "relative", width: "min(100%, 270px)" }}><Search size={15} style={{ position: "absolute", left: 11, top: 13, color: "var(--isp-text-sub)" }} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find name or phone" aria-label="Search customers" style={{ ...inputStyle, paddingLeft: 34 }} /></label>
+                <div><div style={{ display: "flex", gap: 9, alignItems: "center" }}><Users size={18} color="var(--isp-accent)" /><h2 style={{ margin: 0, fontSize: "1rem" }}>Device point balances</h2></div><p style={{ color: "var(--isp-text-muted)", fontSize: ".78rem", margin: "5px 0 0" }}>Each wallet belongs to one device MAC; the payment phone does not select its points.</p></div>
+                <label style={{ position: "relative", width: "min(100%, 270px)" }}><Search size={15} style={{ position: "absolute", left: 11, top: 13, color: "var(--isp-text-sub)" }} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Find name, MAC or phone" aria-label="Search device wallets" style={{ ...inputStyle, paddingLeft: 34 }} /></label>
               </div>
               {users.length === 0 ? <div style={{ padding: "2rem 1rem", textAlign: "center", border: "1px dashed var(--isp-border)", borderRadius: 10, color: "var(--isp-text-muted)" }}>{search ? "No customers match that search." : "Customer balances will appear here as customers earn points."}</div> : (
-                <div style={{ overflowX: "auto" }}><table className="isp-table" style={{ minWidth: 620 }}><thead><tr><th style={{ textAlign: "left" }}>Customer</th><th style={{ textAlign: "right" }}>Points</th><th style={{ textAlign: "right" }}>Hotspot accounts</th><th style={{ textAlign: "left" }}>Status</th><th style={{ textAlign: "right" }}>Last activity</th></tr></thead>
-                  <tbody>{users.map(user => <tr key={user.phone}><td><div style={{ fontWeight: 700 }}>{user.name || "Customer"}</div><div style={{ color: "var(--isp-text-muted)", fontSize: ".77rem", marginTop: 2 }}>{user.phone}</div></td><td style={{ textAlign: "right" }}><strong style={{ color: "var(--isp-green)" }}>{fmt(Number(user.points) || 0)}</strong></td><td style={{ textAlign: "right" }}>{fmt(Number(user.accountCount) || 0)}</td><td><span className={`isp-badge ${user.status.toLowerCase() === "active" ? "isp-badge-green" : "isp-badge-gray"}`}>{user.status || "Unknown"}</span></td><td style={{ textAlign: "right", color: "var(--isp-text-muted)", fontSize: ".79rem" }}>{user.lastActivityAt ? new Date(user.lastActivityAt).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" }) : "—"}</td></tr>)}</tbody>
+                 <div style={{ overflowX: "auto" }}><table className="isp-table" style={{ minWidth: 660 }}><thead><tr><th style={{ textAlign: "left" }}>Device / customer</th><th style={{ textAlign: "right" }}>Points</th><th style={{ textAlign: "right" }}>Hotspot accounts</th><th style={{ textAlign: "left" }}>Status</th><th style={{ textAlign: "right" }}>Last activity</th></tr></thead>
+                   <tbody>{users.map(user => <tr key={user.deviceMac || `legacy:${user.phone}`}><td><div style={{ fontWeight: 700 }}>{user.name || "Customer"}</div><div style={{ color: "var(--isp-text-muted)", fontSize: ".77rem", marginTop: 2 }}>{user.deviceMac || "No verified device MAC"} · {user.phone || "no phone on file"}</div></td><td style={{ textAlign: "right" }}><strong style={{ color: user.deviceMac ? "var(--isp-green)" : "var(--isp-warning, #b7791f)" }}>{fmt(Number(user.points) || 0)}</strong></td><td style={{ textAlign: "right" }}>{fmt(Number(user.accountCount) || 0)}</td><td><span className={`isp-badge ${user.status.toLowerCase() === "active" ? "isp-badge-green" : "isp-badge-gray"}`}>{user.status || "Unknown"}</span></td><td style={{ textAlign: "right", color: "var(--isp-text-muted)", fontSize: ".79rem" }}>{user.lastActivityAt ? new Date(user.lastActivityAt).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" }) : "—"}</td></tr>)}</tbody>
                 </table></div>
               )}
             </section>

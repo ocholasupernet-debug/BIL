@@ -51,6 +51,7 @@ type LoyaltyCustomer = {
   admin_id: number;
   name: string;
   phone: string;
+  mac_address?: string | null;
   status: string;
   updated_at: string | null;
 };
@@ -297,13 +298,13 @@ function issueDeviceAuthorization(context: {
     : null;
 }
 
-async function deviceBalance(adminId: number, phone: string | null): Promise<number> {
-  if (!phone) return 0;
+async function deviceBalance(adminId: number, mac: string | null): Promise<number> {
+  if (!mac) return 0;
   const accounts = await hotspotLoyaltyOperations.select<{
     points_balance: number | string; fractional_balance: number | string;
   }>(
-    "isp_loyalty_accounts",
-    `admin_id=eq.${adminId}&phone=eq.${phone}&select=points_balance,fractional_balance&limit=1`,
+    "isp_loyalty_device_accounts",
+    `admin_id=eq.${adminId}&device_mac=eq.${encodeURIComponent(mac)}&select=points_balance,fractional_balance&limit=1`,
   );
   return pointBalance(accounts[0]?.points_balance, accounts[0]?.fractional_balance);
 }
@@ -311,12 +312,12 @@ async function deviceBalance(adminId: number, phone: string | null): Promise<num
 async function loyaltyQuote(
   adminId: number,
   plan: LoyaltyPlan,
-  phone: string,
+  mac: string,
   hasCustomer: boolean,
   hasDeviceMac: boolean,
 ): Promise<{ balance: number; pointsRequired: number | null; pointsAwarded: number; canRedeem: boolean }> {
   const [balance, rules, settings] = await Promise.all([
-    deviceBalance(adminId, phone || null),
+    deviceBalance(adminId, mac || null),
     hotspotLoyaltyOperations.select<LoyaltyRule>(
       "isp_loyalty_plan_rules",
       `admin_id=eq.${adminId}&plan_id=eq.${plan.id}&select=plan_id,points_awarded,redemption_points&limit=1`,
@@ -351,6 +352,7 @@ async function publicPlanContext(req: Request, res: Response): Promise<{
   adminId: number;
   plan: LoyaltyPlan;
   phone: string;
+  mac: string;
   hasCustomer: boolean;
   deviceAccount: { phone: string; customerId: number; customerAdminId: number; status: string } | null;
 } | null> {
@@ -370,7 +372,7 @@ async function publicPlanContext(req: Request, res: Response): Promise<{
   const phone = await deviceAccountPhone(adminId, mac, {
     routerId: plan.router_id, portId: plan.port_id, resellerId: plan.owner_reseller_id,
   });
-  return { adminId, plan, phone: phone?.phone ?? "", hasCustomer: phone !== null, deviceAccount: phone };
+  return { adminId, plan, phone: phone?.phone ?? "", mac, hasCustomer: phone !== null, deviceAccount: phone };
 }
 
 router.get("/admin/loyalty/context", requireAdmin(), async (req, res): Promise<void> => {
@@ -380,7 +382,7 @@ router.get("/admin/loyalty/context", requireAdmin(), async (req, res): Promise<v
     return;
   }
   try {
-    const [settings, plans, rules, childAdmins, accounts] = await Promise.all([
+    const [settings, plans, rules, childAdmins, accounts, legacyAccounts] = await Promise.all([
       sbSelectStrict<{ kes_per_point: number | string }>(
         "isp_loyalty_settings",
         `admin_id=eq.${adminId}&select=kes_per_point&limit=1`,
@@ -397,6 +399,10 @@ router.get("/admin/loyalty/context", requireAdmin(), async (req, res): Promise<v
         "isp_admins",
         `parent_id=eq.${adminId}&select=id&order=id.asc`,
       ),
+      selectAllRows<{ device_mac: string; phone: string | null; points_balance: number | string; fractional_balance: number | string }>(
+        "isp_loyalty_device_accounts",
+        `admin_id=eq.${adminId}&select=device_mac,phone,points_balance,fractional_balance&order=device_mac.asc`,
+      ),
       selectAllRows<{ phone: string; points_balance: number | string; fractional_balance: number | string }>(
         "isp_loyalty_accounts",
         `admin_id=eq.${adminId}&select=phone,points_balance,fractional_balance&order=phone.asc`,
@@ -407,11 +413,12 @@ router.get("/admin/loyalty/context", requireAdmin(), async (req, res): Promise<v
     ))];
     const customers = await selectAllRows<LoyaltyCustomer>(
       "isp_customers",
-      `admin_id=in.(${ownerIds.join(",")})&type=eq.hotspot&select=id,admin_id,name,phone,status,updated_at&order=updated_at.desc,id.desc`,
+      `admin_id=in.(${ownerIds.join(",")})&type=eq.hotspot&select=id,admin_id,name,phone,mac_address,status,updated_at&order=updated_at.desc,id.desc`,
     );
 
     const ruleByPlan = new Map(rules.map(rule => [rule.plan_id, rule]));
     const userByPhone = new Map<string, {
+      deviceMac: string;
       phone: string;
       name: string;
       points: number;
@@ -421,15 +428,17 @@ router.get("/admin/loyalty/context", requireAdmin(), async (req, res): Promise<v
     }>();
     for (const customer of customers) {
       const phone = normaliseKenyanMobile(customer.phone);
-      if (!phone) continue;
-      const current = userByPhone.get(phone);
+      const deviceMac = normalizeMac(customer.mac_address);
+      if (!deviceMac) continue;
+      const current = userByPhone.get(deviceMac);
       if (current) {
         current.accountCount += 1;
         continue;
       }
-      userByPhone.set(phone, {
+      userByPhone.set(deviceMac, {
+        deviceMac,
         phone,
-        name: customer.name || phone,
+        name: customer.name || deviceMac,
         points: 0,
         accountCount: 1,
         status: customer.status || "unknown",
@@ -437,21 +446,46 @@ router.get("/admin/loyalty/context", requireAdmin(), async (req, res): Promise<v
       });
     }
     for (const account of accounts) {
-      const phone = normaliseKenyanMobile(account.phone);
-      if (!phone) continue;
+      const deviceMac = normalizeMac(account.device_mac);
+      if (!deviceMac) continue;
       const points = pointBalance(account.points_balance, account.fractional_balance);
-      const current = userByPhone.get(phone);
+      const current = userByPhone.get(deviceMac);
       if (current) current.points = points;
       else {
-        userByPhone.set(phone, {
-          phone,
-          name: phone,
+        userByPhone.set(deviceMac, {
+          deviceMac,
+          phone: normaliseKenyanMobile(account.phone ?? ""),
+          name: deviceMac,
           points,
           accountCount: 0,
           status: "no current account",
           lastActivityAt: null,
         });
       }
+    }
+    const assignedByPhone = new Map<string, number>();
+    for (const account of accounts) {
+      const phone = normaliseKenyanMobile(account.phone ?? "");
+      if (!phone) continue;
+      assignedByPhone.set(phone, (assignedByPhone.get(phone) ?? 0)
+        + pointBalance(account.points_balance, account.fractional_balance));
+    }
+    for (const legacy of legacyAccounts) {
+      const phone = normaliseKenyanMobile(legacy.phone);
+      if (!phone) continue;
+      const unassigned = Math.max(0, pointBalance(legacy.points_balance, legacy.fractional_balance)
+        - (assignedByPhone.get(phone) ?? 0));
+      if (unassigned <= 0) continue;
+      const key = `LEGACY:${phone}`;
+      userByPhone.set(key, {
+        deviceMac: "",
+        phone,
+        name: "Unassigned legacy points — review device",
+        points: unassigned,
+        accountCount: 0,
+        status: "needs MAC review",
+        lastActivityAt: null,
+      });
     }
 
     res.json({
@@ -469,7 +503,7 @@ router.get("/admin/loyalty/context", requireAdmin(), async (req, res): Promise<v
         };
       }),
       users: [...userByPhone.values()].sort((left, right) =>
-        right.points - left.points || left.phone.localeCompare(right.phone),
+        right.points - left.points || left.deviceMac.localeCompare(right.deviceMac),
       ),
     });
   } catch (error) {
@@ -594,7 +628,7 @@ router.post("/hotspot/loyalty/balance", async (req, res): Promise<void> => {
     const phone = await deviceAccountPhone(adminId, mac, {
       routerId, portId: routerId ? portId : undefined, resellerId,
     });
-    res.json({ ok: true, balance: await deviceBalance(adminId, phone?.phone ?? null), hasAccount: phone !== null });
+    res.json({ ok: true, balance: await deviceBalance(adminId, phone ? mac : null), hasAccount: phone !== null });
   } catch (error) {
     logger.warn({ err: error }, "[hotspot/loyalty/balance] device balance unavailable");
     res.status(503).json({ ok: false, error: "This device's loyalty points could not be checked right now." });
@@ -611,7 +645,7 @@ router.post("/hotspot/loyalty/quote", async (req, res): Promise<void> => {
     const quote = await loyaltyQuote(
       context.adminId,
       context.plan,
-      context.phone,
+      context.mac,
       hasCustomer,
       !!mac,
     );
@@ -626,15 +660,14 @@ router.post("/hotspot/loyalty/quote", async (req, res): Promise<void> => {
       if (!await verifyLoyaltyAccount(req, res, context)) return;
       const reference = `LOYALTY-${key}`;
       const transactions = await hotspotLoyaltyOperations.select<{
-        admin_id: number; plan_id: number; payment_phone: string; mac_address: string; reference: string; status: string;
+        admin_id: number; plan_id: number; mac_address: string; reference: string; status: string;
       }>(
         "isp_transactions",
-        `admin_id=eq.${context.adminId}&reference=eq.${reference}&payment_method=eq.loyalty_points&status=eq.completed&select=admin_id,plan_id,payment_phone,mac_address,reference,status&limit=1`,
+        `admin_id=eq.${context.adminId}&reference=eq.${reference}&payment_method=eq.loyalty_points&status=eq.completed&select=admin_id,plan_id,mac_address,reference,status&limit=1`,
       );
       const paid = transactions[0];
       if (paid && paid.admin_id === context.adminId && paid.plan_id === context.plan.id
           && paid.reference === reference && paid.status === "completed"
-          && normaliseKenyanMobile(paid.payment_phone) === context.phone
           && normalizeMac(paid.mac_address) === mac) {
         pendingCheckoutId = reference;
         const suppliedAuthorization = typeof req.body?.device_authorization === "string"
@@ -687,7 +720,7 @@ router.post("/hotspot/loyalty/redeem", async (req, res): Promise<void> => {
       checkout_id: string;
       points_balance: number | string;
       points_spent: number;
-    }>("redeem_hotspot_loyalty_points", {
+    }>("redeem_hotspot_loyalty_device_points", {
       p_admin_id: context.adminId,
       p_plan_id: context.plan.id,
       p_phone: context.phone,
@@ -703,8 +736,8 @@ router.post("/hotspot/loyalty/redeem", async (req, res): Promise<void> => {
       points_balance: number | string;
       fractional_balance: number | string;
     }>(
-      "isp_loyalty_accounts",
-      `admin_id=eq.${context.adminId}&phone=eq.${context.phone}&select=points_balance,fractional_balance&limit=1`,
+      "isp_loyalty_device_accounts",
+      `admin_id=eq.${context.adminId}&device_mac=eq.${encodeURIComponent(macAddress)}&select=points_balance,fractional_balance&limit=1`,
     );
     res.json({
       ok: true,
