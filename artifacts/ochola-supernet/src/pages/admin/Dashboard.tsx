@@ -612,22 +612,6 @@ export default function Dashboard() {
   const telemetry = telemetryQuery.data;
   const telemetryPorts = telemetry?.filters.ports.filter((port) => selectedRouter === "all" || port.routerId === selectedRouter) ?? [];
   const recentTxs = transactions.slice(0, 5);
-  const expiringToday = useMemo(() => {
-    const nairobiDate = (date: Date) => new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Africa/Nairobi",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(date);
-    const todayKey = nairobiDate(now);
-    return customers
-      .filter((customer) => {
-        if (!customer.expires_at) return false;
-        const expiry = new Date(customer.expires_at);
-        return Number.isFinite(expiry.getTime()) && nairobiDate(expiry) === todayKey;
-      })
-      .sort((a, b) => Date.parse(a.expires_at || "") - Date.parse(b.expires_at || ""));
-  }, [customers, now]);
   const completedRevenue = revenueSummary?.totalRevenue ?? 0;
   const greeting = now.getHours() < 12 ? "Good morning" : now.getHours() < 17 ? "Good afternoon" : "Good evening";
   const displayName = getAdminDisplayName();
@@ -677,9 +661,9 @@ export default function Dashboard() {
         </header>
 
         {hasError && (
-          <div className="dashboard-error" role="status">
-            <span className="dashboard-error-mark"><CircleAlert size={15} /></span>
-            <span><strong>Some live data is delayed.</strong> Last available figures remain visible.</span>
+          <div className="dashboard-error" role="alert">
+            <CircleAlert size={17} />
+            <span>Some live data could not be loaded. Your last available figures remain visible.</span>
             <button
               type="button"
               className="dashboard-error-retry"
@@ -956,18 +940,6 @@ export default function Dashboard() {
                       <stop offset="100%" stopColor="var(--isp-accent)" stopOpacity="0.35" />
                     </linearGradient>
                   </defs>
-                  {[20, 43, 66, 89, 112].map((y) => (
-                    <line
-                      key={y}
-                      x1="2"
-                      y1={y}
-                      x2={monthlyData.length * 36 - 2}
-                      y2={y}
-                      stroke="var(--isp-border)"
-                      strokeOpacity={y === 112 ? 0.8 : 0.38}
-                      strokeWidth="1"
-                    />
-                  ))}
                   {monthlyData.map((month, index) => {
                     const barHeight = Math.max(month.count ? Math.round((month.count / maxCount) * 104) : 2, 2);
                     const x = index * 36 + 6;
@@ -1040,57 +1012,6 @@ export default function Dashboard() {
             </section>
           </div>
         </div>
-
-        <section className="section-card expiring-panel" aria-label="Customers expiring today">
-          <div className="panel-heading">
-            <div className="panel-title">
-              <span className="panel-title-icon panel-title-icon--soft expiring-title-icon"><CalendarDays size={16} /></span>
-              <div>
-                <h2>Expiring today</h2>
-                <p>Accounts with an expiry date today · East Africa Time</p>
-              </div>
-            </div>
-            <span className="expiring-count">{customersLoading ? "…" : expiringToday.length} accounts</span>
-          </div>
-          <div className="expiring-table-wrap">
-            <table className="isp-table expiring-table">
-              <thead><tr><th>Customer</th><th>Access</th><th>Phone</th><th className="expiring-time-heading">Expiry</th></tr></thead>
-              <tbody>
-                {customersLoading ? (
-                  <tr><td colSpan={4}><div className="dashboard-loading"><Loader2 size={16} className="animate-spin" /> Checking expiry dates…</div></td></tr>
-                ) : customersError && customers.length === 0 ? (
-                  <tr><td colSpan={4}><div className="dashboard-empty"><CircleAlert size={16} /><span>Expiry data is unavailable.</span></div></td></tr>
-                ) : expiringToday.length === 0 ? (
-                  <tr><td colSpan={4}><div className="expiring-empty"><CircleCheck size={16} /><span>No accounts are due to expire today.</span></div></td></tr>
-                ) : expiringToday.map((customer) => (
-                  <tr key={customer.id}>
-                    <td>
-                      <Link href="/admin/customers" className="expiring-customer-link">
-                        {customer.username || customer.pppoe_username || `Customer ${customer.id}`}
-                      </Link>
-                    </td>
-                    <td><span className="expiring-access">{customer.type || "—"}</span></td>
-                    <td>
-                      <span className="expiring-phone">
-                        <span className="expiring-status-dot" aria-label="Expiry due today" />
-                        {customer.phone || "Phone not recorded"}
-                      </span>
-                    </td>
-                    <td className="expiring-time-cell">
-                      <span className="expiring-time-badge">
-                        {new Date(customer.expires_at as string).toLocaleTimeString("en-KE", {
-                          timeZone: "Africa/Nairobi",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
 
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>
           Payment activity
