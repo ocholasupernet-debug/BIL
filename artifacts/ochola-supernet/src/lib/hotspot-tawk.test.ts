@@ -5,11 +5,17 @@ import test from "node:test";
 const portal = readFileSync(new URL("../../public/hotspot/login.html", import.meta.url), "utf8");
 const verifyPortal = readFileSync(new URL("../../scripts/verify-hotspot-portal-output.mjs", import.meta.url), "utf8");
 
-test("Tawk is loaded only after chat-account authentication and signs in the stable account identity", () => {
+test("Tawk icon is available first, reveals sign-in on click, and restores the stable account identity", () => {
   assert.match(portal, /\/api\/public\/hotspot-chat\/auth/);
   assert.match(portal, /action:action/);
-  assert.match(portal, /window\.Tawk_API\.login\(\{userId:identity\.userId,hash:identity\.hash\}/);
-  assert.match(portal, /Your previous chat history is ready/);
+  assert.match(portal, /window\.Tawk_API\.login\(\{userId:pendingIdentity\.userId,hash:pendingIdentity\.hash\}/);
+  assert.match(portal, /Your previous conversation will continue/);
+  assert.match(portal, /panel\.hidden=true;/);
+  assert.match(portal, /credentials\.hidden=true;/);
+  assert.match(portal, /window\.Tawk_API\.onChatMaximized=function\(\)/);
+  assert.match(portal, /showChatPrompt\(\);/);
+  assert.match(portal, /window\.Tawk_API\.minimize\(\)/);
+  assert.ok(portal.indexOf("tawkScript.src=") < portal.indexOf("if(savedToken)"));
   assert.match(portal, /hotspot-chat-register/);
   assert.match(portal, /hotspot-chat-login/);
   assert.match(portal, /ochola_hotspot_chat_remember_v1_/);
