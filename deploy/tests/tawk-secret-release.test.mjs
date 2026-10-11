@@ -8,6 +8,7 @@ const ecosystem = await readFile(new URL("../../ecosystem.config.cjs", import.me
 test("Tawk signing key is passed from GitHub Actions to the protected VPS environment without logging its value", () => {
   assert.match(workflow, /TAWK_API_KEY:\s*\$\{\{\s*secrets\.TAWK_API_KEY\s*\}\}/);
   assert.match(workflow, /envs:.*\bTAWK_API_KEY\b/);
+  assert.match(workflow, /^ {10}envs:.*\bTAWK_API_KEY\b/m);
   assert.match(workflow, /upsert_env "TAWK_API_KEY"\s+"\$TAWK_API_KEY"/);
   assert.match(ecosystem, /TAWK_API_KEY:\s*process\.env\.TAWK_API_KEY\s*\|\|\s*""/);
   assert.doesNotMatch(workflow, /echo\s+.*TAWK_API_KEY.*\$/);
