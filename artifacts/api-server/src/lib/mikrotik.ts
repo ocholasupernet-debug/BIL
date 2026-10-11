@@ -421,7 +421,7 @@ async function connectWithRetry(
 
       /* ── Step 1: TCP port probe ── */
       logger.debug({ host: label, port: creds.port, attempt }, "Port probe");
-      const directManagementVpnEnabled = process.env.ROUTEROS_DIRECT_VPN_ACCESS === "true";
+      const directManagementVpnEnabled = process.env.ROUTEROS_DIRECT_VPN_ACCESS === "true" || process.env.NODE_ENV === "production";
       if (isVpn && !directManagementVpnEnabled) {
         try {
           forward = await openVpsTcpForward(host, creds.port, { timeoutMs: connectMs });
