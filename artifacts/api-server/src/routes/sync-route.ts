@@ -24,7 +24,12 @@ import { routerManagementVpnIpFor } from "../lib/router-payment-credentials.js";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import { hotspotPlanProfileName } from "../lib/prepaid-identifiers.js";
 import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
-import { planServicePoolName, portServiceResourceNames } from "../lib/port-service-resources.js";
+import {
+  managedPppoePlanAddresses,
+  managedPppoeProfileName,
+  planServicePoolName,
+  portServiceResourceNames,
+} from "../lib/port-service-resources.js";
 import {
   removeHotspotUserExpiry,
   removeHotspotUserFup,
@@ -125,9 +130,13 @@ async function ensureSyncUserPlanProfile(
   },
   profileName: string,
   activeIpPool: string,
+  pppoeServiceAddresses?: { localAddress: string; remoteAddress: string },
 ): Promise<boolean> {
   const isPppoe = String(plan.type).trim().toLowerCase() === "pppoe";
   const path = isPppoe ? "/ppp/profile" : "/ip/hotspot/user/profile";
+  if (isPppoe && !pppoeServiceAddresses) {
+    throw new Error("The managed PPPoE service profile does not provide a verified local address and remote pool.");
+  }
   const rows = await readRouterRows(conn, path, `?name=${profileName}`);
   if (rows.some(row => row.name === profileName && row[".id"])) return false;
 
@@ -141,7 +150,8 @@ async function ensureSyncUserPlanProfile(
     ? {
         name: profileName,
         "rate-limit": rateLimit,
-        ...(activeIpPool ? { "remote-address": activeIpPool } : {}),
+        "local-address": pppoeServiceAddresses!.localAddress,
+        "remote-address": pppoeServiceAddresses!.remoteAddress,
       }
     : {
         name: profileName,
@@ -743,12 +753,16 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
     log(`  pushing ${scopedPlans.length} plan profile(s)\n`);
 
     let created = 0, updated = 0, skipped = 0;
+    const routerPppProfiles = scopedPlans.some(plan => String(plan.type).toLowerCase() === "pppoe")
+      ? await withTimeout(conn.write(["/ppp/profile/print"]), 10_000) as Record<string, string>[]
+      : [];
 
     for (const plan of scopedPlans) {
       const profileName = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
+      const planResources = resourcesByPortId.get(Number(plan.port_id));
       const activeIpPool = String(
         plan.active_ip_pool
-          || planServicePoolName(plan.type, resourcesByPortId.get(Number(plan.port_id)))
+          || planServicePoolName(plan.type, planResources)
           || "",
       ).trim();
       const rateLimit   = toRateLimit(
@@ -761,12 +775,27 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
 
       if (plan.type === "pppoe") {
         /* ── PPPoE profile ── */
-         log(`▶ PPPoE profile: ${profileName} | pool: ${activeIpPool || "none"} | rate-limit: ${rateLimit}`);
+        const managedProfileName = managedPppoeProfileName(plan.router_id, planResources);
+        const managedProfile = routerPppProfiles.find(row => row.name === managedProfileName);
+        const assignment = managedPppoePlanAddresses({
+          localAddress: managedProfile?.["local-address"],
+          remoteAddress: managedProfile?.["remote-address"],
+        }, activeIpPool);
+        if (!managedProfileName || !assignment) {
+          log(`  ❌ PPPoE profile ${profileName} was not changed: managed service profile "${managedProfileName ?? "unknown"}" must exist with both local and remote addresses.`);
+          skipped++;
+          continue;
+        }
+        if (assignment.requestedPoolMismatch) {
+          log(`  ⚠ Plan pool "${activeIpPool}" does not match the managed PPPoE pool; using "${assignment.remoteAddress}" from ${managedProfileName}.`);
+        }
+        log(`▶ PPPoE profile: ${profileName} | local: ${assignment.localAddress} | pool: ${assignment.remoteAddress} | rate-limit: ${rateLimit}`);
         try {
           const action = await upsertByFilter(conn, "/ppp/profile", "name", profileName, {
             name:         profileName,
             "rate-limit": rateLimit,
-             ...(activeIpPool ? { "remote-address": activeIpPool } : {}),
+            "local-address": assignment.localAddress,
+            "remote-address": assignment.remoteAddress,
           });
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
@@ -1146,6 +1175,26 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
     let created = 0, updated = 0, skipped = 0;
     let disabled = 0;
     let failed = 0;
+    const pppoePlanAddressesById = new Map<number, { localAddress: string; remoteAddress: string }>();
+    if (planRows.some(plan => String(plan.type).toLowerCase() === "pppoe")) {
+      const pppProfiles = await withTimeout(conn.write(["/ppp/profile/print"]), 10_000) as Record<string, string>[];
+      for (const plan of planRows.filter(row => String(row.type).toLowerCase() === "pppoe")) {
+        const managedName = managedPppoeProfileName(
+          plan.router_id,
+          planResourcesByPortId.get(Number(plan.port_id)),
+        );
+        const serviceProfile = pppProfiles.find(row => row.name === managedName);
+        const addresses = managedPppoePlanAddresses({
+          localAddress: serviceProfile?.["local-address"],
+          remoteAddress: serviceProfile?.["remote-address"],
+        }, plan.active_ip_pool);
+        if (addresses) {
+          pppoePlanAddressesById.set(Number(plan.id), addresses);
+        } else {
+          log(`  ❌ PPPoE plan '${plan.name}' cannot be synced: managed service profile '${managedName ?? "unknown"}' is missing or has no local/remote address.`);
+        }
+      }
+    }
     const syncUsers: Array<{
       username: string;
       planName: string;
@@ -1203,6 +1252,12 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         : 0;
       const isHotspotUser = ["hotspot", "voucher", "trial", "trials"].includes(normalizedType);
       const isPppoeUser = normalizedType === "pppoe";
+      const pppoeServiceAddresses = plan ? pppoePlanAddressesById.get(Number(plan.id)) : undefined;
+      if (isPppoeUser && plan && !pppoeServiceAddresses) {
+        log(`  ❌ Skipping '${username}': the plan has no verified managed PPPoE pool and local address`);
+        skipped++;
+        continue;
+      }
       if (u.router_id !== undefined && routerId !== undefined && Number(u.router_id) !== Number(routerId)) {
         log(`  — Skipping '${username}': assigned to a different router`);
         skipped++;
@@ -1321,6 +1376,12 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
         continue;
       }
 
+      if (isPppoeUser && plan && !pppoeServiceAddresses) {
+        log(`  ❌ Skipping '${username}': the plan has no verified managed PPPoE pool and local address`);
+        skipped++;
+        continue;
+      }
+
       if (isHotspotUser && !u.plan_id) {
         log(`  ❌ Hotspot user '${username}' has no assigned plan; refusing request-supplied access`);
         skipped++;
@@ -1333,7 +1394,9 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
           : "default";
       const activeIpPool = plan
         ? String(
-            plan.active_ip_pool
+            (String(plan.type).toLowerCase() === "pppoe"
+              ? pppoeServiceAddresses?.remoteAddress
+              : plan.active_ip_pool)
               || planServicePoolName(plan.type, planResourcesByPortId.get(Number(plan.port_id)))
               || "",
           ).trim()
@@ -1461,7 +1524,13 @@ router.post("/admin/sync/users", requireAdmin(), async (req, res): Promise<void>
             isOnline: checkActiveSession,
             push: async () => {
               if (plan) {
-                profileCreated = await ensureSyncUserPlanProfile(conn, plan, profileName, activeIpPool);
+                profileCreated = await ensureSyncUserPlanProfile(
+                  conn,
+                  plan,
+                  profileName,
+                  activeIpPool,
+                  pppoeServiceAddresses,
+                );
               } else {
                 await requireExistingRouterProfile(conn, "/ppp/profile", profileName);
               }

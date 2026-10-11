@@ -497,6 +497,31 @@ export function planServicePoolName(
   return null;
 }
 
+export function managedPppoeProfileName(
+  routerId: unknown,
+  resources?: Pick<PortServiceResourceNames, "pppoeProfile">,
+): string | null {
+  if (resources?.pppoeProfile) return resources.pppoeProfile;
+  const id = Number(routerId);
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  return `ochola-services-${id}-pppoe-profile`;
+}
+
+export function managedPppoePlanAddresses(
+  serviceProfile: { localAddress?: unknown; remoteAddress?: unknown },
+  requestedPool?: unknown,
+): { localAddress: string; remoteAddress: string; requestedPoolMismatch: boolean } | null {
+  const localAddress = String(serviceProfile.localAddress ?? "").trim();
+  const remoteAddress = String(serviceProfile.remoteAddress ?? "").trim();
+  if (!localAddress || !remoteAddress) return null;
+  const requested = String(requestedPool ?? "").trim();
+  return {
+    localAddress,
+    remoteAddress,
+    requestedPoolMismatch: Boolean(requested && requested !== remoteAddress),
+  };
+}
+
 function resourceSegment(value: string, fallback: string, maxLength = 24): string {
   const result = value
     .trim()
