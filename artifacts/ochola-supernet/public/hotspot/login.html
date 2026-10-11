@@ -2543,8 +2543,21 @@ else{
   if(!portalPaidHandoffStarted)attemptPortalAutoReconnect();
 }
 </script>
+<div id="hotspot-chat-account" hidden style="position:fixed;right:16px;bottom:18px;z-index:9998;width:min(340px,calc(100vw - 32px));box-sizing:border-box;padding:16px;border:1px solid #d7e0ea;border-radius:14px;background:#fff;color:#172033;box-shadow:0 12px 36px #10243b30;font:14px system-ui,sans-serif">
+  <strong style="display:block;margin-bottom:5px">Customer support chat</strong>
+  <p style="margin:0 0 12px;color:#64748b;font-size:12px">Create a chat account once, then sign in again to continue your conversation.</p>
+  <label style="display:block;margin:8px 0 4px;font-size:12px;font-weight:600" for="hotspot-chat-username">Chat username</label>
+  <input id="hotspot-chat-username" autocomplete="username" maxlength="32" style="box-sizing:border-box;width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px">
+  <label style="display:block;margin:8px 0 4px;font-size:12px;font-weight:600" for="hotspot-chat-password">Chat password</label>
+  <input id="hotspot-chat-password" type="password" autocomplete="current-password" minlength="8" maxlength="128" style="box-sizing:border-box;width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px">
+  <div style="display:flex;gap:8px;margin-top:12px">
+    <button id="hotspot-chat-register" type="button" style="flex:1;padding:10px;border:0;border-radius:8px;background:#0b74e5;color:#fff;font-weight:700">Create account</button>
+    <button id="hotspot-chat-login" type="button" style="flex:1;padding:10px;border:1px solid #0b74e5;border-radius:8px;background:#fff;color:#0b74e5;font-weight:700">Continue</button>
+  </div>
+  <p id="hotspot-chat-message" role="status" aria-live="polite" style="margin:10px 0 0;color:#475569;font-size:12px"></p>
+</div>
 <script>
-/* Load the configured Tawk widget only when Hotspot Settings enables it for this domain. */
+/* Tawk history is restored only after the visitor signs into a chat-only account. */
 (function(){
   var config=window.__HOTSPOT_CONFIG__;
   var targetHostname="ocholasupernet.isplatty.org";
@@ -2560,16 +2573,52 @@ else{
     var widgetId="1k47i6apm";
     if(propertyId==="YOUR_PROPERTY_ID"||widgetId==="YOUR_WIDGET_ID")return;
 
-    window.Tawk_API=window.Tawk_API||{};
-    window.Tawk_LoadStart=new Date();
-    var tawkScript=document.createElement("script");
-    tawkScript.async=true;
-    tawkScript.src="https://embed.tawk.to/"+encodeURIComponent(propertyId)+"/"+encodeURIComponent(widgetId);
-    tawkScript.charset="UTF-8";
-    tawkScript.setAttribute("crossorigin","*");
-    var firstScript=document.getElementsByTagName("script")[0];
-    if(firstScript&&firstScript.parentNode)firstScript.parentNode.insertBefore(tawkScript,firstScript);
-    else document.head.appendChild(tawkScript);
+    var panel=document.getElementById("hotspot-chat-account");
+    var message=document.getElementById("hotspot-chat-message");
+    var widgetStarted=false;
+    panel.hidden=false;
+    function startWidget(identity){
+      if(widgetStarted)return;
+      widgetStarted=true;
+      window.Tawk_API=window.Tawk_API||{};
+      window.Tawk_API.onLoad=function(){
+        window.Tawk_API.login({userId:identity.userId,hash:identity.hash},function(error){
+          if(error){message.textContent="Chat sign-in failed. Check your details and try again.";return;}
+          message.textContent="Signed in. Your previous chat history is ready.";
+          panel.hidden=true;
+        });
+      };
+      window.Tawk_LoadStart=new Date();
+      var tawkScript=document.createElement("script");
+      tawkScript.async=true;
+      tawkScript.src="https://embed.tawk.to/"+encodeURIComponent(propertyId)+"/"+encodeURIComponent(widgetId);
+      tawkScript.charset="UTF-8";
+      tawkScript.setAttribute("crossorigin","*");
+      var firstScript=document.getElementsByTagName("script")[0];
+      if(firstScript&&firstScript.parentNode)firstScript.parentNode.insertBefore(tawkScript,firstScript);
+      else document.head.appendChild(tawkScript);
+    }
+    function authenticate(action){
+      var username=document.getElementById("hotspot-chat-username").value.trim();
+      var password=document.getElementById("hotspot-chat-password").value;
+      var apiBase=String(config.apiBase||"");
+      if(!username||!password){message.textContent="Enter your chat username and password.";return;}
+      message.textContent=action==="register"?"Creating your chat account…":"Signing in…";
+      fetch(apiBase.replace(/\/+$/,"")+"/api/public/hotspot-chat/auth",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:action,adminId:Number(config.adminId),username:username,password:password})
+      }).then(function(response){return response.json().then(function(data){return {ok:response.ok,data:data};});})
+        .then(function(result){
+          document.getElementById("hotspot-chat-password").value="";
+          if(!result.ok||!result.data||!result.data.identity){
+            message.textContent=result.data&&result.data.error||"Chat sign-in is temporarily unavailable.";
+            return;
+          }
+          startWidget(result.data.identity);
+        }).catch(function(){message.textContent="Could not reach chat sign-in. Check your connection and retry.";});
+    }
+    document.getElementById("hotspot-chat-register").addEventListener("click",function(){authenticate("register");});
+    document.getElementById("hotspot-chat-login").addEventListener("click",function(){authenticate("login");});
   }
 })();
 </script>

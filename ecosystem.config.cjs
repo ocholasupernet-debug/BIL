@@ -55,6 +55,7 @@ module.exports = {
         NODE_ENV: "production",
         PORT: "8080",
         SERVE_STATIC: "true",
+        TAWK_API_KEY: process.env.TAWK_API_KEY || "",
       },
 
       // ── Mode 2: Without nginx (simple single-port setup) ─────────────
@@ -69,6 +70,7 @@ module.exports = {
         SUPABASE_URL:         process.env.SUPABASE_URL || "",
         SUPABASE_DB_URL: process.env.SUPABASE_DB_URL || process.env.SUPABASE_DATABASE_URL || "",
          SESSION_SECRET:       process.env.SESSION_SECRET || "",
+        TAWK_API_KEY:         process.env.TAWK_API_KEY || "",
          WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || "",
          WHATSAPP_WEBHOOK_VERIFY_TOKEN: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "",
          WHATSAPP_APP_SECRET: process.env.WHATSAPP_APP_SECRET || "",
