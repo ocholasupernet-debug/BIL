@@ -1,6 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSelfInstallStepCommand } from "./self-install-step-command.js";
+import { buildRouterFileImportCommand, buildSelfInstallStepCommand } from "./self-install-step-command.js";
+
+test("RouterOS fetch/import command runs as one block and preserves the file on import failure", () => {
+  const command = buildRouterFileImportCommand({
+    sourceUrl: "https://come.isplatty.org/api/router-file-source/104/networksetup.rsc",
+    fileName: "networksetup.rsc",
+  });
+
+  assert.equal(command.split("\n").length, 1);
+  assert.match(command, /^:do \{/);
+  assert.match(command, /\/tool fetch .*dst-path="networksetup\.rsc"/);
+  assert.match(command, /\/import "networksetup\.rsc"/);
+  assert.match(command, /\/file remove \[find where name="networksetup\.rsc"\]/);
+  assert.match(command, /Import step failed: /);
+  assert.ok(command.indexOf('/import "networksetup.rsc"') < command.indexOf("/file remove"));
+});
 
 test("Self Install commands report all step states and skip completed steps", () => {
   const command = buildSelfInstallStepCommand({

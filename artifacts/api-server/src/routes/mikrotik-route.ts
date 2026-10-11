@@ -59,6 +59,7 @@ import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
 import { routerManagementOvpnCredentials, routerManagementVpnContract } from "../lib/router-management-vpn";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
+import { buildRouterFileImportCommand } from "../lib/self-install-step-command.js";
 import {
   provisionRouterManagementOpenVpn,
   provisionRouterManagementOpenVpnPair,
@@ -1102,12 +1103,6 @@ router.get("/router/:id/files", requireAdmin(), async (req, res): Promise<void> 
 
   try {
     const result = await fetchRouterFiles(found.creds);
-    const stepCommand = (sourceUrl: string, fileName: string, verified = false): string => `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}
-:delay 2s
-/import "${fileName}"
-/file remove "${fileName}"
-`;
-
     res.json({
       routerId: id,
       routerName: found.row.name,
@@ -2811,11 +2806,8 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const networkSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${networkFileName}`;
     const vpnSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${vpnFileName}`;
     const serviceSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${serviceFileName}`;
-    const stepCommand = (sourceUrl: string, fileName: string, verified = false): string => `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}
-:delay 2s
-/import "${fileName}"
-/file remove "${fileName}"
-`;
+    const stepCommand = (sourceUrl: string, fileName: string, verified = false): string =>
+      buildRouterFileImportCommand({ sourceUrl, fileName, verified });
     res.json({
       routerId: id,
       warning: provisioningWarning || undefined,
