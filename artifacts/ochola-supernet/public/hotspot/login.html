@@ -1066,6 +1066,7 @@ function attemptPortalAutoReconnect(){
       portalAutoReconnectDone=true;
       if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
       portalAutoReconnectTimer=0;
+      redirectAfterVerifiedPortalReconnect();
       return;
     }
     if(data.status==="expired"||data.status==="depleted")return;
@@ -1080,6 +1081,15 @@ function attemptPortalAutoReconnect(){
       schedulePortalAutoReconnect(portalAutoReconnectRetryDelay());
     }
   });
+}
+function redirectAfterVerifiedPortalReconnect(){
+  var destination=configuredPostLoginDestination();
+  if(!destination)return;
+  try{
+    var target=new URL(destination);
+    if(target.origin===window.location.origin&&window.location.pathname==="/")return;
+    window.location.replace(target.href);
+  }catch(e){}
 }
 function retryPortalAutoReconnectOnReturn(){
   if(portalAutoReconnectDone||portalPaidLoginHandoff||portalAutoReconnectBusy)return;
