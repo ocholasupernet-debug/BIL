@@ -162,6 +162,35 @@ async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise
     return;
   }
 
+  if (form.type === "pppoe") {
+    if (!form.pppoe_username.trim() && !form.username.trim()) throw new Error("Enter a PPPoE username.");
+    if (form.password.length < 6) throw new Error("A PPPoE password must be at least 6 characters.");
+    if (!plan || plan.type !== "pppoe") throw new Error("Select a PPPoE plan.");
+    const routerId = plan.router_id ?? (form.router_id ? Number(form.router_id) : null);
+    if (!routerId) throw new Error("Select a router for this PPPoE customer.");
+    const response = await adminApiFetch("/api/customers", {
+      method: "POST",
+      body: JSON.stringify({
+        adminId: ADMIN_ID,
+        name: form.name.trim(),
+        phone: form.phone.trim() || null,
+        email: form.email.trim() || null,
+        planId: plan.id,
+        routerId,
+        type: "pppoe",
+        pppoeUsername: form.pppoe_username.trim() || form.username.trim(),
+        username: form.pppoe_username.trim() || form.username.trim(),
+        password: form.password,
+        ipAddress: form.ip_assign === "static" ? form.ip_address.trim() || null : null,
+        status: "active",
+        expiryDate: form.expires_at ? new Date(form.expires_at).toISOString() : null,
+      }),
+    });
+    const result = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) throw new Error(result.error || `PPPoE customer could not be created (${response.status}).`);
+    return;
+  }
+
   const response = await adminApiFetch("/api/customers", {
     method: "POST",
     body: JSON.stringify({
@@ -175,7 +204,6 @@ async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise
       planId: plan?.id ?? null,
       ipAddress: form.ip_address.trim() || null,
       macAddress: form.mac_address.trim() || null,
-      pppoeUsername: form.type === "pppoe" ? (form.pppoe_username.trim() || form.username.trim()) : null,
       expiryDate: form.expires_at ? new Date(form.expires_at).toISOString() : null,
       status: "active",
       staticNetmask: form.subnet_mask || "255.255.255.0",

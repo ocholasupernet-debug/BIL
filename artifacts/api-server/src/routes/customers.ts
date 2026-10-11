@@ -24,6 +24,9 @@ import {
   removeVlanCustomerQueue,
   reconcileHotspotUserAccess,
   reconcilePppoeUserAccess,
+  addPPPSecret,
+  updatePPPSecret,
+  schedulePppUserExpiry,
   disconnectHotspotActiveUser,
   fetchHotspotConnectedDevices,
   fetchHotspotUserRateQueueStatsBulk,
@@ -44,6 +47,7 @@ import {
   removePppUserExpiry,
   removeHotspotUser,
   removePPPSecretByName,
+  fetchPPPSecrets,
   getPaidHotspotBindingSnapshot,
   reconcilePaidHotspotBinding,
   type PaidHotspotBindingSnapshot,
@@ -1331,7 +1335,7 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
   if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
     const planFilter =
       `id=eq.${requestedPlanId}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(null)}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,is_active,owner_reseller_id&limit=1`;
-    const planRows = needsVlanPlanCheck
+    const planRows = needsVlanPlanCheck || String(type ?? "").trim().toLowerCase() === "pppoe"
       ? await sbSelectStrict<PlanRow>("isp_plans", planFilter)
       : await sbSelect<PlanRow>("isp_plans", planFilter);
     plan = planRows[0];
@@ -1507,6 +1511,159 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
   if (requestedType === "vlan") {
     res.status(400).json({ error: "VLAN customer creation requires a VLAN plan and assigned IP." });
     return;
+  }
+  if (requestedType === "pppoe") {
+    const username = String(pppoeUsername ?? requestedUsername ?? "").trim();
+    const password = typeof requestedPassword === "string" ? requestedPassword : "";
+    const requestedRouterId = Number(routerId);
+    if (!plan || !plan.is_active || planServiceType !== "pppoe") {
+      res.status(400).json({ error: "Select an active PPPoE plan owned by this ISP account." });
+      return;
+    }
+    if (!/^[A-Za-z0-9._-]{3,64}$/.test(username)) {
+      res.status(400).json({ error: "The PPPoE username must use 3–64 letters, numbers, dots, underscores, or hyphens." });
+      return;
+    }
+    if (password.length < 6 || password.length > 256) {
+      res.status(400).json({ error: "A PPPoE password must contain at least 6 characters." });
+      return;
+    }
+    if (!Number.isSafeInteger(requestedRouterId) || requestedRouterId < 1) {
+      res.status(400).json({ error: "Select a router for this PPPoE customer." });
+      return;
+    }
+    if (plan.router_id && plan.router_id !== requestedRouterId) {
+      res.status(400).json({ error: "The selected router does not match the router assigned to this PPPoE plan." });
+      return;
+    }
+    let expiresAt: string | null;
+    try {
+      expiresAt = asOptionalIso(expiryDate) ?? null;
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid PPPoE expiry date." });
+      return;
+    }
+    const enabled = String(status ?? "active").trim().toLowerCase() === "active"
+      && (!expiresAt || Date.parse(expiresAt) > Date.now());
+    let routerMutationAttempted = false;
+    let radiusMutationAttempted = false;
+    let customerId: number | undefined;
+    let creds: ReturnType<typeof routerCredentials> | undefined;
+    try {
+      const routers = await sbSelectStrict<RouterRow>(
+        "isp_routers",
+        `id=eq.${requestedRouterId}&admin_id=eq.${effectiveAdminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+      );
+      const router = routers[0];
+      if (!router) {
+        res.status(400).json({ error: "The selected router is not available in this ISP account." });
+        return;
+      }
+      creds = routerCredentials(router);
+
+      const [usernameRows, pppoeUsernameRows, radiusExists, pppSecrets] = await Promise.all([
+        sbSelectStrict<{ id: number }>("isp_customers", `admin_id=eq.${effectiveAdminId}&username=eq.${encodeURIComponent(username)}&select=id&limit=1`),
+        sbSelectStrict<{ id: number }>("isp_customers", `admin_id=eq.${effectiveAdminId}&pppoe_username=eq.${encodeURIComponent(username)}&select=id&limit=1`),
+        hasRadiusCustomerStrict(username),
+        fetchPPPSecrets(creds),
+      ]);
+      if (usernameRows[0] || pppoeUsernameRows[0] || radiusExists || pppSecrets.some(secret => secret.name === username)) {
+        res.status(409).json({ error: "That PPPoE username is already in use. Choose a unique username." });
+        return;
+      }
+
+      const [pending] = await sbInsertStrict<CustomerRow>("isp_customers", {
+        admin_id: effectiveAdminId,
+        name: String(name).trim(),
+        phone: phone || null,
+        email: email || null,
+        username,
+        pppoe_username: username,
+        password,
+        plan_id: plan.id,
+        router_id: requestedRouterId,
+        port_id: plan.port_id ?? null,
+        type: "pppoe",
+        ip_address: ipAddress || null,
+        status: "provisioning",
+        expires_at: expiresAt,
+      });
+      customerId = Number(pending?.id);
+      if (!customerId) throw new Error("The PPPoE customer record could not be reserved.");
+
+      routerMutationAttempted = true;
+      await addPPPSecret(creds, {
+        name: username,
+        password,
+        profile: plan.name,
+        service: "pppoe",
+        comment: `ISP customer ${effectiveAdminId}:${customerId}`,
+        ...(String(ipAddress ?? "").trim() ? { remoteAddress: String(ipAddress).trim() } : {}),
+      });
+      if (!enabled) {
+        const secret = (await fetchPPPSecrets(creds)).find(row => row.name === username);
+        if (secret?.id) await updatePPPSecret(creds, secret.id, { disabled: true });
+      } else if (expiresAt) {
+        await schedulePppUserExpiry(creds, {
+          name: username,
+          expiresInSeconds: Math.max(1, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000)),
+        });
+      }
+      radiusMutationAttempted = true;
+      await syncRadiusCustomerStrict({
+        username,
+        password,
+        planId: plan.id,
+        planType: "pppoe",
+        enabled,
+        sharedUsers: plan.shared_users ?? 1,
+        fullname: String(name).trim(),
+        rateUp: plan.speed_up,
+        rateUpUnit: plan.speed_up_unit,
+        rateDown: plan.speed_down,
+        rateDownUnit: plan.speed_down_unit,
+        dataLimitMb: plan.data_limit_mb ?? undefined,
+        dataCapMode: plan.data_cap_mode === "throttle" ? "throttle" : "disconnect",
+        expiresAt,
+      });
+      const [saved] = await sbUpdateStrict<CustomerRow>(
+        "isp_customers",
+        `id=eq.${customerId}&admin_id=eq.${effectiveAdminId}`,
+        { status: enabled ? "active" : "expired", updated_at: new Date().toISOString() },
+      );
+      if (!saved) throw new Error("The PPPoE account was provisioned but its final status could not be saved.");
+      void logActivity({
+        adminId: Number(effectiveAdminId),
+        type: "customer",
+        action: "added",
+        subject: String(name).trim(),
+        details: { phone: phone ?? null, type: "pppoe", username, planId: plan.id, routerId: requestedRouterId },
+      });
+      res.status(201).json(saved);
+      return;
+    } catch (error) {
+      const cleanupErrors: string[] = [];
+      if (routerMutationAttempted && creds) {
+        await removePPPSecretByName(creds, username).catch(cleanupError => cleanupErrors.push(
+          cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        ));
+      }
+      if (radiusMutationAttempted) {
+        await removeRadiusCustomerStrict(username).catch(cleanupError => cleanupErrors.push(
+          cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        ));
+      }
+      if (customerId) {
+        await sbDeleteStrict("isp_customers", `id=eq.${customerId}&admin_id=eq.${effectiveAdminId}`).catch(cleanupError => cleanupErrors.push(
+          cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        ));
+      }
+      logger.error({ err: error, adminId: effectiveAdminId, routerId: requestedRouterId, customerId, username, cleanupErrors }, "[customers] PPPoE creation failed");
+      res.status(503).json({
+        error: `PPPoE creation failed: ${error instanceof Error ? error.message : String(error)}${cleanupErrors.length ? ` Cleanup needs administrator attention: ${cleanupErrors.join("; ")}` : ""}`,
+      });
+      return;
+    }
   }
   const radiusUsername = requestedType === "pppoe"
     ? String(pppoeUsername ?? requestedUsername ?? "").trim()
