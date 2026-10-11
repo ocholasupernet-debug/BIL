@@ -47,6 +47,7 @@ import {
   removePppUserExpiry,
   removeHotspotUser,
   removePPPSecretByName,
+  removePPPSecret,
   fetchPPPSecrets,
   fetchPPPProfiles,
   getPaidHotspotBindingSnapshot,
@@ -1652,10 +1653,19 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
       return;
     } catch (error) {
       const cleanupErrors: string[] = [];
-      if (routerMutationAttempted && creds) {
-        await removePPPSecretByName(creds, username).catch(cleanupError => cleanupErrors.push(
-          cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-        ));
+      if (routerMutationAttempted && creds && customerId) {
+        const ownedComment = `ISP customer ${effectiveAdminId}:${customerId}`;
+        try {
+          const createdSecret = (await fetchPPPSecrets(creds)).find(secret =>
+            secret.name === username && secret.comment === ownedComment && Boolean(secret.id),
+          );
+          if (createdSecret?.id) {
+            await removePppUserExpiry(creds, username);
+            await removePPPSecret(creds, createdSecret.id);
+          }
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
+        }
       }
       if (radiusMutationAttempted) {
         await removeRadiusCustomerStrict(username).catch(cleanupError => cleanupErrors.push(
