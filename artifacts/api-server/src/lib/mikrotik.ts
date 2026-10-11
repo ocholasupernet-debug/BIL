@@ -421,7 +421,8 @@ async function connectWithRetry(
 
       /* ── Step 1: TCP port probe ── */
       logger.debug({ host: label, port: creds.port, attempt }, "Port probe");
-      if (isVpn) {
+      const directManagementVpnEnabled = process.env.ROUTEROS_DIRECT_VPN_ACCESS === "true";
+      if (isVpn && !directManagementVpnEnabled) {
         try {
           forward = await openVpsTcpForward(host, creds.port, { timeoutMs: connectMs });
           connectionHost = forward.host;
@@ -431,9 +432,26 @@ async function connectWithRetry(
           logger.warn({ host: label, attempt, err: lastErr.message }, "VPS management API forward failed");
           continue;
         }
+      } else if (isVpn && directManagementVpnEnabled) {
+        logger.debug({ host: label, port: creds.port }, "Using the VPS management VPN route directly");
       }
 
-      const rawProbe = await probePort(connectionHost, connectionPort, probeMs);
+      let rawProbe = await probePort(connectionHost, connectionPort, probeMs);
+      if (!rawProbe.reachable && isVpn && directManagementVpnEnabled && !forward) {
+        try {
+          forward = await openVpsTcpForward(host, creds.port, { timeoutMs: connectMs });
+          connectionHost = forward.host;
+          connectionPort = forward.port;
+          rawProbe = await probePort(connectionHost, connectionPort, probeMs);
+          logger.warn(
+            { host: label, directProbeReachable: false, forwardedProbeReachable: rawProbe.reachable },
+            "Direct management VPN route failed; tried the SSH-forward fallback",
+          );
+        } catch (err) {
+          lastErr = err instanceof Error ? err : new Error(String(err));
+          logger.warn({ host: label, attempt, err: lastErr.message }, "VPS management API fallback failed");
+        }
+      }
       const probe = isVpn
         ? { ...rawProbe, host, port: creds.port }
         : rawProbe;
