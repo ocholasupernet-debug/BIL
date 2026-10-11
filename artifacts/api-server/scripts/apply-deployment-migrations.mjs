@@ -128,6 +128,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_hotspot_voucher_multi_redemption.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_hotspot_loyalty_points.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_hotspot_fractional_loyalty_points.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_hotspot_mac_loyalty_wallets.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_radacct_standard_accounting_columns.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_hotspot_chat_accounts.sql", import.meta.url)),
 ];
