@@ -33,6 +33,7 @@ import {
   fetchRouterFiles,
   ensureRouterFileDirectory,
   runRouterCommand,
+  runRouterScript,
   runRouterCommands,
   fetchRouterSecurityState,
   deployRouterFile,
@@ -90,7 +91,8 @@ import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authoriz
 import { validateRouterTakeoverMainhotspot } from "../lib/router-takeover-template.js";
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
 import { planHotspotChatWalledGardenAdds } from "../lib/hotspot-chat-walled-garden.js";
-import { portServiceResourceNames, type PortServiceResourceInput } from "../lib/port-service-resources.js";
+import { portServiceResourceNames, vlanServiceInterfaceName, type PortServiceResourceInput, type VlanServiceIdentityInput } from "../lib/port-service-resources.js";
+import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
 import { SHARED_HOTSPOT_SERVER_NAME } from "../lib/shared-hotspot-resources.js";
 import {
   classifyHotspotSessionService,
@@ -103,6 +105,16 @@ import {
 } from "../lib/router-live-session-entitlement.js";
 
 const router: IRouter = Router();
+
+function generatedVlanNames(port: VlanServiceIdentityInput & Pick<PortServiceResourceInput, "interface_name" | "bridge_name">) {
+  const legacy = Boolean(port.bridge_name?.startsWith("OCHOLA_RS")) && !port.interface_name.startsWith("OCHOLA_RS");
+  return {
+    parentBridge: (legacy ? port.interface_name : port.bridge_name) || "",
+    vlanInterface: legacy
+      ? port.bridge_name || vlanServiceInterfaceName(port)
+      : port.interface_name || vlanServiceInterfaceName(port),
+  };
+}
 
 function requireHotspotFileReplacementConsent(req: Request, res: Response): boolean {
   if (hasHotspotFileMutationConfirmation(req.authUser, req.body?.portalFileReplacementConsent)) return true;
@@ -1113,6 +1125,195 @@ router.get("/router/:id/files", requireAdmin(), async (req, res): Promise<void> 
     });
   } catch (err) {
     routerErrorResponse(res, err);
+  }
+});
+
+router.get("/router/:id/files/vlan-options", requireAdmin(), async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ error: "A valid router and signed-in ISP account are required." });
+    return;
+  }
+  try {
+    const rows = await sbSelectStrict<PortServiceResourceInput & {
+      admin_id: number; handoff_interface: string | null; vlan_ingress_mode: string | null;
+    }>("isp_reseller_ports", `id=gt.0&admin_id=eq.${adminId}&router_id=eq.${id}&handoff_mode=eq.vlan_services&select=id,router_id,interface_name,bridge_name,reseller_id,assigned_reseller_id,vlan_tag,admin_id,handoff_interface,vlan_ingress_mode&order=id.asc`);
+    res.json(rows.map(port => {
+      const resources = generatedVlanNames(port);
+      return { id: port.id, label: `VLAN ${port.vlan_tag ?? "?"} · ${resources.vlanInterface}`, ready: Boolean(port.handoff_interface && ["tagged", "untagged"].includes(port.vlan_ingress_mode ?? "")) };
+    }));
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Could not load VLAN assignments." });
+  }
+});
+
+router.post("/router/:id/files/generated/deploy", requireAdmin(), async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const kind = req.body?.kind;
+  const portId = Number(req.body?.portId);
+  if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ error: "A valid router and signed-in ISP account are required." });
+    return;
+  }
+  if (kind !== "pppoe" && kind !== "vlan") {
+    res.status(400).json({ error: "Choose PPPoE or VLAN; these files are separate from Hotspot files." });
+    return;
+  }
+  const found = await getRouterCreds(id, adminId);
+  if (!found) { res.status(404).json({ error: "Router not found for this ISP account." }); return; }
+  let uploadedFilePath: string | null = null;
+  try {
+    let content: string;
+    let fileName: string;
+    let expectedVlan: { vlanName: string; vlanTag: number; bridgeName: string; ingressInterface: string; ingressMode: "tagged" | "untagged" } | null = null;
+    if (kind === "pppoe") {
+      const bridges = await runRouterCommand(found.creds, ["/interface/bridge/print", "=.proplist=name"]);
+      if (!Array.isArray(bridges) || !bridges.some(row => row.name === "hotspot-bridge")) {
+        res.status(409).json({ error: 'The router does not have "hotspot-bridge"; PPPoE file was not created.' });
+        return;
+      }
+      const wanLists = await runRouterCommand(found.creds, ["/interface/list/print", "=.proplist=name", "?name=WAN"]);
+      if (!Array.isArray(wanLists) || !wanLists.some(row => row.name === "WAN")) {
+        res.status(409).json({ error: 'This PPPoE setup requires an existing RouterOS interface list named "WAN"; no file was pushed or imported.' });
+        return;
+      }
+      const wanMembers = await runRouterCommand(found.creds, ["/interface/list/member/print", "=.proplist=list,interface,disabled", "?list=WAN"]);
+      if (!Array.isArray(wanMembers) || !wanMembers.some(row => row.list === "WAN" && row.interface && !["true", "yes"].includes(String(row.disabled).toLowerCase()))) {
+        res.status(409).json({ error: 'The RouterOS "WAN" list has no enabled interface member; PPPoE file was not pushed or imported.' });
+        return;
+      }
+      const tag = `ochola-services-${id}`;
+      content = `# PPPoE-only setup for router ${id}; scoped to its managed PPPoE network and WAN list.
+:local bridge "hotspot-bridge";
+:local activePool "${tag}-pppoe-pool";
+:local expiredPool "${tag}-pppoe-expired-pool";
+:local pppProfile "${tag}-pppoe-profile";
+:local pppService "${tag}-pppoe";
+:if ([:len [/ip pool find where name=$activePool]] = 0) do={
+  :if (([:len [/ip address find where address~"192.168.99."]] > 0) || ([:len [/ip pool find where ranges~"192.168.99."]] > 0)) do={ :error "192.168.99.0/24 conflicts with an existing address or pool; no PPPoE pools were changed"; }
+}
+:if ([:len [/ip pool find where name=$expiredPool]] = 0) do={
+  :if (([:len [/ip address find where address~"192.168.191."]] > 0) || ([:len [/ip pool find where ranges~"192.168.191."]] > 0)) do={ :error "192.168.191.0/24 conflicts with an existing address or pool; no PPPoE pools were changed"; }
+}
+:if ([:len [/ip pool find where name=$activePool]] = 0) do={ /ip pool add name=$activePool ranges=192.168.99.10-192.168.99.254 comment="${tag} PPPoE pool"; }
+:if ([:len [/ip pool find where name=$expiredPool]] = 0) do={ /ip pool add name=$expiredPool ranges=192.168.191.10-192.168.191.254 comment="${tag} PPPoE expired pool"; }
+:if ([:len [/ppp profile find where name=$pppProfile]] = 0) do={
+  /ppp profile add name=$pppProfile local-address=192.168.99.1 remote-address=$activePool dns-server=1.1.1.1,8.8.8.8 only-one=yes change-tcp-mss=yes comment="${tag} PPPoE profile";
+} else={
+  /ppp profile set [find where name=$pppProfile] local-address=192.168.99.1 remote-address=$activePool dns-server=1.1.1.1,8.8.8.8 only-one=yes change-tcp-mss=yes;
+}
+:if ([:len [/interface pppoe-server server find where service-name=$pppService]] = 0) do={
+  /interface pppoe-server server add service-name=$pppService interface=$bridge default-profile=$pppProfile one-session-per-host=yes disabled=no;
+} else={
+  /interface pppoe-server server set [find where service-name=$pppService] interface=$bridge default-profile=$pppProfile one-session-per-host=yes disabled=no;
+}
+:local pppForwardComment "${tag} pppoe-to-wan";
+:if ([:len [/ip firewall filter find where comment=$pppForwardComment]] = 0) do={
+  /ip firewall filter add chain=forward action=accept src-address=192.168.99.0/24 out-interface-list=WAN connection-state=new,established,related comment=$pppForwardComment place-before=0;
+}
+:local pppNatComment "${tag} PPPoE masquerade";
+:if ([:len [/ip firewall nat find where comment=$pppNatComment]] = 0) do={
+  /ip firewall nat add chain=srcnat action=masquerade src-address=192.168.99.0/24 out-interface-list=WAN comment=$pppNatComment;
+}
+:put "Ready: managed PPPoE server, address pools, WAN forwarding, and NAT are configured. Expired pool is reserved, not automatically assigned."
+`;
+      fileName = `pppoe-setup-${id}.rsc`;
+    } else {
+      if (!Number.isSafeInteger(portId) || portId <= 0) { res.status(400).json({ error: "Choose a VLAN assignment for this router." }); return; }
+      const ports = await sbSelectStrict<PortServiceResourceInput & {
+        admin_id: number; handoff_interface: string | null; vlan_ingress_mode: string | null;
+      }>("isp_reseller_ports", `id=eq.${portId}&admin_id=eq.${adminId}&router_id=eq.${id}&handoff_mode=eq.vlan_services&select=id,router_id,interface_name,bridge_name,reseller_id,assigned_reseller_id,vlan_tag,admin_id,handoff_interface,vlan_ingress_mode&limit=1`);
+      const port = ports[0];
+      if (!port?.handoff_interface || !["tagged", "untagged"].includes(port.vlan_ingress_mode ?? "")) {
+        res.status(409).json({ error: "The selected VLAN assignment is incomplete or not assigned to this router." });
+        return;
+      }
+      const resources = generatedVlanNames(port);
+      expectedVlan = {
+        vlanName: resources.vlanInterface,
+        vlanTag: Number(port.vlan_tag),
+        bridgeName: resources.parentBridge,
+        ingressInterface: port.handoff_interface,
+        ingressMode: port.vlan_ingress_mode as "tagged" | "untagged",
+      };
+      content = buildVlanHandoffScript({ bridgeName: resources.parentBridge, ingressInterface: port.handoff_interface, vlanName: resources.vlanInterface, vlanTag: Number(port.vlan_tag), ingressMode: port.vlan_ingress_mode as "tagged" | "untagged" });
+      fileName = `${resources.vlanInterface.toLowerCase()}-interface.rsc`;
+    }
+    const token = randomBytes(24).toString("hex");
+    pendingRouterFileSources.set(token, { content: Buffer.from(content, "utf8"), contentType: "text/plain; charset=utf-8", fileName, expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS });
+    try {
+      const result = await deployRouterFile(found.creds, { destinationPath: fileName, sourceUrl: `${managementScriptSourceOrigin(req)}/api/router-file-source/${token}`, overwrite: false, uploadId: token.slice(0, 16) });
+      uploadedFilePath = result.destinationPath;
+      await runRouterScript({ ...found.creds, requestTimeoutMs: Math.max(found.creds.requestTimeoutMs ?? 0, 120_000) }, result.destinationPath);
+      if (kind === "pppoe") {
+        const tag = `ochola-services-${id}`;
+        const checks = await runRouterCommands(found.creds, [
+          ["/ip/pool/print", "=.proplist=name,ranges", `?name=${tag}-pppoe-pool`],
+          ["/ip/pool/print", "=.proplist=name,ranges", `?name=${tag}-pppoe-expired-pool`],
+          ["/ppp/profile/print", "=.proplist=name,local-address,remote-address", `?name=${tag}-pppoe-profile`],
+          ["/interface/pppoe-server/server/print", "=.proplist=service-name,interface,disabled", `?service-name=${tag}-pppoe`],
+          ["/ip/firewall/filter/print", "=.proplist=comment,chain,action,src-address,out-interface-list,connection-state", `?comment=${tag} pppoe-to-wan`],
+          ["/ip/firewall/nat/print", "=.proplist=comment,chain,action,src-address,out-interface-list", `?comment=${tag} PPPoE masquerade`],
+        ]);
+        const [activePools, expiredPools, profiles, servers, filters, nats] = checks;
+        const profile = Array.isArray(profiles) ? profiles[0] : undefined;
+        const server = Array.isArray(servers) ? servers[0] : undefined;
+        const filter = Array.isArray(filters) ? filters[0] : undefined;
+        const nat = Array.isArray(nats) ? nats[0] : undefined;
+        if (!Array.isArray(activePools) || !activePools.some(row => row.name === `${tag}-pppoe-pool` && row.ranges === "192.168.99.10-192.168.99.254")
+          || !Array.isArray(expiredPools) || !expiredPools.some(row => row.name === `${tag}-pppoe-expired-pool` && row.ranges === "192.168.191.10-192.168.191.254")
+          || profile?.["local-address"] !== "192.168.99.1" || profile?.["remote-address"] !== `${tag}-pppoe-pool`
+          || server?.interface !== "hotspot-bridge" || ["true", "yes"].includes(String(server.disabled).toLowerCase())
+          || filter?.chain !== "forward" || filter.action !== "accept" || filter["src-address"] !== "192.168.99.0/24" || filter["out-interface-list"] !== "WAN"
+          || nat?.chain !== "srcnat" || nat.action !== "masquerade" || nat["src-address"] !== "192.168.99.0/24" || nat["out-interface-list"] !== "WAN") {
+          throw new Error("PPPoE script imported, but one or more pools, service, firewall, or NAT resources could not be verified. Check RouterOS before retrying.");
+        }
+      } else if (expectedVlan) {
+        const [vlanRows, ingressRows, bridgeVlanRows] = await runRouterCommands(found.creds, [
+          ["/interface/vlan/print", "=.proplist=name,vlan-id,interface,disabled", `?name=${expectedVlan.vlanName}`],
+          ["/interface/bridge/port/print", "=.proplist=bridge,interface,pvid", `?interface=${expectedVlan.ingressInterface}`],
+          ["/interface/bridge/vlan/print", "=.proplist=bridge,vlan-ids,tagged,untagged", `?bridge=${expectedVlan.bridgeName}`],
+        ]);
+        const vlan = Array.isArray(vlanRows) ? vlanRows.find(row => row.name === expectedVlan?.vlanName) : undefined;
+        const ingress = Array.isArray(ingressRows) ? ingressRows.find(row => row.interface === expectedVlan?.ingressInterface) : undefined;
+        const membership = Array.isArray(bridgeVlanRows) ? bridgeVlanRows.find(row =>
+          row.bridge === expectedVlan?.bridgeName
+          && String(row["vlan-ids"] ?? "").split(",").includes(String(expectedVlan?.vlanTag))
+          && (expectedVlan?.ingressMode === "tagged"
+            ? String(row.tagged ?? "").split(",").includes(expectedVlan.ingressInterface)
+            : String(row.untagged ?? "").split(",").includes(expectedVlan.ingressInterface)),
+        ) : undefined;
+        if (!vlan || Number(vlan["vlan-id"]) !== expectedVlan.vlanTag || vlan.interface !== expectedVlan.bridgeName || vlan.disabled === "true"
+          || !ingress || ingress.bridge !== expectedVlan.bridgeName
+          || (expectedVlan.ingressMode === "untagged" && Number(ingress.pvid) !== expectedVlan.vlanTag)
+          || !membership) {
+          throw new Error("VLAN handoff script imported, but its interface or ingress membership could not be verified. Check RouterOS before retrying.");
+        }
+      }
+      res.status(201).json({
+        ok: true,
+        kind,
+        fileName: result.destinationPath,
+        size: result.size,
+        connectedHost: result.connectedHost,
+        executed: true,
+        verified: true,
+        message: kind === "pppoe"
+          ? "PPPoE setup imported and verified, including its managed WAN forwarding and NAT rules."
+          : "VLAN handoff imported and verified. This creates the reseller VLAN link only; the reseller's own router remains responsible for its Hotspot/PPPoE service and firewall.",
+      });
+    } finally { pendingRouterFileSources.delete(token); }
+  } catch (error) {
+    if (uploadedFilePath) {
+      res.status(502).json({
+        error: `${uploadedFilePath} was uploaded, but RouterOS import or verification failed: ${error instanceof Error ? error.message : String(error)}. The router may have partial changes; check the listed resources before retrying.`,
+      });
+      return;
+    }
+    if (error instanceof RouterFileExistsError) { res.status(409).json({ error: `${error.message}. No overwrite was attempted.` }); return; }
+    routerErrorResponse(res, error);
   }
 });
 

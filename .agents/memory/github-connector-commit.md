@@ -38,3 +38,9 @@ A temporary index seeded from the remote base can omit new local files under ign
 **Why:** `git add -A` skips ignored paths absent from the remote-base index, producing an incomplete expected tree and a misleading tree-SHA mismatch.
 
 **How to apply:** When reconstructing a release tree from a remote base, force-add changed paths that are ignored in that context, then regenerate and compare the complete recursive leaf manifest before committing.
+
+The GitHub proxy may reject Git Data commit creation even when blob/tree reads and writes succeed, while Contents updates to an isolated branch are permitted.
+
+**Why:** Connector permissions and endpoint filters can differ by write route; a successful blob or tree upload does not prove that commit creation is allowed.
+
+**How to apply:** If commit creation returns 404, do not retry blindly. Create an isolated branch at the verified remote base, update only approved files serially through Contents, verify the final head tree has exactly the intended leaf changes, and dispatch only after verification.

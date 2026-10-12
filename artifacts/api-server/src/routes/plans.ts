@@ -202,11 +202,40 @@ async function planPoolAssignment(
     });
   }
 
+  const normalizedType = normalizePlanServiceType(planType);
+  let activeIpPool = planServicePoolName(String(planType ?? "hotspot"), resources);
+  let expiredIpPool = existingExpiredIpPool === undefined
+    ? null
+    : String(existingExpiredIpPool ?? "").trim() || null;
+  if (normalizedType === "pppoe" && scope.portId === null) {
+    const managedActivePool = `ochola-services-${scope.routerId}-pppoe-pool`;
+    const managedExpiredPool = `ochola-services-${scope.routerId}-pppoe-expired-pool`;
+    const existingPools = await sbSelectStrict<{ id: number; name: string }>(
+      "isp_ip_pools",
+      `admin_id=eq.${adminId}&router_id=eq.${scope.routerId}&select=id,name&limit=1000`,
+    );
+    const now = new Date().toISOString();
+    const requiredPools = [
+      { name: managedActivePool, range_start: "192.168.99.10", range_end: "192.168.99.254" },
+      ...(!expiredIpPool ? [{ name: managedExpiredPool, range_start: "192.168.191.10", range_end: "192.168.191.254" }] : []),
+    ];
+    for (const pool of requiredPools) {
+      if (!existingPools.some(existing => existing.name.trim() === pool.name)) {
+        await sbInsertStrict<Record<string, unknown>>("isp_ip_pools", {
+          admin_id: adminId,
+          router_id: scope.routerId,
+          ...pool,
+          created_at: now,
+          updated_at: now,
+        });
+      }
+    }
+    activeIpPool = managedActivePool;
+    if (!expiredIpPool) expiredIpPool = managedExpiredPool;
+  }
   return {
-    activeIpPool: planServicePoolName(String(planType ?? "hotspot"), resources),
-    expiredIpPool: existingExpiredIpPool === undefined
-      ? null
-      : String(existingExpiredIpPool ?? "").trim() || null,
+    activeIpPool,
+    expiredIpPool,
   };
 }
 
@@ -916,7 +945,7 @@ router.post("/plans/:id/copy", requireAdmin(), async (req, res): Promise<void> =
     router_id: scope.routerId,
     port_id: scope.portId,
     active_ip_pool: pools.activeIpPool,
-    expired_ip_pool: null,
+    expired_ip_pool: pools.expiredIpPool,
     data_limit_mb: source.data_limit_mb ?? null,
     data_cap_mode: source.data_cap_mode ?? "disconnect",
     fup_speed_down: source.fup_speed_down ?? null,
