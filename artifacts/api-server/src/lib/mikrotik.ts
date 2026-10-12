@@ -7914,6 +7914,8 @@ export function generateServiceSetupScript(
   const pppoeAddress = `${pppoeGateway}/24`;
   const pppoeNetwork = "192.168.99.0/24";
   const pppoePoolRange = "192.168.99.10-192.168.99.254";
+  const pppoeExpiredPool = `${tag}-pppoe-expired-pool`;
+  const pppoeExpiredPoolRange = "192.168.191.10-192.168.191.254";
   const portalFileUrls = options.portalFileUrls
     ? {
         login: validateRouterOpenVpnCaUrl(options.portalFileUrls.login),
@@ -8175,15 +8177,34 @@ ${portalFileUrls ? `:if ([:len [/file find where name=($hsdir . "/login.html")]]
 }
 :if (!$serviceStepFailed) do={ :put "${tag}: SERVICE STEP 5/7 complete - walled garden ready." }
 
-# 6. PPPoE pool, profile, and server on the same service bridge.
+# 6. PPPoE active/expired pools, profile, and server on the same service bridge.
 :set serviceStepFailed false
 :put "${tag}: SERVICE STEP 6/7 - PPPoE starting."
 :do {
+    :local expiredPoolIds [/ip pool find where name=${routerOsString(pppoeExpiredPool)}]
+    :if ([:len $expiredPoolIds] = 0) do={
+        :local expiredPoolAddressConflicts [/ip address find where address~"192.168.191."]
+        :local expiredPoolRangeConflicts [/ip pool find where name!=${routerOsString(pppoeExpiredPool)} && ranges~"192.168.191."]
+        :if (([:len $expiredPoolAddressConflicts] > 0) || ([:len $expiredPoolRangeConflicts] > 0)) do={
+            :set serviceError "${tag}: 192.168.191.0/24 is already used by another address or IP pool; PPPoE pools were not changed."
+            :error $serviceError
+        }
+    } else={
+        :if ([:len [/ip pool find where name=${routerOsString(pppoeExpiredPool)} && comment=${routerOsString(`${tag} PPPoE expired pool`)}]] = 0) do={
+            :set serviceError "${tag}: a foreign pool uses the managed PPPoE expired-pool name; no pools were changed."
+            :error $serviceError
+        }
+    }
     :if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] = 0) do={
         /ip pool add name=${routerOsString(pppoePool)} ranges=${routerOsString(pppoePoolRange)} comment=${routerOsString(`${tag} PPPoE pool`)}
     }
     :if ([:len [/ip pool find where name=${routerOsString(pppoePool)}]] > 0) do={
         /ip pool set [find where name=${routerOsString(pppoePool)}] ranges=${routerOsString(pppoePoolRange)} comment=${routerOsString(`${tag} PPPoE pool`)}
+    }
+    :if ([:len [/ip pool find where name=${routerOsString(pppoeExpiredPool)}]] = 0) do={
+        /ip pool add name=${routerOsString(pppoeExpiredPool)} ranges=${routerOsString(pppoeExpiredPoolRange)} comment=${routerOsString(`${tag} PPPoE expired pool`)}
+    } else={
+        /ip pool set [find where name=${routerOsString(pppoeExpiredPool)}] ranges=${routerOsString(pppoeExpiredPoolRange)}
     }
     :if ([:len [/ppp profile find where name=${routerOsString(pppoeProfile)}]] = 0) do={
         /ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes${radiusProfileSetting} comment=${routerOsString(`${tag} PPPoE profile`)}
