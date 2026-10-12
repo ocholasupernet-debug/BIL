@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildDualServiceCommands,
   isValidNasIdentifier,
+  matchesPortServiceResourceIdentity,
   normalizeApprovedAssetPath,
   routerIdentityProperty,
   routerSetArguments,
@@ -79,6 +80,40 @@ test("a port service gets isolated Hotspot and PPPoE resources", () => {
   assert.doesNotMatch(script, /\/ip\/hotspot\/profile\/add[^\n]*comment=/);
   assert.doesNotMatch(script, /\/ip\/hotspot\/add[^\n]*comment=/);
   assert.doesNotMatch(script, /interface=ether2 =profile=HS_ether2/);
+});
+
+test("cleanup recognizes exact uncommented RouterOS 6 resources only on their owned interface", () => {
+  const resources = portServiceResourceNames(port);
+  assert.equal(
+    matchesPortServiceResourceIdentity(
+      { name: resources.hotspotServer, interface: resources.bridgeName, comment: "" },
+      "name",
+      resources.hotspotServer,
+      resources,
+      resources.bridgeName,
+    ),
+    true,
+  );
+  assert.equal(
+    matchesPortServiceResourceIdentity(
+      { name: resources.hotspotServer, interface: resources.bridgeName, comment: "manual service" },
+      "name",
+      resources.hotspotServer,
+      resources,
+      resources.bridgeName,
+    ),
+    false,
+  );
+  assert.equal(
+    matchesPortServiceResourceIdentity(
+      { "service-name": resources.pppoeService, interface: "main-bridge" },
+      "service-name",
+      resources.pppoeService,
+      resources,
+      resources.bridgeName,
+    ),
+    false,
+  );
 });
 
 test("custom portal hostnames are included in both physical-port and VLAN walled gardens", () => {
