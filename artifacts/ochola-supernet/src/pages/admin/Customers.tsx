@@ -765,11 +765,43 @@ function DeleteModal({ customer, onClose, onConfirm, loading }: { customer: DbCu
   );
 }
 
-function PppoeDialerModal({ customer, onClose }: { customer: DbCustomer; onClose: () => void }) {
+function PppoeDialerModal({ customer, routers, onClose }: { customer: DbCustomer; routers: RouterLite[]; onClose: () => void }) {
   const [interfaceName, setInterfaceName] = useState("");
-  const [addDefaultRoute, setAddDefaultRoute] = useState(true);
+  const [addDefaultRoute, setAddDefaultRoute] = useState(false);
+  const [targetRouterId, setTargetRouterId] = useState<number | "">("");
+  const [confirmCustomerRouter, setConfirmCustomerRouter] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushResult, setPushResult] = useState<{ ok: boolean; message: string } | null>(null);
   const username = (customer.pppoe_username || customer.username || "").trim();
   const canGenerate = Boolean(username && customer.password && interfaceName.trim());
+  const customerRouters = routers.filter(router => router.id !== Number(customer.router_id));
+  const canPush = Boolean(canGenerate && targetRouterId && confirmCustomerRouter && !pushBusy);
+
+  async function pushDialer() {
+    if (!canPush) return;
+    setPushBusy(true);
+    setPushResult(null);
+    try {
+      const response = await adminApiFetch(`/api/customers/${customer.id}/pppoe-client-push`, {
+        method: "POST",
+        body: JSON.stringify({
+          adminId: ADMIN_ID,
+          targetRouterId,
+          interfaceName: interfaceName.trim(),
+          addDefaultRoute,
+          confirmCustomerRouter,
+        }),
+      });
+      const result = await response.json() as { error?: string; message?: string };
+      if (!response.ok) throw new Error(result.error ?? "The PPPoE dialer could not be pushed.");
+      setPushResult({ ok: true, message: result.message ?? "Dialer settings were saved on the selected router." });
+    } catch (error) {
+      setPushResult({ ok: false, message: error instanceof Error ? error.message : "The PPPoE dialer could not be pushed." });
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
   return (
     <div role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
@@ -792,15 +824,33 @@ function PppoeDialerModal({ customer, onClose }: { customer: DbCustomer; onClose
           <input autoFocus value={interfaceName} onChange={event => setInterfaceName(event.target.value.trim())} placeholder="Example: ether1"
             style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.65rem 0.75rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "monospace", textTransform: "none" }} />
         </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem", marginTop: "0.8rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase" }}>
+          Customer-side MikroTik to configure
+          <select value={targetRouterId} onChange={event => { setTargetRouterId(event.target.value ? Number(event.target.value) : ""); setConfirmCustomerRouter(false); setPushResult(null); }}
+            style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.65rem 0.75rem", color: "var(--isp-text)", fontSize: "0.875rem", textTransform: "none" }}>
+            <option value="">Select a registered router…</option>
+            {customerRouters.map(router => <option key={router.id} value={router.id}>{router.name} · {router.status}</option>)}
+          </select>
+          {customerRouters.length === 0 && <span style={{ color: "#fbbf24", textTransform: "none", fontWeight: 500 }}>No separate managed router is available; register the customer-side router first.</span>}
+        </label>
         <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", margin: "0.95rem 0", color: "var(--isp-text)", fontSize: "0.8rem", lineHeight: 1.45 }}>
           <input type="checkbox" checked={addDefaultRoute} onChange={event => setAddDefaultRoute(event.target.checked)} style={{ marginTop: 3 }} />
           <span>Use PPPoE as the customer router’s default internet route. This can change its current internet path.</span>
         </label>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", margin: "0.5rem 0 0.95rem", color: "var(--isp-text)", fontSize: "0.78rem", lineHeight: 1.45 }}>
+          <input type="checkbox" checked={confirmCustomerRouter} disabled={!targetRouterId} onChange={event => setConfirmCustomerRouter(event.target.checked)} style={{ marginTop: 3 }} />
+          <span>I confirm the selected router is the customer-side dialer, not this account’s PPPoE server.</span>
+        </label>
         <div role="note" style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 8, padding: "0.65rem 0.75rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.45, marginBottom: "1rem" }}>
-          The downloaded script contains this account’s PPPoE password. Treat it as sensitive and remove the file after importing.
+          The customer router will receive this account’s PPPoE password. Enabling the default route may change that router’s current internet path.
         </div>
+        {pushResult && <div role={pushResult.ok ? "status" : "alert"} style={{ marginBottom: "0.8rem", padding: "0.65rem 0.75rem", borderRadius: 8, background: pushResult.ok ? "rgba(16,185,129,0.1)" : "rgba(248,113,113,0.1)", color: pushResult.ok ? "#6ee7b7" : "#fca5a5", fontSize: "0.78rem", lineHeight: 1.45 }}>{pushResult.message}</div>}
         <div style={{ display: "flex", gap: "0.65rem" }}>
           <button onClick={onClose} style={{ flex: 1, padding: "0.65rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+          <button disabled={!canPush} onClick={() => void pushDialer()}
+            style={{ flex: 1.5, padding: "0.65rem", borderRadius: 8, background: canPush ? "var(--isp-accent)" : "var(--isp-accent-border)", border: "none", color: "white", fontWeight: 700, cursor: canPush ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem" }}>
+            {pushBusy ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />} {pushBusy ? "Pushing…" : "Push to router"}
+          </button>
           <button disabled={!canGenerate} onClick={() => downloadPppoeClientScript(customer, interfaceName.trim(), addDefaultRoute)}
             style={{ flex: 1.5, padding: "0.65rem", borderRadius: 8, background: canGenerate ? "var(--isp-accent)" : "var(--isp-accent-border)", border: "none", color: "white", fontWeight: 700, cursor: canGenerate ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem" }}>
             <Download size={14} /> Download client script
@@ -929,7 +979,7 @@ export default function Customers() {
           onConfirm={() => deleteMutation.mutate(deleting)}
         />
       )}
-      {dialerFor && <PppoeDialerModal customer={dialerFor} onClose={() => setDialerFor(null)} />}
+      {dialerFor && <PppoeDialerModal customer={dialerFor} routers={routers} onClose={() => setDialerFor(null)} />}
 
       <div className="space-y-5">
 

@@ -50,6 +50,7 @@ import {
   removePPPSecret,
   fetchPPPSecrets,
   fetchPPPProfiles,
+  runRouterCommand,
   getPaidHotspotBindingSnapshot,
   reconcilePaidHotspotBinding,
   type PaidHotspotBindingSnapshot,
@@ -178,12 +179,14 @@ type ConnectedDeviceCustomerRow = CustomerRow & {
 
 type RouterRow = {
   id: number;
+  admin_id?: number;
   name: string;
   host: string | null;
   bridge_ip: string | null;
   vpn_ip: string | null;
   router_username: string | null;
   router_secret: string | null;
+  status?: string;
 };
 
 type VlanPortRow = {
@@ -1303,6 +1306,135 @@ router.post("/customers/hotspot-admin-grant", requireAdmin(), async (req, res): 
       error: error instanceof Error ? error.message : "The Hotspot admin grant could not be confirmed.",
       ...(pending?.id ? { customerId: pending.id, username, retryable: true } : {}),
     });
+  }
+});
+
+router.post("/customers/:id/pppoe-client-push", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const account = await authenticatedAccount(req);
+  const customerId = Number(req.params.id);
+  const targetRouterId = Number(req.body?.targetRouterId);
+  const interfaceName = String(req.body?.interfaceName ?? "").trim();
+  const addDefaultRoute = req.body?.addDefaultRoute === true;
+
+  if (!adminId || !account || account.role === "reseller") {
+    res.status(403).json({ error: "Only the owning ISP administrator can push a PPPoE dialer." });
+    return;
+  }
+  if (!Number.isSafeInteger(customerId) || customerId < 1 || !Number.isSafeInteger(targetRouterId) || targetRouterId < 1) {
+    res.status(400).json({ error: "Choose a valid PPPoE account and customer-side router." });
+    return;
+  }
+  if (!interfaceName || interfaceName.length > 64 || /[\r\n\0]/.test(interfaceName)) {
+    res.status(400).json({ error: "Enter a valid customer-router uplink interface." });
+    return;
+  }
+  if (req.body?.confirmCustomerRouter !== true) {
+    res.status(400).json({ error: "Confirm that the selected router is the customer-side PPPoE dialer, not the PPPoE server." });
+    return;
+  }
+
+  try {
+    const customer = (await sbSelectStrict<CustomerRow>(
+      "isp_customers",
+      `id=eq.${customerId}&admin_id=eq.${adminId}&select=id,admin_id,name,type,username,pppoe_username,password,router_id,status&limit=1`,
+    ))[0];
+    if (!customer || String(customer.type ?? "").trim().toLowerCase() !== "pppoe") {
+      res.status(404).json({ error: "The selected PPPoE customer account was not found." });
+      return;
+    }
+    if (customer.router_id && Number(customer.router_id) === targetRouterId) {
+      res.status(409).json({ error: "The selected router is the PPPoE server for this account. Choose the separate customer-side dialing router." });
+      return;
+    }
+    const username = String(customer.pppoe_username || customer.username || "").trim();
+    const password = String(customer.password ?? "");
+    if (!username || !password) {
+      res.status(409).json({ error: "This PPPoE account has no saved username or password to configure." });
+      return;
+    }
+
+    const targetRouter = (await sbSelectStrict<RouterRow>(
+      "isp_routers",
+      `id=eq.${targetRouterId}&admin_id=eq.${adminId}&select=id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status&limit=1`,
+    ))[0];
+    if (!targetRouter) {
+      res.status(404).json({ error: "The selected customer-side router is not registered to this ISP account." });
+      return;
+    }
+
+    const creds = routerCredentials(targetRouter);
+    const interfaceRows = await runRouterCommand(creds, [
+      "/interface/print",
+      "=.proplist=name,disabled",
+      `?name=${interfaceName}`,
+    ]);
+    if (!interfaceRows.some(row => row.name === interfaceName && row.disabled !== "true")) {
+      res.status(409).json({ error: `Interface '${interfaceName}' was not found or is disabled on ${targetRouter.name}. Nothing was changed.` });
+      return;
+    }
+
+    const managedName = `ochola-pppoe-customer-${customer.id}`;
+    const managedComment = `Ochola PPPoE customer ${customer.id}`;
+    const existingRows = await runRouterCommand(creds, [
+      "/interface/pppoe-client/print",
+      "=.proplist=.id,name,user,interface,comment,disabled,running,add-default-route",
+      `?name=${managedName}`,
+    ]);
+    const existing = existingRows[0];
+    if (existing && existing.comment !== managedComment) {
+      res.status(409).json({ error: "A PPPoE client already uses the managed name but is not owned by this account. Nothing was changed." });
+      return;
+    }
+    if (!existing) {
+      const duplicateUser = await runRouterCommand(creds, [
+        "/interface/pppoe-client/print",
+        "=.proplist=name,user",
+        `?user=${username}`,
+      ]);
+      if (duplicateUser.length) {
+        res.status(409).json({ error: `This PPPoE username is already configured as '${duplicateUser[0].name ?? "another client"}' on ${targetRouter.name}. Review it instead of creating a duplicate.` });
+        return;
+      }
+    }
+
+    const fields = [
+      `=interface=${interfaceName}`,
+      `=user=${username}`,
+      `=password=${password}`,
+      `=add-default-route=${addDefaultRoute ? "yes" : "no"}`,
+      "=use-peer-dns=yes",
+      "=disabled=no",
+      `=comment=${managedComment}`,
+    ];
+    if (existing?.[".id"]) {
+      await runRouterCommand(creds, ["/interface/pppoe-client/set", `=.id=${existing[".id"]}`, ...fields]);
+    } else {
+      await runRouterCommand(creds, ["/interface/pppoe-client/add", `=name=${managedName}`, ...fields]);
+    }
+
+    const verifiedRows = await runRouterCommand(creds, [
+      "/interface/pppoe-client/print",
+      "=.proplist=name,user,interface,comment,disabled,running,add-default-route",
+      `?name=${managedName}`,
+    ]);
+    const verified = verifiedRows[0];
+    if (!verified || verified.user !== username || verified.interface !== interfaceName || verified.disabled === "true") {
+      throw new Error("RouterOS accepted the dialer change, but its saved settings could not be verified. Check the router before retrying.");
+    }
+    res.json({
+      ok: true,
+      routerName: targetRouter.name,
+      clientName: managedName,
+      running: verified.running === "true",
+      addDefaultRoute,
+      message: verified.running === "true"
+        ? `PPPoE dialer is running on ${targetRouter.name}.`
+        : `Dialer configuration was saved on ${targetRouter.name}, but RouterOS has not established the PPPoE session yet.`,
+    });
+  } catch (error) {
+    logger.error({ err: error, adminId, customerId, targetRouterId }, "[customers/pppoe-client-push] dialer push failed");
+    res.status(503).json({ error: error instanceof Error ? error.message : "The PPPoE dialer could not be pushed." });
   }
 });
 
