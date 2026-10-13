@@ -266,6 +266,8 @@ export interface DbCustomer {
   phone: string | null;
   type: string | null;           // 'hotspot' | 'pppoe' | 'static' | 'vlan'
   plan_id: number | null;
+  router_id?: number | null;
+  port_id?: number | null;
   status: string;                // 'active' | 'expired' | 'suspended'
   ip_address: string | null;
   mac_address: string | null;

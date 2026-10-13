@@ -231,14 +231,27 @@ function AddSecretModal({
 }: { routerId: number; profiles: PPPProfile[]; onClose: () => void; onSaved: () => void }) {
   const [name, setName]       = useState("");
   const [password, setPassword] = useState("");
-  const [profile, setProfile] = useState(profiles[0]?.name ?? "default");
+  const [profile, setProfile] = useState("");
   const [service, setService] = useState("pppoe");
   const [comment, setComment] = useState("");
   const [saving, setSaving]   = useState(false);
   const [err, setErr]         = useState("");
+  const selectedProfile = profiles.find(p => p.name === profile);
+
+  React.useEffect(() => {
+    if (profile || !profiles.length) return;
+    const addressProfile =
+      profiles.find(p => p.remoteAddress.trim() && /pppoe/i.test(`${p.name} ${p.comment}`)) ??
+      profiles.find(p => p.remoteAddress.trim());
+    setProfile(addressProfile?.name ?? profiles[0].name);
+  }, [profile, profiles]);
 
   async function handleSave() {
     if (!name.trim() || password.length < 6) { setErr("Enter a username and a password with at least 6 characters."); return; }
+    if (service === "pppoe" && !selectedProfile?.remoteAddress.trim()) {
+      setErr("This PPP profile has no remote IP pool. Choose a profile with an IP pool before creating a PPPoE user.");
+      return;
+    }
     setSaving(true); setErr("");
     try {
       await apiPost(`/api/router/${routerId}/ppp/secrets`, { name: name.trim(), password, profile, service, comment });
@@ -275,8 +288,17 @@ function AddSecretModal({
         <div style={row}>
           <label style={lbl}>Profile</label>
           <select value={profile} onChange={e => setProfile(e.target.value)} style={sel}>
-            {profiles.length ? profiles.map(p => <option key={p.id} value={p.name}>{p.name}{p.rateLimit ? ` — ${p.rateLimit}` : ""}</option>) : <option value="default">default</option>}
+            {profiles.length ? profiles.map(p => (
+              <option key={p.id} value={p.name}>
+                {p.name}{p.rateLimit ? ` — ${p.rateLimit}` : ""}{p.remoteAddress ? ` · IP pool: ${p.remoteAddress}` : " · no IP pool"}
+              </option>
+            )) : <option value="default">default · no IP pool</option>}
           </select>
+          {service === "pppoe" && !profiles.some(p => p.remoteAddress.trim()) && (
+            <p style={{ color: "#fbbf24", fontSize: 12, margin: "6px 0 0" }}>
+              No address-enabled PPP profile is available on this router. Sync or configure its PPPoE pool first.
+            </p>
+          )}
         </div>
         <div style={row}><label style={lbl}>Comment (optional)</label><input value={comment} onChange={e => setComment(e.target.value)} style={inp} placeholder="e.g. Apartment 5B" /></div>
 

@@ -550,7 +550,7 @@ test("signed reseller portal requests stay within their assigned service", async
         return row.query.get("id") === `eq.${assignedTransaction.id}`
           && row.query.get("admin_id") === "eq.7";
       }
-      if (row.table === "award_hotspot_loyalty_points_fractional") {
+      if (row.table === "award_hotspot_loyalty_device_points") {
         return row.method === "POST"
           && Number(row.body?.p_transaction_id) === assignedTransaction.id;
       }

@@ -7,7 +7,7 @@ import { ADMIN_ID, type DbCustomer } from "@/lib/supabase";
 import {
   Search, Plus, Edit, Trash, Download, Loader2, Users,
   Wifi, Network, Globe, Eye, EyeOff, RefreshCw, X,
-  CheckCircle2, AlertTriangle, Copy, ShieldCheck, RotateCcw, UploadCloud,
+  CheckCircle2, AlertTriangle, Copy, ShieldCheck, RotateCcw, UploadCloud, Router,
 } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
 import { getCurrencySymbol } from "@/lib/utils";
@@ -90,6 +90,38 @@ function emptyForm(type: CustomerType = "hotspot"): NewCustomerForm {
     ip_address: "", pppoe_service: "internet", subnet_mask: "255.255.255.0", gateway_ip: "", expires_at: "",
     custom_fields: [],
   };
+}
+
+function rosQuote(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\$/g, "\\$")}"`;
+}
+
+function downloadPppoeClientScript(customer: DbCustomer, interfaceName: string, addDefaultRoute: boolean) {
+  const username = (customer.pppoe_username || customer.username || "").trim();
+  const password = customer.password ?? "";
+  const managedName = `ochola-pppoe-customer-${customer.id}`;
+  const displayName = String(customer.name || username).replace(/[\r\n\0]/g, " ").trim();
+  const comment = `Ochola PPPoE customer ${customer.id}`;
+  const routeSetting = addDefaultRoute ? "yes" : "no";
+  const script = `# PPPoE client setup for ${displayName}
+# Run this on the customer-side MikroTik, not on the PPPoE server.
+# This script only updates/creates its own named PPPoE client.
+:local clientName ${rosQuote(managedName)}
+:local clientIds [/interface pppoe-client find where name=$clientName]
+:if ([:len $clientIds] > 0) do={
+  /interface pppoe-client set $clientIds interface=${rosQuote(interfaceName)} user=${rosQuote(username)} password=${rosQuote(password)} add-default-route=${routeSetting} use-peer-dns=yes disabled=no
+} else={
+  /interface pppoe-client add name=$clientName interface=${rosQuote(interfaceName)} user=${rosQuote(username)} password=${rosQuote(password)} add-default-route=${routeSetting} use-peer-dns=yes disabled=no comment=${rosQuote(comment)}
+}
+:put "PPPoE client configured. Check /interface pppoe-client monitor [find where name=$clientName] once"
+`;
+  const blob = new Blob([script], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `pppoe-client-${username.replace(/[^a-zA-Z0-9._-]/g, "-")}.rsc`;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /* ══════════════════════════ DB helpers ══════════════════════════ */
@@ -733,12 +765,59 @@ function DeleteModal({ customer, onClose, onConfirm, loading }: { customer: DbCu
   );
 }
 
+function PppoeDialerModal({ customer, onClose }: { customer: DbCustomer; onClose: () => void }) {
+  const [interfaceName, setInterfaceName] = useState("");
+  const [addDefaultRoute, setAddDefaultRoute] = useState(true);
+  const username = (customer.pppoe_username || customer.username || "").trim();
+  const canGenerate = Boolean(username && customer.password && interfaceName.trim());
+  return (
+    <div role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1100, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
+      <section role="dialog" aria-modal="true" aria-labelledby="pppoe-dialer-title"
+        style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 14, width: "100%", maxWidth: 480, padding: "1.5rem", boxShadow: "0 24px 60px rgba(0,0,0,0.5)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", marginBottom: "0.35rem" }}>
+          <Router size={18} color="var(--isp-accent)" />
+          <h2 id="pppoe-dialer-title" style={{ color: "var(--isp-text)", fontSize: "1rem", margin: 0 }}>Customer PPPoE dialer</h2>
+        </div>
+        <p style={{ color: "var(--isp-text-muted)", fontSize: "0.8rem", lineHeight: 1.5, margin: "0 0 1rem" }}>
+          Generate an importable client script for <strong>{customer.name || username}</strong>. It will not change the server router; import it only on the customer-side MikroTik.
+        </p>
+        {!customer.password && (
+          <div role="alert" style={{ background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.25)", color: "#fca5a5", borderRadius: 8, padding: "0.7rem", marginBottom: "0.9rem", fontSize: "0.78rem" }}>
+            No saved PPPoE password is available for this account. Set the account password before generating a dialer.
+          </div>
+        )}
+        <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase" }}>
+          Customer router uplink interface
+          <input autoFocus value={interfaceName} onChange={event => setInterfaceName(event.target.value.trim())} placeholder="Example: ether1"
+            style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.65rem 0.75rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "monospace", textTransform: "none" }} />
+        </label>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: "0.55rem", margin: "0.95rem 0", color: "var(--isp-text)", fontSize: "0.8rem", lineHeight: 1.45 }}>
+          <input type="checkbox" checked={addDefaultRoute} onChange={event => setAddDefaultRoute(event.target.checked)} style={{ marginTop: 3 }} />
+          <span>Use PPPoE as the customer router’s default internet route. This can change its current internet path.</span>
+        </label>
+        <div role="note" style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 8, padding: "0.65rem 0.75rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.45, marginBottom: "1rem" }}>
+          The downloaded script contains this account’s PPPoE password. Treat it as sensitive and remove the file after importing.
+        </div>
+        <div style={{ display: "flex", gap: "0.65rem" }}>
+          <button onClick={onClose} style={{ flex: 1, padding: "0.65rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, cursor: "pointer" }}>Cancel</button>
+          <button disabled={!canGenerate} onClick={() => downloadPppoeClientScript(customer, interfaceName.trim(), addDefaultRoute)}
+            style={{ flex: 1.5, padding: "0.65rem", borderRadius: 8, background: canGenerate ? "var(--isp-accent)" : "var(--isp-accent-border)", border: "none", color: "white", fontWeight: 700, cursor: canGenerate ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem" }}>
+            <Download size={14} /> Download client script
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 /* ══════════════════════════ Main Page ══════════════════════════ */
 export default function Customers() {
   const qc = useQueryClient();
   const [showAdd,      setShowAdd]      = useState(false);
   const [editing,      setEditing]      = useState<DbCustomer | null>(null);
   const [deleting,     setDeleting]     = useState<DbCustomer | null>(null);
+  const [dialerFor,    setDialerFor]    = useState<DbCustomer | null>(null);
   const [searchTerm,   setSearchTerm]   = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterType,   setFilterType]   = useState("all");
@@ -850,6 +929,7 @@ export default function Customers() {
           onConfirm={() => deleteMutation.mutate(deleting)}
         />
       )}
+      {dialerFor && <PppoeDialerModal customer={dialerFor} onClose={() => setDialerFor(null)} />}
 
       <div className="space-y-5">
 
@@ -1060,6 +1140,12 @@ export default function Customers() {
                       {/* Actions */}
                       <td style={{ padding: "0.75rem 1.25rem" }}>
                         <div style={{ display: "flex", gap: "0.25rem" }}>
+                          {c.type === "pppoe" && statusVal === "active" && (
+                            <button title="Generate PPPoE client dialer" aria-label={`Generate PPPoE dialer for ${name}`} onClick={() => setDialerFor(c)}
+                              style={{ padding: "0.35rem", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--isp-accent)", cursor: "pointer" }}>
+                              <Router size={13} />
+                            </button>
+                          )}
                           <button title="Edit" onClick={() => setEditing(c)}
                             style={{ padding: "0.35rem", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--isp-text-muted)", cursor: "pointer" }}>
                             <Edit size={13} />

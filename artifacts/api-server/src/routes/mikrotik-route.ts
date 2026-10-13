@@ -59,6 +59,7 @@ import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
 import { routerManagementOvpnCredentials, routerManagementVpnContract } from "../lib/router-management-vpn";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
+import { buildRouterFileImportCommand } from "../lib/self-install-step-command.js";
 import {
   provisionRouterManagementOpenVpn,
   provisionRouterManagementOpenVpnPair,
@@ -89,7 +90,8 @@ import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authoriz
 import { validateRouterTakeoverMainhotspot } from "../lib/router-takeover-template.js";
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
 import { planHotspotChatWalledGardenAdds } from "../lib/hotspot-chat-walled-garden.js";
-import { portServiceResourceNames, type PortServiceResourceInput } from "../lib/port-service-resources.js";
+import { portServiceResourceNames, vlanServiceInterfaceName, type PortServiceResourceInput, type VlanServiceIdentityInput } from "../lib/port-service-resources.js";
+import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
 import { SHARED_HOTSPOT_SERVER_NAME } from "../lib/shared-hotspot-resources.js";
 import {
   classifyHotspotSessionService,
@@ -102,6 +104,16 @@ import {
 } from "../lib/router-live-session-entitlement.js";
 
 const router: IRouter = Router();
+
+function generatedVlanNames(port: VlanServiceIdentityInput & Pick<PortServiceResourceInput, "interface_name" | "bridge_name">) {
+  const legacy = Boolean(port.bridge_name?.startsWith("OCHOLA_RS")) && !port.interface_name.startsWith("OCHOLA_RS");
+  return {
+    parentBridge: (legacy ? port.interface_name : port.bridge_name) || "",
+    vlanInterface: legacy
+      ? port.bridge_name || vlanServiceInterfaceName(port)
+      : port.interface_name || vlanServiceInterfaceName(port),
+  };
+}
 
 function requireHotspotFileReplacementConsent(req: Request, res: Response): boolean {
   if (hasHotspotFileMutationConfirmation(req.authUser, req.body?.portalFileReplacementConsent)) return true;
@@ -1102,12 +1114,6 @@ router.get("/router/:id/files", requireAdmin(), async (req, res): Promise<void> 
 
   try {
     const result = await fetchRouterFiles(found.creds);
-    const stepCommand = (sourceUrl: string, fileName: string, verified = false): string => `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}
-:delay 2s
-/import "${fileName}"
-/file remove "${fileName}"
-`;
-
     res.json({
       routerId: id,
       routerName: found.row.name,
@@ -1118,6 +1124,96 @@ router.get("/router/:id/files", requireAdmin(), async (req, res): Promise<void> 
     });
   } catch (err) {
     routerErrorResponse(res, err);
+  }
+});
+
+router.get("/router/:id/files/vlan-options", requireAdmin(), async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ error: "A valid router and signed-in ISP account are required." });
+    return;
+  }
+  try {
+    const rows = await sbSelectStrict<PortServiceResourceInput & {
+      admin_id: number; handoff_interface: string | null; vlan_ingress_mode: string | null;
+    }>("isp_reseller_ports", `id=gt.0&admin_id=eq.${adminId}&router_id=eq.${id}&handoff_mode=eq.vlan_services&select=id,router_id,interface_name,bridge_name,reseller_id,assigned_reseller_id,vlan_tag,admin_id,handoff_interface,vlan_ingress_mode&order=id.asc`);
+    res.json(rows.map(port => {
+      const resources = generatedVlanNames(port);
+      return { id: port.id, label: `VLAN ${port.vlan_tag ?? "?"} · ${resources.vlanInterface}`, ready: Boolean(port.handoff_interface && ["tagged", "untagged"].includes(port.vlan_ingress_mode ?? "")) };
+    }));
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : "Could not load VLAN assignments." });
+  }
+});
+
+router.post("/router/:id/files/generated/deploy", requireAdmin(), async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const kind = req.body?.kind;
+  const portId = Number(req.body?.portId);
+  if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ error: "A valid router and signed-in ISP account are required." });
+    return;
+  }
+  if (kind !== "pppoe" && kind !== "vlan") {
+    res.status(400).json({ error: "Choose PPPoE or VLAN; these files are separate from Hotspot files." });
+    return;
+  }
+  const found = await getRouterCreds(id, adminId);
+  if (!found) { res.status(404).json({ error: "Router not found for this ISP account." }); return; }
+  try {
+    let content: string;
+    let fileName: string;
+    if (kind === "pppoe") {
+      const bridges = await runRouterCommand(found.creds, ["/interface/bridge/print", "=.proplist=name"]);
+      if (!Array.isArray(bridges) || !bridges.some(row => row.name === "hotspot-bridge")) {
+        res.status(409).json({ error: 'The router does not have "hotspot-bridge"; PPPoE file was not created.' });
+        return;
+      }
+      const tag = `ochola-services-${id}`;
+      content = `# PPPoE-only setup for router ${id}; upload only, not imported or executed.
+:local bridge "hotspot-bridge";
+:local activePool "${tag}-pppoe-pool";
+:local expiredPool "${tag}-pppoe-expired-pool";
+:local pppProfile "${tag}-pppoe-profile";
+:local pppService "${tag}-pppoe";
+:if ([:len [/ip pool find where name=$activePool]] = 0) do={
+  :if (([:len [/ip address find where address~"192.168.99."]] > 0) || ([:len [/ip pool find where ranges~"192.168.99."]] > 0)) do={ :error "192.168.99.0/24 conflicts with an existing address or pool; no PPPoE pools were changed"; }
+}
+:if ([:len [/ip pool find where name=$expiredPool]] = 0) do={
+  :if (([:len [/ip address find where address~"192.168.191."]] > 0) || ([:len [/ip pool find where ranges~"192.168.191."]] > 0)) do={ :error "192.168.191.0/24 conflicts with an existing address or pool; no PPPoE pools were changed"; }
+}
+:if ([:len [/ip pool find where name=$activePool]] = 0) do={ /ip pool add name=$activePool ranges=192.168.99.10-192.168.99.254 comment="${tag} PPPoE pool"; }
+:if ([:len [/ip pool find where name=$expiredPool]] = 0) do={ /ip pool add name=$expiredPool ranges=192.168.191.10-192.168.191.254 comment="${tag} PPPoE expired pool"; }
+:if ([:len [/ppp profile find where name=$pppProfile]] = 0) do={ /ppp profile add name=$pppProfile local-address=192.168.99.1 remote-address=$activePool dns-server=1.1.1.1,8.8.8.8 only-one=yes change-tcp-mss=yes comment="${tag} PPPoE profile"; }
+:if ([:len [/interface pppoe-server server find where service-name=$pppService]] = 0) do={ /interface pppoe-server server add service-name=$pppService interface=$bridge default-profile=$pppProfile one-session-per-host=yes disabled=no; }
+:put "Separate PPPoE setup prepared. Expired pool is not automatically assigned to expired users."
+`;
+      fileName = `pppoe-setup-${id}.rsc`;
+    } else {
+      if (!Number.isSafeInteger(portId) || portId <= 0) { res.status(400).json({ error: "Choose a VLAN assignment for this router." }); return; }
+      const ports = await sbSelectStrict<PortServiceResourceInput & {
+        admin_id: number; handoff_interface: string | null; vlan_ingress_mode: string | null;
+      }>("isp_reseller_ports", `id=eq.${portId}&admin_id=eq.${adminId}&router_id=eq.${id}&handoff_mode=eq.vlan_services&select=id,router_id,interface_name,bridge_name,reseller_id,assigned_reseller_id,vlan_tag,admin_id,handoff_interface,vlan_ingress_mode&limit=1`);
+      const port = ports[0];
+      if (!port?.handoff_interface || !["tagged", "untagged"].includes(port.vlan_ingress_mode ?? "")) {
+        res.status(409).json({ error: "The selected VLAN assignment is incomplete or not assigned to this router." });
+        return;
+      }
+      const resources = generatedVlanNames(port);
+      content = buildVlanHandoffScript({ bridgeName: resources.parentBridge, ingressInterface: port.handoff_interface, vlanName: resources.vlanInterface, vlanTag: Number(port.vlan_tag), ingressMode: port.vlan_ingress_mode as "tagged" | "untagged" });
+      fileName = `${resources.vlanInterface.toLowerCase()}-interface.rsc`;
+    }
+    const token = randomBytes(24).toString("hex");
+    pendingRouterFileSources.set(token, { content: Buffer.from(content, "utf8"), contentType: "text/plain; charset=utf-8", fileName, expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS });
+    try {
+      const result = await deployRouterFile(found.creds, { destinationPath: fileName, sourceUrl: `${managementScriptSourceOrigin(req)}/api/router-file-source/${token}`, overwrite: false, uploadId: token.slice(0, 16) });
+      res.status(201).json({ ok: true, kind, fileName: result.destinationPath, size: result.size, connectedHost: result.connectedHost, executed: false });
+    } finally { pendingRouterFileSources.delete(token); }
+  } catch (error) {
+    if (error instanceof RouterFileExistsError) { res.status(409).json({ error: `${error.message}. No overwrite was attempted.` }); return; }
+    routerErrorResponse(res, error);
   }
 });
 
@@ -2811,11 +2907,8 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     const networkSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${networkFileName}`;
     const vpnSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${vpnFileName}`;
     const serviceSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${serviceFileName}`;
-    const stepCommand = (sourceUrl: string, fileName: string, verified = false): string => `/tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}
-:delay 2s
-/import "${fileName}"
-/file remove "${fileName}"
-`;
+    const stepCommand = (sourceUrl: string, fileName: string, verified = false): string =>
+      buildRouterFileImportCommand({ sourceUrl, fileName, verified });
     res.json({
       routerId: id,
       warning: provisioningWarning || undefined,
@@ -4079,7 +4172,19 @@ router.post("/router/:id/ppp/secrets", async (req, res): Promise<void> => {
   const found = await getRouterCreds(id);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {
-    await addPPPSecret(found.creds, { name, password, profile, service, comment });
+    const selectedService = typeof service === "string" ? service : "any";
+    const selectedProfile = typeof profile === "string" && profile.trim() ? profile.trim() : "default";
+    if (selectedService === "pppoe") {
+      const profiles = await fetchPPPProfiles(found.creds);
+      const pppProfile = profiles.find(row => row.name === selectedProfile);
+      if (!pppProfile?.remoteAddress.trim()) {
+        res.status(400).json({
+          error: `PPP profile "${selectedProfile}" has no remote IP pool. Choose a profile with a configured address pool before creating a PPPoE user.`,
+        });
+        return;
+      }
+    }
+    await addPPPSecret(found.creds, { name, password, profile: selectedProfile, service: selectedService, comment });
     res.json({ ok: true, message: `PPP secret '${name}' created` });
   } catch (err) { routerErrorResponse(res, err); }
 });

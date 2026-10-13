@@ -41,6 +41,11 @@ import {
   planPortServiceBridgeAddition,
   resolvePortServiceBridgeName,
 } from "../lib/port-service-bridge-move.js";
+import {
+  assertPortServiceBridgeIsolated,
+  assertPortServiceDnsEntriesOwned,
+  assertPortServiceHostnamesIsolated,
+} from "../lib/port-service-isolation.js";
 import { getRouterCreds } from "./mikrotik-route.js";
 import { validatePortAccess } from "./reseller-route.js";
 
@@ -753,6 +758,18 @@ async function readPortServiceBridgeMembership(
   });
 }
 
+async function assertPortServiceBridgeIsAvailable(
+  creds: RouterCredentials,
+  bridgeName: string,
+  ownerComment: string,
+): Promise<void> {
+  const bridges = await runRouterCommand(creds, [
+    "/interface/bridge/print",
+    "=.proplist=name,comment",
+  ]);
+  assertPortServiceBridgeIsolated(bridgeName, ownerComment, bridges);
+}
+
 async function executeIdempotentRouterCommand(
   creds: RouterCredentials,
   command: string[],
@@ -781,23 +798,9 @@ async function executeIdempotentRouterCommand(
     );
     if (plan.action === "skip") return;
     if (plan.action === "move") {
-      logger.info({
-        interfaceName,
-        sourceBridge: plan.fromBridgeName,
-        targetBridge: bridgeName,
-      }, "[port-services] moving bridge port after admin confirmation");
-      await runRouterCommand(creds, [
-        "/interface/bridge/port/remove",
-        `=.id=${plan.portId}`,
-      ]);
-      const afterRemoval = await readPortServiceBridgeMembership(creds, interfaceName);
-      if (afterRemoval.length > 0) {
-        const currentPlan = planPortServiceBridgeAddition(interfaceName, bridgeName, afterRemoval);
-        if (currentPlan.action === "skip") return;
-        throw new Error(
-          `RouterOS still reports ${interfaceName} assigned to bridge ${afterRemoval[0].bridgeName}; refusing to add it to ${bridgeName}.`,
-        );
-      }
+      throw new Error(
+        `Interface ${interfaceName} is already in bridge "${plan.fromBridgeName}". To avoid interrupting its current service, use an unused physical port instead; this deployment will not move it.`,
+      );
     }
     await runRouterCommand(creds, command);
     const verifiedMemberships = await readPortServiceBridgeMembership(creds, interfaceName);
@@ -907,6 +910,19 @@ function isPortServiceComment(resources: PortServiceResourceNames, row: RouterRe
   return String(row.comment ?? "").startsWith(`${resources.commentPrefix}_`);
 }
 
+export function matchesPortServiceResourceIdentity(
+  row: RouterResourceRow,
+  nameField: string,
+  expectedName: string,
+  resources: PortServiceResourceNames,
+  expectedInterface?: string,
+): boolean {
+  const comment = String(row.comment ?? "").trim();
+  return row[nameField] === expectedName
+    && (!expectedInterface || row.interface === expectedInterface)
+    && (comment.startsWith(`${resources.commentPrefix}_`) || comment === "");
+}
+
 async function removePortServiceFiles(
   creds: RouterCredentials,
   port: PortServiceRow,
@@ -951,29 +967,30 @@ export async function removePortServiceResources(
   options: { removeHotspotFiles?: boolean } = {},
 ): Promise<boolean> {
   const ownedComment = (row: RouterResourceRow) => isPortServiceComment(resources, row);
-  const exactName = (name: string, requireBridge?: string) => (row: RouterResourceRow) =>
-    row.name === name
-    && (!requireBridge || row.interface === requireBridge)
-    && (ownedComment(row) || !row.comment);
+  const serviceInterface = port.handoff_mode === "vlan_services"
+    ? port.interface_name
+    : resources.bridgeName;
+  const exactName = (name: string, requireInterface?: string) => (row: RouterResourceRow) =>
+    matchesPortServiceResourceIdentity(row, "name", name, resources, requireInterface);
 
   /* Remove dependants before profiles, pools, and the bridge they reference. */
   await removeRouterResourceRows(
     creds,
     "/interface/pppoe-server/server/print",
     ".id,service-name,interface,comment",
-    row => row["service-name"] === resources.pppoeService && ownedComment(row),
+    row => matchesPortServiceResourceIdentity(row, "service-name", resources.pppoeService, resources, serviceInterface),
   );
   await removeRouterResourceRows(
     creds,
     "/ip/hotspot/print",
     ".id,name,interface,comment",
-    row => row.name === resources.hotspotServer && ownedComment(row),
+    row => matchesPortServiceResourceIdentity(row, "name", resources.hotspotServer, resources, serviceInterface),
   );
   await removeRouterResourceRows(
     creds,
     "/ip/dhcp-server/print",
     ".id,name,interface,comment",
-    exactName(resources.hotspotDhcp, resources.bridgeName),
+    exactName(resources.hotspotDhcp, serviceInterface),
   );
   await removeRouterResourceRows(
     creds,
@@ -1009,7 +1026,8 @@ export async function removePortServiceResources(
     creds,
     "/ip/hotspot/profile/print",
     ".id,name,comment",
-    row => [resources.hotspotProfile, resources.pppoeProfile].includes(row.name) && ownedComment(row),
+    row => [resources.hotspotProfile, resources.pppoeProfile]
+      .some((name) => matchesPortServiceResourceIdentity(row, "name", name, resources)),
   );
   await removeRouterResourceRows(
     creds,
@@ -1142,6 +1160,22 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
     );
     if (!routerRows[0]) {
       res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+      return;
+    }
+    const routerAccess = await getRouterCreds(routerId, tenantId);
+    if (!routerAccess) {
+      res.status(502).json({ ok: false, error: "Router credentials are unavailable; no port assignment was saved." });
+      return;
+    }
+    const liveBridgeMemberships = await readPortServiceBridgeMembership(routerAccess.creds, interfaceName);
+    if (liveBridgeMemberships.length > 0) {
+      res.status(409).json({
+        ok: false,
+        code: "PORT_ALREADY_IN_BRIDGE",
+        error: `Interface ${interfaceName} already belongs to bridge "${liveBridgeMemberships[0].bridgeName}". Choose an unused physical port to avoid interrupting the existing network. No assignment was saved.`,
+        interfaceName,
+        sourceBridgeName: liveBridgeMemberships[0].bridgeName,
+      });
       return;
     }
     const conflicts = await sbSelectStrict<{ id: number }>(
@@ -1652,6 +1686,24 @@ async function executePortServiceDeployment(
     hotspot_dns_name: port.hotspot_dns_name ?? (port.hotspot_enabled ? sharedDnsName : null),
     pppoe_dns_name: port.pppoe_dns_name ?? (port.pppoe_enabled ? sharedDnsName : null),
   };
+  const protectedPortalHostnames = [
+    customPortalHostname,
+    new URL(sourceOrigin).hostname,
+  ];
+  const serviceDnsNames = [
+    deploymentPort.hotspot_enabled ? deploymentPort.hotspot_dns_name : null,
+    deploymentPort.pppoe_enabled ? deploymentPort.pppoe_dns_name : null,
+  ];
+  assertPortServiceHostnamesIsolated(serviceDnsNames, protectedPortalHostnames);
+  const existingDnsEntries = await runRouterCommand(found.creds, [
+    "/ip/dns/static/print",
+    "=.proplist=.id,name,comment",
+  ]);
+  assertPortServiceDnsEntriesOwned(
+    serviceDnsNames,
+    [`${resources.commentPrefix}_hotspot_dns`, `${resources.commentPrefix}_pppoe_dns`],
+    existingDnsEntries,
+  );
   const assetPathsNeedNormalization = (
     (port.hotspot_enabled && (
       hotspotSource !== (port.hotspot_folder_path ?? port.hotspot_template_path)
@@ -1840,22 +1892,37 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       const identity = await resourceIdentityForPort(port);
       const resources = portServiceResourceNames(port, identity);
       const targetBridgeName = resources.bridgeName;
+      await assertPortServiceBridgeIsAvailable(
+        found.creds,
+        targetBridgeName,
+        `${resources.commentPrefix}_bridge`,
+      );
       const memberships = await readPortServiceBridgeMembership(found.creds, port.interface_name);
       try {
-        planPortServiceBridgeAddition(
+        const bridgePlan = planPortServiceBridgeAddition(
           port.interface_name,
           targetBridgeName,
           memberships,
           confirmedMoveFromBridge,
         );
+        if (bridgePlan.action === "move") {
+          res.status(409).json({
+            ok: false,
+            code: "PORT_ALREADY_IN_BRIDGE",
+            error: `Interface ${port.interface_name} is already in bridge "${bridgePlan.fromBridgeName}". To avoid interrupting its current service, choose an unused physical port. No bridge membership was changed.`,
+            interfaceName: port.interface_name,
+            sourceBridgeName: bridgePlan.fromBridgeName,
+            targetBridgeName,
+          });
+          return;
+        }
       } catch (error) {
         if (error instanceof BridgeMoveConfirmationRequiredError) {
           res.status(409).json({
             ok: false,
-            code: error.code,
-            error: error.message,
+            code: "PORT_ALREADY_IN_BRIDGE",
+            error: `Interface ${error.interfaceName} is already in bridge "${error.sourceBridgeName}". To avoid interrupting its current service, choose an unused physical port. No bridge membership was changed.`,
             interfaceName: error.interfaceName,
-            sourceBridgeReference: error.sourceBridgeReference,
             sourceBridgeName: error.sourceBridgeName,
             targetBridgeName: error.targetBridgeName,
           });

@@ -1331,6 +1331,25 @@ export async function processMpesaCallback(
     );
     return false;
   }
+  let isNewHotspotCheckout = false;
+  if (
+    isSuccessful
+    && transaction.payment_method === "mpesa"
+    && transaction.admin_id
+    && transaction.plan_id
+    && !transaction.customer_id
+    && normaliseMacAddress(transaction.mac_address)
+  ) {
+    try {
+      const plans = await sbSelectStrict<{ type: string }>(
+        "isp_plans",
+        `id=eq.${transaction.plan_id}&admin_id=eq.${transaction.admin_id}&select=type&limit=1`,
+      );
+      isNewHotspotCheckout = normalizePlanServiceType(plans[0]?.type) === "hotspot";
+    } catch (error) {
+      logger.warn({ err: error, checkoutId, transactionId: transaction.id }, "[mpesa/callback] could not classify paid plan for background activation");
+    }
+  }
   let settlements: SettlementResult[];
   try {
     settlements = await dependencies.settle({
@@ -1339,6 +1358,8 @@ export async function processMpesaCallback(
       p_note: isSuccessful
         ? routerPendingFailure
           ? `M-Pesa payment verified by Daraja; RouterOS activation pending. ${routerPendingFailure}`
+          : isNewHotspotCheckout
+            ? "Hotspot payment verified; automatic account activation is pending."
           : "M-Pesa payment verified by Daraja."
         : `Daraja ResultCode ${verification.resultCode}: ${verification.resultDesc || String(ResultDesc ?? "Payment failed")}`,
     });
@@ -1420,6 +1441,12 @@ export async function processMpesaCallback(
     }
   } else if (isSuccessful) {
     logger.info({ customerId: settlement.credited_customer_id, checkoutId, amount: settlement.amount }, "[mpesa/callback] Payment settled atomically");
+    // The browser is not responsible for beginning account creation. The
+    // background sweep reads the confirmed transaction directly so leaving
+    // the portal after payment cannot strand a paid Hotspot checkout.
+    if (process.env.NODE_ENV === "production" && settlement.payment_method === "mpesa") {
+      void runAutomaticHotspotActivationSweep();
+    }
   }
   return true;
 }
@@ -3152,7 +3179,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
   });
 
   if (transaction.payment_method === "mpesa") {
-    void sbRpc("award_hotspot_loyalty_points_fractional", { p_transaction_id: transaction.id })
+    void sbRpc("award_hotspot_loyalty_device_points", { p_transaction_id: transaction.id })
       .catch(error => {
         logger.warn(
           { err: error, transactionId: transaction.id, customerId: customer.id },
@@ -3476,6 +3503,152 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
 }
 
 router.post("/mpesa/hotspot-mac-access", handleHotspotMacAccess);
+
+let automaticHotspotActivationBusy = false;
+const AUTOMATIC_HOTSPOT_ACTIVATION_BATCH = 5;
+
+async function runAutomaticHotspotActivationSweep(): Promise<void> {
+  if (automaticHotspotActivationBusy || !supabaseServiceRoleConfigured) return;
+  automaticHotspotActivationBusy = true;
+  try {
+    const unlinked = await sbSelectStrict<{
+      id: number;
+      admin_id: number;
+      plan_id: number;
+      reference: string | null;
+      mac_address: string | null;
+    }>(
+      "isp_transactions",
+      `status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&customer_id=is.null&plan_id=not.is.null&mac_address=not.is.null&notes=ilike.*automatic%20account%20activation%20is%20pending*&select=id,admin_id,plan_id,reference,mac_address&order=created_at.asc,id.asc&limit=${AUTOMATIC_HOTSPOT_ACTIVATION_BATCH}`,
+    );
+
+    const routerPending = await sbSelectStrict<{
+      id: number;
+      admin_id: number;
+      plan_id: number;
+      reference: string | null;
+      mac_address: string | null;
+      notes: string | null;
+    }>(
+      "isp_transactions",
+      `status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&customer_id=not.is.null&plan_id=not.is.null&mac_address=not.is.null&notes=ilike.*RouterOS%20account%20activation%20is%20pending*&select=id,admin_id,plan_id,reference,mac_address,notes&order=created_at.asc,id.asc&limit=${AUTOMATIC_HOTSPOT_ACTIVATION_BATCH}`,
+    );
+
+    const work: Array<{
+      transactionId: number;
+      adminId: number;
+      checkoutId: string;
+      macAddress: string;
+      retry: boolean;
+    }> = [];
+    const verifiedHotspotPlans = new Set<string>();
+    const isHotspotPlan = async (adminId: number, planId: number): Promise<boolean> => {
+      const key = `${adminId}:${planId}`;
+      if (verifiedHotspotPlans.has(key)) return true;
+      const plans = await sbSelectStrict<{ type: string }>(
+        "isp_plans",
+        `id=eq.${planId}&admin_id=eq.${adminId}&select=type&limit=1`,
+      );
+      const valid = normalizePlanServiceType(plans[0]?.type) === "hotspot";
+      if (valid) verifiedHotspotPlans.add(key);
+      return valid;
+    };
+    for (const transaction of unlinked) {
+      if (
+        transaction.admin_id > 0
+        && transaction.reference
+        && transaction.mac_address
+        && await isHotspotPlan(transaction.admin_id, transaction.plan_id)
+      ) {
+        work.push({
+          transactionId: transaction.id,
+          adminId: transaction.admin_id,
+          checkoutId: transaction.reference,
+          macAddress: transaction.mac_address,
+          retry: false,
+        });
+      }
+    }
+    for (const transaction of routerPending) {
+      if (work.length >= AUTOMATIC_HOTSPOT_ACTIVATION_BATCH || transaction.admin_id < 1) break;
+      if (
+        !transaction.reference
+        || !transaction.mac_address
+        || !transaction.notes?.includes("RouterOS account activation is pending")
+        || !await isHotspotPlan(transaction.admin_id, transaction.plan_id)
+      ) continue;
+      work.push({
+        transactionId: transaction.id,
+        adminId: transaction.admin_id,
+        checkoutId: transaction.reference,
+        macAddress: transaction.mac_address,
+        retry: true,
+      });
+    }
+
+    const seen = new Set<number>();
+    for (const item of work.slice(0, AUTOMATIC_HOTSPOT_ACTIVATION_BATCH)) {
+      if (seen.has(item.transactionId) || !/^[A-Za-z0-9_-]{8,128}$/.test(item.checkoutId)) continue;
+      seen.add(item.transactionId);
+      let statusCode = 200;
+      let responseBody: unknown;
+      const request = {
+        body: {
+          adminId: item.adminId,
+          checkout_id: item.checkoutId,
+          recovery_transaction_id: item.transactionId,
+          mac_address: item.macAddress,
+          ...(item.retry ? { retry: true } : {}),
+        },
+      } as unknown as Request;
+      const response = {
+        get statusCode() {
+          return statusCode;
+        },
+        status(code: number) {
+          statusCode = code;
+          return this;
+        },
+        json(body: unknown) {
+          responseBody = body;
+          return this;
+        },
+        once() {
+          return this;
+        },
+      } as unknown as Response;
+      try {
+        await handleHotspotMacAccess(request, response);
+        const succeeded = statusCode >= 200 && statusCode < 300
+          && !!responseBody && typeof responseBody === "object"
+          && (responseBody as { ok?: unknown }).ok === true;
+        if (!succeeded) {
+          const message = responseBody && typeof responseBody === "object"
+            ? (responseBody as { error?: unknown }).error
+            : undefined;
+          logger.warn({
+            transactionId: item.transactionId,
+            statusCode,
+            ...(typeof message === "string" ? { error: message } : {}),
+          }, "[mpesa/hotspot-auto-activation] paid account setup remains pending");
+        }
+      } catch (error) {
+        logger.warn({ err: error, transactionId: item.transactionId }, "[mpesa/hotspot-auto-activation] sweep item failed");
+      }
+    }
+  } catch (error) {
+    logger.warn({ err: error }, "[mpesa/hotspot-auto-activation] sweep failed");
+  } finally {
+    automaticHotspotActivationBusy = false;
+  }
+}
+
+if (process.env.NODE_ENV === "production") {
+  setTimeout(() => {
+    void runAutomaticHotspotActivationSweep();
+    setInterval(() => void runAutomaticHotspotActivationSweep(), 60_000).unref();
+  }, 20_000).unref();
+}
 
 interface HotspotRecoveryAdminScope {
   tenantAdminId: number;

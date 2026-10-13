@@ -18,7 +18,7 @@ import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
 
 type Mode = "shared" | "multiport";
 type RouterOption = { id: number; name: string; status?: string; model?: string | null };
-type PortOption = { name: string; type: string; running: boolean; assigned?: boolean };
+type PortOption = { name: string; type: string; running: boolean; assigned?: boolean; bridgeName?: string | null };
 type PortAssignment = {
   id: number;
   router_id: number;
@@ -330,56 +330,29 @@ export default function Multiport() {
   }, [assignments, portOptions, selectedPortKey, selectedRouter]);
 
   const allPortChoices = useMemo(() => [
-    ...assignments.map((port) => ({ key: `assigned:${port.id}`, label: `${port.interface_name} · assigned`, assigned: true })),
+    ...assignments.map((port) => ({ key: `assigned:${port.id}`, label: `${port.interface_name} · assigned`, assigned: true, unavailable: false })),
     ...portOptions
       .filter((option) => !assignments.some((port) => port.interface_name === option.name))
-      .map((option) => ({ key: `new:${option.name}`, label: `${option.name} · ${option.type}${option.running ? " · running" : ""}`, assigned: false })),
+      .map((option) => ({
+        key: `new:${option.name}`,
+        label: `${option.name} · ${option.type}${option.running ? " · running" : ""}${option.bridgeName ? ` · already in ${option.bridgeName} (unavailable)` : ""}`,
+        assigned: false,
+        unavailable: Boolean(option.bridgeName),
+      })),
   ], [assignments, portOptions]);
 
   const setDraftValue = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
   };
 
-  const deployPortWithMoveConfirmation = async (
+  const deployPortSafely = async (
     portId: number,
     portalFileReplacementConsent: boolean,
   ) => {
-    let confirmedSourceBridgeReference: string | undefined;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        return await apiJson(`/api/admin/port-services/${portId}/deploy`, {
-          method: "POST",
-          body: JSON.stringify({
-            portalFileReplacementConsent,
-            ...(confirmedSourceBridgeReference
-              ? { confirmMoveFromBridge: confirmedSourceBridgeReference }
-              : {}),
-          }),
-        });
-      } catch (cause) {
-        if (
-          !(cause instanceof ApiResponseError)
-          || cause.body.code !== "BRIDGE_MOVE_CONFIRMATION_REQUIRED"
-        ) {
-          throw cause;
-        }
-        const interfaceName = String(cause.body.interfaceName ?? "interface");
-        const sourceBridgeName = String(cause.body.sourceBridgeName ?? "");
-        const sourceBridgeReference = String(cause.body.sourceBridgeReference ?? "");
-        const targetBridgeName = String(cause.body.targetBridgeName ?? "");
-        if (!sourceBridgeName || !sourceBridgeReference || !targetBridgeName) {
-          throw new Error("RouterOS returned incomplete bridge details. Refresh the port list and retry.");
-        }
-        if (!window.confirm(
-          `Move ${interfaceName} from bridge "${sourceBridgeName}" to "${targetBridgeName}"? ` +
-          "This removes the port from its current bridge and may interrupt traffic or services using that bridge.",
-        )) {
-          throw new Error("Deployment cancelled. No bridge membership was changed.");
-        }
-        confirmedSourceBridgeReference = sourceBridgeReference;
-      }
-    }
-    throw new Error("The bridge membership kept changing. Refresh the port list and retry deployment.");
+    return apiJson(`/api/admin/port-services/${portId}/deploy`, {
+      method: "POST",
+      body: JSON.stringify({ portalFileReplacementConsent }),
+    });
   };
 
   const save = async (event: React.FormEvent) => {
@@ -421,7 +394,7 @@ export default function Multiport() {
       let deploymentError = "";
       if (savedPortId && (draft.hotspotEnabled || draft.pppoeEnabled)) {
         try {
-          await deployPortWithMoveConfirmation(savedPortId, allowHotspotReplace);
+          await deployPortSafely(savedPortId, allowHotspotReplace);
         } catch (cause) {
           deploymentError = cause instanceof Error ? cause.message : "Router deployment failed.";
         }
@@ -463,7 +436,7 @@ export default function Multiport() {
       );
     setDeploying(true);
     try {
-      await deployPortWithMoveConfirmation(selectedAssignment.id, allowHotspotReplace);
+      await deployPortSafely(selectedAssignment.id, allowHotspotReplace);
       setSuccess(
         `${selectedAssignment.interface_name} was deployed to the router.${
           selectedAssignment.hotspot_enabled
@@ -571,10 +544,10 @@ export default function Multiport() {
                   {routers.map((router) => <option key={router.id} value={router.id}>{router.name}{router.status ? ` · ${router.status}` : ""}</option>)}
                 </select>
               </Field>
-              <Field label={portsLoading ? "Physical port (loading…)" : "Physical port"} hint="Assigned ports are editable; unassigned ports are available for a new isolated service.">
+              <Field label={portsLoading ? "Physical port (loading…)" : "Physical port"} hint="Any unused physical port can be selected. Ports already in a bridge are blocked to avoid disrupting its current network.">
                 <select style={input} value={selectedPortKey} onChange={(event) => setSelectedPortKey(event.target.value)} disabled={portsLoading || !routerId}>
                   <option value="">Choose a physical port</option>
-                  {allPortChoices.map((choice) => <option key={choice.key} value={choice.key}>{choice.label}</option>)}
+                  {allPortChoices.map((choice) => <option key={choice.key} value={choice.key} disabled={choice.unavailable}>{choice.label}</option>)}
                 </select>
               </Field>
               <button type="button" onClick={() => void loadPorts(routerId)} disabled={portsLoading || !routerId} style={{ minHeight: 40, border: "1px solid var(--isp-border)", borderRadius: 8, background: "transparent", color: "var(--isp-text)", cursor: "pointer", padding: "0 13px", display: "inline-flex", alignItems: "center", gap: 7 }}>
@@ -599,9 +572,9 @@ export default function Multiport() {
                   <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
                   <div>
                     <strong>Last deployment error:</strong> {selectedAssignment.provisioning_error}
-                    {selectedAssignment.provisioning_error.toLowerCase().includes("foreign bridge") ? (
+                    {selectedAssignment.provisioning_error.toLowerCase().includes("already in bridge") ? (
                       <div style={{ marginTop: 5 }}>
-                        The app can move the port after an ISP admin confirms the source bridge. The move may interrupt traffic or services using that bridge.
+                        The app will not move a live port between bridges. Select an unused physical port for a separate service.
                       </div>
                     ) : null}
                   </div>

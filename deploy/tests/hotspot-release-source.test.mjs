@@ -49,6 +49,8 @@ test("deployments register both loyalty and voucher entitlement migrations", () 
     "2026_hotspot_voucher_account_activation.sql",
     "2026_hotspot_voucher_data_entitlements.sql",
     "2026_hotspot_loyalty_points.sql",
+    "2026_hotspot_fractional_loyalty_points.sql",
+    "2026_hotspot_mac_loyalty_wallets.sql",
     "2026_radacct_standard_accounting_columns.sql",
   ]) {
     assert.ok(runner.includes(`../migrations/${name}`), `Migration not registered: ${name}`);
@@ -110,7 +112,9 @@ test("loyalty remains reachable in the API, admin UI, and customer checkout", ()
   assert.ok(checkout.includes("/api/hotspot/loyalty/quote"));
   assert.ok(checkout.includes("/api/hotspot/loyalty/redeem"));
   const payments = api("src/routes/mpesa-route.ts");
-  assert.ok(payments.includes('sbRpc("award_hotspot_loyalty_points_fractional"'));
+  assert.ok(payments.includes('sbRpc("award_hotspot_loyalty_device_points"'));
+  const loyaltyRoute = api("src/routes/hotspot-loyalty-route.ts");
+  assert.ok(loyaltyRoute.includes("redeem_hotspot_loyalty_device_points"));
   assert.ok(payments.includes("payment_method=in.(mpesa,loyalty_points)"));
 });
 

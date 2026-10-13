@@ -31,7 +31,7 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
       : table === "isp_routers" ? [{ id: 31 }]
       : table === "isp_reseller_router_ports" ? [{ assigned_reseller_id: 19 }]
       : table === "isp_customers" ? customer ? [customer] : []
-      : table === "isp_loyalty_accounts" ? [{ points_balance: balance, fractional_balance: fraction }]
+      : table === "isp_loyalty_device_accounts" ? [{ points_balance: balance, fractional_balance: fraction }]
       : table === "isp_loyalty_settings" ? [{ kes_per_point: 10 }]
       : table === "isp_loyalty_plan_rules" ? redemptionRule === undefined
         ? [] : [{ plan_id: 41, redemption_points: redemptionRule, points_awarded: null }]
@@ -70,6 +70,8 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
       const result = await request("balance", { mac_address: "aa-bb-cc-dd-ee-ff" });
       assert.equal(result.status, 200);
       assert.deepEqual(result.body, { ok: true, balance: 5.5, hasAccount: true });
+      assert.ok(reads.some(row => row.table === "isp_loyalty_device_accounts"
+        && row.query.includes("device_mac=eq.AA%3ABB%3ACC%3ADD%3AEE%3AFF")));
       assert.ok(reads.some(row => row.table === "isp_customers" && row.query.includes("router_id=eq.31")
         && row.query.includes("admin_id=in.(7)") && row.query.includes("port_id=is.null")
         && row.query.includes("order=created_at.desc.nullslast,id.desc&limit=1")));
@@ -169,7 +171,7 @@ test("device loyalty reads and redemption stay tied to the newest scoped MAC acc
       assert.equal(result.body.balance, 5);
       assert.ok(reads.some(row => row.table === "isp_customers"
         && row.query.includes("admin_id=in.(7,19)") && row.query.includes("port_id=eq.43")));
-      assert.ok(reads.some(row => row.table === "isp_loyalty_accounts" && row.query.includes("admin_id=eq.7")));
+        assert.ok(reads.some(row => row.table === "isp_loyalty_device_accounts" && row.query.includes("admin_id=eq.7")));
       assert.equal((await request("balance", { port_id: 44 }, true)).status, 404);
       customer = saved;
     });

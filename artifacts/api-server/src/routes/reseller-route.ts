@@ -37,6 +37,7 @@ import { logger } from "../lib/logger.js";
 import { planOwnerFilter } from "../lib/plan-ownership.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 import { routerResourceSetFields } from "../lib/routeros-resource-reconciliation.js";
+import { assertPortServiceBridgeIsolated } from "../lib/port-service-isolation.js";
 import {
   changeVlanIngressMode,
   mergeVlanIngressMembership,
@@ -318,6 +319,11 @@ function validInterface(value: unknown): value is string {
   return typeof value === "string"
     && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(value.trim())
     && value.trim().length <= 64;
+}
+
+function physicalPortInterface(value: unknown): value is string {
+  return typeof value === "string"
+    && /^(ether|sfp|combo|wlan|lte)[a-zA-Z0-9._-]*$/i.test(value.trim());
 }
 
 function normalizedHandoffInterface(value: unknown): string | null {
@@ -3372,7 +3378,7 @@ router.get("/admin/resellers/port-options", requireAdmin(), async (req, res): Pr
       return;
     }
     const target = await tenantRouter(account.id, routerId);
-    const [interfaces, assignments] = await Promise.all([
+    const [interfaces, assignments, bridgePorts, bridges] = await Promise.all([
       runRouterCommand(routerCredentials(target), [
         "/interface/print",
         "=.proplist=name,type,running,disabled,mac-address,comment",
@@ -3381,8 +3387,26 @@ router.get("/admin/resellers/port-options", requireAdmin(), async (req, res): Pr
         "isp_reseller_ports",
         `admin_id=eq.${account.id}&router_id=eq.${routerId}&select=interface_name,status`,
       ),
+      runRouterCommand(routerCredentials(target), [
+        "/interface/bridge/port/print",
+        "=.proplist=interface,bridge",
+      ]),
+      runRouterCommand(routerCredentials(target), [
+        "/interface/bridge/print",
+        "=.proplist=.id,name",
+      ]),
     ]);
     const assigned = new Set(assignments.filter((row) => row.status !== "disabled").map((row) => row.interface_name));
+    const bridgeNames = new Map<string, string>();
+    for (const bridge of bridges) {
+      if (!bridge.name) continue;
+      bridgeNames.set(bridge.name, bridge.name);
+      if (bridge[".id"]) bridgeNames.set(bridge[".id"], bridge.name);
+    }
+    const bridgeByInterface = new Map(bridgePorts.map((row) => [
+      row.interface,
+      bridgeNames.get(row.bridge) ?? row.bridge ?? "another bridge",
+    ]));
     res.json({
       ok: true,
       router: { id: target.id, name: target.name },
@@ -3395,8 +3419,13 @@ router.get("/admin/resellers/port-options", requireAdmin(), async (req, res): Pr
           macAddress: row["mac-address"] || "",
           comment: row.comment || "",
           assigned: assigned.has(row.name),
+          bridgeName: bridgeByInterface.get(row.name) ?? null,
         }))
-         .filter((row) => validInterface(row.name) && !row.disabled && (handoffType === "vlan" || !assigned.has(row.name))),
+        .filter((row) => (
+          (handoffType === "vlan" ? validInterface(row.name) : physicalPortInterface(row.name))
+          && !row.disabled
+          && (handoffType === "vlan" || !assigned.has(row.name))
+        )),
     });
   } catch (error) {
     res.status(502).json({ ok: false, error: error instanceof Error ? error.message : "Unable to load router ports." });
@@ -3535,9 +3564,14 @@ router.post("/admin/resellers", requireAdmin(), async (req, res): Promise<void> 
     const creds = routerCredentials(target);
     const bridgeRows = await runRouterCommand(creds, [
       "/interface/bridge/print",
-      "=.proplist=name",
+      "=.proplist=name,comment",
       `?name=${serviceBridgeName}`,
     ]);
+    assertPortServiceBridgeIsolated(
+      serviceBridgeName,
+      `OcholaSupernet_${servicePortName}_service_bridge`,
+      bridgeRows,
+    );
     if (!bridgeRows.some((row) => row.name === serviceBridgeName)) {
       await runRouterCommand(creds, [
         "/interface/bridge/add",

@@ -83,6 +83,8 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /SCRIPT 4 optional bandwidth tree starting/);
   assert.match(script, /no aggregate queue speed was supplied; existing bandwidth policy was preserved/);
   assert.match(script, /interface pppoe-server server add/);
+  assert.match(script, /name="ochola-services-104-pppoe-expired-pool" ranges="192\.168\.191\.10-192\.168\.191\.254"/);
+  assert.match(script, /192\.168\.191\.0\/24 is already used by another address or IP pool/);
   assert.match(script, /192\.168\.180\.10-192\.168\.183\.254/);
   assert.match(script, /interface list member add list="LAN" interface="co-hotspot-bridge-104"/);
   assert.match(script, /chain=forward action=accept in-interface="co-hotspot-bridge-104" out-interface-list=WAN hotspot=auth/);

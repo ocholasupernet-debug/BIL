@@ -43,6 +43,12 @@ interface RouterFilesPayload {
   fetchedAt?: string;
 }
 
+interface VlanFileOption {
+  id: number;
+  label: string;
+  ready: boolean;
+}
+
 const panel: React.CSSProperties = {
   background: "var(--isp-section)",
   border: "1px solid var(--isp-border)",
@@ -131,6 +137,11 @@ export default function Files() {
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [deployingHotspot, setDeployingHotspot] = useState(false);
   const [deploymentSummary, setDeploymentSummary] = useState<HotspotFileDeploymentResult | null>(null);
+  const [vlanOptions, setVlanOptions] = useState<VlanFileOption[]>([]);
+  const [vlanOptionsError, setVlanOptionsError] = useState("");
+  const [selectedVlanPort, setSelectedVlanPort] = useState<number | null>(null);
+  const [pushingGenerated, setPushingGenerated] = useState<"pppoe" | "vlan" | null>(null);
+  const [generatedPushMessage, setGeneratedPushMessage] = useState("");
 
   const loadRouters = useCallback(async () => {
     setLoadingRouters(true);
@@ -176,6 +187,26 @@ export default function Files() {
   useEffect(() => {
     if (selectedRouterId) void loadFiles(selectedRouterId);
   }, [loadFiles, selectedRouterId]);
+
+  useEffect(() => {
+    let active = true;
+    setVlanOptions([]);
+    setVlanOptionsError("");
+    setSelectedVlanPort(null);
+    if (!selectedRouterId) return;
+    void readJson<VlanFileOption[]>(`/api/router/${selectedRouterId}/files/vlan-options?adminId=${ADMIN_ID}`)
+      .then(options => {
+        if (!active) return;
+        setVlanOptions(options);
+        setSelectedVlanPort(options.find(option => option.ready)?.id ?? null);
+      })
+      .catch(cause => {
+        if (!active) return;
+        setVlanOptions([]);
+        setVlanOptionsError(cause instanceof Error ? cause.message : "VLAN assignments could not be loaded.");
+      });
+    return () => { active = false; };
+  }, [selectedRouterId]);
 
   const visibleFiles = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -226,6 +257,38 @@ export default function Files() {
       setError(cause instanceof Error ? cause.message : "Hotspot files could not be deployed.");
     } finally {
       setDeployingHotspot(false);
+    }
+  };
+
+  const pushGeneratedFile = async (kind: "pppoe" | "vlan") => {
+    if (!selectedRouterId || pushingGenerated) return;
+    if (kind === "vlan" && !selectedVlanPort) {
+      setError("Choose a ready VLAN assignment for this router first.");
+      return;
+    }
+    const kindLabel = kind === "pppoe" ? "PPPoE-only setup" : "selected VLAN handoff";
+    if (!window.confirm(`Upload the generated ${kindLabel} file to ${selectedRouter?.name || "this router"}? The file will not be imported or run.`)) return;
+    setPushingGenerated(kind);
+    setError("");
+    setGeneratedPushMessage("");
+    try {
+      const token = getAdminApiToken();
+      const response = await fetch(`/api/router/${selectedRouterId}/files/generated/deploy`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ adminId: ADMIN_ID, kind, ...(kind === "vlan" ? { portId: selectedVlanPort } : {}) }),
+      });
+      const result = await response.json().catch(() => ({})) as { error?: string; fileName?: string; connectedHost?: string };
+      if (!response.ok) throw new Error(result.error || `File push failed (${response.status}).`);
+      setGeneratedPushMessage(`${result.fileName} uploaded to ${result.connectedHost || selectedRouter?.name || "router"}. It was not imported or run.`);
+      await loadFiles(selectedRouterId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Generated setup file could not be pushed.");
+    } finally {
+      setPushingGenerated(null);
     }
   };
 
@@ -282,6 +345,34 @@ export default function Files() {
             {loadingRouters ? <Loader2 size={15} style={{ animation: "self-install-spin 1s linear infinite" }} /> : <Server size={15} />}
             Refresh routers
           </button>
+        </section>
+
+        <section style={{ ...panel, padding: "1rem", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: "0.85rem" }}>
+          <div style={{ border: "1px solid var(--isp-border)", borderRadius: 10, padding: "0.85rem" }}>
+            <div style={{ color: "var(--isp-text)", fontSize: "0.82rem", fontWeight: 800 }}>PPPoE files</div>
+            <p style={{ ...mutedText, margin: "0.3rem 0 0.65rem" }}>Generate a PPPoE-only setup file with separate active and expired pools. Hotspot files and commands are not included.</p>
+            <button type="button" onClick={() => void pushGeneratedFile("pppoe")} disabled={!selectedRouterId || pushingGenerated !== null} style={{ ...buttonStyle, background: "var(--isp-accent)", color: "#fff", borderColor: "var(--isp-accent)", opacity: !selectedRouterId || pushingGenerated ? 0.6 : 1 }}>
+              {pushingGenerated === "pppoe" ? <Loader2 size={14} /> : <HardDrive size={14} />}
+              {pushingGenerated === "pppoe" ? "Uploading PPPoE file…" : "Generate & push PPPoE file"}
+            </button>
+          </div>
+          <div style={{ border: "1px solid var(--isp-border)", borderRadius: 10, padding: "0.85rem" }}>
+            <div style={{ color: "var(--isp-text)", fontSize: "0.82rem", fontWeight: 800 }}>VLAN files</div>
+            <p style={{ ...mutedText, margin: "0.3rem 0 0.65rem" }}>Choose a VLAN handoff assigned to this router. The generated file changes only that VLAN ingress when manually imported.</p>
+            {vlanOptionsError && <p role="alert" style={{ color: "#fca5a5", fontSize: "0.75rem", margin: "0 0 0.5rem" }}>{vlanOptionsError}</p>}
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <select value={selectedVlanPort ?? ""} onChange={event => setSelectedVlanPort(Number(event.target.value) || null)} disabled={!vlanOptions.length || pushingGenerated !== null} style={{ ...buttonStyle, flex: "1 1 170px", justifyContent: "space-between" }}>
+                {!vlanOptions.length && <option value="">{vlanOptionsError ? "Could not load VLAN assignments" : "No VLAN assignments"}</option>}
+                {vlanOptions.map(option => <option key={option.id} value={option.id} disabled={!option.ready}>{option.label}{option.ready ? "" : " · needs setup"}</option>)}
+              </select>
+              <button type="button" onClick={() => void pushGeneratedFile("vlan")} disabled={!selectedRouterId || !selectedVlanPort || pushingGenerated !== null} style={{ ...buttonStyle, background: "var(--isp-accent)", color: "#fff", borderColor: "var(--isp-accent)", opacity: !selectedRouterId || !selectedVlanPort || pushingGenerated ? 0.6 : 1 }}>
+                {pushingGenerated === "vlan" ? <Loader2 size={14} /> : <HardDrive size={14} />}
+                {pushingGenerated === "vlan" ? "Uploading VLAN file…" : "Generate & push VLAN file"}
+              </button>
+            </div>
+          </div>
+          <div style={{ gridColumn: "1 / -1", ...mutedText }}>PPPoE and VLAN pushes upload separate `.rsc` files only. They never import or execute them. Existing files are not overwritten; remove or rename a conflicting file before retrying.</div>
+          {generatedPushMessage && <div style={{ gridColumn: "1 / -1", color: "#86efac", fontSize: "0.78rem" }}>{generatedPushMessage}</div>}
         </section>
 
         <section style={{ ...panel, padding: "0.85rem 1rem", borderColor: "rgba(96,165,250,0.3)", background: "rgba(96,165,250,0.05)" }}>

@@ -7,6 +7,25 @@ export interface SelfInstallStepCommandOptions {
   verified?: boolean;
 }
 
+export interface RouterFileImportCommandOptions {
+  sourceUrl: string;
+  fileName: string;
+  verified?: boolean;
+}
+
+/**
+ * Keep fetch, import, and cleanup inside one RouterOS command block. Pasting
+ * separate top-level commands into some RouterOS terminals can execute fetch
+ * while dropping the following import line.
+ */
+export function buildRouterFileImportCommand({
+  sourceUrl,
+  fileName,
+  verified = false,
+}: RouterFileImportCommandOptions): string {
+  return `:do { /tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}; :delay 2s; :put "[OCHOLA] Download finished; importing ${fileName}"; /import "${fileName}"; /file remove [find where name="${fileName}"]; :put "[OCHOLA] Imported ${fileName} successfully." } on-error={ :put ("[OCHOLA] Import step failed: " . $error) }`;
+}
+
 const STEP_DESCRIPTORS = [
   { id: "network", order: 1, label: "network engine" },
   { id: "vpn", order: 2, label: "management VPN/API" },

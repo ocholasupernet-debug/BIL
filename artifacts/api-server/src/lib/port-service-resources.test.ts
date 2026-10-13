@@ -6,6 +6,8 @@ import {
   mergeVlanIngressMembership,
   planVlanIngressModeChange,
   planServicePoolName,
+  managedPppoeProfileName,
+  managedPppoePlanAddresses,
   portServiceResourceNames,
   VlanIngressConflictError,
   withVlanIngressModeLock,
@@ -407,6 +409,21 @@ test("router-wide plans retain the installed default pool names", () => {
   assert.equal(planServicePoolName("hotspot"), "hotspot pool");
   assert.equal(planServicePoolName("pppoe"), "pppoe");
   assert.equal(planServicePoolName("static"), null);
+  assert.equal(managedPppoeProfileName(243), "ochola-services-243-pppoe-profile");
+  assert.equal(managedPppoeProfileName(243, { pppoeProfile: "PPPOE_PROFILE_RS9_VLAN210" }), "PPPOE_PROFILE_RS9_VLAN210");
+  assert.equal(managedPppoeProfileName(undefined), null);
+  assert.deepEqual(
+    managedPppoePlanAddresses(
+      { localAddress: "192.168.99.1", remoteAddress: "ochola-services-243-pppoe-pool" },
+      "pppoe",
+    ),
+    {
+      localAddress: "192.168.99.1",
+      remoteAddress: "ochola-services-243-pppoe-pool",
+      requestedPoolMismatch: true,
+    },
+  );
+  assert.equal(managedPppoePlanAddresses({ localAddress: "", remoteAddress: "pppoe" }), null);
 });
 
 test("VLAN identity follows the assigned reseller rather than the original reseller", () => {
