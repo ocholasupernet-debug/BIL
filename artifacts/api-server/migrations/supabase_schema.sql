@@ -185,6 +185,7 @@ create table if not exists isp_customers (
   pppoe_username  text,
   status          text not null default 'active',   -- active | suspended | expired
   expires_at      timestamptz,
+  archived_at     timestamptz,
   depletion_reason text,
   router_import_data jsonb,
   wallet_balance  numeric(12,2) not null default 0,
@@ -195,6 +196,8 @@ create index if not exists isp_customers_admin_id_idx   on isp_customers(admin_i
 create index if not exists isp_customers_phone_idx      on isp_customers(phone);
 create index if not exists isp_customers_username_idx   on isp_customers(username);
 create index if not exists isp_customers_status_idx     on isp_customers(status);
+create index if not exists isp_customers_unarchived_admin_created_idx
+  on isp_customers(admin_id, created_at desc) where archived_at is null;
 
 -- MikroTik routers
 create table if not exists isp_routers (

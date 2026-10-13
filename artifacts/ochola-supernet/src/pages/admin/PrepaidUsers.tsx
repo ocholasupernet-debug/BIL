@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
-import { useReconnectPrepaidHotspot, type HotspotReconnectResult } from "@workspace/api-client-react";
 import {
   Loader2, RefreshCw, Wifi, Network, Globe,
   Users, CheckCircle2, XCircle, Clock, AlertTriangle,
@@ -66,7 +65,7 @@ interface HotspotReconnectResult {
   status: string;
   message: string;
 }
-type StatusFilter = "all" | "active" | "expired" | "suspended" | "online";
+type StatusFilter = "all" | "active" | "expired" | "suspended" | "online" | "archived";
 
 /* ══════════════════════════════ Helpers ══════════════════════════════ */
 function fmtDate(d?: string | null) {
@@ -233,8 +232,11 @@ function Avt({ name, id }: { name?: string | null; id: number }) {
 }
 
 /* ══════════════════════════════ Fetch helpers ══════════════════════════════ */
-async function fetchCustomers(): Promise<Customer[]> {
-  const response = await adminApiFetch(`/api/customers?adminId=${ADMIN_ID}`, { cache: "no-store" });
+async function fetchCustomers(includeArchived = false): Promise<Customer[]> {
+  const response = await adminApiFetch(
+    `/api/customers?adminId=${ADMIN_ID}${includeArchived ? "&includeArchived=true" : ""}`,
+    { cache: "no-store" },
+  );
   const result = await response.json() as Customer[] | { error?: string };
   if (!response.ok || !Array.isArray(result)) {
     throw new Error(!Array.isArray(result) && result.error ? result.error : "Prepaid users could not be loaded.");
@@ -693,6 +695,14 @@ function ExtendUserDialog({
 /* ══════════════════════════════ Page ══════════════════════════════ */
 export default function PrepaidUsers() {
   const qc = useQueryClient();
+  const [statusTab, setStatusTab] = useState<StatusFilter>("all");
+  const [archivePreview, setArchivePreview] = useState<{
+    groups: DisplayCustomer[];
+    customerIds: number[];
+    transactionCount: number;
+  } | null>(null);
+  const [archivePreviewLoading, setArchivePreviewLoading] = useState(false);
+  const [archiveBusy, setArchiveBusy] = useState(false);
   const reconnectMutation = {
     mutateAsync: async ({ id }: { id: number }): Promise<HotspotReconnectResult> => {
       const token = getAdminApiToken();
@@ -713,10 +723,17 @@ export default function PrepaidUsers() {
 
   const { data: customers = [], isLoading } = useQuery<Customer[]>({
     queryKey: ["prepaid_customers", ADMIN_ID],
-    queryFn:  fetchCustomers,
+    queryFn: () => fetchCustomers(false),
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
+  const archivedCustomersQuery = useQuery<Customer[]>({
+    queryKey: ["prepaid_archived_customers", ADMIN_ID],
+    queryFn: () => fetchCustomers(true),
+    enabled: statusTab === "archived",
+    staleTime: 15_000,
+  });
+  const rowsForView = statusTab === "archived" ? archivedCustomersQuery.data ?? [] : customers;
   const { data: plans   = [] } = useQuery<Plan[]>({
     queryKey: ["prepaid_plans", ADMIN_ID],
     queryFn:  fetchPlans,
@@ -728,18 +745,37 @@ export default function PrepaidUsers() {
     staleTime: 30_000,
   });
   const { data: payments = [] } = useQuery<Payment[]>({
-    queryKey: ["prepaid_payments", ADMIN_ID, customers.map(c => c.id).join(",")],
-    queryFn: () => fetchPayments(customers.map(c => c.id)),
-    enabled: customers.length > 0,
+    queryKey: ["prepaid_payments", ADMIN_ID, rowsForView.map(c => c.id).join(",")],
+    queryFn: () => fetchPayments(rowsForView.map(c => c.id)),
+    enabled: rowsForView.length > 0,
     staleTime: 15_000,
     refetchInterval: 30_000,
   });
   const planMap   = useMemo(() => Object.fromEntries(plans.map(p   => [p.id,   p  ])), [plans]);
   const routerMap = useMemo(() => Object.fromEntries(routers.map(r => [r.id,   r  ])), [routers]);
   const displayCustomers = useMemo(
-    () => mergeCustomerServiceIdentities(customers, planMap),
-    [customers, planMap],
+    () => mergeCustomerServiceIdentities(rowsForView, planMap),
+    [rowsForView, planMap],
   );
+  const archiveCandidateGroups = useMemo(() => {
+    if (statusTab === "archived") return [];
+    return displayCustomers
+      .filter(isCustomerExpired)
+      .sort((a, b) => {
+        const timeDifference = Date.parse(a.created_at ?? "") - Date.parse(b.created_at ?? "");
+        return (Number.isFinite(timeDifference) ? timeDifference : 0) || a.id - b.id;
+      })
+      .slice(0, 200);
+  }, [displayCustomers, statusTab]);
+  const archiveCandidateIds = useMemo(() => {
+    const byId = new Map(customers.map(customer => [customer.id, customer]));
+    return [...new Set(archiveCandidateGroups.flatMap(group =>
+      group.mergedCustomerIds.filter(id => {
+        const customer = byId.get(id);
+        return Boolean(customer && isCustomerExpired(customer));
+      }),
+    ))];
+  }, [archiveCandidateGroups, customers]);
   const paymentsByCustomerId = useMemo(() => {
     const grouped = new Map<number, Payment[]>();
     const latestFirst = [...payments].sort((a, b) => {
@@ -826,7 +862,6 @@ export default function PrepaidUsers() {
   );
   /* ── UI state ── */
   const [search,      setSearch]      = useState("");
-  const [statusTab,   setStatusTab]   = useState<StatusFilter>("all");
   const [typeFilter,  setTypeFilter]  = useState("");
   const [packageFilter, setPackageFilter] = useState("");
   const [routerFilter, setRouterFilter] = useState("");
@@ -1028,6 +1063,111 @@ export default function PrepaidUsers() {
     }
   }
 
+  async function openArchivePreview() {
+    setActionError("");
+    if (!archiveCandidateIds.length) {
+      setActionError("No expired prepaid accounts are available to archive.");
+      return;
+    }
+    if (archiveCandidateIds.length > 1000) {
+      setActionError("The selected visible groups contain too many underlying records for one archive batch.");
+      return;
+    }
+    const token = getAdminApiToken();
+    if (!token) {
+      setActionError("Your admin session has expired. Sign in again before archiving accounts.");
+      return;
+    }
+    setArchivePreviewLoading(true);
+    try {
+      const response = await fetch(apiUrl(
+        `/api/customers/archive-preview?customerIds=${archiveCandidateIds.join(",")}`,
+      ), {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      const result = await parseJsonResponse<{
+        ok?: boolean;
+        error?: string;
+        customerCount?: number;
+        transactionCount?: number;
+      }>(response);
+      if (!response.ok || !result.ok) throw new Error(result.error || "The archive preview could not be loaded.");
+      setArchivePreview({
+        groups: archiveCandidateGroups,
+        customerIds: archiveCandidateIds,
+        transactionCount: Number(result.transactionCount ?? 0),
+      });
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "The archive preview could not be loaded.");
+    } finally {
+      setArchivePreviewLoading(false);
+    }
+  }
+
+  async function handleArchiveCandidates() {
+    if (!archivePreview || archiveBusy) return;
+    const message = `Archive ${archivePreview.groups.length} expired visible entries covering ${archivePreview.customerIds.length} expired customer records? This only marks customers as archived. Their transaction rows and every transaction field will remain unchanged.`;
+    if (!window.confirm(message)) return;
+    const token = getAdminApiToken();
+    if (!token) {
+      setActionError("Your admin session has expired. Sign in again before archiving accounts.");
+      return;
+    }
+    setArchiveBusy(true);
+    setActionError("");
+    try {
+      const response = await fetch(apiUrl("/api/customers/archive-expired"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ customerIds: archivePreview.customerIds }),
+      });
+      const result = await parseJsonResponse<{ ok?: boolean; error?: string; archivedCount?: number }>(response);
+      if (!response.ok || !result.ok) throw new Error(result.error || "Expired accounts could not be archived.");
+      setArchivePreview(null);
+      setActionNotice(`${result.archivedCount ?? archivePreview.customerIds.length} expired customer records archived. Transaction history was not changed.`);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] }),
+        qc.invalidateQueries({ queryKey: ["prepaid_archived_customers", ADMIN_ID] }),
+        qc.invalidateQueries({ queryKey: ["prepaid_payments", ADMIN_ID] }),
+      ]);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "Expired accounts could not be archived.");
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
+
+  async function restoreArchivedCustomer(user: Customer) {
+    const token = getAdminApiToken();
+    if (!token) {
+      setActionError("Your admin session has expired. Sign in again before restoring accounts.");
+      return;
+    }
+    setActionBusy(user.id);
+    setActionError("");
+    try {
+      const response = await fetch(apiUrl(`/api/customers/${user.id}/restore-archive`), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const result = await parseJsonResponse<{ ok?: boolean; error?: string }>(response);
+      if (!response.ok || !result.ok) throw new Error(result.error || "The archived account could not be restored.");
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] }),
+        qc.invalidateQueries({ queryKey: ["prepaid_archived_customers", ADMIN_ID] }),
+      ]);
+      setActionNotice(`${purchaseUsername(user)} restored to the prepaid users list.`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "The archived account could not be restored.");
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
   async function handleAdjustExpiry(user: Customer, expiresAt: string) {
     await updateUser(user, { expires_at: expiresAt });
     setAdjustingExpiryUser(null);
@@ -1057,7 +1197,9 @@ export default function PrepaidUsers() {
   /* ── Filter ── */
   const filtered = useMemo(() => {
     let list = displayCustomers;
-    if (statusTab === "online") list = list.filter(c => customerIsOnline(c, livePresenceByRouter, planMap));
+    if (statusTab === "archived") {
+      // The archived view is already isolated by the API query.
+    } else if (statusTab === "online") list = list.filter(c => customerIsOnline(c, livePresenceByRouter, planMap));
     else if (statusTab === "active") list = list.filter(hasUnexpiredPaidAccess);
     else if (statusTab === "expired") list = list.filter(isCustomerExpired);
     else if (statusTab !== "all") list = list.filter(c => c.status === statusTab);
@@ -1184,6 +1326,7 @@ export default function PrepaidUsers() {
     { key: "expired",   label: "Expired",   count: stats.expired,   color: "#f87171" },
     { key: "suspended", label: "Suspended", count: stats.suspended, color: "#fbbf24" },
     { key: "online",    label: "Online",    count: displayCustomers.filter(c => customerIsOnline(c, livePresenceByRouter, planMap)).length, color: "#22c55e" },
+    { key: "archived",  label: "Archived",  count: archivedCustomersQuery.data?.length ?? 0, color: "#94a3b8" },
   ];
 
   return (
@@ -1422,6 +1565,18 @@ export default function PrepaidUsers() {
            <button onClick={exportCSV} style={BTN("var(--isp-accent)")}>
             <Download size={13} /> Export CSV
           </button>
+          {statusTab !== "archived" && (
+            <button
+              type="button"
+              onClick={() => void openArchivePreview()}
+              disabled={archivePreviewLoading || archiveCandidateGroups.length === 0}
+              style={BTN("#64748b")}
+              title="Preview the oldest expired entries before archiving"
+            >
+              {archivePreviewLoading ? <Loader2 size={13} className="prepaid-spin" /> : <Database size={13} />}
+              Preview oldest {Math.min(200, archiveCandidateGroups.length)} expired
+            </button>
+          )}
 
           <button onClick={() => qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] })}
             style={BTN("rgba(255,255,255,0.06)", "var(--isp-text-muted)")}>
@@ -1457,6 +1612,40 @@ export default function PrepaidUsers() {
             <Wifi size={13} /> Grant Hotspot access
           </button>
         </div>
+
+        {archivePreview && (
+          <section className="prepaid-toolbar-card" aria-labelledby="archive-preview-title" style={{ marginTop: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+              <div>
+                <h2 id="archive-preview-title" style={{ margin: 0, fontSize: "0.95rem", color: "var(--isp-text)" }}>
+                  Review expired accounts to archive
+                </h2>
+                <p className="prepaid-help">
+                  {archivePreview.groups.length} oldest visible entries cover {archivePreview.customerIds.length} expired customer records.
+                  {` ${archivePreview.transactionCount} linked transaction records were found; archiving will not change any transaction fields.`}
+                </p>
+              </div>
+              <button type="button" onClick={() => setArchivePreview(null)} style={iconButton("#64748b")} aria-label="Close archive preview">
+                <X size={13} />
+              </button>
+            </div>
+            <div style={{ maxHeight: 280, overflow: "auto", marginTop: 10, border: "1px solid var(--isp-border)", borderRadius: 7 }}>
+              {archivePreview.groups.map((user, index) => (
+                <div key={user.id} style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "8px 10px", borderBottom: "1px solid var(--isp-border)", fontSize: ".72rem" }}>
+                  <span>{index + 1}. {purchaseUsername(user)} · {user.name || "Unnamed"}{user.mergedCustomerIds.length > 1 ? ` · ${user.mergedCustomerIds.length} linked prepaid records` : ""}</span>
+                  <span style={{ color: "var(--isp-text-muted)", whiteSpace: "nowrap" }}>{fmtTableDateTime(user.created_at)}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+              <button type="button" onClick={() => setArchivePreview(null)} style={BTN("rgba(255,255,255,0.06)", "var(--isp-text-muted)")}>Cancel</button>
+              <button type="button" onClick={() => void handleArchiveCandidates()} disabled={archiveBusy} style={BTN("#64748b")}>
+                {archiveBusy ? <Loader2 size={13} className="prepaid-spin" /> : <Database size={13} />}
+                Archive {archivePreview.customerIds.length} records
+              </button>
+            </div>
+          </section>
+        )}
 
         {/* ── Stat cards ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: "0.625rem" }}>
@@ -1659,7 +1848,7 @@ export default function PrepaidUsers() {
               </tr>
             </thead>
             <tbody>
-              {isLoading ? (
+              {(isLoading || (statusTab === "archived" && archivedCustomersQuery.isLoading)) ? (
                 <tr>
                    <td colSpan={13} style={{ ...TD, textAlign: "center", padding: "3rem" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem", color: "var(--isp-text-muted)" }}>
@@ -1753,6 +1942,18 @@ export default function PrepaidUsers() {
                        </td>
                       <td style={{ ...TD, textAlign: "center" }}>
                         <div style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                          {statusTab === "archived" && (
+                            <button
+                              type="button"
+                              title="Restore this account to the prepaid users list"
+                              aria-label={`Restore ${username}`}
+                              onClick={() => void restoreArchivedCustomer(user)}
+                              disabled={actionBusy === user.id}
+                              style={iconButton("#34d399")}
+                            >
+                              <RotateCw size={13} />
+                            </button>
+                          )}
                           {reconnectEligibleIds.has(user.id) && (
                             <button
                               type="button"

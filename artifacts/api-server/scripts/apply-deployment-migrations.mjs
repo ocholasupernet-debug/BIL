@@ -133,6 +133,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_hotspot_loyalty_repeat_remaining_to_unshared_macs.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_radacct_standard_accounting_columns.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_hotspot_chat_accounts.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_customer_archive_staged.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
 

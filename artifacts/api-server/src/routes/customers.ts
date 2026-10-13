@@ -758,8 +758,147 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
     res.status(400).json({ error: "The requested account does not match the signed-in admin session." });
     return;
   }
-  const rows = await sbSelect("isp_customers", `admin_id=eq.${adminId}&select=*`);
-  res.json(rows);
+  // Filter in application code so the ordinary customer list remains compatible
+  // until the staged archived_at migration is applied to the database.
+  const rows = await sbSelect<{ archived_at?: string | null } & Record<string, unknown>>(
+    "isp_customers",
+    `admin_id=eq.${adminId}&select=*`,
+  );
+  const includeArchived = req.query.includeArchived === "true";
+  res.json(rows.filter(row => includeArchived ? Boolean(row.archived_at) : !row.archived_at));
+});
+
+router.get("/customers/archive-preview", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req);
+  const rawIds = String(req.query.customerIds ?? "").split(",").filter(Boolean);
+  const ids = [...new Set(rawIds.map(Number))];
+  if (
+    !adminId || ids.length < 1 || ids.length > 1000
+    || ids.length !== rawIds.length
+    || ids.some(id => !Number.isSafeInteger(id) || id < 1)
+  ) {
+    res.status(400).json({ ok: false, error: "A signed-in account and 1–1000 unique customer IDs are required." });
+    return;
+  }
+  try {
+    const customers = await sbSelectStrict<{
+      id: number;
+      status: string | null;
+      expires_at: string | null;
+      depletion_reason: string | null;
+    }>(
+      "isp_customers",
+      `admin_id=eq.${adminId}&id=in.(${ids.join(",")})&archived_at=is.null&select=id,status,expires_at,depletion_reason`,
+    );
+    if (customers.length !== ids.length || customers.some(customer =>
+      !isPrepaidCustomerExpired(customer.status, customer.expires_at, customer.depletion_reason)
+    )) {
+      res.status(409).json({ ok: false, error: "The candidate list changed or includes an account that is not expired. Refresh the page." });
+      return;
+    }
+    const transactions = await sbSelectStrict<{ customer_id: number; status: string }>(
+      "isp_transactions",
+      `admin_id=eq.${adminId}&customer_id=in.(${ids.join(",")})&select=customer_id,status&limit=10000`,
+    );
+    const transactionCounts: Record<number, number> = {};
+    for (const transaction of transactions) {
+      transactionCounts[transaction.customer_id] = (transactionCounts[transaction.customer_id] ?? 0) + 1;
+    }
+    res.json({
+      ok: true,
+      customerCount: customers.length,
+      transactionCount: transactions.length,
+      transactionCounts,
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "The archive preview could not be loaded." });
+  }
+});
+
+router.post("/customers/archive-expired", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req);
+  const submittedIds = req.body?.customerIds;
+  if (!adminId || !Array.isArray(submittedIds) || submittedIds.length < 1 || submittedIds.length > 1000) {
+    res.status(400).json({ ok: false, error: "A signed-in account and 1–1000 customer IDs are required." });
+    return;
+  }
+  const ids = [...new Set(submittedIds.map(Number))];
+  if (
+    ids.length !== submittedIds.length
+    || ids.some(id => !Number.isSafeInteger(id) || id < 1)
+  ) {
+    res.status(400).json({ ok: false, error: "Customer IDs must be unique positive integers." });
+    return;
+  }
+
+  try {
+    const candidates = await sbSelectStrict<{
+      id: number;
+      status: string | null;
+      expires_at: string | null;
+      depletion_reason: string | null;
+    }>(
+      "isp_customers",
+      `admin_id=eq.${adminId}&id=in.(${ids.join(",")})&archived_at=is.null&select=id,status,expires_at,depletion_reason`,
+    );
+    if (candidates.length !== ids.length) {
+      res.status(409).json({ ok: false, error: "Some selected customer records are missing, already archived, or outside this account." });
+      return;
+    }
+    const expiredIds = new Set(
+      candidates
+        .filter(customer => isPrepaidCustomerExpired(customer.status, customer.expires_at, customer.depletion_reason))
+        .map(customer => customer.id),
+    );
+    if (expiredIds.size !== ids.length) {
+      res.status(409).json({ ok: false, error: "Archiving was stopped because one or more selected accounts are not expired." });
+      return;
+    }
+
+    const archivedAt = new Date().toISOString();
+    const archived = await sbUpdateStrict<{ id: number }>(
+      "isp_customers",
+      `admin_id=eq.${adminId}&id=in.(${ids.join(",")})&archived_at=is.null&select=id`,
+      { archived_at: archivedAt },
+    );
+    if (archived.length !== ids.length) {
+      res.status(409).json({ ok: false, error: "The archive count changed during the operation. Refresh and review the list." });
+      return;
+    }
+    void logActivity({
+      adminId,
+      type: "customer",
+      action: "archived_expired",
+      subject: `${archived.length} expired prepaid accounts`,
+      details: { customerIds: archived.map(customer => customer.id), archivedAt },
+    });
+    res.json({ ok: true, archivedCount: archived.length, archivedAt });
+  } catch {
+    res.status(503).json({ ok: false, error: "Expired prepaid accounts could not be archived." });
+  }
+});
+
+router.post("/customers/:id/restore-archive", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req);
+  const id = Number(req.params.id);
+  if (!adminId || !Number.isSafeInteger(id) || id < 1) {
+    res.status(400).json({ ok: false, error: "A signed-in account and valid customer ID are required." });
+    return;
+  }
+  try {
+    const rows = await sbUpdateStrict<{ id: number }>(
+      "isp_customers",
+      `id=eq.${id}&admin_id=eq.${adminId}&archived_at=not.is.null&select=id`,
+      { archived_at: null },
+    );
+    if (!rows.length) {
+      res.status(404).json({ ok: false, error: "Archived prepaid account not found." });
+      return;
+    }
+    res.json({ ok: true, id: rows[0].id });
+  } catch {
+    res.status(503).json({ ok: false, error: "The archived account could not be restored." });
+  }
 });
 
 router.post("/customers/:id/hotspot-reconnect", requireAdmin(), async (req, res): Promise<void> => {
