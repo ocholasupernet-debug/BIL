@@ -1272,7 +1272,8 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
 
     const content = buildManagedPppoeSetupScript({ routerId: id, interfaceName, serviceName });
     const suffix = mode === "hotspot_bridge" ? "bridge" : interfaceName.toLowerCase();
-    const fileName = `pppoe-setup-${id}-${suffix}-${Date.now()}.rsc`;
+    const directory = `pppoe-setup-${id}`;
+    const fileName = `${directory}/setup-${suffix}.rsc`;
     const token = randomBytes(24).toString("hex");
     pendingRouterFileSources.set(token, {
       content: Buffer.from(content, "utf8"),
@@ -1281,10 +1282,11 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
       expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
     });
     try {
+      await ensureRouterFileDirectory(found.creds, directory);
       const uploaded = await deployRouterFile(found.creds, {
         destinationPath: fileName,
         sourceUrl: `${managementScriptSourceOrigin(req)}/api/router-file-source/${token}`,
-        overwrite: false,
+        overwrite: true,
         uploadId: token.slice(0, 16),
       });
       uploadedFilePath = uploaded.destinationPath;
