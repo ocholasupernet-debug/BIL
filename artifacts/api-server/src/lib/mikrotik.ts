@@ -1023,8 +1023,8 @@ export async function reconcileGeneratedServiceConfiguration(
   const hotspotGateway = "192.168.180.1";
   const hotspotNetwork = "192.168.180.0/22";
   const hotspotPoolRange = "192.168.180.10-192.168.183.254";
-  const pppoeGateway = "192.168.99.1";
-  const pppoePoolRange = "192.168.99.10-192.168.99.254";
+  const pppoeGateway = hotspotGateway;
+  const pppoePoolRange = "192.168.192.10-192.168.192.254";
 
   const hotspotRows = await runRouterCommand(creds, [
     "/ip/hotspot/print",
@@ -1294,8 +1294,10 @@ export async function repairGeneratedServiceNetworking(
   wanInterfaceListFound: boolean;
   egressInterface: string | null;
   dnsEnabled: boolean;
+  activeDefaultRouteFound: boolean;
 }> {
   const tag = `ochola-services-${routerId}`;
+  const pppoeSubnet = "192.168.192.0/24";
   const safeRequestedBridge = String(requestedBridgeName ?? "").trim();
   if (safeRequestedBridge && !/^[A-Za-z0-9_.-]+$/.test(safeRequestedBridge)) {
     throw new Error("The service bridge name is not a valid RouterOS resource name.");
@@ -1355,10 +1357,11 @@ export async function repairGeneratedServiceNetworking(
   const immediateGatewayInterface = String(defaultRoute?.["immediate-gw"] ?? "")
     .split("%")[1]
     ?.trim() ?? "";
+  const gatewayValue = String(defaultRoute?.gateway ?? "").trim();
   const rawEgressInterface = [
     defaultRoute?.interface,
     immediateGatewayInterface,
-    defaultRoute?.gateway,
+    /^(?:\d{1,3}\.){3}\d{1,3}$/.test(gatewayValue) ? "" : gatewayValue,
   ]
     .map(value => String(value ?? "").trim())
     .find(Boolean) ?? "";
@@ -1405,7 +1408,7 @@ export async function repairGeneratedServiceNetworking(
     await addFilter(`${tag} pppoe-to-wan`, [
       "=chain=forward",
       "=action=accept",
-      "=src-address=192.168.99.0/24",
+      `=src-address=${pppoeSubnet}`,
       egressField,
       "=connection-state=new,established,related",
     ]);
@@ -1455,7 +1458,7 @@ export async function repairGeneratedServiceNetworking(
     };
     for (const [comment, source] of [
       [`${tag} Hotspot masquerade`, "192.168.180.0/22"],
-      [`${tag} PPPoE masquerade`, "192.168.99.0/24"],
+      [`${tag} PPPoE masquerade`, pppoeSubnet],
     ] as const) {
       await removeTaggedNat(comment);
       await runRouterCommand(creds, [
@@ -1469,7 +1472,13 @@ export async function repairGeneratedServiceNetworking(
     }
   }
 
-  return { bridgeName, wanInterfaceListFound, egressInterface, dnsEnabled: true };
+  return {
+    bridgeName,
+    wanInterfaceListFound,
+    egressInterface,
+    dnsEnabled: true,
+    activeDefaultRouteFound: Boolean(defaultRoute),
+  };
 }
 
 /**
@@ -7910,12 +7919,12 @@ export function generateServiceSetupScript(
   const dhcpServer = `${tag}-dhcp`;
   const hotspotAddress = `${hotspotGateway}/22`;
   const hotspotPoolRange = "192.168.180.10-192.168.183.254";
-  const pppoeGateway = "192.168.99.1";
-  const pppoeAddress = `${pppoeGateway}/24`;
-  const pppoeNetwork = "192.168.99.0/24";
-  const pppoePoolRange = "192.168.99.10-192.168.99.254";
+  const pppoeGateway = hotspotGateway;
+  const pppoeAddress = hotspotAddress;
+  const pppoeNetwork = "192.168.192.0/24";
+  const pppoePoolRange = "192.168.192.10-192.168.192.254";
   const pppoeExpiredPool = `${tag}-pppoe-expired-pool`;
-  const pppoeExpiredPoolRange = "192.168.191.10-192.168.191.254";
+  const pppoeExpiredPoolRange = "192.168.193.10-192.168.193.254";
   const portalFileUrls = options.portalFileUrls
     ? {
         login: validateRouterOpenVpnCaUrl(options.portalFileUrls.login),
@@ -8183,10 +8192,10 @@ ${portalFileUrls ? `:if ([:len [/file find where name=($hsdir . "/login.html")]]
 :do {
     :local expiredPoolIds [/ip pool find where name=${routerOsString(pppoeExpiredPool)}]
     :if ([:len $expiredPoolIds] = 0) do={
-        :local expiredPoolAddressConflicts [/ip address find where address~"192.168.191."]
-        :local expiredPoolRangeConflicts [/ip pool find where name!=${routerOsString(pppoeExpiredPool)} && ranges~"192.168.191."]
+        :local expiredPoolAddressConflicts [/ip address find where address~"192.168.193."]
+        :local expiredPoolRangeConflicts [/ip pool find where name!=${routerOsString(pppoeExpiredPool)} && ranges~"192.168.193."]
         :if (([:len $expiredPoolAddressConflicts] > 0) || ([:len $expiredPoolRangeConflicts] > 0)) do={
-            :set serviceError "${tag}: 192.168.191.0/24 is already used by another address or IP pool; PPPoE pools were not changed."
+            :set serviceError "${tag}: 192.168.193.0/24 is already used by another address or IP pool; PPPoE pools were not changed."
             :error $serviceError
         }
     } else={
