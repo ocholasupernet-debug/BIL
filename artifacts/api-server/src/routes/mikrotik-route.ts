@@ -94,6 +94,7 @@ import { planHotspotChatWalledGardenAdds } from "../lib/hotspot-chat-walled-gard
 import { portServiceResourceNames, vlanServiceInterfaceName, type PortServiceResourceInput, type VlanServiceIdentityInput } from "../lib/port-service-resources.js";
 import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
 import { buildManagedPppoeSetupScript } from "../lib/pppoe-setup-script.js";
+import { ipv4AddressNumber, ipv4RangesOverlap, parseIpv4Ranges } from "../lib/ipv4-range-safety.js";
 import { SHARED_HOTSPOT_SERVER_NAME } from "../lib/shared-hotspot-resources.js";
 import {
   classifyHotspotSessionService,
