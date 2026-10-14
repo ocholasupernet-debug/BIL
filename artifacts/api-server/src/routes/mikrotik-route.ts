@@ -33,6 +33,7 @@ import {
   fetchRouterFiles,
   ensureRouterFileDirectory,
   runRouterCommand,
+  runRouterScript,
   runRouterCommands,
   fetchRouterSecurityState,
   deployRouterFile,
