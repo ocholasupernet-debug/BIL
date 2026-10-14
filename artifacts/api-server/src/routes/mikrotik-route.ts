@@ -1097,6 +1097,85 @@ router.post("/router/:id/hotspot/recovery-disable", requireAdmin(), async (req, 
   }
 });
 
+router.post("/router/pppoe/repair-network", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req);
+  const requestedName = String(req.body?.routerName ?? "").trim().toLocaleLowerCase();
+  if (!adminId || !requestedName || requestedName.length > 100) {
+    res.status(400).json({ error: "A signed-in ISP account and router name are required." });
+    return;
+  }
+
+  try {
+    const rows = await sbSelectStrict<{ id: number; name: string }>(
+      "isp_routers",
+      `admin_id=eq.${adminId}&select=id,name&limit=1000`,
+    );
+    const matches = rows.filter(row => String(row.name ?? "").trim().toLocaleLowerCase() === requestedName);
+    if (matches.length !== 1) {
+      res.status(matches.length ? 409 : 404).json({
+        error: matches.length
+          ? "More than one router has that name under this ISP account."
+          : "Router not found for this ISP account.",
+      });
+      return;
+    }
+
+    const routerId = Number(matches[0].id);
+    const found = await getRouterCreds(routerId, adminId);
+    if (!found) {
+      res.status(404).json({ error: "Router not found for this ISP account." });
+      return;
+    }
+
+    const services = await runRouterCommand(found.creds, [
+      "/interface/pppoe-server/server/print",
+      "=.proplist=interface,disabled",
+    ]);
+    const activeBridges = [...new Set((Array.isArray(services) ? services : [])
+      .filter(row => !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()))
+      .map(row => String(row.interface ?? "").trim())
+      .filter(Boolean))];
+    if (activeBridges.length !== 1) {
+      res.status(409).json({ error: "Expected exactly one enabled PPPoE service interface; no network repair was applied." });
+      return;
+    }
+
+    const networking = await repairGeneratedServiceNetworking(found.creds, routerId, activeBridges[0]);
+    const tag = `ochola-services-${routerId}`;
+    const [filters, nats] = await runRouterCommands(found.creds, [
+      ["/ip/firewall/filter/print", "=.proplist=comment,chain,action,src-address,out-interface-list,out-interface,disabled", `?comment=${tag} pppoe-to-wan`],
+      ["/ip/firewall/nat/print", "=.proplist=comment,chain,action,src-address,out-interface-list,out-interface,disabled", `?comment=${tag} PPPoE masquerade`],
+    ]);
+    const filter = Array.isArray(filters) ? filters.find(row => row.comment === `${tag} pppoe-to-wan`) : undefined;
+    const nat = Array.isArray(nats) ? nats.find(row => row.comment === `${tag} PPPoE masquerade`) : undefined;
+    const enabled = (row: Record<string, unknown> | undefined) => row && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase());
+    const internetRulesVerified = Boolean(
+      filter && nat
+        && enabled(filter) && filter.chain === "forward" && filter.action === "accept"
+        && filter["src-address"] === "192.168.192.0/24"
+        && (filter["out-interface-list"] === "WAN" || filter["out-interface"] === networking.egressInterface)
+        && enabled(nat) && nat.chain === "srcnat" && nat.action === "masquerade"
+        && nat["src-address"] === "192.168.192.0/24"
+        && (nat["out-interface-list"] === "WAN" || nat["out-interface"] === networking.egressInterface)
+        && networking.activeDefaultRouteFound,
+    );
+    if (!internetRulesVerified) {
+      res.status(409).json({
+        ok: false,
+        routerName: found.row.name,
+        networking,
+        error: "Managed PPPoE routing was repaired, but a usable default route or verified WAN forwarding/NAT could not be confirmed.",
+      });
+      return;
+    }
+
+    logger.warn({ routerId, adminId }, "Managed PPPoE internet forwarding and NAT repaired");
+    res.json({ ok: true, routerId, routerName: found.row.name, networking, internetRulesVerified: true });
+  } catch (error) {
+    routerErrorResponse(res, error);
+  }
+});
+
 /* ─── GET /api/router/:id/files ─────────────────────────────────────────── */
 /**
  * Returns the file metadata currently stored on a selected MikroTik router.
