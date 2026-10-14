@@ -1716,6 +1716,7 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   white-space: nowrap;
 }
 .router-meta { margin-top: 4px; color: var(--isp-text-sub); font-size: 0.8125rem; }
+.router-uptime { margin-top: 2px; }
 .router-seen { margin-top: 7px; color: #b86659; font-size: 0.8125rem; }
 .status-dot { width: 6px; height: 6px; display: inline-block; flex-shrink: 0; border-radius: 50%; }
 .status-dot--green { background: var(--isp-green); }

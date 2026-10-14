@@ -144,6 +144,13 @@ function routerOnline(router: DbRouter): boolean {
     && Date.now() - lastSeen <= ROUTER_HEARTBEAT_MAX_AGE_MS;
 }
 
+function formatRouterUptime(uptime: string | null | undefined): string {
+  const value = uptime?.trim();
+  if (!value) return "";
+  const parts = value.match(/\d+\s*[wdhms]/gi);
+  return parts?.length ? parts.map(part => part.replace(/\s+/g, "")).join(" ") : value;
+}
+
 function fmtSince(iso: string | null | undefined): string {
   if (!iso) return "";
   const date = new Date(iso);
@@ -779,6 +786,9 @@ export default function Dashboard() {
                   </div>
                   <div className="router-host">{router.host}</div>
                   <div className="router-meta">{router.model ?? "MikroTik"} {router.ros_version ? `· ROS v${router.ros_version}` : ""}</div>
+                  {isOnline && router.router_uptime && (
+                    <div className="router-meta router-uptime">Uptime: {formatRouterUptime(router.router_uptime)}</div>
+                  )}
                   {!isOnline && <div className="router-seen">{router.last_seen ? `Last seen ${fmtSince(router.last_seen)}` : "No heartbeat recorded"}</div>}
                 </article>
               );
