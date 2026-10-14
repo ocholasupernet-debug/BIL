@@ -535,7 +535,8 @@ if [ -s "$pppoe_repair_marker" ]; then
   pppoe_repair_subdomain="${pppoe_repair_identity%%|*}"
   pppoe_repair_target="${pppoe_repair_identity#*|}"
   if [ "$pppoe_repair_identity" = "$pppoe_repair_subdomain" ] ||
-     [ "$pppoe_repair_target" != "OCHOLA2" ] ||
+     [ "$pppoe_repair_subdomain" != "ocholasupernet" ] ||
+     [ "$pppoe_repair_target" != "ocholasupernet2" ] ||
      [[ ! "$pppoe_repair_subdomain" =~ ^[a-z0-9-]{3,63}$ ]]; then
     echo "ERROR: Refusing an invalid one-time PPPoE repair identity." >&2
     exit 1
