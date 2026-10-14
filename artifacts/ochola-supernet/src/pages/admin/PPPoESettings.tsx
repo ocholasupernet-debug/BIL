@@ -307,6 +307,7 @@ export default function PPPoESettings() {
             <p>Shape the sign-in experience customers see when they manage their broadband account.</p>
           </div>
           <div className="pppoe-settings-actions">
+            <a className="pppoe-settings-button preview" href="/admin/pppoe-settings/setup"><Wifi size={14} /> Router setup</a>
             <button type="button" className="pppoe-settings-button preview" onClick={() => setShowPreview(true)}><Eye size={14} /> Preview portal</button>
             <button type="button" className={`pppoe-settings-button save ${saved ? "saved" : ""}`} onClick={saveSettings} disabled={saving}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}

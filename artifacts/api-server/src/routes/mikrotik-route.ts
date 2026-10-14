@@ -92,6 +92,7 @@ import { normalizePortalHostname } from "../lib/portal-hostname.js";
 import { planHotspotChatWalledGardenAdds } from "../lib/hotspot-chat-walled-garden.js";
 import { portServiceResourceNames, vlanServiceInterfaceName, type PortServiceResourceInput, type VlanServiceIdentityInput } from "../lib/port-service-resources.js";
 import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
+import { buildManagedPppoeSetupScript } from "../lib/pppoe-setup-script.js";
 import { SHARED_HOTSPOT_SERVER_NAME } from "../lib/shared-hotspot-resources.js";
 import {
   classifyHotspotSessionService,
@@ -1144,6 +1145,200 @@ router.get("/router/:id/files/vlan-options", requireAdmin(), async (req, res): P
     }));
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : "Could not load VLAN assignments." });
+  }
+});
+
+router.get("/router/:id/pppoe-setup/interfaces", requireAdmin(), async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ error: "A valid router and signed-in ISP account are required." });
+    return;
+  }
+  const found = await getRouterCreds(id, adminId);
+  if (!found) { res.status(404).json({ error: "Router not found for this ISP account." }); return; }
+  try {
+    const [interfaces, bridgePorts, wanLists, wanMembers, bridges] = await runRouterCommands(found.creds, [
+      ["/interface/print", "=.proplist=name,type,disabled,running"],
+      ["/interface/bridge/port/print", "=.proplist=interface,bridge,disabled"],
+      ["/interface/list/print", "=.proplist=name", "?name=WAN"],
+      ["/interface/list/member/print", "=.proplist=list,interface,disabled", "?list=WAN"],
+      ["/interface/bridge/print", "=.proplist=name,disabled", "?name=hotspot-bridge"],
+    ]);
+    if (!Array.isArray(interfaces) || !Array.isArray(bridgePorts) || !Array.isArray(wanLists)
+      || !Array.isArray(wanMembers) || !Array.isArray(bridges)) {
+      res.status(502).json({ error: "RouterOS returned an incomplete interface inventory; no PPPoE options were loaded." });
+      return;
+    }
+    const bridged = new Set(bridgePorts
+      .filter(row => !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()))
+      .map(row => String(row.interface ?? "")));
+    const wan = new Set(wanMembers
+      .filter(row => row.list === "WAN" && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()))
+      .map(row => String(row.interface ?? "")));
+    const ports = interfaces
+      .filter(row => row.type === "ether" && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()))
+      .map(row => ({
+        name: String(row.name ?? ""),
+        running: ["true", "yes"].includes(String(row.running ?? "").toLowerCase()),
+        inBridge: bridged.has(String(row.name ?? "")),
+        isWan: wan.has(String(row.name ?? "")),
+      }))
+      .filter(port => port.name);
+    res.json({
+      routerId: id,
+      hotspotBridgeAvailable: bridges.some(row => row.name === "hotspot-bridge" && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase())),
+      ports,
+      loadedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    routerErrorResponse(res, error);
+  }
+});
+
+router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const mode = req.body?.mode;
+  const interfaceName = mode === "hotspot_bridge" ? "hotspot-bridge" : String(req.body?.interfaceName ?? "").trim();
+  if (!Number.isSafeInteger(id) || id <= 0 || !Number.isSafeInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ error: "A valid router and signed-in ISP account are required." });
+    return;
+  }
+  if (mode !== "hotspot_bridge" && mode !== "own_port") {
+    res.status(400).json({ error: "Choose PPPoE over the Hotspot bridge or a dedicated Ethernet port." });
+    return;
+  }
+  if (mode === "own_port" && !/^[A-Za-z0-9_.-]{1,64}$/.test(interfaceName)) {
+    res.status(400).json({ error: "Choose a valid Ethernet interface from the live router list." });
+    return;
+  }
+  const found = await getRouterCreds(id, adminId);
+  if (!found) { res.status(404).json({ error: "Router not found for this ISP account." }); return; }
+  let uploadedFilePath: string | null = null;
+  try {
+    const [interfaces, bridgePorts, wanLists, wanMembers, bridges, currentServers] = await runRouterCommands(found.creds, [
+      ["/interface/print", "=.proplist=name,type,disabled"],
+      ["/interface/bridge/port/print", "=.proplist=interface,bridge,disabled"],
+      ["/interface/list/print", "=.proplist=name", "?name=WAN"],
+      ["/interface/list/member/print", "=.proplist=list,interface,disabled", "?list=WAN"],
+      ["/interface/bridge/print", "=.proplist=name,disabled", "?name=hotspot-bridge"],
+      ["/interface/pppoe-server/server/print", "=.proplist=service-name,interface,disabled"],
+    ]);
+    if (![interfaces, bridgePorts, wanLists, wanMembers, bridges, currentServers].every(Array.isArray)) {
+      res.status(502).json({ error: "RouterOS returned incomplete PPPoE preflight data; nothing was changed." });
+      return;
+    }
+    if (!wanLists.some(row => row.name === "WAN")
+      || !wanMembers.some(row => row.list === "WAN" && row.interface && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()))) {
+      res.status(409).json({ error: 'This setup requires an existing "WAN" interface list with an enabled uplink; nothing was changed.' });
+      return;
+    }
+    if (mode === "hotspot_bridge") {
+      if (!bridges.some(row => row.name === "hotspot-bridge" && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()))) {
+        res.status(409).json({ error: 'The router has no enabled "hotspot-bridge"; nothing was changed.' });
+        return;
+      }
+    } else {
+      const selected = interfaces.find(row => row.name === interfaceName && row.type === "ether"
+        && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()));
+      if (!selected) {
+        res.status(409).json({ error: "The selected port is no longer an enabled physical Ethernet interface; refresh the port list." });
+        return;
+      }
+      if (bridgePorts.some(row => row.interface === interfaceName && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()))) {
+        res.status(409).json({ error: "This port belongs to a bridge. Choose an unbridged port; this setup will not move interfaces or disrupt existing bridge service." });
+        return;
+      }
+      if (wanMembers.some(row => row.list === "WAN" && row.interface === interfaceName && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()))) {
+        res.status(409).json({ error: "The selected port is a WAN uplink. Choose a customer-facing access port instead." });
+        return;
+      }
+    }
+
+    const tag = `ochola-services-${id}`;
+    const serviceSuffix = mode === "hotspot_bridge" ? "" : `-port-${interfaceName.toLowerCase()}`;
+    const serviceName = `${tag}-pppoe${serviceSuffix}`;
+    const conflictingServer = currentServers.find(row =>
+      row.interface === interfaceName
+      && row["service-name"] !== serviceName
+      && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()),
+    );
+    if (conflictingServer) {
+      res.status(409).json({ error: `A different enabled PPPoE server (${String(conflictingServer["service-name"] ?? "unnamed")}) already uses ${interfaceName}; nothing was changed.` });
+      return;
+    }
+
+    const content = buildManagedPppoeSetupScript({ routerId: id, interfaceName, serviceName });
+    const suffix = mode === "hotspot_bridge" ? "bridge" : interfaceName.toLowerCase();
+    const fileName = `pppoe-setup-${id}-${suffix}-${Date.now()}.rsc`;
+    const token = randomBytes(24).toString("hex");
+    pendingRouterFileSources.set(token, {
+      content: Buffer.from(content, "utf8"),
+      contentType: "text/plain; charset=utf-8",
+      fileName,
+      expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+    });
+    try {
+      const uploaded = await deployRouterFile(found.creds, {
+        destinationPath: fileName,
+        sourceUrl: `${managementScriptSourceOrigin(req)}/api/router-file-source/${token}`,
+        overwrite: false,
+        uploadId: token.slice(0, 16),
+      });
+      uploadedFilePath = uploaded.destinationPath;
+      await runRouterScript({ ...found.creds, requestTimeoutMs: Math.max(found.creds.requestTimeoutMs ?? 0, 120_000) }, uploaded.destinationPath);
+
+      const checks = await runRouterCommands(found.creds, [
+        ["/ip/pool/print", "=.proplist=name,ranges", `?name=${tag}-pppoe-pool`],
+        ["/ip/pool/print", "=.proplist=name,ranges", `?name=${tag}-pppoe-expired-pool`],
+        ["/ppp/profile/print", "=.proplist=name,local-address,remote-address", `?name=${tag}-pppoe-profile`],
+        ["/interface/pppoe-server/server/print", "=.proplist=service-name,interface,disabled", `?service-name=${serviceName}`],
+        ["/ip/firewall/filter/print", "=.proplist=comment,chain,action,src-address,out-interface-list,connection-state", `?comment=${tag} pppoe-to-wan`],
+        ["/ip/firewall/nat/print", "=.proplist=comment,chain,action,src-address,out-interface-list", `?comment=${tag} PPPoE masquerade`],
+      ]);
+      const [activePools, expiredPools, profiles, servers, filters, nats] = checks;
+      const profile = Array.isArray(profiles) ? profiles.find(row => row.name === `${tag}-pppoe-profile`) : undefined;
+      const server = Array.isArray(servers) ? servers.find(row => row["service-name"] === serviceName) : undefined;
+      const filter = Array.isArray(filters) ? filters.find(row => row.comment === `${tag} pppoe-to-wan`) : undefined;
+      const nat = Array.isArray(nats) ? nats.find(row => row.comment === `${tag} PPPoE masquerade`) : undefined;
+      if (!Array.isArray(activePools) || !activePools.some(row => row.name === `${tag}-pppoe-pool` && row.ranges === "192.168.99.10-192.168.99.254")
+        || !Array.isArray(expiredPools) || !expiredPools.some(row => row.name === `${tag}-pppoe-expired-pool` && row.ranges === "192.168.191.10-192.168.191.254")
+        || profile?.["local-address"] !== "192.168.99.1" || profile?.["remote-address"] !== `${tag}-pppoe-pool`
+        || server?.interface !== interfaceName || ["true", "yes"].includes(String(server.disabled ?? "").toLowerCase())
+        || filter?.chain !== "forward" || filter.action !== "accept" || filter["src-address"] !== "192.168.99.0/24" || filter["out-interface-list"] !== "WAN"
+        || nat?.chain !== "srcnat" || nat.action !== "masquerade" || nat["src-address"] !== "192.168.99.0/24" || nat["out-interface-list"] !== "WAN") {
+        throw new Error("The script ran, but RouterOS could not verify every PPPoE pool, profile, listener, firewall, and NAT resource.");
+      }
+      res.status(201).json({
+        ok: true,
+        verified: true,
+        routerName: found.row.name,
+        mode,
+        interfaceName,
+        serviceName,
+        fileName: uploaded.destinationPath,
+        features: [
+          "Dedicated PPPoE service listener",
+          "Managed active and expired address pools",
+          "Managed PPP profile with DNS and TCP MSS adjustment",
+          "WAN forwarding and masquerade rules",
+        ],
+        message: "The PPPoE script was imported and every listed RouterOS resource was verified.",
+      });
+    } finally {
+      pendingRouterFileSources.delete(token);
+    }
+  } catch (error) {
+    if (uploadedFilePath) {
+      res.status(502).json({ error: `${uploadedFilePath} was uploaded, but import or verification failed: ${error instanceof Error ? error.message : String(error)}. Inspect the named RouterOS resources before retrying.` });
+      return;
+    }
+    if (error instanceof RouterFileExistsError) {
+      res.status(409).json({ error: `${error.message}. No existing file was overwritten.` });
+      return;
+    }
+    routerErrorResponse(res, error);
   }
 });
 

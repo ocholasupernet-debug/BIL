@@ -37,6 +37,7 @@ import PaidHotspotRecovery from "./pages/admin/PaidHotspotRecovery";
 import TransactionGraphs from "./pages/admin/TransactionGraphs";
 import HotspotSettings from "./pages/admin/HotspotSettings";
 import PPPoESettings from "./pages/admin/PPPoESettings";
+import PPPoESetup from "./pages/admin/PPPoESetup";
 import AdminVouchers from "./pages/admin/Vouchers";
 import HotspotBinding from "./pages/admin/HotspotBinding";
 import PrepaidUsers from "./pages/admin/PrepaidUsers";
@@ -181,6 +182,7 @@ function Router() {
       <Route path="/admin/activation/prepaid-users" component={PrepaidUsers} />
       <Route path="/admin/hotspot-settings" component={HotspotSettings} />
       <Route path="/admin/pppoe-settings"   component={PPPoESettings}   />
+      <Route path="/admin/pppoe-settings/setup" component={PPPoESetup} />
       <Route path="/admin/webhooks"          component={Webhooks}         />
       <Route path="/admin/logs"             component={ActivityLogs}     />
       <Route path="/admin/invoices" component={AdminInvoices} />
