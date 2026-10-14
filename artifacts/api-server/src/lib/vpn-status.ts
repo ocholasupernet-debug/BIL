@@ -81,14 +81,19 @@ export function readVpnClients(): VpnClient[] {
 }
 
 /**
- * Returns the VPN tunnel IP for a given WAN IP or CN, or null if not found.
- * Matches by realIp first, then by cn (certificate common name).
+ * Returns the VPN tunnel IP for a given certificate CN, or for a WAN IP only
+ * when that WAN IP identifies one connected peer unambiguously.
  */
 export function vpnIpFor(hostOrCn: string, clients: VpnClient[]): string | null {
-  for (const c of clients) {
-    if (c.realIp === hostOrCn || c.cn === hostOrCn) return c.vpnIp;
-  }
-  return null;
+  const key = String(hostOrCn ?? "").trim();
+  if (!key) return null;
+
+  const commonNameMatches = clients.filter(client => client.cn.trim() === key);
+  if (commonNameMatches.length === 1) return commonNameMatches[0].vpnIp;
+  if (commonNameMatches.length > 1) return null;
+
+  const realIpMatches = clients.filter(client => client.realIp.trim() === key);
+  return realIpMatches.length === 1 ? realIpMatches[0].vpnIp : null;
 }
 
 /** Read OpenVPN's persistent client-name → tunnel-IP assignments. */
