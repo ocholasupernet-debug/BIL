@@ -1271,9 +1271,8 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
     }
 
     const content = buildManagedPppoeSetupScript({ routerId: id, interfaceName, serviceName });
-    const suffix = mode === "hotspot_bridge" ? "bridge" : interfaceName.toLowerCase();
     const directory = `pppoe-setup-${id}`;
-    const fileName = `${directory}/setup-${suffix}.rsc`;
+    const fileName = `${directory}/setup.rsc`;
     const token = randomBytes(24).toString("hex");
     pendingRouterFileSources.set(token, {
       content: Buffer.from(content, "utf8"),
