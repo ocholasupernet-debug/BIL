@@ -549,8 +549,27 @@ const dotenv = fs.readFileSync(envPath, "utf8");
 const dotenvValue = name => dotenv.match(new RegExp(`^${name}=(.*)$`, "m"))?.[1] ?? "";
 const secret = process.env.TOKEN_SIGNING_SECRET || dotenvValue("TOKEN_SIGNING_SECRET")
   || process.env.SESSION_SECRET || dotenvValue("SESSION_SECRET");
-if (!secret) throw new Error("No application signing secret is available for the approved PPPoE repair.");
-const payload = `a.3.${Math.floor(Date.now() / 1000)}`;
+const supabaseUrl = process.env.VITE_SUPABASE_URL || dotenvValue("VITE_SUPABASE_URL");
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || dotenvValue("SUPABASE_SERVICE_ROLE_KEY");
+if (!secret || !supabaseUrl || !serviceRoleKey) {
+  throw new Error("Application signing or database lookup configuration is unavailable for the approved PPPoE repair.");
+}
+const routerLookupUrl = new URL("/rest/v1/isp_routers", supabaseUrl);
+routerLookupUrl.searchParams.set("select", "id,name,admin_id");
+routerLookupUrl.searchParams.set("name", `ilike.${routerName}`);
+const lookupResponse = await fetch(routerLookupUrl, {
+  headers: {
+    apikey: serviceRoleKey,
+    authorization: `Bearer ${serviceRoleKey}`,
+  },
+});
+if (!lookupResponse.ok) throw new Error(`Could not resolve the approved router owner (${lookupResponse.status}).`);
+const routers = await lookupResponse.json();
+if (!Array.isArray(routers) || routers.length !== 1 || !Number.isSafeInteger(Number(routers[0]?.admin_id))) {
+  throw new Error(`Expected exactly one router named ${routerName} with a valid ISP owner; no RouterOS changes were made.`);
+}
+const adminId = Number(routers[0].admin_id);
+const payload = `a.${adminId}.${Math.floor(Date.now() / 1000)}`;
 const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
 const response = await fetch("http://127.0.0.1:8080/api/router/pppoe/repair-network", {
   method: "POST",
