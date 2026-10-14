@@ -83,12 +83,12 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /SCRIPT 4 optional bandwidth tree starting/);
   assert.match(script, /no aggregate queue speed was supplied; existing bandwidth policy was preserved/);
   assert.match(script, /interface pppoe-server server add/);
-  assert.match(script, /name="ochola-services-104-pppoe-expired-pool" ranges="192\.168\.191\.10-192\.168\.191\.254"/);
-  assert.match(script, /192\.168\.191\.0\/24 is already used by another address or IP pool/);
+  assert.match(script, /name="ochola-services-104-pppoe-expired-pool" ranges="192\.168\.193\.10-192\.168\.193\.254"/);
+  assert.match(script, /192\.168\.193\.0\/24 is already used by another address or IP pool/);
   assert.match(script, /192\.168\.180\.10-192\.168\.183\.254/);
   assert.match(script, /interface list member add list="LAN" interface="co-hotspot-bridge-104"/);
   assert.match(script, /chain=forward action=accept in-interface="co-hotspot-bridge-104" out-interface-list=WAN hotspot=auth/);
-  assert.match(script, /chain=forward action=accept src-address="192\.168\.99\.0\/24" out-interface-list=WAN/);
+  assert.match(script, /chain=forward action=accept src-address="192\.168\.192\.0\/24" out-interface-list=WAN/);
   assert.doesNotMatch(script, /chain=forward action=accept in-interface="co-hotspot-bridge-104" out-interface-list=WAN connection-state=new,established,related comment="ochola-services-104 service-to-wan"/);
   assert.match(script, /ip dns set allow-remote-requests=yes/);
   assert.match(script, /chain=input action=accept in-interface="co-hotspot-bridge-104" protocol=udp dst-port=53/);
@@ -151,6 +151,9 @@ test("service setup keeps PPPoE on hotspot-bridge with the /22 Hotspot gateway",
   assert.match(script, /ip address add address="192\.168\.180\.1\/22" interface="hotspot-bridge"/);
   assert.match(script, /ip dhcp-server add name="ochola-services-104-dhcp" interface="hotspot-bridge"/);
   assert.match(script, /pppoe-server server add service-name="ochola-services-104-pppoe" interface="hotspot-bridge"/);
+  assert.match(script, /name="ochola-services-104-pppoe-pool" ranges="192\.168\.192\.10-192\.168\.192\.254"/);
+  assert.match(script, /name="ochola-services-104-pppoe-profile" local-address="192\.168\.180\.1" remote-address="ochola-services-104-pppoe-pool"/);
+  assert.doesNotMatch(script, /192\.168\.99\.(?:1|10)-/);
   assert.match(script, /ip hotspot add name="hotspot" interface="hotspot-bridge"/);
   assert.doesNotMatch(script, /interface bridge add name="hotspot-bridge" comment=/);
   assert.match(script, /interface bridge set \[find where name="hotspot-bridge"\] comment=""/);
@@ -167,9 +170,9 @@ test("Takeover service setup keeps shared Hotspot/PPPoE defaults with fresh targ
   assert.match(script, /address="192\.168\.180\.1\/22"/);
   assert.match(script, /address="192\.168\.180\.0\/22" gateway="192\.168\.180\.1"/);
   assert.match(script, /ranges="192\.168\.180\.10-192\.168\.183\.254"/);
-  assert.match(script, /address="192\.168\.99\.1\/24"/);
-  assert.match(script, /src-address="192\.168\.99\.0\/24"/);
-  assert.match(script, /ranges="192\.168\.99\.10-192\.168\.99\.254"/);
+  assert.doesNotMatch(script, /address="192\.168\.99\.1\/24"/);
+  assert.match(script, /src-address="192\.168\.192\.0\/24"/);
+  assert.match(script, /ranges="192\.168\.192\.10-192\.168\.192\.254"/);
   assert.doesNotMatch(script, /ochola-services-7/);
   assert.doesNotMatch(script, /legacy\.invalid|proxy\.invalid/);
 });
@@ -199,7 +202,7 @@ test("service setup adds the optional shared-wire queue tree without changing th
     portalHostnames: ["come.isplatty.org"],
   });
   assert.match(script, /name="ochola-services-104-root" target="co-hotspot-bridge-104" max-limit="100M\/100M" priority=2\/2/);
-  assert.match(script, /name="ochola-services-104-pppoe" target="192\.168\.99\.0\/24" parent="ochola-services-104-root"[^\\n]*priority=1\/1/);
+  assert.match(script, /name="ochola-services-104-pppoe" target="192\.168\.192\.0\/24" parent="ochola-services-104-root"[^\\n]*priority=1\/1/);
   assert.match(script, /name="ochola-services-104-hotspot" target="192\.168\.180\.0\/22" parent="ochola-services-104-root"[^\\n]*priority=8\/8/);
   assert.match(script, /walled-garden ip add dst-host="come\.isplatty\.org"/);
 });
