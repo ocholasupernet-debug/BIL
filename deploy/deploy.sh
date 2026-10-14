@@ -554,21 +554,37 @@ const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || dotenvValue("SUP
 if (!secret || !supabaseUrl || !serviceRoleKey) {
   throw new Error("Application signing or database lookup configuration is unavailable for the approved PPPoE repair.");
 }
-const routerLookupUrl = new URL("/rest/v1/isp_routers", supabaseUrl);
-routerLookupUrl.searchParams.set("select", "id,name,admin_id");
-routerLookupUrl.searchParams.set("name", `ilike.${routerName}`);
-const lookupResponse = await fetch(routerLookupUrl, {
+const adminLookupUrl = new URL("/rest/v1/isp_admins", supabaseUrl);
+adminLookupUrl.searchParams.set("select", "id,subdomain,is_active");
+adminLookupUrl.searchParams.set("subdomain", "eq.come");
+const adminResponse = await fetch(adminLookupUrl, {
   headers: {
     apikey: serviceRoleKey,
     authorization: `Bearer ${serviceRoleKey}`,
   },
 });
-if (!lookupResponse.ok) throw new Error(`Could not resolve the approved router owner (${lookupResponse.status}).`);
-const routers = await lookupResponse.json();
-if (!Array.isArray(routers) || routers.length !== 1 || !Number.isSafeInteger(Number(routers[0]?.admin_id))) {
-  throw new Error(`Expected exactly one router named ${routerName} with a valid ISP owner; no RouterOS changes were made.`);
+if (!adminResponse.ok) throw new Error(`Could not resolve the COME ISP account (${adminResponse.status}).`);
+const admins = await adminResponse.json();
+if (!Array.isArray(admins) || admins.length !== 1 || admins[0]?.subdomain !== "come" || admins[0]?.is_active !== true) {
+  throw new Error("Expected one active COME ISP account; no RouterOS changes were made.");
 }
-const adminId = Number(routers[0].admin_id);
+const adminId = Number(admins[0].id);
+if (!Number.isSafeInteger(adminId) || adminId < 1) throw new Error("COME ISP account ID is invalid.");
+const routerLookupUrl = new URL("/rest/v1/isp_routers", supabaseUrl);
+routerLookupUrl.searchParams.set("select", "id,name,admin_id");
+routerLookupUrl.searchParams.set("admin_id", `eq.${adminId}`);
+routerLookupUrl.searchParams.set("name", `ilike.${routerName}`);
+const routerResponse = await fetch(routerLookupUrl, {
+  headers: {
+    apikey: serviceRoleKey,
+    authorization: `Bearer ${serviceRoleKey}`,
+  },
+});
+if (!routerResponse.ok) throw new Error(`Could not resolve OCHOLA2 for the COME ISP account (${routerResponse.status}).`);
+const routers = await routerResponse.json();
+if (!Array.isArray(routers) || routers.length !== 1 || Number(routers[0]?.admin_id) !== adminId) {
+  throw new Error(`Expected exactly one ${routerName} router under the COME ISP account; no RouterOS changes were made.`);
+}
 const payload = `a.${adminId}.${Math.floor(Date.now() / 1000)}`;
 const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
 const response = await fetch("http://127.0.0.1:8080/api/router/pppoe/repair-network", {
