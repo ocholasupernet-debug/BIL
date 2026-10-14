@@ -528,6 +528,62 @@ for host in vpn.isplatty.org; do
   verify_public_health "$host" || exit 1
 done
 
+pppoe_repair_marker="$PROJECT_DIR/deploy/pppoe-repair-target"
+pppoe_repair_state="/var/lib/ocholanet/pppoe-repair-target"
+if [ -s "$pppoe_repair_marker" ]; then
+  pppoe_repair_target="$(tr -d '\r\n' < "$pppoe_repair_marker")"
+  if [ "$pppoe_repair_target" != "OCHOLA2" ]; then
+    echo "ERROR: Refusing unexpected one-time PPPoE repair target: ${pppoe_repair_target}" >&2
+    exit 1
+  fi
+  if [ ! -s "$pppoe_repair_state" ] || [ "$(cat "$pppoe_repair_state")" != "$pppoe_repair_target" ]; then
+    echo "Applying the approved managed PPPoE internet repair to ${pppoe_repair_target}..."
+    PPPOE_REPAIR_TARGET="$pppoe_repair_target" PROJECT_DIR="$PROJECT_DIR" node --input-type=module <<'NODE'
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+
+const routerName = process.env.PPPOE_REPAIR_TARGET;
+const envPath = path.join(process.env.PROJECT_DIR, ".env");
+const dotenv = fs.readFileSync(envPath, "utf8");
+const dotenvValue = name => dotenv.match(new RegExp(`^${name}=(.*)$`, "m"))?.[1] ?? "";
+const secret = process.env.TOKEN_SIGNING_SECRET || dotenvValue("TOKEN_SIGNING_SECRET")
+  || process.env.SESSION_SECRET || dotenvValue("SESSION_SECRET");
+if (!secret) throw new Error("No application signing secret is available for the approved PPPoE repair.");
+const payload = `a.3.${Math.floor(Date.now() / 1000)}`;
+const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+const response = await fetch("http://127.0.0.1:8080/api/router/pppoe/repair-network", {
+  method: "POST",
+  headers: {
+    authorization: `Bearer ${payload}.${signature}`,
+    "content-type": "application/json",
+  },
+  body: JSON.stringify({ routerName }),
+});
+const body = await response.text();
+if (!response.ok) throw new Error(`PPPoE repair failed (${response.status}): ${body.slice(0, 1000)}`);
+const result = JSON.parse(body);
+if (result.ok !== true || result.internetRulesVerified !== true) {
+  throw new Error(`PPPoE repair returned without verified Internet rules: ${body.slice(0, 1000)}`);
+}
+console.log(JSON.stringify({
+  ok: result.ok,
+  routerName: result.routerName,
+  routerId: result.routerId,
+  internetRulesVerified: result.internetRulesVerified,
+  egressInterface: result.networking?.egressInterface ?? null,
+}));
+NODE
+    install -d -m 700 "$(dirname "$pppoe_repair_state")"
+    state_tmp="$(mktemp "${pppoe_repair_state}.XXXXXX")"
+    printf '%s\n' "$pppoe_repair_target" > "$state_tmp"
+    chmod 600 "$state_tmp"
+    mv "$state_tmp" "$pppoe_repair_state"
+  else
+    echo "The one-time PPPoE repair for ${pppoe_repair_target} was already completed; skipping."
+  fi
+fi
+
 echo "[12/12] Applying scoped one-time RouterOS deployment actions..."
 bash "$PROJECT_DIR/deploy/run-router-one-shots.sh" "$PROJECT_DIR" "$PORTAL_REFRESH_ONLY"
 
