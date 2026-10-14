@@ -24,6 +24,7 @@ import {
   removeVlanCustomerQueue,
   reconcileHotspotUserAccess,
   reconcilePppoeUserAccess,
+  repairGeneratedServiceNetworking,
   addPPPSecret,
   updatePPPSecret,
   schedulePppUserExpiry,
@@ -1884,6 +1885,26 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
           error: `The PPPoE plan profile "${pppProfileName}" has no remote IP pool on ${router.name}. Configure and sync the plan's IP pool before creating the account.`,
         });
         return;
+      }
+
+      if (plan.port_id == null) {
+        const pppoeServers = await runRouterCommand(creds, [
+          "/interface/pppoe-server/server/print",
+          "=.proplist=interface,disabled",
+        ]);
+        const serviceBridges = Array.from(new Set(
+          pppoeServers
+            .filter(server => !["true", "yes"].includes(String(server.disabled ?? "").trim().toLowerCase()))
+            .map(server => String(server.interface ?? "").trim())
+            .filter(Boolean),
+        ));
+        if (serviceBridges.length !== 1) {
+          throw new Error("The router must have one unambiguous active PPPoE service bridge before creating a router-wide PPPoE account.");
+        }
+        const networking = await repairGeneratedServiceNetworking(creds, requestedRouterId, serviceBridges[0]);
+        if (!networking.activeDefaultRouteFound || (!networking.wanInterfaceListFound && !networking.egressInterface)) {
+          throw new Error("No active internet route and WAN egress are available. The PPPoE account was not created because internet forwarding and NAT cannot be verified.");
+        }
       }
 
       const [pending] = await sbInsertStrict<CustomerRow>("isp_customers", {
