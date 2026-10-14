@@ -1503,6 +1503,32 @@ router.post("/customers/:id/pppoe-client-push", requireAdmin(), async (req, res)
     }
 
     const creds = routerCredentials(targetRouter);
+    const matchingServerSecrets = await runRouterCommand(creds, [
+      "/ppp/secret/print",
+      "=.proplist=name,service,disabled",
+      `?name=${username}`,
+    ]);
+    const hasPppoeServerSecret = matchingServerSecrets.some(row =>
+      row.name === username
+      && String(row.service ?? "").trim().toLowerCase() === "pppoe"
+      && !["true", "yes"].includes(String(row.disabled ?? "").trim().toLowerCase()),
+    );
+    if (hasPppoeServerSecret) {
+      const pppoeServers = await runRouterCommand(creds, [
+        "/interface/pppoe-server/server/print",
+        "=.proplist=service-name,interface,disabled",
+      ]);
+      const hasEnabledPppoeServer = pppoeServers.some(row =>
+        !["true", "yes"].includes(String(row.disabled ?? "").trim().toLowerCase()),
+      );
+      if (hasEnabledPppoeServer) {
+        res.status(409).json({
+          error: "This router already serves this account as a PPPoE user. Choose the separate customer-side router; no dialer was changed.",
+        });
+        return;
+      }
+    }
+
     const interfaceRows = await runRouterCommand(creds, [
       "/interface/print",
       "=.proplist=name,disabled",
