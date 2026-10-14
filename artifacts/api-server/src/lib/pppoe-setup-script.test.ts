@@ -32,6 +32,11 @@ test("bridge PPPoE uses the Hotspot gateway, repairs plan profiles, and removes 
   assert.match(script, /find where remote-address=\$expiredPool/);
   assert.match(script, /interface=\$pppInterface address="192\.168\.99\.1\/24"/);
   assert.match(script, /\/ip address remove \$legacyPppoeAddress/);
+  assert.match(script, /192\.168\.192\.10-192\.168\.192\.254/);
+  assert.match(script, /192\.168\.193\.10-192\.168\.193\.254/);
+  assert.match(script, /src-address=192\.168\.192\.0\/24/);
+  assert.match(script, /192\.168\.192\.0\/24 is already in use/);
+  assert.match(script, /192\.168\.193\.0\/24 is already in use/);
 });
 
 test("managed PPPoE setup rejects unsafe interface or service names", () => {

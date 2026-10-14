@@ -1277,6 +1277,13 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
     const tag = `ochola-services-${id}`;
     const serviceSuffix = mode === "hotspot_bridge" ? "" : `-port-${interfaceName.toLowerCase()}`;
     const serviceName = `${tag}-pppoe${serviceSuffix}`;
+    const activePoolRange = mode === "hotspot_bridge"
+      ? "192.168.192.10-192.168.192.254"
+      : "192.168.99.10-192.168.99.254";
+    const expiredPoolRange = mode === "hotspot_bridge"
+      ? "192.168.193.10-192.168.193.254"
+      : "192.168.191.10-192.168.191.254";
+    const activePoolSubnet = mode === "hotspot_bridge" ? "192.168.192.0/24" : "192.168.99.0/24";
     const conflictingServer = currentServers.find(row =>
       row.interface === interfaceName
       && row["service-name"] !== serviceName
@@ -1331,15 +1338,15 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
       const server = Array.isArray(servers) ? servers.find(row => row["service-name"] === serviceName) : undefined;
       const filter = Array.isArray(filters) ? filters.find(row => row.comment === `${tag} pppoe-to-wan`) : undefined;
       const nat = Array.isArray(nats) ? nats.find(row => row.comment === `${tag} PPPoE masquerade`) : undefined;
-      if (!Array.isArray(activePools) || !activePools.some(row => row.name === `${tag}-pppoe-pool` && row.ranges === "192.168.99.10-192.168.99.254")
-        || !Array.isArray(expiredPools) || !expiredPools.some(row => row.name === `${tag}-pppoe-expired-pool` && row.ranges === "192.168.191.10-192.168.191.254")
+      if (!Array.isArray(activePools) || !activePools.some(row => row.name === `${tag}-pppoe-pool` && row.ranges === activePoolRange)
+        || !Array.isArray(expiredPools) || !expiredPools.some(row => row.name === `${tag}-pppoe-expired-pool` && row.ranges === expiredPoolRange)
         || profile?.["local-address"] !== pppoeLocalAddress || profile?.["remote-address"] !== `${tag}-pppoe-pool`
         || relatedProfiles.some(row => row["local-address"] !== pppoeLocalAddress)
         || (mode === "hotspot_bridge" && (!Array.isArray(addresses)
           || addresses.some(row => row.interface === interfaceName && row.address === "192.168.99.1/24")))
         || server?.interface !== interfaceName || ["true", "yes"].includes(String(server.disabled ?? "").toLowerCase())
-        || filter?.chain !== "forward" || filter.action !== "accept" || filter["src-address"] !== "192.168.99.0/24" || filter["out-interface-list"] !== "WAN"
-        || nat?.chain !== "srcnat" || nat.action !== "masquerade" || nat["src-address"] !== "192.168.99.0/24" || nat["out-interface-list"] !== "WAN") {
+        || filter?.chain !== "forward" || filter.action !== "accept" || filter["src-address"] !== activePoolSubnet || filter["out-interface-list"] !== "WAN"
+        || nat?.chain !== "srcnat" || nat.action !== "masquerade" || nat["src-address"] !== activePoolSubnet || nat["out-interface-list"] !== "WAN") {
         throw new Error("The script ran, but RouterOS could not verify every PPPoE pool, profile, listener, firewall, and NAT resource.");
       }
       res.status(201).json({
@@ -1352,7 +1359,7 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
         fileName: uploaded.destinationPath,
         features: [
           "Dedicated PPPoE service listener",
-          "Managed active and expired address pools",
+          `Active and expired PPPoE pools: ${activePoolRange} / ${expiredPoolRange}`,
           `Managed PPP profiles use local address ${pppoeLocalAddress}`,
           ...(mode === "hotspot_bridge" ? ["Removed legacy 192.168.99.1/24 address from hotspot-bridge"] : []),
           "WAN forwarding and masquerade rules",

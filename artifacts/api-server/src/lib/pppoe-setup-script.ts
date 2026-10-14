@@ -29,19 +29,29 @@ export function buildManagedPppoeSetupScript({
     throw new Error("A valid PPPoE local IPv4 address is required.");
   }
   const tag = `ochola-services-${routerId}`;
+  const activePoolRange = removeLegacyBridgeAddress
+    ? "192.168.192.10-192.168.192.254"
+    : "192.168.99.10-192.168.99.254";
+  const activePoolSubnet = removeLegacyBridgeAddress ? "192.168.192.0/24" : "192.168.99.0/24";
+  const expiredPoolRange = removeLegacyBridgeAddress
+    ? "192.168.193.10-192.168.193.254"
+    : "192.168.191.10-192.168.191.254";
+  const activePoolCollisionCheck = removeLegacyBridgeAddress
+    ? `:local activeRangeInUse false;
+:foreach addressId in=[/ip address find where address~"192.168.192."] do={ :set activeRangeInUse true; }
+:foreach poolId in=[/ip pool find where ranges~"192.168.192."] do={ :if ([/ip pool get $poolId name] != $activePool) do={ :set activeRangeInUse true; } }
+:if ($activeRangeInUse = true) do={ :error "192.168.192.0/24 is already in use; PPPoE pools were not changed"; }
+:local expiredRangeInUse false;
+:foreach addressId in=[/ip address find where address~"192.168.193."] do={ :set expiredRangeInUse true; }
+:foreach poolId in=[/ip pool find where ranges~"192.168.193."] do={ :if ([/ip pool get $poolId name] != $expiredPool) do={ :set expiredRangeInUse true; } }
+:if ($expiredRangeInUse = true) do={ :error "192.168.193.0/24 is already in use; PPPoE pools were not changed"; }
+`
+    : "";
   const legacyBridgeAddressRemoval = removeLegacyBridgeAddress
     ? `:local legacyPppoeAddress [/ip address find where interface=$pppInterface address="192.168.99.1/24"];
 :if ([:len $legacyPppoeAddress] > 0) do={ /ip address remove $legacyPppoeAddress; }
 `
     : "";
-  const activeAddressCollisionCheck = removeLegacyBridgeAddress
-    ? `:local existingActiveAddresses [/ip address find where address~"192.168.99."];
-:local removableLegacyAddress [/ip address find where interface=$pppInterface address="192.168.99.1/24"];
-:if ([:len $existingActiveAddresses] > [:len $removableLegacyAddress]) do={ :error "192.168.99.0/24 conflicts with another router address; no PPPoE pools were changed"; }
-`
-    : `:if ([:len [/ip address find where address~"192.168.99."]] > 0) do={ :error "192.168.99.0/24 conflicts with an existing router address; no PPPoE pools were changed"; }
-`;
-
   return `# Managed PPPoE setup for router ${routerId}; scoped to ${interfaceName} and the WAN interface list.
 :local pppInterface ${targetInterface};
 :local pppLocalAddress "${localAddress}";
@@ -49,15 +59,9 @@ export function buildManagedPppoeSetupScript({
 :local expiredPool "${tag}-pppoe-expired-pool";
 :local pppProfile "${tag}-pppoe-profile";
 :local pppService ${targetService};
-:if ([:len [/ip pool find where name=$activePool]] = 0) do={
-  ${activeAddressCollisionCheck}
-  :if ([:len [/ip pool find where ranges~"192.168.99."]] > 0) do={ :error "192.168.99.0/24 conflicts with an existing pool; no PPPoE pools were changed"; }
-}
-:if ([:len [/ip pool find where name=$expiredPool]] = 0) do={
-  :if (([:len [/ip address find where address~"192.168.191."]] > 0) || ([:len [/ip pool find where ranges~"192.168.191."]] > 0)) do={ :error "192.168.191.0/24 conflicts with an existing address or pool; no PPPoE pools were changed"; }
-}
-:if ([:len [/ip pool find where name=$activePool]] = 0) do={ /ip pool add name=$activePool ranges=192.168.99.10-192.168.99.254 comment="${tag} PPPoE pool"; }
-:if ([:len [/ip pool find where name=$expiredPool]] = 0) do={ /ip pool add name=$expiredPool ranges=192.168.191.10-192.168.191.254 comment="${tag} PPPoE expired pool"; }
+${activePoolCollisionCheck}
+:if ([:len [/ip pool find where name=$activePool]] = 0) do={ /ip pool add name=$activePool ranges=${activePoolRange} comment="${tag} PPPoE pool"; } else={ /ip pool set [find where name=$activePool] ranges=${activePoolRange}; }
+:if ([:len [/ip pool find where name=$expiredPool]] = 0) do={ /ip pool add name=$expiredPool ranges=${expiredPoolRange} comment="${tag} PPPoE expired pool"; } else={ /ip pool set [find where name=$expiredPool] ranges=${expiredPoolRange}; }
 :if ([:len [/ppp profile find where name=$pppProfile]] = 0) do={
   /ppp profile add name=$pppProfile local-address=$pppLocalAddress remote-address=$activePool dns-server=1.1.1.1,8.8.8.8 only-one=yes change-tcp-mss=yes comment="${tag} PPPoE profile";
 } else={
@@ -72,12 +76,12 @@ export function buildManagedPppoeSetupScript({
 }
 :local pppForwardComment "${tag} pppoe-to-wan";
 :if ([:len [/ip firewall filter find where comment=$pppForwardComment]] = 0) do={
-  /ip firewall filter add chain=forward action=accept src-address=192.168.99.0/24 out-interface-list=WAN connection-state=new,established,related comment=$pppForwardComment place-before=0;
-}
+  /ip firewall filter add chain=forward action=accept src-address=${activePoolSubnet} out-interface-list=WAN connection-state=new,established,related comment=$pppForwardComment place-before=0;
+} else={ /ip firewall filter set [find where comment=$pppForwardComment] src-address=${activePoolSubnet}; }
 :local pppNatComment "${tag} PPPoE masquerade";
 :if ([:len [/ip firewall nat find where comment=$pppNatComment]] = 0) do={
-  /ip firewall nat add chain=srcnat action=masquerade src-address=192.168.99.0/24 out-interface-list=WAN comment=$pppNatComment;
-}
+  /ip firewall nat add chain=srcnat action=masquerade src-address=${activePoolSubnet} out-interface-list=WAN comment=$pppNatComment;
+} else={ /ip firewall nat set [find where comment=$pppNatComment] src-address=${activePoolSubnet}; }
 ${legacyBridgeAddressRemoval}
 :put "Ready: PPPoE server, active and expired pools, profile, WAN forwarding, and NAT are configured.";
 `;
