@@ -1218,18 +1218,21 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
   if (!found) { res.status(404).json({ error: "Router not found for this ISP account." }); return; }
   let uploadedFilePath: string | null = null;
   try {
-    const [interfaces, bridgePorts, wanLists, wanMembers, bridges, currentServers] = await runRouterCommands(found.creds, [
+    const [interfaces, bridgePorts, wanLists, wanMembers, bridges, currentServers, hotspotServers, hotspotProfiles] = await runRouterCommands(found.creds, [
       ["/interface/print", "=.proplist=name,type,disabled"],
       ["/interface/bridge/port/print", "=.proplist=interface,bridge,disabled"],
       ["/interface/list/print", "=.proplist=name", "?name=WAN"],
       ["/interface/list/member/print", "=.proplist=list,interface,disabled", "?list=WAN"],
       ["/interface/bridge/print", "=.proplist=name,disabled", "?name=hotspot-bridge"],
       ["/interface/pppoe-server/server/print", "=.proplist=service-name,interface,disabled"],
+      ["/ip/hotspot/print", "=.proplist=interface,profile,disabled"],
+      ["/ip/hotspot/profile/print", "=.proplist=name,hotspot-address"],
     ]);
-    if (![interfaces, bridgePorts, wanLists, wanMembers, bridges, currentServers].every(Array.isArray)) {
+    if (![interfaces, bridgePorts, wanLists, wanMembers, bridges, currentServers, hotspotServers, hotspotProfiles].every(Array.isArray)) {
       res.status(502).json({ error: "RouterOS returned incomplete PPPoE preflight data; nothing was changed." });
       return;
     }
+    let pppoeLocalAddress = "192.168.99.1";
     if (!wanLists.some(row => row.name === "WAN")
       || !wanMembers.some(row => row.list === "WAN" && row.interface && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()))) {
       res.status(409).json({ error: 'This setup requires an existing "WAN" interface list with an enabled uplink; nothing was changed.' });
@@ -1240,6 +1243,20 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
         res.status(409).json({ error: 'The router has no enabled "hotspot-bridge"; nothing was changed.' });
         return;
       }
+      const activeHotspots = hotspotServers.filter(row => row.interface === interfaceName
+        && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()));
+      const hotspotAddresses = activeHotspots.map(server => {
+        const profile = hotspotProfiles.find(row => row.name === server.profile);
+        return String(profile?.["hotspot-address"] ?? "").trim();
+      });
+      const distinctHotspotAddresses = [...new Set(hotspotAddresses)];
+      if (!activeHotspots.length || distinctHotspotAddresses.length !== 1
+        || !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(distinctHotspotAddresses[0] ?? "")
+        || distinctHotspotAddresses[0] === "192.168.99.1") {
+        res.status(409).json({ error: "Could not safely identify one active Hotspot gateway on hotspot-bridge. No PPPoE changes were made." });
+        return;
+      }
+      pppoeLocalAddress = distinctHotspotAddresses[0];
     } else {
       const selected = interfaces.find(row => row.name === interfaceName && row.type === "ether"
         && !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()));
@@ -1270,7 +1287,13 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
       return;
     }
 
-    const content = buildManagedPppoeSetupScript({ routerId: id, interfaceName, serviceName });
+    const content = buildManagedPppoeSetupScript({
+      routerId: id,
+      interfaceName,
+      serviceName,
+      localAddress: pppoeLocalAddress,
+      removeLegacyBridgeAddress: mode === "hotspot_bridge",
+    });
     const directory = `pppoe-setup-${id}`;
     const fileName = `${directory}/setup.rsc`;
     const token = randomBytes(24).toString("hex");
@@ -1294,19 +1317,26 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
       const checks = await runRouterCommands(found.creds, [
         ["/ip/pool/print", "=.proplist=name,ranges", `?name=${tag}-pppoe-pool`],
         ["/ip/pool/print", "=.proplist=name,ranges", `?name=${tag}-pppoe-expired-pool`],
-        ["/ppp/profile/print", "=.proplist=name,local-address,remote-address", `?name=${tag}-pppoe-profile`],
+        ["/ppp/profile/print", "=.proplist=name,local-address,remote-address"],
         ["/interface/pppoe-server/server/print", "=.proplist=service-name,interface,disabled", `?service-name=${serviceName}`],
         ["/ip/firewall/filter/print", "=.proplist=comment,chain,action,src-address,out-interface-list,connection-state", `?comment=${tag} pppoe-to-wan`],
         ["/ip/firewall/nat/print", "=.proplist=comment,chain,action,src-address,out-interface-list", `?comment=${tag} PPPoE masquerade`],
+        ["/ip/address/print", "=.proplist=address,interface"],
       ]);
-      const [activePools, expiredPools, profiles, servers, filters, nats] = checks;
+      const [activePools, expiredPools, profiles, servers, filters, nats, addresses] = checks;
       const profile = Array.isArray(profiles) ? profiles.find(row => row.name === `${tag}-pppoe-profile`) : undefined;
+      const relatedProfiles = Array.isArray(profiles) ? profiles.filter(row =>
+        row["remote-address"] === `${tag}-pppoe-pool` || row["remote-address"] === `${tag}-pppoe-expired-pool`,
+      ) : [];
       const server = Array.isArray(servers) ? servers.find(row => row["service-name"] === serviceName) : undefined;
       const filter = Array.isArray(filters) ? filters.find(row => row.comment === `${tag} pppoe-to-wan`) : undefined;
       const nat = Array.isArray(nats) ? nats.find(row => row.comment === `${tag} PPPoE masquerade`) : undefined;
       if (!Array.isArray(activePools) || !activePools.some(row => row.name === `${tag}-pppoe-pool` && row.ranges === "192.168.99.10-192.168.99.254")
         || !Array.isArray(expiredPools) || !expiredPools.some(row => row.name === `${tag}-pppoe-expired-pool` && row.ranges === "192.168.191.10-192.168.191.254")
-        || profile?.["local-address"] !== "192.168.99.1" || profile?.["remote-address"] !== `${tag}-pppoe-pool`
+        || profile?.["local-address"] !== pppoeLocalAddress || profile?.["remote-address"] !== `${tag}-pppoe-pool`
+        || relatedProfiles.some(row => row["local-address"] !== pppoeLocalAddress)
+        || (mode === "hotspot_bridge" && (!Array.isArray(addresses)
+          || addresses.some(row => row.interface === interfaceName && row.address === "192.168.99.1/24")))
         || server?.interface !== interfaceName || ["true", "yes"].includes(String(server.disabled ?? "").toLowerCase())
         || filter?.chain !== "forward" || filter.action !== "accept" || filter["src-address"] !== "192.168.99.0/24" || filter["out-interface-list"] !== "WAN"
         || nat?.chain !== "srcnat" || nat.action !== "masquerade" || nat["src-address"] !== "192.168.99.0/24" || nat["out-interface-list"] !== "WAN") {
@@ -1323,7 +1353,8 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
         features: [
           "Dedicated PPPoE service listener",
           "Managed active and expired address pools",
-          "Managed PPP profile with DNS and TCP MSS adjustment",
+          `Managed PPP profiles use local address ${pppoeLocalAddress}`,
+          ...(mode === "hotspot_bridge" ? ["Removed legacy 192.168.99.1/24 address from hotspot-bridge"] : []),
           "WAN forwarding and masquerade rules",
         ],
         message: "The PPPoE script was imported and every listed RouterOS resource was verified.",

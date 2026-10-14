@@ -17,6 +17,23 @@ test("managed PPPoE setup targets the selected interface and includes access poo
   assert.match(script, /PPPoE masquerade/);
 });
 
+test("bridge PPPoE uses the Hotspot gateway, repairs plan profiles, and removes only the legacy bridge address", () => {
+  const script = buildManagedPppoeSetupScript({
+    routerId: 243,
+    interfaceName: "hotspot-bridge",
+    serviceName: "ochola-services-243-pppoe",
+    localAddress: "192.168.180.1",
+    removeLegacyBridgeAddress: true,
+  });
+
+  assert.match(script, /local-address=\$pppLocalAddress/);
+  assert.match(script, /:local pppLocalAddress "192\.168\.180\.1";/);
+  assert.match(script, /find where remote-address=\$activePool/);
+  assert.match(script, /find where remote-address=\$expiredPool/);
+  assert.match(script, /interface=\$pppInterface address="192\.168\.99\.1\/24"/);
+  assert.match(script, /\/ip address remove \$legacyPppoeAddress/);
+});
+
 test("managed PPPoE setup rejects unsafe interface or service names", () => {
   assert.throws(() => buildManagedPppoeSetupScript({
     routerId: 243,
