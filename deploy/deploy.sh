@@ -531,19 +531,24 @@ done
 pppoe_repair_marker="$PROJECT_DIR/deploy/pppoe-repair-target"
 pppoe_repair_state="/var/lib/ocholanet/pppoe-repair-target"
 if [ -s "$pppoe_repair_marker" ]; then
-  pppoe_repair_target="$(tr -d '\r\n' < "$pppoe_repair_marker")"
-  if [ "$pppoe_repair_target" != "OCHOLA2" ]; then
-    echo "ERROR: Refusing unexpected one-time PPPoE repair target: ${pppoe_repair_target}" >&2
+  pppoe_repair_identity="$(tr -d '\r\n' < "$pppoe_repair_marker")"
+  pppoe_repair_subdomain="${pppoe_repair_identity%%|*}"
+  pppoe_repair_target="${pppoe_repair_identity#*|}"
+  if [ "$pppoe_repair_identity" = "$pppoe_repair_subdomain" ] ||
+     [ "$pppoe_repair_target" != "OCHOLA2" ] ||
+     [[ ! "$pppoe_repair_subdomain" =~ ^[a-z0-9-]{3,63}$ ]]; then
+    echo "ERROR: Refusing an invalid one-time PPPoE repair identity." >&2
     exit 1
   fi
-  if [ ! -s "$pppoe_repair_state" ] || [ "$(cat "$pppoe_repair_state")" != "$pppoe_repair_target" ]; then
-    echo "Applying the approved managed PPPoE internet repair to ${pppoe_repair_target}..."
-    PPPOE_REPAIR_TARGET="$pppoe_repair_target" PROJECT_DIR="$PROJECT_DIR" node --input-type=module <<'NODE'
+  if [ ! -s "$pppoe_repair_state" ] || [ "$(cat "$pppoe_repair_state")" != "$pppoe_repair_identity" ]; then
+    echo "Applying the approved managed PPPoE internet repair to ${pppoe_repair_target} in ${pppoe_repair_subdomain}..."
+    PPPOE_REPAIR_TARGET="$pppoe_repair_target" PPPOE_REPAIR_SUBDOMAIN="$pppoe_repair_subdomain" PROJECT_DIR="$PROJECT_DIR" node --input-type=module <<'NODE'
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 const routerName = process.env.PPPOE_REPAIR_TARGET;
+const tenantSubdomain = process.env.PPPOE_REPAIR_SUBDOMAIN;
 const envPath = path.join(process.env.PROJECT_DIR, ".env");
 const dotenv = fs.readFileSync(envPath, "utf8");
 const dotenvValue = name => dotenv.match(new RegExp(`^${name}=(.*)$`, "m"))?.[1] ?? "";
@@ -556,7 +561,7 @@ if (!secret || !supabaseUrl || !serviceRoleKey) {
 }
 const adminLookupUrl = new URL("/rest/v1/isp_admins", supabaseUrl);
 adminLookupUrl.searchParams.set("select", "id,subdomain,is_active");
-adminLookupUrl.searchParams.set("subdomain", "eq.come");
+adminLookupUrl.searchParams.set("subdomain", `eq.${tenantSubdomain}`);
 const adminResponse = await fetch(adminLookupUrl, {
   headers: {
     apikey: serviceRoleKey,
@@ -565,8 +570,8 @@ const adminResponse = await fetch(adminLookupUrl, {
 });
 if (!adminResponse.ok) throw new Error(`Could not resolve the COME ISP account (${adminResponse.status}).`);
 const admins = await adminResponse.json();
-if (!Array.isArray(admins) || admins.length !== 1 || admins[0]?.subdomain !== "come" || admins[0]?.is_active !== true) {
-  throw new Error("Expected one active COME ISP account; no RouterOS changes were made.");
+if (!Array.isArray(admins) || admins.length !== 1 || admins[0]?.subdomain !== tenantSubdomain || admins[0]?.is_active !== true) {
+  throw new Error(`Expected one active ${tenantSubdomain} ISP account; no RouterOS changes were made.`);
 }
 const adminId = Number(admins[0].id);
 if (!Number.isSafeInteger(adminId) || adminId < 1) throw new Error("COME ISP account ID is invalid.");
@@ -583,7 +588,7 @@ const routerResponse = await fetch(routerLookupUrl, {
 if (!routerResponse.ok) throw new Error(`Could not resolve OCHOLA2 for the COME ISP account (${routerResponse.status}).`);
 const routers = await routerResponse.json();
 if (!Array.isArray(routers) || routers.length !== 1 || Number(routers[0]?.admin_id) !== adminId) {
-  throw new Error(`Expected exactly one ${routerName} router under the COME ISP account; no RouterOS changes were made.`);
+    throw new Error(`Expected exactly one ${routerName} router under ${tenantSubdomain}; no RouterOS changes were made.`);
 }
 const payload = `a.${adminId}.${Math.floor(Date.now() / 1000)}`;
 const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
@@ -611,7 +616,7 @@ console.log(JSON.stringify({
 NODE
     install -d -m 700 "$(dirname "$pppoe_repair_state")"
     state_tmp="$(mktemp "${pppoe_repair_state}.XXXXXX")"
-    printf '%s\n' "$pppoe_repair_target" > "$state_tmp"
+    printf '%s\n' "$pppoe_repair_identity" > "$state_tmp"
     chmod 600 "$state_tmp"
     mv "$state_tmp" "$pppoe_repair_state"
   else
