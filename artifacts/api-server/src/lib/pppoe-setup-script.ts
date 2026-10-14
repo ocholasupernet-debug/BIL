@@ -40,10 +40,16 @@ export function buildManagedPppoeSetupScript({
     ? `:local activeRangeInUse false;
 :foreach addressId in=[/ip address find where address~"192.168.192."] do={ :set activeRangeInUse true; }
 :foreach poolId in=[/ip pool find where ranges~"192.168.192."] do={ :if ([/ip pool get $poolId name] != $activePool) do={ :set activeRangeInUse true; } }
+:foreach userId in=[/ip hotspot user find where address~"192.168.192."] do={ :set activeRangeInUse true; }
+:foreach bindingId in=[/ip hotspot ip-binding find where address~"192.168.192."] do={ :set activeRangeInUse true; }
+:foreach leaseId in=[/ip dhcp-server lease find where address~"192.168.192."] do={ :set activeRangeInUse true; }
 :if ($activeRangeInUse = true) do={ :error "192.168.192.0/24 is already in use; PPPoE pools were not changed"; }
 :local expiredRangeInUse false;
 :foreach addressId in=[/ip address find where address~"192.168.193."] do={ :set expiredRangeInUse true; }
 :foreach poolId in=[/ip pool find where ranges~"192.168.193."] do={ :if ([/ip pool get $poolId name] != $expiredPool) do={ :set expiredRangeInUse true; } }
+:foreach userId in=[/ip hotspot user find where address~"192.168.193."] do={ :set expiredRangeInUse true; }
+:foreach bindingId in=[/ip hotspot ip-binding find where address~"192.168.193."] do={ :set expiredRangeInUse true; }
+:foreach leaseId in=[/ip dhcp-server lease find where address~"192.168.193."] do={ :set expiredRangeInUse true; }
 :if ($expiredRangeInUse = true) do={ :error "192.168.193.0/24 is already in use; PPPoE pools were not changed"; }
 `
     : "";

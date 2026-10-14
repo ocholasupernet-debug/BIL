@@ -1218,7 +1218,8 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
   if (!found) { res.status(404).json({ error: "Router not found for this ISP account." }); return; }
   let uploadedFilePath: string | null = null;
   try {
-    const [interfaces, bridgePorts, wanLists, wanMembers, bridges, currentServers, hotspotServers, hotspotProfiles] = await runRouterCommands(found.creds, [
+    const [interfaces, bridgePorts, wanLists, wanMembers, bridges, currentServers, hotspotServers, hotspotProfiles,
+      addressPools, routerAddresses, hotspotUsers, hotspotBindings, dhcpLeases, pppSecrets] = await runRouterCommands(found.creds, [
       ["/interface/print", "=.proplist=name,type,disabled"],
       ["/interface/bridge/port/print", "=.proplist=interface,bridge,disabled"],
       ["/interface/list/print", "=.proplist=name", "?name=WAN"],
@@ -1226,9 +1227,16 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
       ["/interface/bridge/print", "=.proplist=name,disabled", "?name=hotspot-bridge"],
       ["/interface/pppoe-server/server/print", "=.proplist=service-name,interface,disabled"],
       ["/ip/hotspot/print", "=.proplist=interface,profile,disabled"],
-      ["/ip/hotspot/profile/print", "=.proplist=name,hotspot-address"],
+      ["/ip/hotspot/profile/print", "=.proplist=name,hotspot-address,address-pool"],
+      ["/ip/pool/print", "=.proplist=name,ranges"],
+      ["/ip/address/print", "=.proplist=address,interface"],
+      ["/ip/hotspot/user/print", "=.proplist=name,address,disabled"],
+      ["/ip/hotspot/ip-binding/print", "=.proplist=address,type,disabled"],
+      ["/ip/dhcp-server/lease/print", "=.proplist=address,dynamic,status,server"],
+      ["/ppp/secret/print", "=.proplist=name,remote-address,disabled,service"],
     ]);
-    if (![interfaces, bridgePorts, wanLists, wanMembers, bridges, currentServers, hotspotServers, hotspotProfiles].every(Array.isArray)) {
+    if (![interfaces, bridgePorts, wanLists, wanMembers, bridges, currentServers, hotspotServers, hotspotProfiles,
+      addressPools, routerAddresses, hotspotUsers, hotspotBindings, dhcpLeases, pppSecrets].every(Array.isArray)) {
       res.status(502).json({ error: "RouterOS returned incomplete PPPoE preflight data; nothing was changed." });
       return;
     }
@@ -1284,6 +1292,62 @@ router.post("/router/:id/pppoe-setup/deploy", requireAdmin(), async (req, res): 
       ? "192.168.193.10-192.168.193.254"
       : "192.168.191.10-192.168.191.254";
     const activePoolSubnet = mode === "hotspot_bridge" ? "192.168.192.0/24" : "192.168.99.0/24";
+    try {
+      const plannedRanges = [...parseIpv4Ranges(activePoolRange), ...parseIpv4Ranges(expiredPoolRange)];
+      const managedPoolNames = new Set([`${tag}-pppoe-pool`, `${tag}-pppoe-expired-pool`]);
+      const activeHotspotPoolNames = new Set(hotspotServers
+        .filter(row => !["true", "yes"].includes(String(row.disabled ?? "").toLowerCase()))
+        .map(server => String(hotspotProfiles.find(profile => profile.name === server.profile)?.["address-pool"] ?? "").trim())
+        .filter(Boolean));
+      const conflicts: string[] = [];
+      for (const pool of addressPools) {
+        const poolName = String(pool.name ?? "");
+        if (managedPoolNames.has(poolName)) {
+          if (activeHotspotPoolNames.has(poolName)) conflicts.push(`Hotspot uses managed PPPoE pool ${poolName}`);
+          continue;
+        }
+        const ranges = parseIpv4Ranges(String(pool.ranges ?? ""));
+        if (ranges.some(range => plannedRanges.some(planned => ipv4RangesOverlap(range, planned)))) {
+          conflicts.push(`pool ${poolName || "unnamed"}`);
+        }
+      }
+      for (const [kind, rows] of [
+        ["router IP", routerAddresses],
+        ["Hotspot user IP", hotspotUsers],
+        ["Hotspot binding IP", hotspotBindings],
+        ["DHCP lease IP", dhcpLeases],
+      ] as const) {
+        for (const row of rows) {
+          const rawAddress = String(row.address ?? "").trim();
+          if (!rawAddress) continue;
+          const address = ipv4AddressNumber(rawAddress.split("/")[0]);
+          if (address === null) throw new Error(`RouterOS returned an unreadable ${kind} value.`);
+          if (plannedRanges.some(range => range.start <= address && address <= range.end)) {
+            conflicts.push(`${kind} ${rawAddress}`);
+          }
+        }
+      }
+      for (const secret of pppSecrets) {
+        const rawAddress = String(secret["remote-address"] ?? "").trim();
+        if (!rawAddress) continue;
+        const address = ipv4AddressNumber(rawAddress.split("/")[0]);
+        if (address === null) throw new Error("RouterOS returned an unreadable PPPoE secret address.");
+        if (plannedRanges.some(range => range.start <= address && address <= range.end)) {
+          conflicts.push(`PPPoE secret IP ${rawAddress}`);
+        }
+      }
+      if (conflicts.length) {
+        res.status(409).json({
+          error: `The planned PPPoE pools overlap existing RouterOS allocations (${[...new Set(conflicts)].slice(0, 5).join(", ")}). No changes were made; choose unused ranges first.`,
+        });
+        return;
+      }
+    } catch (error) {
+      res.status(409).json({
+        error: `Could not safely verify the PPPoE pool ranges against existing Hotspot/DHCP allocations: ${error instanceof Error ? error.message : String(error)}. No changes were made.`,
+      });
+      return;
+    }
     const conflictingServer = currentServers.find(row =>
       row.interface === interfaceName
       && row["service-name"] !== serviceName
