@@ -210,17 +210,27 @@ async function planPoolAssignment(
   if (normalizedType === "pppoe" && scope.portId === null) {
     const managedActivePool = `ochola-services-${scope.routerId}-pppoe-pool`;
     const managedExpiredPool = `ochola-services-${scope.routerId}-pppoe-expired-pool`;
-    const existingPools = await sbSelectStrict<{ id: number; name: string }>(
+    const existingPools = await sbSelectStrict<{
+      id: number;
+      name: string;
+      range_start: string | null;
+      range_end: string | null;
+    }>(
       "isp_ip_pools",
-      `admin_id=eq.${adminId}&router_id=eq.${scope.routerId}&select=id,name&limit=1000`,
+      `admin_id=eq.${adminId}&router_id=eq.${scope.routerId}&select=id,name,range_start,range_end&limit=1000`,
     );
     const now = new Date().toISOString();
     const requiredPools = [
-      { name: managedActivePool, range_start: "192.168.99.10", range_end: "192.168.99.254" },
-      ...(!expiredIpPool ? [{ name: managedExpiredPool, range_start: "192.168.191.10", range_end: "192.168.191.254" }] : []),
+      { name: managedActivePool, range_start: "192.168.192.10", range_end: "192.168.192.254" },
+      ...(!expiredIpPool ? [{ name: managedExpiredPool, range_start: "192.168.193.10", range_end: "192.168.193.254" }] : []),
     ];
     for (const pool of requiredPools) {
-      if (!existingPools.some(existing => existing.name.trim() === pool.name)) {
+      const matches = existingPools.filter(existing => existing.name.trim() === pool.name);
+      if (matches.length > 1) {
+        throw new Error(`Multiple saved records use managed PPPoE pool name "${pool.name}"; resolve the duplicate before saving the plan.`);
+      }
+      const existing = matches[0];
+      if (!existing) {
         await sbInsertStrict<Record<string, unknown>>("isp_ip_pools", {
           admin_id: adminId,
           router_id: scope.routerId,
@@ -228,6 +238,13 @@ async function planPoolAssignment(
           created_at: now,
           updated_at: now,
         });
+      } else if (existing.range_start !== pool.range_start || existing.range_end !== pool.range_end) {
+        const [updated] = await sbUpdateStrict<Record<string, unknown>>(
+          "isp_ip_pools",
+          `id=eq.${existing.id}&admin_id=eq.${adminId}&router_id=eq.${scope.routerId}`,
+          { range_start: pool.range_start, range_end: pool.range_end, updated_at: now },
+        );
+        if (!updated) throw new Error(`The saved range for managed PPPoE pool "${pool.name}" could not be updated.`);
       }
     }
     activeIpPool = managedActivePool;
