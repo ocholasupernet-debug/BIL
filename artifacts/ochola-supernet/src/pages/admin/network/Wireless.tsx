@@ -107,6 +107,9 @@ function PasswordInput({
 function errorText(body: unknown, status: number) {
   if (body && typeof body === "object") {
     const b = body as { error?: unknown; detail?: unknown; message?: unknown };
+    if (b.error === "MikroTik API error" && typeof b.detail === "string" && b.detail.trim()) {
+      return `${b.error}: ${b.detail.trim().slice(0, 500)}`;
+    }
     for (const value of [b.error, b.detail, b.message])
       if (typeof value === "string" && value.trim()) return value;
   }
