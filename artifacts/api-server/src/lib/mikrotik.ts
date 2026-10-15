@@ -4575,6 +4575,7 @@ export interface WirelessInterface {
   managedByApp: boolean;
   securitySummary?: string;
   channelLabel?: string;
+  securityMode?: "open" | "wpa2";
 }
 
 export interface WirelessSecurityProfile {
@@ -4641,6 +4642,9 @@ export async function fetchWireless(
             : hasAuthenticationTypes
               ? "Open Wi-Fi"
               : "Security not reported",
+          securityMode: hasAuthenticationTypes
+            ? authenticationTypes ? "wpa2" : "open"
+            : undefined,
         };
       });
       return { apiMode: "wifi", interfaces, profiles: [] };
@@ -4675,6 +4679,10 @@ export async function fetchWireless(
       authentication:   r["authentication-types"] ?? "",
       mode:             r.mode                    ?? "",
     }));
+    const profilesByName = new Map(profiles.map(profile => [profile.name, profile]));
+    for (const iface of interfaces) {
+      iface.securityMode = profilesByName.get(iface.securityProfile)?.mode === "none" ? "open" : "wpa2";
+    }
 
     return { apiMode: "legacy", interfaces, profiles };
   });
@@ -4695,10 +4703,15 @@ const wirelessAppComment = (routerId: number) =>
 const isWirelessAppComment = (comment: unknown, routerId: number) =>
   new RegExp(`^ochola-wireless-app:${routerId}:[A-Za-z0-9]+$`, "i").test(String(comment ?? "").trim());
 
+function isWirelessMenuMissing(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no such command|unknown command|bad command|not found|invalid item/i.test(message);
+}
+
 function unsupportedWirelessError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
   return /no such command|unknown command|bad command|input does not match any value|unknown parameter/i.test(message)
-    ? new Error(`RouterOS legacy wireless package is unsupported: ${message}`)
+    ? new Error(`RouterOS does not support this wireless operation: ${message}`)
     : (error instanceof Error ? error : new Error(message));
 }
 
@@ -4720,7 +4733,16 @@ export async function createWirelessVirtualAp(
   try {
     await withConn(creds, async (conn) => {
       const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-      const interfaces = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+      let apiMode: "legacy" | "wifi";
+      let interfaces: Record<string, string>[];
+      try {
+        interfaces = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+        apiMode = "legacy";
+      } catch (error) {
+        if (!isWirelessMenuMissing(error)) throw error;
+        interfaces = await withTimeout(conn.write(["/interface/wifi/print"]), ms) as Record<string, string>[];
+        apiMode = "wifi";
+      }
       const master = interfaces.find(row => row[".id"] === params.masterInterfaceId);
       if (!master || String(master["master-interface"] ?? "").trim()) {
         throw new Error("masterInterfaceId must identify a physical wireless radio.");
@@ -4732,6 +4754,35 @@ export async function createWirelessVirtualAp(
         throw new Error("A wireless interface with that name already exists.");
       }
       const comment = wirelessAppComment(params.routerId);
+      if (apiMode === "wifi") {
+        const command = [
+          "/interface/wifi/add",
+          `=name=${params.name}`,
+          `=master-interface=${masterName}`,
+          "=configuration.mode=ap",
+          `=configuration.ssid=${params.ssid}`,
+          `=disabled=${params.disabled ? "yes" : "no"}`,
+          `=comment=${comment}`,
+          ...(securityMode === "wpa2"
+            ? ["=security.authentication-types=wpa2-psk", `=security.passphrase=${params.password}`]
+            : ["=security.authentication-types=", "=security.passphrase="]),
+        ];
+        await withTimeout(conn.write(command), ms);
+        const createdRows = await withTimeout(
+          conn.write(["/interface/wifi/print", `?name=${params.name}`]),
+          ms,
+        ) as Record<string, string>[];
+        const created = createdRows.find(row => row.name === params.name);
+        const authenticationTypes = String(created?.["security.authentication-types"] ?? "").trim();
+        if (!created || created["master-interface"] !== masterName ||
+            created["configuration.ssid"] !== params.ssid ||
+            !isWirelessAppComment(created.comment, params.routerId) ||
+            (params.disabled !== undefined && parseBool(created.disabled) !== params.disabled) ||
+            (securityMode === "open" ? authenticationTypes !== "" : !authenticationTypes.includes("wpa2-psk"))) {
+          throw new Error("Post-write verification failed: virtual WiFi interface settings did not persist.");
+        }
+        return;
+      }
       const profileCommand = [
         "/interface/wireless/security-profiles/add",
         `=name=${profileName}`,
@@ -4799,11 +4850,51 @@ export async function patchWirelessInterface(
   try {
     await withConn(creds, async (conn) => {
       const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-      const rows = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+      let apiMode: "legacy" | "wifi";
+      let rows: Record<string, string>[];
+      try {
+        rows = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+        apiMode = "legacy";
+      } catch (error) {
+        if (!isWirelessMenuMissing(error)) throw error;
+        rows = await withTimeout(conn.write(["/interface/wifi/print"]), ms) as Record<string, string>[];
+        apiMode = "wifi";
+      }
       const current = rows.find(row => row[".id"] === params.interfaceId);
       if (!current) throw new Error("Wireless interface was not found.");
-      const oldProfile = String(current["security-profile"] ?? "");
       const requestedSecurityMode = params.securityMode ?? (params.password !== undefined ? "wpa2" : undefined);
+      if (apiMode === "wifi") {
+        const currentAuthentication = String(current["security.authentication-types"] ?? "").trim();
+        const currentIsOpen = currentAuthentication === "";
+        if (requestedSecurityMode === "wpa2" && currentIsOpen && params.password === undefined) {
+          throw new Error("Provide a WPA2 password before enabling Wi-Fi security.");
+        }
+        const command = ["/interface/wifi/set", `=.id=${params.interfaceId}`];
+        if (params.ssid !== undefined) command.push(`=configuration.ssid=${params.ssid}`);
+        if (params.disabled !== undefined) command.push(`=disabled=${params.disabled ? "yes" : "no"}`);
+        if (requestedSecurityMode === "open") {
+          command.push("=security.authentication-types=", "=security.passphrase=");
+        } else if (requestedSecurityMode === "wpa2") {
+          command.push("=security.authentication-types=wpa2-psk");
+          if (params.password !== undefined) command.push(`=security.passphrase=${params.password}`);
+        }
+        if (command.length > 2) await withTimeout(conn.write(command), ms);
+        const verifiedRows = await withTimeout(
+          conn.write(["/interface/wifi/print", `?.id=${params.interfaceId}`]),
+          ms,
+        ) as Record<string, string>[];
+        const updated = verifiedRows.find(row => row[".id"] === params.interfaceId);
+        const updatedAuthentication = String(updated?.["security.authentication-types"] ?? "").trim();
+        if (!updated ||
+            (params.ssid !== undefined && updated["configuration.ssid"] !== params.ssid) ||
+            (params.disabled !== undefined && parseBool(updated.disabled) !== params.disabled) ||
+            (requestedSecurityMode === "open" && updatedAuthentication !== "") ||
+            (requestedSecurityMode === "wpa2" && !updatedAuthentication.includes("wpa2-psk"))) {
+          throw new Error("Post-write verification failed: WiFi settings did not persist.");
+        }
+        return;
+      }
+      const oldProfile = String(current["security-profile"] ?? "");
       let selectedProfile: string | undefined;
       let newProfile: string | undefined;
 
@@ -4900,21 +4991,33 @@ export async function deleteWirelessVirtualAp(
   try {
     await withConn(creds, async (conn) => {
       const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-      const rows = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+      let apiMode: "legacy" | "wifi";
+      let rows: Record<string, string>[];
+      try {
+        rows = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+        apiMode = "legacy";
+      } catch (error) {
+        if (!isWirelessMenuMissing(error)) throw error;
+        rows = await withTimeout(conn.write(["/interface/wifi/print"]), ms) as Record<string, string>[];
+        apiMode = "wifi";
+      }
       const current = rows.find(row => row[".id"] === interfaceId);
       const masterId = String(current?.["master-interface"] ?? "");
       if (!current || !masterId || !isWirelessAppComment(current.comment, routerId)) {
         throw new Error("Only app-owned virtual wireless interfaces may be deleted.");
       }
-      await withTimeout(conn.write(["/interface/wireless/remove", `=.id=${interfaceId}`]), ms);
-      const remaining = await withTimeout(conn.write(["/interface/wireless/print", `?.id=${interfaceId}`]), ms) as Record<string, string>[];
+      const menu = apiMode === "wifi" ? "/interface/wifi" : "/interface/wireless";
+      await withTimeout(conn.write([`${menu}/remove`, `=.id=${interfaceId}`]), ms);
+      const remaining = await withTimeout(conn.write([`${menu}/print`, `?.id=${interfaceId}`]), ms) as Record<string, string>[];
       if (remaining.some(row => row[".id"] === interfaceId)) throw new Error("Post-delete verification failed.");
-      const profileRows = await withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Record<string, string>[];
-      const used = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
-      for (const profile of profileRows) {
-        if (isWirelessAppComment(profile.comment, routerId) && profile[".id"] &&
-            !used.some(row => row["security-profile"] === profile.name)) {
-          await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${profile[".id"]}`]), ms);
+      if (apiMode === "legacy") {
+        const profileRows = await withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Record<string, string>[];
+        const used = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+        for (const profile of profileRows) {
+          if (isWirelessAppComment(profile.comment, routerId) && profile[".id"] &&
+              !used.some(row => row["security-profile"] === profile.name)) {
+            await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${profile[".id"]}`]), ms);
+          }
         }
       }
     });
