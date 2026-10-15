@@ -36,6 +36,7 @@ interface WirelessIface {
   masterInterface?: string | null;
   securitySummary?: string;
   channelLabel?: string;
+  securityMode?: "open" | "wpa2";
 }
 interface WirelessData {
   apiMode?: "legacy" | "wifi";
@@ -68,9 +69,11 @@ const button: React.CSSProperties = {
 function PasswordInput({
   value,
   onChange,
+  placeholder = "Wi-Fi password",
 }: {
   value: string;
   onChange: (value: string) => void;
+  placeholder?: string;
 }) {
   const [show, setShow] = useState(false);
   return (
@@ -79,7 +82,7 @@ function PasswordInput({
         type={show ? "text" : "password"}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="Wi-Fi password"
+        placeholder={placeholder}
         style={{ ...inp, paddingRight: "2.5rem" }}
       />
       <button
@@ -124,7 +127,7 @@ function WirelessCard({
 }) {
   const profile =
     profiles.find((p) => p.name === iface.securityProfile) ?? null;
-  const existingSecurityMode = profile?.mode === "none" ? "open" : "wpa2";
+  const existingSecurityMode = iface.securityMode ?? (profile?.mode === "none" ? "open" : "wpa2");
   const [ssid, setSsid] = useState(iface.ssid ?? "");
   const [password, setPassword] = useState(profile?.wpa2PreSharedKey ?? "");
   const [securityMode, setSecurityMode] = useState<"open" | "wpa2">(existingSecurityMode);
@@ -142,14 +145,14 @@ function WirelessCard({
   const dirty =
     ssid !== (iface.ssid ?? "") ||
     securityMode !== existingSecurityMode ||
-    (securityMode === "wpa2" && password !== (profile?.wpa2PreSharedKey ?? ""));
+    (securityMode === "wpa2" && password !== "" && password !== (profile?.wpa2PreSharedKey ?? ""));
   const save = async () => {
     if (securityMode === "wpa2" && securityMode !== existingSecurityMode &&
         (new TextEncoder().encode(password).length < 8 || new TextEncoder().encode(password).length > 63)) {
       setState({ ok: false, text: "Enter a WPA2 password of 8–63 bytes to enable Wi-Fi security." });
       return;
     }
-    if (securityMode === "wpa2" && password !== (profile?.wpa2PreSharedKey ?? "") &&
+    if (securityMode === "wpa2" && password !== "" && password !== (profile?.wpa2PreSharedKey ?? "") &&
         (password.length < 8 || new TextEncoder().encode(password).length > 63)) {
       setState({ ok: false, text: "WPA2 passwords must be 8–63 bytes." });
       return;
@@ -160,7 +163,7 @@ function WirelessCard({
       const body: Record<string, unknown> = { interfaceId: iface.id };
       if (ssid !== iface.ssid) body.ssid = ssid;
       if (securityMode !== existingSecurityMode) body.securityMode = securityMode;
-      if (securityMode === "wpa2" && password !== (profile?.wpa2PreSharedKey ?? ""))
+      if (securityMode === "wpa2" && password !== "" && password !== (profile?.wpa2PreSharedKey ?? ""))
         body.password = password;
       const response = await fetch(`/api/router/${routerId}/wireless`, {
         method: "PATCH",
@@ -313,7 +316,7 @@ function WirelessCard({
           }}
         >
           NETWORK NAME (SSID)
-          <input
+              <input
             value={ssid}
             onChange={(e) => setSsid(e.target.value)}
             readOnly={readOnly}
@@ -345,7 +348,11 @@ function WirelessCard({
           }}
         >
           <Lock size={11} /> PASSWORD
-          <PasswordInput value={password} onChange={setPassword} />
+          <PasswordInput
+            value={password}
+            onChange={setPassword}
+            placeholder={profile ? "Wi-Fi password" : "New Wi-Fi password (blank keeps current)"}
+          />
           {!profile && (
             <span
               style={{
@@ -587,7 +594,7 @@ export default function Wireless() {
           >
             <button
               onClick={() => setAdding((v) => !v)}
-              disabled={physical.length === 0 || data.apiMode === "wifi"}
+              disabled={physical.length === 0}
               style={{
                 ...button,
                 alignSelf: "flex-start",
@@ -604,9 +611,7 @@ export default function Wireless() {
                 fontSize: ".76rem",
               }}
             >
-              {data.apiMode === "wifi"
-                ? "This router uses the newer WiFi menu. WLAN inventory is available here, but changes are read-only."
-                : "Delete is available only for app-managed virtual WLANs. Physical radios and WLANs managed outside the app cannot be deleted here."}
+              Delete is available only for app-managed virtual WLANs. Physical radios and WLANs managed outside the app cannot be deleted here.
             </p>
             {data.interfaces.length === 0 && (
               <div
@@ -639,7 +644,7 @@ export default function Wireless() {
                 No physical radios are available for creating a WLAN.
               </div>
             )}
-            {adding && data.apiMode !== "wifi" && (
+            {adding && (
               <form
                 onSubmit={add}
                 style={{
@@ -738,7 +743,7 @@ export default function Wireless() {
                 profiles={data.profiles}
                 routerId={selectedRouterId!}
                 onChanged={() => query.refetch()}
-                readOnly={data.apiMode === "wifi"}
+                readOnly={false}
               />
             ))}
           </div>
