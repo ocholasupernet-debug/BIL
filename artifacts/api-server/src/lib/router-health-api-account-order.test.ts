@@ -20,3 +20,9 @@ test("health checks use the management account without duplicating it as fallbac
     username: "ocholasupernet",
   });
 });
+test("router Bridge Ports prefer the management API user and retain the saved router username", () => {
+  assert.deepEqual(routerHealthApiAccountOrder("ocholasupernet1", "10.8.5.18"), {
+    username: "ocholasupernet",
+    alternateUsernames: ["ocholasupernet1"],
+  });
+});

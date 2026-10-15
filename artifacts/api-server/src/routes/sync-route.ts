@@ -2757,10 +2757,27 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
     toTry.push({ ip: cnVpnIp, label: `${cnVpnIp} (VPN by CN)` });
 
   for (const { ip, label } of toTry) {
-    try {
-      conn = makeConn(ip, username, password, BRIDGE_PORT_TIMEOUT_SECONDS);
-      await withTimeout(conn.connect(), 8000);
-      connectedVia = label;
+    const accountOrder = routerManagementApiAccountOrder(username, ip);
+    const apiUsernames = [
+      accountOrder.username,
+      ...(accountOrder.alternateUsernames ?? []),
+    ].filter((candidate, index, all) => candidate && all.indexOf(candidate) === index);
+
+    for (const apiUsername of apiUsernames) {
+      const candidateConn = makeConn(ip, apiUsername, password, BRIDGE_PORT_TIMEOUT_SECONDS);
+      try {
+        await withTimeout(candidateConn.connect(), 8000);
+        conn = candidateConn;
+        connectedVia = label;
+        break;
+      } catch (err) {
+        lastErr = err;
+        try { candidateConn.close(); } catch { /* ignore */ }
+        if (isRouterApiTransportFailure(err)) break;
+      }
+    }
+
+    if (connectedVia) {
 
       /* ── Save discovered VPN IP back to Supabase in background ── */
       const HB_URL = hbUrl();
@@ -2784,9 +2801,6 @@ router.post("/admin/router/ports", async (req, res): Promise<void> => {
         }
       }
       break; /* connected — stop trying */
-    } catch (err) {
-      lastErr = err;
-      try { conn?.close(); } catch { /* ignore */ }
     }
   }
 

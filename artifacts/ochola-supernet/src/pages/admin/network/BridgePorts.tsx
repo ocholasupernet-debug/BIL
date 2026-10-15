@@ -25,7 +25,17 @@ function RouterErrorPanel({ error }: { error: string }) {
   /* Classify the failure */
   const isRefused   = e.includes("refused") || e.includes("econnrefused");
   const isTimeout   = e.includes("timed out") || e.includes("etimedout") || e.includes("did not respond");
-  const isAuthFail  = e.includes("login failed") || e.includes("authentication") || e.includes("wrong credentials") || e.includes("bad password");
+  const isAuthFail  = [
+    "login failed",
+    "authentication",
+    "wrong credentials",
+    "bad password",
+    "username or password is invalid",
+    "user name or password is invalid",
+    "invalid username or password",
+    "invalid user name or password",
+    "invalid user or password",
+  ].some(message => e.includes(message));
   const isNoVpn     = e.includes("routing failure") || e.includes("ehostunreach") || e.includes("enetunreach") || e.includes("no host");
 
   let title  = "Router API Not Reachable";
@@ -35,9 +45,8 @@ function RouterErrorPanel({ error }: { error: string }) {
 
   if (isAuthFail) {
     title  = "Authentication Failed";
-    reason = "The router API is reachable but rejected the username or password.";
-    hint   = "Check the router credentials saved in the Routers page and ensure the API user has full access:";
-    cmds   = ["/ip service enable api", "/user add name=admin group=full"];
+    reason = "The router API answered, but RouterOS rejected the saved username or password.";
+    hint   = "In the Routers page, verify the saved API username and password match an enabled RouterOS user with API access. Do not create a default admin user or expose API access to the public Internet.";
   } else if (isRefused) {
     title  = "API Service Disabled";
     reason = "Port 8728 is reachable on the router (VPN tunnel is up ✓) but the RouterOS API service is turned off.";
@@ -70,7 +79,7 @@ function RouterErrorPanel({ error }: { error: string }) {
         <AlertTriangle size={15} /> {title}
       </div>
       <p style={{ color: "#fca5a5", margin: "0 0 0.875rem", fontSize: "0.82rem", lineHeight: 1.6 }}>{reason}</p>
-      {cmds.length > 0 && (
+      {(hint || cmds.length > 0) && (
         <div style={{ background: "rgba(34,197,94,0.06)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 8, padding: "0.75rem 1rem" }}>
           <div style={{ color: "#4ade80", fontSize: "0.72rem", fontWeight: 700, marginBottom: "0.5rem" }}>{hint}</div>
           {cmds.map((cmd) => (
