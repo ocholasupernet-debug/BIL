@@ -9,6 +9,7 @@ export interface ServiceIdentityCustomer {
   pppoe_username?: string | null;
   username?: string | null;
   ip_address?: string | null;
+  expires_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -90,6 +91,17 @@ export function mergeCustomerServiceIdentities<T extends ServiceIdentityCustomer
         if (primaryStateFields.has(field) || !isMissingCustomerValue(mergedFields[field])) continue;
         if (!isMissingCustomerValue(value)) mergedFields[field] = value;
       }
+    }
+
+    // Router imports can add a newer PPPoE identity row without an expiry.
+    // Keep the newest stored expiry from the same scoped identity when that
+    // happens, but never replace an expiry already present on the primary row.
+    if (String(primary.type ?? "").toLowerCase() === "pppoe" && isMissingCustomerValue(mergedFields.expires_at)) {
+      const relatedExpiry = related.find(customer => {
+        const expiry = customer.expires_at;
+        return typeof expiry === "string" && Number.isFinite(Date.parse(expiry));
+      })?.expires_at;
+      if (relatedExpiry) mergedFields.expires_at = relatedExpiry;
     }
 
     merged.mergedCustomerIds = group.map(customer => customer.id);

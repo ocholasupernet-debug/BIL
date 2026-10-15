@@ -170,7 +170,7 @@ function autoDraftForPort(router: RouterOption, port: PortOption, assignments: P
     hotspotFolderPath: "login.html",
     hotspotDnsName: "",
     pppoeEnabled: false,
-    pppoeFolderPath: "",
+    pppoeFolderPath: "pppoe-renewal.html",
     pppoeDnsName: "",
     bridgeName: `${routerSegment}-bridge-${portSegment}`,
     subnetRange: nextAvailableSubnet(assignments),
@@ -189,7 +189,7 @@ function draftFromAssignment(port: PortAssignment, router: RouterOption, assignm
     hotspotFolderPath: port.hotspot_folder_path ?? port.hotspot_template_path ?? "",
     hotspotDnsName: port.hotspot_dns_name ?? defaults.hotspotDnsName,
     pppoeEnabled: port.pppoe_enabled,
-    pppoeFolderPath: port.pppoe_folder_path ?? (port.hotspot_enabled ? port.hotspot_folder_path ?? port.hotspot_template_path ?? "" : ""),
+    pppoeFolderPath: port.pppoe_folder_path ?? (port.pppoe_enabled ? "pppoe-renewal.html" : ""),
     pppoeDnsName: port.pppoe_dns_name ?? defaults.pppoeDnsName,
     bridgeName: port.bridge_name ?? defaults.bridgeName,
     subnetRange: port.subnet_range ?? defaults.subnetRange,
@@ -203,7 +203,7 @@ function defaultDraft(): Draft {
     hotspotFolderPath: "",
     hotspotDnsName: "",
     pppoeEnabled: false,
-    pppoeFolderPath: "",
+    pppoeFolderPath: "pppoe-renewal.html",
     pppoeDnsName: "",
     bridgeName: "",
     subnetRange: "",
@@ -607,23 +607,21 @@ export default function Multiport() {
                   <input style={input} value={draft.hotspotDnsName} onChange={(event) => setDraftValue("hotspotDnsName", event.target.value)} placeholder="come.com" disabled={!draft.hotspotEnabled} />
                 </Field>
                 <Field
-                  label={draft.hotspotEnabled ? "PPPoE bridge asset" : "PPPoE approved source"}
-                  hint={draft.hotspotEnabled
-                    ? "PPPoE is carried on the same Hotspot bridge and reuses the approved Hotspot asset."
-                    : "Choose the approved source asset for a standalone PPPoE service."}
+                  label="PPPoE renewal page asset"
+                  hint="This page is for expired or paused PPPoE renewals only. It does not replace PPPoE username/password authentication."
                 >
                   <input
                     style={input}
-                    value={draft.hotspotEnabled ? draft.hotspotFolderPath : draft.pppoeFolderPath}
-                    onChange={(event) => setDraftValue(draft.hotspotEnabled ? "hotspotFolderPath" : "pppoeFolderPath", event.target.value)}
-                    placeholder="login.html"
-                    disabled={!draft.pppoeEnabled || draft.hotspotEnabled}
+                    value={draft.pppoeFolderPath}
+                    onChange={(event) => setDraftValue("pppoeFolderPath", event.target.value)}
+                    placeholder="pppoe-renewal.html"
+                    disabled={!draft.pppoeEnabled}
                   />
                   <div style={{ color: "var(--isp-text-muted)", fontSize: 11, fontWeight: 800, letterSpacing: ".06em", textTransform: "uppercase" }}>
                     PPPoE RouterOS portal asset
                   </div>
                   <div style={{ ...muted, fontFamily: "var(--font-mono)", fontSize: 11, overflowWrap: "anywhere" }}>
-                    {installedAssetPath("pppoe", selectedAssignment, (draft.hotspotEnabled ? draft.hotspotFolderPath : draft.pppoeFolderPath) || "login.html")}
+                    {installedAssetPath("pppoe", selectedAssignment, draft.pppoeFolderPath || "pppoe-renewal.html")}
                   </div>
                 </Field>
                 <Field label="PPPoE name / DNS" hint="Defaults to the short company.com name; later ports receive a short numeric suffix if needed.">

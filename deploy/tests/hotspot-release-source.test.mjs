@@ -58,6 +58,17 @@ test("deployments register both loyalty and voucher entitlement migrations", () 
   }
 });
 
+test("deployments register and verify the PPPoE renewal settings migration", () => {
+  const runner = api("scripts/apply-deployment-migrations.mjs");
+  const migration = api("migrations/2026_pppoe_portal_settings.sql");
+  const deployScript = source("deploy/deploy.sh");
+  assert.ok(runner.includes("../migrations/2026_pppoe_portal_settings.sql"));
+  assert.match(migration, /create table if not exists isp_pppoe_portal_settings/);
+  assert.match(migration, /renewal_signin_enabled boolean not null default true/);
+  assert.match(deployScript, /SUPABASE_DB_URL="\$database_url" node scripts\/apply-deployment-migrations\.mjs/);
+  assert.match(deployScript, /rest\/v1\/isp_pppoe_portal_settings\?select=admin_id&limit=0/);
+});
+
 test("the default release source keeps WAHA and prepaid migrations without running unrelated RouterOS setup", () => {
   const runner = api("scripts/apply-deployment-migrations.mjs");
   for (const name of [

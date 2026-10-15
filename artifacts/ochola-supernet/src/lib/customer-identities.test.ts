@@ -74,7 +74,7 @@ test("identity scope falls back to the linked plan router and port", () => {
       plan_id: 10,
       username: "HomeUser",
       status: "active",
-      expires_at: "2026-10-10T00:00:00.000Z",
+      expires_at: "2026-10-09T00:00:00.000Z",
       created_at: "2026-10-06T10:00:00.000Z",
     },
     {
@@ -99,4 +99,34 @@ test("identity scope falls back to the linked plan router and port", () => {
 
   assert.equal(uniqueCustomers.length, 1);
   assert.equal(activeCount, 1);
+  assert.equal(uniqueCustomers[0].expires_at, "2026-10-10T00:00:00.000Z");
+});
+
+test("PPPoE identity keeps its stored expiry when a newer imported row has none", () => {
+  const customers = [
+    {
+      id: 1,
+      type: "pppoe",
+      router_id: 7,
+      username: "homeuser",
+      status: "active",
+      expires_at: "2026-10-20T00:00:00.000Z",
+      created_at: "2026-10-06T10:00:00.000Z",
+    },
+    {
+      id: 2,
+      type: "pppoe",
+      router_id: 7,
+      username: "HOMEUSER",
+      status: "active",
+      expires_at: null,
+      created_at: "2026-10-07T10:00:00.000Z",
+    },
+  ];
+
+  const uniqueCustomers = mergeCustomerServiceIdentities(customers, {});
+
+  assert.equal(uniqueCustomers.length, 1);
+  assert.equal(uniqueCustomers[0].id, 2);
+  assert.equal(uniqueCustomers[0].expires_at, "2026-10-20T00:00:00.000Z");
 });

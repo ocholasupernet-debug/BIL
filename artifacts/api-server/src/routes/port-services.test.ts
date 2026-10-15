@@ -12,8 +12,19 @@ import {
 import { mergeRouterDhcpOptionNames } from "../lib/captive-portal-discovery.js";
 import { getCaptivePortalApiOrigin } from "../lib/captive-portal-discovery.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
+import { getDeployableSource } from "../lib/portal-assets.js";
 
 process.env.TOKEN_SIGNING_SECRET ??= "test-captive-portal-signing-secret";
+
+test("the PPPoE renewal page is available as an approved RouterOS asset", () => {
+  const source = getDeployableSource("hotspot", "pppoe-renewal.html");
+  assert.ok(source);
+  assert.match(source.content.toString("utf8"), /PPPoE service renewal/);
+  assert.match(source.content.toString("utf8"), /expired or paused PPPoE service/);
+  assert.match(source.content.toString("utf8"), /name="password" type="password"/);
+  assert.match(source.content.toString("utf8"), /{{PPPOE_RENEWAL_ACTION}}/);
+  assert.match(source.content.toString("utf8"), /{{PPPOE_ROUTER_ID}}/);
+});
 
 const port = {
   id: 12,

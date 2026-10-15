@@ -34,6 +34,7 @@ const portalMiddleware = portalRoute.default.default;
 const portalStatus = portalRoute.isEligiblePppoePortalStatus;
 
 const app = express();
+app.use(express.urlencoded({ extended: true }));
 app.use(portalMiddleware);
 const server = await new Promise(resolve => {
   const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
@@ -61,6 +62,31 @@ function request(pathname, host, extraHeaders = {}) {
   });
 }
 
+function postForm(pathname, host, values) {
+  const body = new URLSearchParams(values).toString();
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(`${baseUrl}${pathname}`, {
+      method: "POST",
+      headers: {
+        Host: host,
+        "X-Forwarded-Proto": "https",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Length": Buffer.byteLength(body),
+      },
+    }, response => {
+      const chunks = [];
+      response.on("data", chunk => chunks.push(chunk));
+      response.on("end", () => resolve({
+        status: response.statusCode,
+        headers: response.headers,
+        body: Buffer.concat(chunks).toString("utf8"),
+      }));
+    });
+    request.on("error", reject);
+    request.end(body);
+  });
+}
+
 let customerStatus = "expired";
 globalThis.fetch = async input => {
   const url = new URL(String(input));
@@ -83,6 +109,8 @@ globalThis.fetch = async input => {
             username: "subscriber",
             pppoe_username: "subscriber",
             name: "Subscriber",
+            password: "ppp-secret",
+            router_id: 42,
           }]
         : [];
   return new Response(JSON.stringify(rows), {
@@ -204,6 +232,35 @@ test("the router handoff keeps router credentials out of the customer redirect",
   );
   assert.equal(malformedRouter.status, 302);
   assert.doesNotMatch(malformedRouter.headers.location, /ref=/);
+});
+
+test("renewal sign-in verifies expired customer credentials and redirects with a short-lived reference", async () => {
+  customerStatus = "expired";
+  const signedIn = await postForm("/public/pppoe-portal/sign-in", "tenant.isplatty.org", {
+    routerId: "42",
+    username: "subscriber",
+    password: "ppp-secret",
+  });
+  assert.equal(signedIn.status, 303);
+  assert.match(signedIn.headers.location, /^https:\/\/tenant\.isplatty\.org\/pppoe-login\?ref=/);
+  assert.doesNotMatch(signedIn.headers.location, /ppp-secret|subscriber/);
+  assert.equal(signedIn.headers["cache-control"], "no-store, private");
+
+  const wrongPassword = await postForm("/public/pppoe-portal/sign-in", "tenant.isplatty.org", {
+    routerId: "42",
+    username: "subscriber",
+    password: "incorrect",
+  });
+  assert.equal(wrongPassword.status, 401);
+  assert.doesNotMatch(wrongPassword.body, /ppp-secret/);
+
+  customerStatus = "active";
+  const activeAccount = await postForm("/public/pppoe-portal/sign-in", "tenant.isplatty.org", {
+    routerId: "42",
+    username: "subscriber",
+    password: "ppp-secret",
+  });
+  assert.equal(activeAccount.status, 401);
 });
 
 test.after(() => {

@@ -46,6 +46,11 @@ interface NewCustomerForm {
   ip_assign: "dynamic" | "pool" | "static";
   ip_address: string;
   pppoe_service: string;
+  sendPppoePrompt: boolean;
+  includeRouterFee: boolean;
+  routerFee: string;
+  includeLabourFee: boolean;
+  labourFee: string;
   // static extras
   subnet_mask: string;
   gateway_ip: string;
@@ -87,7 +92,8 @@ function emptyForm(type: CustomerType = "hotspot"): NewCustomerForm {
   return {
     type, name: "", username: "", password: genPassword(), email: "", phone: "",
     plan_id: "", router_id: "", mac_address: "", pppoe_username: "", ip_assign: "dynamic",
-    ip_address: "", pppoe_service: "internet", subnet_mask: "255.255.255.0", gateway_ip: "", expires_at: "",
+    ip_address: "", pppoe_service: "internet", sendPppoePrompt: false, includeRouterFee: false, routerFee: "",
+    includeLabourFee: false, labourFee: "", subnet_mask: "255.255.255.0", gateway_ip: "", expires_at: "",
     custom_fields: [],
   };
 }
@@ -200,6 +206,13 @@ async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise
     if (!plan || plan.type !== "pppoe") throw new Error("Select a PPPoE plan.");
     const routerId = plan.router_id ?? (form.router_id ? Number(form.router_id) : null);
     if (!routerId) throw new Error("Select a router for this PPPoE customer.");
+    const routerFee = form.includeRouterFee ? Number(form.routerFee) : 0;
+    const labourFee = form.includeLabourFee ? Number(form.labourFee) : 0;
+    if (form.sendPppoePrompt && (!form.phone.trim() ||
+      (form.includeRouterFee && (!Number.isSafeInteger(routerFee) || routerFee < 1)) ||
+      (form.includeLabourFee && (!Number.isSafeInteger(labourFee) || labourFee < 1)))) {
+      throw new Error("Enter a phone number and valid whole-shilling amounts for the selected charges.");
+    }
     const response = await adminApiFetch("/api/customers", {
       method: "POST",
       body: JSON.stringify({
@@ -214,12 +227,38 @@ async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise
         username: form.pppoe_username.trim() || form.username.trim(),
         password: form.password,
         ipAddress: form.ip_assign === "static" ? form.ip_address.trim() || null : null,
-        status: "active",
+        status: form.sendPppoePrompt ? "expired" : "active",
         expiryDate: form.expires_at ? new Date(form.expires_at).toISOString() : null,
       }),
     });
-    const result = await response.json().catch(() => ({})) as { error?: string };
+    const result = await response.json().catch(() => ({})) as { error?: string; id?: number };
     if (!response.ok) throw new Error(result.error || `PPPoE customer could not be created (${response.status}).`);
+    if (form.sendPppoePrompt) {
+      if (!result.id) throw new Error("The account was created, but its payment prompt could not be linked.");
+      const intentResponse = await adminApiFetch("/api/mpesa/intent", {
+        method: "POST",
+        body: JSON.stringify({
+          adminId: ADMIN_ID, plan_id: plan.id, phone: form.phone.trim(), service_type: "pppoe",
+          customer_id: result.id, router_id: routerId,
+          include_router_fee: form.includeRouterFee, router_fee: routerFee,
+          include_labour_fee: form.includeLabourFee, labour_fee: labourFee,
+        }),
+      });
+      const intent = await intentResponse.json().catch(() => ({})) as { error?: string; paymentIntent?: string; amount?: number };
+      if (!intentResponse.ok || !intent.paymentIntent || !intent.amount) {
+        throw new Error(intent.error || "The customer was created but the M-Pesa prompt could not be prepared.");
+      }
+      const stkResponse = await adminApiFetch("/api/mpesa/stk", {
+        method: "POST",
+        body: JSON.stringify({
+          adminId: ADMIN_ID, phone: form.phone.trim(), amount: intent.amount, plan_id: plan.id,
+          service_type: "pppoe", customer_id: result.id, router_id: routerId,
+          paymentIntent: intent.paymentIntent,
+        }),
+      });
+      const stk = await stkResponse.json().catch(() => ({})) as { error?: string };
+      if (!stkResponse.ok) throw new Error(stk.error || "The PPPoE account was created inactive, but M-Pesa could not send the prompt.");
+    }
     return;
   }
 
@@ -570,6 +609,28 @@ function CustomerModal({
                       onChange={e => set("ip_address", e.target.value)} />
                   </Field>
                 )}
+                <div style={{ padding: "0.875rem", border: "1px solid var(--isp-border)", borderRadius: 10, background: "rgba(255,255,255,0.025)" }}>
+                  <label style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 700, fontSize: "0.82rem" }}>
+                    <input type="checkbox" checked={form.sendPppoePrompt} onChange={e => setForm(f => ({ ...f, sendPppoePrompt: e.target.checked }))} />
+                    Send M‑Pesa subscription prompt
+                  </label>
+                  {form.sendPppoePrompt && (
+                    <div style={{ display: "grid", gap: 9, marginTop: 12 }}>
+                      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: "0.78rem", color: "var(--isp-text-muted)" }}>
+                        <input type="checkbox" checked={form.includeRouterFee} onChange={e => setForm(f => ({ ...f, includeRouterFee: e.target.checked }))} /> Add router charge
+                        {form.includeRouterFee && <input style={{ ...inp, width: 130 }} type="number" min="1" step="1" placeholder="KES" value={form.routerFee} onChange={e => set("routerFee", e.target.value)} />}
+                      </label>
+                      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: "0.78rem", color: "var(--isp-text-muted)" }}>
+                        <input type="checkbox" checked={form.includeLabourFee} onChange={e => setForm(f => ({ ...f, includeLabourFee: e.target.checked }))} /> Add labour charge
+                        {form.includeLabourFee && <input style={{ ...inp, width: 130 }} type="number" min="1" step="1" placeholder="KES" value={form.labourFee} onChange={e => set("labourFee", e.target.value)} />}
+                      </label>
+                      <div style={{ color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 700 }}>
+                        Package {getCurrencySymbol()} {Math.ceil(Number(selectedPlan?.price ?? 0))} + Router {getCurrencySymbol()} {form.includeRouterFee ? Number(form.routerFee || 0) : 0} + Labour {getCurrencySymbol()} {form.includeLabourFee ? Number(form.labourFee || 0) : 0} = Total {getCurrencySymbol()} {Math.ceil(Number(selectedPlan?.price ?? 0)) + (form.includeRouterFee ? Number(form.routerFee || 0) : 0) + (form.includeLabourFee ? Number(form.labourFee || 0) : 0)}
+                      </div>
+                      <small style={{ color: "var(--isp-text-muted)" }}>PPPoE and RADIUS access stays disabled until M‑Pesa confirms payment.</small>
+                    </div>
+                  )}
+                </div>
               </>
             )}
 

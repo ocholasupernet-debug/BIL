@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>PPPoE service renewal</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #071719; color: #f4f8f5; }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px; background: radial-gradient(ellipse at 80% 0, #193c38, transparent 55%), #071719; }
+    main { width: min(100%, 480px); padding: 30px; border: 1px solid #ffffff20; border-radius: 18px; background: #102426; box-shadow: 0 24px 70px #0007; }
+    .mark { width: 48px; height: 48px; display: grid; place-items: center; margin-bottom: 22px; border-radius: 14px; color: #f3a06d; background: #d9683525; font-size: 24px; }
+    .eyebrow { color: #f3a06d; font-size: 12px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+    h1 { margin: 9px 0 12px; font-size: clamp(25px, 7vw, 34px); line-height: 1.1; }
+    p { color: #c0ceca; line-height: 1.65; }
+    label { display: block; margin: 18px 0 7px; color: #c0ceca; font-size: 13px; font-weight: 700; }
+    input { width: 100%; min-height: 46px; padding: 11px 13px; border: 1px solid #ffffff26; border-radius: 9px; color: #f4f8f5; background: #071719; font: inherit; }
+    button { width: 100%; min-height: 46px; margin-top: 20px; border: 0; border-radius: 9px; color: white; background: #168c78; font: inherit; font-weight: 800; cursor: pointer; }
+    .note { margin-top: 22px; padding: 14px; border: 1px solid #f3a06d35; border-radius: 11px; color: #e7d5c9; background: #d9683512; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark" aria-hidden="true">↻</div>
+    <div class="eyebrow">PPPoE renewal</div>
+    <h1>Your internet service needs renewal</h1>
+    <p>Sign in with your PPPoE account to renew an expired or paused PPPoE service and open its secure renewal options.</p>
+    <form method="post" action="{{PPPOE_RENEWAL_ACTION}}" autocomplete="on">
+      <input type="hidden" name="routerId" value="{{PPPOE_ROUTER_ID}}">
+      <label for="username">PPPoE username</label>
+      <input id="username" name="username" autocomplete="username" required maxlength="128">
+      <label for="password">PPPoE password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="128">
+      <button type="submit">Continue to renewal</button>
+    </form>
+    <div class="note">Your password is used only to verify this account. Active accounts cannot use this renewal page. Contact your ISP if you need help.</div>
+  </main>
+</body>
+</html>

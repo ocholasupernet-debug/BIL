@@ -43,6 +43,7 @@ import { normalizePlanServiceType } from "./plan-service-type.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "./fup-policy.js";
 import { isValidIpv4, isValidVlanTag, ipv4InSubnet } from "./vlan-customer-queue.js";
 import { portServiceResourceNames } from "./port-service-resources.js";
+import { syncRadiusCustomerStrict } from "./radius.js";
 
 /* ── Supabase row shapes ────────────────────────────────────────────────── */
 interface SbCustomer {
@@ -167,9 +168,14 @@ export async function reactivatePppoeAccess(opts: {
     router_id: number | null;
     port_id: number | null;
     owner_reseller_id: number | null;
+    speed_down: number | null;
+    speed_up: number | null;
+    speed_down_unit: string | null;
+    speed_up_unit: string | null;
+    shared_users: number | null;
   }>(
     "isp_plans",
-    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&select=id,admin_id,name,type,router_id,port_id,owner_reseller_id&limit=1`,
+    `id=eq.${opts.planId}&admin_id=eq.${opts.adminId}&select=id,admin_id,name,type,router_id,port_id,owner_reseller_id,speed_down,speed_up,speed_down_unit,speed_up_unit,shared_users&limit=1`,
   );
   const plan = plans[0];
   const planType = String(plan?.type ?? "").toLowerCase();
@@ -178,9 +184,9 @@ export async function reactivatePppoeAccess(opts: {
     return { ok: false, error: "The PPPoE plan is not assigned to a router." };
   }
 
-  const customers = await sbSelect<Pick<SbCustomer, "id" | "admin_id" | "type" | "username" | "pppoe_username" | "password" | "router_id" | "port_id">>(
+  const customers = await sbSelect<Pick<SbCustomer, "id" | "admin_id" | "name" | "type" | "username" | "pppoe_username" | "password" | "router_id" | "port_id">>(
     "isp_customers",
-    `id=eq.${opts.customerId}&admin_id=eq.${plan.owner_reseller_id ?? opts.adminId}&type=eq.pppoe&select=id,admin_id,type,username,pppoe_username,password,router_id,port_id&limit=1`,
+    `id=eq.${opts.customerId}&admin_id=eq.${plan.owner_reseller_id ?? opts.adminId}&type=eq.pppoe&select=id,admin_id,name,type,username,pppoe_username,password,router_id,port_id&limit=1`,
   );
   const customer = customers[0];
   if (!customer) {
@@ -216,10 +222,23 @@ export async function reactivatePppoeAccess(opts: {
   };
   const comment = `M-Pesa verified PPPoE renewal — ${opts.reference}`;
 
+  let routerRollback: (() => Promise<void>) | undefined;
   try {
     const secrets = await fetchPPPSecrets(credentials);
     const existing = secrets.find(secret => secret.name === username);
     const rollback = async (): Promise<void> => {
+      await syncRadiusCustomerStrict({
+        username,
+        password: customer.password,
+        planId: plan.id,
+        planType: "pppoe",
+        enabled: false,
+        fullname: customer.name,
+        rateDown: plan.speed_down,
+        rateDownUnit: plan.speed_down_unit,
+        rateUp: plan.speed_up,
+        rateUpUnit: plan.speed_up_unit,
+      });
       if (existing?.id) {
         await updatePPPSecret(credentials, existing.id, {
           disabled: existing.disabled,
@@ -232,6 +251,7 @@ export async function reactivatePppoeAccess(opts: {
       const created = current.find(secret => secret.name === username);
       if (created?.id) await removePPPSecret(credentials, created.id);
     };
+    routerRollback = rollback;
     if (existing?.id) {
       await updatePPPSecret(credentials, existing.id, {
         disabled: false,
@@ -251,9 +271,23 @@ export async function reactivatePppoeAccess(opts: {
     const verified = await fetchPPPSecrets(credentials);
     const restored = verified.find(secret => secret.name === username && !secret.disabled);
     if (!restored) throw new Error("RouterOS did not report the PPPoE account as enabled.");
+    await syncRadiusCustomerStrict({
+      username,
+      password: customer.password,
+      planId: plan.id,
+      planType: "pppoe",
+      enabled: true,
+      sharedUsers: plan.shared_users ?? 1,
+      fullname: customer.name,
+      rateDown: plan.speed_down,
+      rateDownUnit: plan.speed_down_unit,
+      rateUp: plan.speed_up,
+      rateUpUnit: plan.speed_up_unit,
+    });
 
     return { ok: true, routerName: router.name, username, rollback };
   } catch (error) {
+    await routerRollback?.().catch(() => undefined);
     const message = error instanceof Error ? error.message : String(error);
     const diagnosis = classifyRouterConnectionFailure(error);
     logger.warn(

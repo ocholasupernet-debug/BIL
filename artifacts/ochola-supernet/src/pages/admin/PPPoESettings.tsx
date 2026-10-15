@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle, Check, ChevronDown, Eye, HelpCircle, Image as ImageIcon,
@@ -8,6 +8,7 @@ import {
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID as AUTH_ADMIN_ID, getSelectedTenantId, type DbRouter } from "@/lib/supabase";
 import { fetchAdminRouterManagementContext } from "@/lib/admin-router-context";
+import { adminApiFetch } from "@/lib/api-client";
 import {
   DEFAULT_PPPOE_COLORS, PPPoELogin, type PppoePortalSettings,
 } from "@/pages/portal/PPPoELogin";
@@ -244,6 +245,19 @@ export default function PPPoESettings() {
   const [saved, setSaved] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [renewalSignInEnabled, setRenewalSignInEnabled] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    adminApiFetch(`/api/pppoe-portal/settings?adminId=${ADMIN_ID}`, { cache: "no-store" })
+      .then(async response => {
+        const result = await response.json().catch(() => ({})) as { renewalSignInEnabled?: boolean; error?: string };
+        if (!response.ok) throw new Error(result.error || "Renewal sign-in setting could not be loaded.");
+        if (mounted && typeof result.renewalSignInEnabled === "boolean") setRenewalSignInEnabled(result.renewalSignInEnabled);
+      })
+      .catch(error => { if (mounted) setSaveError(error instanceof Error ? error.message : "Renewal setting could not be loaded."); });
+    return () => { mounted = false; };
+  }, []);
 
   const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
     queryKey: ["routers_for_pppoe_settings", ADMIN_ID],
@@ -275,16 +289,23 @@ export default function PPPoESettings() {
     }
     return "";
   }
-  function saveSettings() {
+  async function saveSettings() {
     const error = validate();
     if (error) { setSaveError(error); return; }
     setSaving(true);
     try {
+      const response = await adminApiFetch("/api/pppoe-portal/settings", {
+        method: "PUT",
+        body: JSON.stringify({ adminId: ADMIN_ID, renewalSignInEnabled }),
+      });
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(result.error || "Renewal sign-in setting could not be saved.");
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-      window.setTimeout(() => { setSaving(false); setSaved(true); }, 450);
-    } catch {
       setSaving(false);
-      setSaveError("Settings could not be saved in this browser. Check available storage and try again.");
+      setSaved(true);
+    } catch (error) {
+      setSaving(false);
+      setSaveError(error instanceof Error ? error.message : "Settings could not be saved.");
     }
   }
 
@@ -321,6 +342,22 @@ export default function PPPoESettings() {
 
         <div className="pppoe-settings-layout">
           <div>
+            <section className="pppoe-settings-section">
+              <div className="pppoe-settings-section-head">
+                <div className="pppoe-settings-section-icon"><ShieldCheck size={16} /></div>
+                <div><h2>Expired-account renewal sign-in</h2><p>Allow or block expired PPPoE customers from using the renewal sign-in page.</p></div>
+              </div>
+              <div className="pppoe-settings-body">
+                <FieldRow label="Renewal sign-in" hint="This setting also blocks the server-side sign-in endpoint when disabled.">
+                  <button type="button" role="switch" aria-checked={renewalSignInEnabled}
+                    className={`pppoe-settings-toggle ${renewalSignInEnabled ? "on" : ""}`}
+                    onClick={() => { setRenewalSignInEnabled(value => !value); setSaved(false); }}>
+                    <i />
+                  </button>
+                  <span style={{ marginLeft: 10, color: "#adc0b9", fontSize: ".74rem" }}>{renewalSignInEnabled ? "Enabled" : "Disabled"}</span>
+                </FieldRow>
+              </div>
+            </section>
             <section className="pppoe-settings-section">
               <div className="pppoe-settings-section-head">
                 <div className="pppoe-settings-section-icon"><UserRound size={16} /></div>

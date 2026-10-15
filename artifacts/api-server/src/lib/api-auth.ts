@@ -78,6 +78,7 @@ export interface PaymentIntentPayload {
   customerId?: number;
   macAddress?: string;
   deviceName?: string;
+  amountBreakdown?: { package: number; router: number; labour: number };
   issuedAt: number;
   nonce: string;
 }
@@ -320,6 +321,11 @@ export function validatePaymentIntent(token: string): PaymentIntentPayload | nul
         (payload.customerId !== undefined && (!Number.isSafeInteger(payload.customerId) || payload.customerId <= 0)) ||
         (payload.macAddress !== undefined && !/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(payload.macAddress)) ||
          (payload.deviceName !== undefined && (typeof payload.deviceName !== "string" || payload.deviceName.length > 64)) ||
+         (payload.amountBreakdown !== undefined &&
+          (!Number.isSafeInteger(payload.amountBreakdown.package) || payload.amountBreakdown.package <= 0 ||
+           !Number.isSafeInteger(payload.amountBreakdown.router) || payload.amountBreakdown.router < 0 ||
+           !Number.isSafeInteger(payload.amountBreakdown.labour) || payload.amountBreakdown.labour < 0 ||
+           payload.amount !== payload.amountBreakdown.package + payload.amountBreakdown.router + payload.amountBreakdown.labour)) ||
         Date.now() - payload.issuedAt > PAYMENT_INTENT_TTL_MS ||
         payload.issuedAt > Date.now() + MAX_CLOCK_SKEW_S * 1000) return null;
     return payload;

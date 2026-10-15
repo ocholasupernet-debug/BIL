@@ -1204,7 +1204,7 @@ router.post("/admin/port-services", requireAdmin(), async (req, res): Promise<vo
     });
     const hotspotFolderPath = req.body?.hotspotFolderPath === "" ? null : cleanPath(req.body?.hotspotFolderPath);
     const requestedPppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : cleanPath(req.body?.pppoeFolderPath);
-    const pppoeFolderPath = requestedPppoeFolderPath ?? (hotspotEnabled ? hotspotFolderPath : null);
+    const pppoeFolderPath = requestedPppoeFolderPath ?? (pppoeEnabled ? "pppoe-renewal.html" : null);
     const requestedHotspotDnsName = optionalPortalHostname(req.body?.hotspotDnsName);
     const requestedPppoeDnsName = optionalPortalHostname(req.body?.pppoeDnsName);
     if ((req.body?.hotspotDnsName && !requestedHotspotDnsName) || (req.body?.pppoeDnsName && !requestedPppoeDnsName)) {
@@ -1320,7 +1320,9 @@ router.put("/admin/port-services/:portId", requireAdmin(), validatePortAccess, a
     const hotspotEnabled = req.body?.hotspotEnabled === true;
     const pppoeEnabled = req.body?.pppoeEnabled === true;
     const requestedPppoeFolderPath = req.body?.pppoeFolderPath === "" ? null : normalizeApprovedAssetPath(req.body?.pppoeFolderPath);
-    const pppoeFolderPath = requestedPppoeFolderPath ?? (hotspotEnabled ? hotspotFolderPath : null);
+    const pppoeFolderPath = requestedPppoeFolderPath ?? (
+      pppoeEnabled ? port.pppoe_folder_path ?? "pppoe-renewal.html" : null
+    );
     const requestedHotspotDnsName = req.body?.hotspotDnsName === undefined
       ? port.hotspot_dns_name
       : optionalPortalHostname(req.body.hotspotDnsName);
@@ -1738,7 +1740,7 @@ async function executePortServiceDeployment(
     : portalHtml
     ? `${sharedPortalDirectory}/login.html`
     : hotspotSource ? `${sharedPortalDirectory}/${sourceNameFromPath(hotspotSource)}` : null;
-  const pppoeDestination = pppoeSource ? `${sharedPortalDirectory}/${sourceNameFromPath(pppoeSource)}` : null;
+  const pppoeDestination = pppoeSource ? `${resources.pppoeDirectory}/${sourceNameFromPath(pppoeSource)}` : null;
   for (const directory of [...new Set([resources.hotspotDirectory, resources.pppoeDirectory])]) {
     await runRouterCommand(found.creds, ["/file/make-dir", `=dir-name=${directory}`]).catch(() => undefined);
   }
@@ -1796,7 +1798,24 @@ async function executePortServiceDeployment(
       await deploySourceOnce(companionPortal.source.name, `${sharedPortalDirectory}/${sourceNameFromPath(companionPortal.source.name)}`);
     }
   }
-  if (pppoeSource && pppoeDestination) await deploySourceOnce(pppoeSource, pppoeDestination);
+  if (pppoeSource && pppoeDestination) {
+    if (sourceNameFromPath(pppoeSource) === "pppoe-renewal.html") {
+      const renewalSource = getDeployableSource("hotspot", pppoeSource);
+      if (!renewalSource) throw new Error("The approved PPPoE renewal page is unavailable.");
+      const portalOrigin = new URL(sourceOrigin);
+      if (process.env.NODE_ENV === "production" && portalOrigin.protocol !== "https:") {
+        throw new Error("PPPoE renewal sign-in requires an HTTPS tenant portal.");
+      }
+      const renewalAction = `${portalOrigin.origin}/api/public/pppoe-portal/sign-in`;
+      const renewalHtml = renewalSource.content.toString("utf8")
+        .replaceAll("{{PPPOE_RENEWAL_ACTION}}", renewalAction)
+        .replaceAll("{{PPPOE_ROUTER_ID}}", String(port.router_id));
+      await deployPortalContent(found.creds, sourceOrigin, renewalHtml, pppoeDestination, allowHotspotReplace);
+      deployedDestinations.add(pppoeDestination);
+    } else {
+      await deploySourceOnce(pppoeSource, pppoeDestination);
+    }
+  }
   const hotspotPath = hotspotDestination ? resources.hotspotDirectory : null;
   const pppoePath = pppoeDestination ? resources.pppoeDirectory : null;
   const poolRanges = deploymentPort.handoff_mode === "vlan_services"

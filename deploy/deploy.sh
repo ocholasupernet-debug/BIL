@@ -257,6 +257,22 @@ apply_supabase_migration() {
       exit 1
       ;;
   esac
+  local pppoe_settings_schema_status
+  pppoe_settings_schema_status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --max-time 20 \
+    -H "apikey: $service_key" \
+    -H "Authorization: Bearer $service_key" \
+    "$supabase_url/rest/v1/isp_pppoe_portal_settings?select=admin_id&limit=0")
+  case "$pppoe_settings_schema_status" in
+    2??)
+      echo "      ✓ PPPoE renewal sign-in settings table is queryable"
+      ;;
+    *)
+      echo "      ✗ PPPoE renewal sign-in settings table is missing (REST check returned HTTP $pppoe_settings_schema_status)"
+      echo "        Configure SUPABASE_DB_URL so deployment can apply the registered migration."
+      exit 1
+      ;;
+  esac
   # This deployment cannot start an API whose required RPCs are missing:
   # without a direct DB URL, verify the installed PostgREST schema.
   local openapi
@@ -298,8 +314,8 @@ node --test "$PROJECT_DIR/deploy/tests/hotspot-release-source.test.mjs"
 
 load_deploy_env
 
-# 3. Apply the one-time schema migration before building or restarting the API.
-echo "[3/7] Applying Supabase schema migration..."
+# 3. Apply the registered Supabase schema migrations before building or restarting the API.
+echo "[3/7] Applying Supabase schema migrations..."
 (
   cd "$PROJECT_DIR/artifacts/api-server"
   node --test tests/prepaid-transaction-account-claim.test.mjs tests/mpesa-checkout-idempotency.test.mjs

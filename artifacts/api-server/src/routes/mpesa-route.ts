@@ -947,8 +947,8 @@ async function validatePppoePaymentCustomer(
   plan: VlanPaymentPlan,
   customerId: number,
 ): Promise<{ customer: { id: number; admin_id: number; router_id: number | null; port_id: number | null } | null; error?: string }> {
-  if (!plan.router_id || !plan.port_id) {
-    return { customer: null, error: "The PPPoE plan is not assigned to a router and service port." };
+  if (!plan.router_id) {
+    return { customer: null, error: "The PPPoE plan is not assigned to a router." };
   }
   const customers = await sbSelectStrict<{
     id: number;
@@ -966,6 +966,7 @@ async function validatePppoePaymentCustomer(
   if (customer.router_id !== plan.router_id || customer.port_id !== plan.port_id) {
     return { customer: null, error: "The PPPoE customer service port does not match the selected package." };
   }
+  if (plan.port_id === null) return { customer };
   const ports = await sbSelectStrict<{
     id: number;
     assigned_reseller_id: number | null;
@@ -1884,6 +1885,10 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
       ? "vlan"
       : "hotspot";
   const requestedCustomerId = Number(req.body?.customer_id);
+  const requestedRouterFee = Number(req.body?.router_fee ?? 0);
+  const requestedLabourFee = Number(req.body?.labour_fee ?? 0);
+  const auth = validateToken(extractToken(req));
+  const isSignedInAdmin = !!auth && auth.type === "a" && Number(auth.uid) === adminId;
   const mac = readMacAddress(req.body?.mac_address);
   const clientIp = readClientIp(req.body?.client_ip);
   if (adminId === null || !Number.isSafeInteger(adminId) || adminId < 1 || !Number.isSafeInteger(planId) || planId < 1 || !isKenyanMobileNumber(phone)) {
@@ -1958,11 +1963,26 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
       return;
     }
   }
-  const amount = Math.ceil(Number(plan?.price));
-  if (!plan || !Number.isFinite(amount) || amount <= 0) {
+  const packageAmount = Math.ceil(Number(plan?.price));
+  if (!plan || !Number.isFinite(packageAmount) || packageAmount <= 0) {
     res.status(404).json({ ok: false, error: "The selected plan is not available for payment." });
     return;
   }
+  const hasFeeBreakdown = req.body?.include_router_fee === true || req.body?.include_labour_fee === true;
+  if (hasFeeBreakdown && (
+    requestedService !== "pppoe" || !isSignedInAdmin ||
+    !Number.isSafeInteger(requestedRouterFee) || requestedRouterFee < 0 ||
+    !Number.isSafeInteger(requestedLabourFee) || requestedLabourFee < 0 ||
+    (req.body?.include_router_fee !== true && requestedRouterFee !== 0) ||
+    (req.body?.include_labour_fee !== true && requestedLabourFee !== 0)
+  )) {
+    res.status(400).json({ ok: false, error: "Only a signed-in ISP admin can add valid PPPoE setup charges." });
+    return;
+  }
+  const amountBreakdown = hasFeeBreakdown
+    ? { package: packageAmount, router: req.body?.include_router_fee === true ? requestedRouterFee : 0, labour: req.body?.include_labour_fee === true ? requestedLabourFee : 0 }
+    : undefined;
+  const amount = packageAmount + (amountBreakdown?.router ?? 0) + (amountBreakdown?.labour ?? 0);
   try {
     await getResellerPaymentRoute(adminId, planId);
   } catch (error) {
@@ -2029,8 +2049,10 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
         ...(deviceName ? { deviceName } : {}),
         ...(serviceType === "pppoe" || serviceType === "vlan" ? { customerId: requestedCustomerId } : {}),
         ...(resolvedMac ? { macAddress: resolvedMac } : {}),
+        ...(amountBreakdown ? { amountBreakdown } : {}),
       }),
       amount,
+      ...(amountBreakdown ? { amountBreakdown } : {}),
       ...(resolvedMac ? { deviceMacAddress: resolvedMac } : {}),
     });
   } catch {
@@ -2469,7 +2491,11 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
         }
       }
     }
-    if (requestedAmount !== Math.ceil(Number(plan.price))) {
+    const signedBreakdown = intent?.amountBreakdown;
+    if (signedBreakdown
+      ? requestedAmount !== signedBreakdown.package + signedBreakdown.router + signedBreakdown.labour ||
+        signedBreakdown.package !== Math.ceil(Number(plan.price))
+      : requestedAmount !== Math.ceil(Number(plan.price))) {
       res.status(400).json({ ok: false, error: "The package amount changed. Refresh the package list and try again." });
       return;
     }
@@ -2566,7 +2592,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
        res.status(503).json({ ok: false, error: "M-Pesa requires a saved HTTPS callback URL." });
        return;
      }
-     const paymentMetadata: Record<string, unknown> = platformBillingInvoice
+      const paymentMetadata: Record<string, unknown> = platformBillingInvoice
        ? { source: "platform_billing", billing_invoice_id: platformBillingInvoice.id }
        : resellerRoute
          ? {
@@ -2577,7 +2603,9 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
              merchantIdentifier: resellerRoute.merchantIdentifier,
              accountReference: resellerRoute.accountReference,
            }
-         : {};
+          : intent?.amountBreakdown
+            ? { source: "pppoe_customer_creation", amount_breakdown: intent.amountBreakdown }
+            : {};
       const darajaOAuthStartedAt = process.hrtime.bigint();
       const darajaTokenResultPromise = getDarajaToken(cfg).then(
         token => ({ token }),
