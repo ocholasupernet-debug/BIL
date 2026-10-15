@@ -2924,29 +2924,24 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
     log(`   Bridge: ${bridge}`);
   }
 
-  let conn = makeConn(primaryHost, username, password, BRIDGE_PORT_TIMEOUT_SECONDS);
+  let conn!: RouterOSAPI;
   let connectedVia = primaryHost;
   let connectedHost = primaryHost;
+  let connectedUsername = username || "admin";
 
   try {
-    try {
-      await withTimeout(conn.connect(), BRIDGE_PORT_TIMEOUT_MS);
-      log(`✓ Connected to ${primaryHost}`);
-    } catch (directErr) {
-      /* If primaryHost is already the management VPN IP, or the VPN IP is
-         different, try it as the alternate path. */
-      const altHost = validVpnIp && validVpnIp !== primaryHost ? validVpnIp : null;
-      if (altHost) {
-        try { conn.close(); } catch { /* failed connection may not be open */ }
-        conn = makeConn(altHost, username, password, BRIDGE_PORT_TIMEOUT_SECONDS);
-        await withTimeout(conn.connect(), BRIDGE_PORT_TIMEOUT_MS);
-        connectedVia = `${altHost} (VPN)`;
-        connectedHost = altHost;
-        log(`✓ Connected via VPN tunnel (${altHost})`);
-      } else {
-        throw directErr;
-      }
-    }
+    const connected = await connectWithFallback(
+      primaryHost,
+      validVpnIp || undefined,
+      username,
+      password,
+      log,
+      { managementAccountFirst: true },
+    );
+    conn = connected.conn;
+    connectedVia = connected.via;
+    connectedHost = connected.via;
+    connectedUsername = connected.username;
     void connectedVia;
 
     /* Stop mutating after the first failed command. A timed-out write may
@@ -2970,7 +2965,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
         }
       } catch (e) {
         mutationFailure = e;
-        log(`  ⚠ skip remove ${iface}: ${enrichPermErr(e, username)}`);
+        log(`  ⚠ skip remove ${iface}: ${enrichPermErr(e, connectedUsername)}`);
         break;
       }
     }
@@ -3014,7 +3009,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
         log(`✓ Added ${iface} → ${bridge}`);
       } catch (e) {
         mutationFailure = e;
-        log(`❌ Add ${iface}: ${enrichPermErr(e, username)}`);
+        log(`❌ Add ${iface}: ${enrichPermErr(e, connectedUsername)}`);
         break;
       }
     }
@@ -3037,7 +3032,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
         );
       } catch (e) {
         verificationFailure = e;
-        log(`⚠️ Membership read failed: ${enrichPermErr(e, username)}`);
+        log(`⚠️ Membership read failed: ${enrichPermErr(e, connectedUsername)}`);
       }
     }
 
@@ -3051,9 +3046,17 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
       const recoveryHosts = [...new Set([connectedHost, alternateHost].filter((value): value is string => Boolean(value)))];
 
       for (const recoveryHost of recoveryHosts) {
-        const recoveryConn = makeConn(recoveryHost, username, password, BRIDGE_PORT_TIMEOUT_SECONDS);
+        let recoveryConn: RouterOSAPI | null = null;
         try {
-          await withTimeout(recoveryConn.connect(), BRIDGE_PORT_TIMEOUT_MS);
+          const recovery = await connectWithFallback(
+            recoveryHost,
+            validVpnIp || undefined,
+            username,
+            password,
+            log,
+            { managementAccountFirst: true },
+          );
+          recoveryConn = recovery.conn;
           const recoveredMembers = await withTimeout(
             recoveryConn.write(["/interface/bridge/port/print", `?bridge=${bridge}`]),
             BRIDGE_PORT_TIMEOUT_MS,
@@ -3069,9 +3072,9 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
           log(`✓ Read-only membership check completed via ${recoveryHost}`);
           break;
         } catch (e) {
-          log(`⚠️ Read-only membership check via ${recoveryHost} failed: ${enrichPermErr(e, username)}`);
+          log(`⚠️ Read-only membership check via ${recoveryHost} failed: ${enrichPermErr(e, connectedUsername)}`);
         } finally {
-          try { recoveryConn.close(); } catch { /* connection may already be closed */ }
+          try { recoveryConn?.close(); } catch { /* connection may already be closed */ }
         }
       }
     }
@@ -3107,7 +3110,7 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
     if (routerId && portMembershipVerified && await bridgeAssignmentMatchesSetupRouter(
       routerId,
       connectedHost,
-      username,
+      connectedUsername,
     )) {
       const setupMessage = await markBridgePortsAssigned(routerId);
       if (setupMessage) log(`ℹ️  ${setupMessage}`);
@@ -3179,8 +3182,13 @@ async function bridgeAssignmentMatchesSetupRouter(
   if (!row || !isSetupStatus(row.status)) return false;
   const trustedHosts = [row.host, row.bridge_ip, row.vpn_ip].filter((value): value is string => Boolean(value?.trim()))
     .map(value => value.trim());
+  const accountOrder = routerManagementApiAccountOrder(row.router_username, connectedHost);
+  const trustedUsernames = [
+    accountOrder.username,
+    ...(accountOrder.alternateUsernames ?? []),
+  ];
   return trustedHosts.includes(connectedHost.trim())
-    && (row.router_username || "admin") === (username || "admin");
+    && trustedUsernames.includes(username || "admin");
 }
 
 async function setSetupStatus(routerId: number, expectedStatus: string, status: string): Promise<boolean> {
