@@ -4575,6 +4575,7 @@ export interface WirelessInterface {
   managedByApp: boolean;
   securitySummary?: string;
   channelLabel?: string;
+  securityMode?: "open" | "wpa2";
 }
 
 export interface WirelessSecurityProfile {
@@ -4641,6 +4642,9 @@ export async function fetchWireless(
             : hasAuthenticationTypes
               ? "Open Wi-Fi"
               : "Security not reported",
+          securityMode: hasAuthenticationTypes
+            ? authenticationTypes ? "wpa2" : "open"
+            : undefined,
         };
       });
       return { apiMode: "wifi", interfaces, profiles: [] };
@@ -4675,6 +4679,10 @@ export async function fetchWireless(
       authentication:   r["authentication-types"] ?? "",
       mode:             r.mode                    ?? "",
     }));
+    const profilesByName = new Map(profiles.map(profile => [profile.name, profile]));
+    for (const iface of interfaces) {
+      iface.securityMode = profilesByName.get(iface.securityProfile)?.mode === "none" ? "open" : "wpa2";
+    }
 
     return { apiMode: "legacy", interfaces, profiles };
   });
@@ -4693,12 +4701,4717 @@ export interface WirelessCreateParams {
 const wirelessAppComment = (routerId: number) =>
   `ochola-wireless-app:${routerId}:${randomBytes(8).toString("hex")}`;
 const isWirelessAppComment = (comment: unknown, routerId: number) =>
-  new RegExp(`^ochola-wireless-app:${routerId}:[A-Za-z0-9]+$`, "i").test(String(comment ?? "").trim());
+  new RegExp(`^ochola-wireless-app:${routerId}:[A-Za-z0-9]+import * as net from "net";
+import { randomBytes, X509Certificate } from "node:crypto";
+import { RouterOSAPI } from "node-routeros";
+import { logger } from "./logger";
+import {
+  ROUTER_MANAGEMENT_VPN,
+  ROUTER_MANAGEMENT_VPN_BACKUP,
+  ROUTER_MANAGEMENT_CLIENT_INTERFACE_COMMENT,
+  ROUTER_MANAGEMENT_CLIENT_INTERFACE_NAME,
+  routerManagementBackupIp,
+  routerManagementClientInterfaceName,
+  type RouterManagementVpnRole,
+} from "./router-management-vpn.js";
+import {
+  ISRG_ROOT_X1_PEM,
+  ROUTER_HTTPS_CERTIFICATE_FILE,
+  ROUTER_HTTPS_CERTIFICATE_NAME,
+  routerOsTextVariableWriter,
+} from "./router-https-trust.js";
+import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
+import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "./payment-walled-garden.js";
+import { renderHotspotChatWalledGardenRules } from "./hotspot-chat-walled-garden.js";
+import {
+  legacySharedHotspotResourceNames,
+  SHARED_HOTSPOT_POOL_NAME,
+  SHARED_HOTSPOT_PROFILE_NAME,
+  SHARED_HOTSPOT_SERVER_NAME,
+} from "./shared-hotspot-resources.js";
+import {
+  isVlanCustomerQueueName,
+  isValidSimpleQueueRateLimit,
+  parseVlanQueueCounters,
+  vlanCustomerQueueIdentity,
+} from "./vlan-customer-queue.js";
+import { fupRateLimitFromMbps } from "./fup-policy.js";
+import {
+  buildCaptivePortalApiUrl,
+  getCaptivePortalApiOrigin,
+  routerOsDhcpOptionUriValue,
+} from "./captive-portal-discovery.js";
+
+/* ─── Credential types ───────────────────────────────────────────────────── */
+
+export interface RouterCredentials {
+  /** Primary host — should be a public IP or hostname, not 192.168.x.x */
+  host: string;
+  /** MikroTik API port. 8728 = plain, 8729 = API-SSL (preferred for remote). */
+  port: number;
+  username: string;
+  password: string;
+  /** Additional usernames using the same stored password during installer migration. */
+  alternateUsernames?: string[];
+  /** Use API-SSL (TLS). Auto-enabled when port === 8729. */
+  useSSL?: boolean;
+  /**
+   * VPN tunnel IP — used as a fallback when the primary host is unreachable.
+   * Typically the IP the MikroTik receives inside an OpenVPN tunnel.
+   */
+  bridgeIp?: string;
+  /** Override connect timeout in ms (default: MIKROTIK_CONNECT_TIMEOUT or 15000) */
+  connectTimeoutMs?: number;
+  /** Override per-request timeout in ms (default: MIKROTIK_REQUEST_TIMEOUT or 20000) */
+  requestTimeoutMs?: number;
+  /** Optional total budget for trying all RouterOS connection hosts and credentials. */
+  totalConnectTimeoutMs?: number;
+}
+
+/* ─── Private IP detection ───────────────────────────────────────────────── */
+
+const PRIVATE_RANGES = [
+  /^10\./,
+  /^192\.168\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^127\./,
+  /^::1$/,
+  /^localhost$/i,
+];
+
+export function isPrivateIp(host: string): boolean {
+  return PRIVATE_RANGES.some(r => r.test(host.trim()));
+}
+
+/* ─── Global timeouts from env vars ─────────────────────────────────────── */
+
+const DEFAULT_CONNECT_MS = parseInt(
+  process.env["MIKROTIK_CONNECT_TIMEOUT"] ?? "15000", 10
+);
+const DEFAULT_REQUEST_MS = parseInt(
+  process.env["MIKROTIK_REQUEST_TIMEOUT"] ?? "20000", 10
+);
+const MAX_RETRIES = parseInt(
+  process.env["MIKROTIK_MAX_RETRIES"] ?? "2", 10
+);
+
+/* ─── Environment-variable credentials ──────────────────────────────────── */
+
+/**
+ * Reads the "default" router credentials from environment variables.
+ * Returns null if MIKROTIK_HOST is not set.
+ *
+ * Required:
+ *   MIKROTIK_HOST      — router PUBLIC IP or hostname (avoid 192.168.x.x)
+ *   MIKROTIK_PASSWORD  — API password (store as a Secret, never hardcode)
+ *
+ * Optional:
+ *   MIKROTIK_USERNAME           — API username (default: "admin")
+ *   MIKROTIK_PORT               — API port    (default: 8728 plain / 8729 SSL)
+ *   MIKROTIK_USE_SSL            — "true" to force API-SSL
+ *   MIKROTIK_TLS_VERIFY         — "true" to enforce TLS cert validation
+ *   MIKROTIK_BRIDGE_IP          — VPN tunnel IP fallback
+ *   MIKROTIK_CONNECT_TIMEOUT    — connect timeout in ms (default 15000)
+ *   MIKROTIK_REQUEST_TIMEOUT    — request timeout in ms (default 20000)
+ *   MIKROTIK_MAX_RETRIES        — connection attempts (default 2)
+ */
+export function getEnvCredentials(): RouterCredentials | null {
+  const host = process.env["MIKROTIK_HOST"]?.trim();
+  if (!host) return null;
+
+  const password  = process.env["MIKROTIK_PASSWORD"] ?? "";
+  const username  = process.env["MIKROTIK_USERNAME"] ?? "admin";
+  const bridgeIp  = process.env["MIKROTIK_BRIDGE_IP"]?.trim() || undefined;
+  const useSSL    = process.env["MIKROTIK_USE_SSL"]?.toLowerCase() === "true";
+  const rawPort   = process.env["MIKROTIK_PORT"];
+  const port      = rawPort ? parseInt(rawPort, 10) : useSSL ? 8729 : 8728;
+
+  if (!password) {
+    logger.warn("MIKROTIK_PASSWORD is not set — connection will likely fail");
+  }
+  if (isPrivateIp(host)) {
+    logger.warn(
+      { host },
+      "MIKROTIK_HOST appears to be a private/local IP. " +
+      "The VPS cannot reach this address over the internet. " +
+      "Use the router's public IP or set MIKROTIK_BRIDGE_IP for VPN tunnel access."
+    );
+  }
+
+  return {
+    host,
+    port,
+    username,
+    password,
+    useSSL: useSSL || port === 8729,
+    bridgeIp,
+  };
+}
+
+/* ─── Connection factory ─────────────────────────────────────────────────── */
+
+function makeConn(host: string, creds: RouterCredentials): RouterOSAPI {
+  const ssl = creds.useSSL ?? creds.port === 8729;
+  const connectSec = Math.ceil((creds.connectTimeoutMs ?? DEFAULT_CONNECT_MS) / 1000);
+  return new RouterOSAPI({
+    host,
+    port:      creds.port,
+    user:      creds.username,
+    password:  creds.password,
+    timeout:   connectSec,
+    keepalive: false,
+    ...(ssl
+      ? {
+          tls: {
+            /* RouterOS uses self-signed certs by default.
+               Set MIKROTIK_TLS_VERIFY=true only if the router has
+               a properly signed certificate installed.               */
+            rejectUnauthorized: process.env["MIKROTIK_TLS_VERIFY"] === "true",
+          },
+        }
+      : {}),
+  });
+}
+
+/* ─── Timeout helper ─────────────────────────────────────────────────────── */
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Operation timed out after ${ms / 1000}s`)),
+      ms
+    );
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/* ─── TCP port probe ─────────────────────────────────────────────────────── */
+
+export interface PortProbeResult {
+  host: string;
+  port: number;
+  reachable: boolean;
+  latencyMs: number;
+  /** Raw socket error, if any */
+  error?: string;
+  /** Human-readable diagnosis — NAT, firewall, refused, DNS, etc. */
+  diagnosis?: string;
+}
+
+export type RouterConnectionFailureProfile =
+  | "tcp_timeout"
+  | "bad_credentials"
+  | "offline_vpn_tunnel"
+  | "hotspot_user_conflict"
+  | "unknown";
+
+export function classifyRouterConnectionFailure(error: unknown): {
+  profile: RouterConnectionFailureProfile;
+  summary: string;
+  message: string;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+
+  if (
+    lower.includes("login failed")
+    || lower.includes("authentication")
+    || lower.includes("bad credentials")
+    || lower.includes("invalid user")
+    || lower.includes("invalid password")
+    || lower.includes("not authorized")
+  ) {
+    return {
+      profile: "bad_credentials",
+      summary: "Bad Credentials handshake",
+      message,
+    };
+  }
+  if (
+    lower.includes("management api forward failed")
+    || lower.includes("openvpn")
+    || lower.includes("tunnel is offline")
+  ) {
+    return {
+      profile: "offline_vpn_tunnel",
+      summary: "Offline VPN tunnel container state",
+      message,
+    };
+  }
+  if (
+    lower.includes("already have user with this ip address")
+    || lower.includes("already have user with this address")
+    || lower.includes("duplicate address")
+  ) {
+    return {
+      profile: "hotspot_user_conflict",
+      summary: "Hotspot user/IP conflict",
+      message,
+    };
+  }
+  if (
+    lower.includes("timed out")
+    || lower.includes("timeout")
+    || lower.includes("etimedout")
+    || lower.includes("ehostunreach")
+    || lower.includes("enetunreach")
+    || lower.includes("econnrefused")
+    || lower.includes("not reachable")
+    || lower.includes("port 8728")
+  ) {
+    return {
+      profile: "tcp_timeout",
+      summary: "TCP Timeout (Port 8728 blocked/unreachable)",
+      message,
+    };
+  }
+  return { profile: "unknown", summary: "Unknown RouterOS connection failure", message };
+}
+
+/**
+ * Probes whether a TCP port is open and reachable from this VPS.
+ * This is a raw socket connect — it does NOT speak the RouterOS API protocol.
+ * Use it to detect firewall blocks or NAT issues BEFORE attempting the API.
+ *
+ * Possible outcomes:
+ *  - reachable=true  → port is open; RouterOS API login will be attempted next
+ *  - ECONNREFUSED    → port reached but actively refused (API service may be disabled)
+ *  - ETIMEDOUT       → no reply — likely a firewall DROP rule or NAT not forwarding
+ *  - EHOSTUNREACH    → routing failure — wrong IP or VPS has no route to host
+ *  - ENOTFOUND       → DNS resolution failed — use an IP address instead of hostname
+ */
+export async function probePort(
+  host: string,
+  port: number,
+  timeoutMs = 5000
+): Promise<PortProbeResult> {
+  const start = Date.now();
+
+  return new Promise((resolve) => {
+    const sock = new net.Socket();
+    let done = false;
+
+    const finish = (reachable: boolean, errorMsg?: string) => {
+      if (done) return;
+      done = true;
+      sock.destroy();
+      const latencyMs = Date.now() - start;
+
+      let diagnosis: string | undefined;
+      if (!reachable && errorMsg) {
+        if (errorMsg.includes("ECONNREFUSED")) {
+          diagnosis =
+            `Port ${port} was reached but refused — the RouterOS API service ` +
+            `may be disabled. Enable it under /ip service on the router.`;
+        } else if (
+          errorMsg.includes("ETIMEDOUT") ||
+          errorMsg.toLowerCase().includes("timed out")
+        ) {
+          diagnosis =
+            `Port ${port} did not respond within ${timeoutMs / 1000}s — ` +
+            `likely blocked by a firewall DROP rule or NAT is not forwarding ` +
+            `port ${port} to the router. Check /ip firewall filter and port-forward rules.`;
+        } else if (
+          errorMsg.includes("EHOSTUNREACH") ||
+          errorMsg.includes("ENETUNREACH")
+        ) {
+          diagnosis =
+            `Host ${host} is unreachable — routing failure. ` +
+            `Verify the IP is correct and the VPS has a network path to it. ` +
+            `If behind NAT with no public IP, configure a VPN tunnel instead.`;
+        } else if (errorMsg.includes("ENOTFOUND")) {
+          diagnosis =
+            `Hostname "${host}" could not be resolved. ` +
+            `Use the router's IP address directly instead of a hostname, ` +
+            `or ensure DNS is correctly configured on the VPS.`;
+        } else if (errorMsg.includes("EACCES")) {
+          diagnosis =
+            `Permission denied connecting to ${host}:${port}. ` +
+            `Check OS-level firewall rules on the VPS (iptables/ufw).`;
+        }
+      }
+
+      resolve({ host, port, reachable, latencyMs, error: errorMsg, diagnosis });
+    };
+
+    sock.setTimeout(timeoutMs);
+    sock.on("connect", () => finish(true));
+    sock.on("error",   (err) => finish(false, err.message));
+    sock.on("timeout", () => finish(false, `Timed out after ${timeoutMs / 1000}s`));
+    sock.connect(port, host);
+  });
+}
+
+/* ─── Retry logic ────────────────────────────────────────────────────────── */
+
+/**
+ * Probes the TCP port first, then attempts the RouterOS API handshake.
+ * Retries on transient failures with exponential backoff.
+ *
+ * Strategy per host:
+ *   1. Probe TCP port — if blocked (timeout/refused), skip RouterOS API attempt
+ *      and return a clear diagnosis without burning the full connect timeout
+ *   2. If port is open, attempt RouterOS API login
+ *   3. Try primary host (creds.host), then VPN fallback (creds.bridgeIp)
+ *   4. Retry up to MAX_RETRIES times
+ */
+async function connectWithRetry(
+  creds: RouterCredentials
+): Promise<{ conn: RouterOSAPI; connectedHost: string; connectedUsername: string; probe: PortProbeResult; closeForward?: () => Promise<void> }> {
+  const connectMs  = creds.connectTimeoutMs ?? DEFAULT_CONNECT_MS;
+  /* Port probe uses a shorter timeout — fail fast, don't burn the full budget */
+  const probeMs    = Math.min(connectMs, 6000);
+  const totalBudgetMs = Number.isFinite(creds.totalConnectTimeoutMs) && Number(creds.totalConnectTimeoutMs) > 0
+    ? Number(creds.totalConnectTimeoutMs)
+    : null;
+  const deadline = totalBudgetMs === null ? Number.POSITIVE_INFINITY : Date.now() + totalBudgetMs;
+  const remainingMs = () => Math.max(0, deadline - Date.now());
+  const stageTimeoutMs = (preferredMs: number) => Math.max(
+    1,
+    Math.min(preferredMs, Number.isFinite(deadline) ? remainingMs() : preferredMs),
+  );
+
+  const hosts: Array<{ host: string; label: string; isVpn: boolean }> = [];
+
+  const isVpnIp = (ip: string) => /^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(ip);
+
+  if (creds.host) {
+    const vpn = isVpnIp(creds.host);
+    const label = vpn
+      ? `${creds.host} (VPN tunnel)`
+      : isPrivateIp(creds.host)
+        ? `${creds.host} (⚠ LAN IP — only reachable on local network)`
+        : creds.host;
+    hosts.push({ host: creds.host, label, isVpn: vpn });
+    if (/^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.host)) {
+      const backupIp = creds.host.startsWith("10.8.5.")
+        ? routerManagementBackupIp(creds.host)
+        : creds.host.replace(/^10\.8\.6\./, "10.8.5.");
+      hosts.push({ host: backupIp, label: `${backupIp} (alternate management VPN tunnel)`, isVpn: true });
+    }
+  }
+  if (creds.bridgeIp && creds.bridgeIp !== creds.host) {
+    hosts.push({ host: creds.bridgeIp, label: `${creds.bridgeIp} (VPN tunnel)`, isVpn: true });
+    if (/^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(creds.bridgeIp)) {
+      const backupIp = creds.bridgeIp.startsWith("10.8.5.")
+        ? routerManagementBackupIp(creds.bridgeIp)
+        : creds.bridgeIp.replace(/^10\.8\.6\./, "10.8.5.");
+      hosts.push({ host: backupIp, label: `${backupIp} (alternate management VPN tunnel)`, isVpn: true });
+    }
+  }
+
+  if (hosts.length === 0) {
+    throw new Error("No host or bridge IP configured for this router");
+  }
+  const usernames = Array.from(new Set([
+    creds.username,
+    ...(creds.alternateUsernames ?? []),
+  ].map(username => username.trim()).filter(Boolean)));
+
+  /* VPN tunnel IPs (10.8.x.x) are always reachable from the VPS server.
+     Public/WAN IPs are often firewalled against direct API access.
+     Sort VPN candidates to the front so we reach the router immediately
+     instead of burning the full probe timeout on an unreachable WAN IP first. */
+  hosts.sort((a, b) => (b.isVpn ? 1 : 0) - (a.isVpn ? 1 : 0));
+
+  let lastErr: Error = new Error("No connection attempts made");
+  let lastProbe: PortProbeResult = { host: "", port: creds.port, reachable: false, latencyMs: 0 };
+  let budgetExpired = false;
+
+  outer: for (let attempt = 1; attempt <= Math.max(1, MAX_RETRIES); attempt++) {
+    for (const { host, label, isVpn } of hosts) {
+      if (remainingMs() <= 0) {
+        budgetExpired = true;
+        break outer;
+      }
+      let forward: VpsTcpForward | undefined;
+      let connectionHost = host;
+      let connectionPort = creds.port;
+      const directManagementVpnEnabled = process.env.ROUTEROS_DIRECT_VPN_ACCESS === "true";
+
+      /* ── Step 1: TCP port probe ── */
+      logger.debug({ host: label, port: creds.port, attempt }, "Port probe");
+      if (isVpn && !directManagementVpnEnabled) {
+        try {
+          forward = await openVpsTcpForward(host, creds.port, { timeoutMs: stageTimeoutMs(connectMs) });
+          connectionHost = forward.host;
+          connectionPort = forward.port;
+        } catch (err) {
+          lastErr = err instanceof Error ? err : new Error(String(err));
+          logger.warn({ host: label, attempt, err: lastErr.message }, "VPS management API forward failed");
+          continue;
+        }
+      } else if (isVpn && directManagementVpnEnabled) {
+        logger.debug({ host: label, port: creds.port }, "Using the VPS management VPN route directly");
+      }
+
+      let rawProbe = await probePort(connectionHost, connectionPort, stageTimeoutMs(probeMs));
+      if (!rawProbe.reachable && isVpn && directManagementVpnEnabled && !forward) {
+        /* The production API normally has the management VPN route locally.
+           If that route is temporarily absent, retain the previous SSH-forward
+           path as a slower recovery fallback rather than failing reconnect. */
+        try {
+          forward = await openVpsTcpForward(host, creds.port, { timeoutMs: stageTimeoutMs(connectMs) });
+          connectionHost = forward.host;
+          connectionPort = forward.port;
+          rawProbe = await probePort(connectionHost, connectionPort, stageTimeoutMs(probeMs));
+          logger.warn(
+            { host: label, directProbeReachable: false, forwardedProbeReachable: rawProbe.reachable },
+            "Direct management VPN route failed; tried the SSH-forward fallback",
+          );
+        } catch (err) {
+          lastErr = err instanceof Error ? err : new Error(String(err));
+          logger.warn({ host: label, attempt, err: lastErr.message }, "VPS management API fallback failed");
+        }
+      }
+      const probe = isVpn
+        ? { ...rawProbe, host, port: creds.port }
+        : rawProbe;
+      lastProbe = probe;
+
+      if (!probe.reachable) {
+        const diag = probe.diagnosis ?? probe.error ?? "unreachable";
+        logger.warn(
+          { host: label, port: creds.port, attempt, diagnosis: diag },
+          "Port probe failed — skipping RouterOS API connect"
+        );
+        lastErr = new Error(
+          `Port ${creds.port} on ${label} is not reachable ` +
+          `(attempt ${attempt}/${MAX_RETRIES}): ${diag}`
+        );
+        /* Don't attempt RouterOS API when port is blocked — move to next host */
+        await forward?.close();
+        continue;
+      }
+
+      logger.debug({ host: label, port: creds.port, latencyMs: probe.latencyMs }, "Port open");
+
+      /* ── Step 2: RouterOS API login ──
+         Self Install creates the stable management account, while older rows
+         may still store the router-name username. Try both over the same
+         already-verified tunnel before declaring the router offline. */
+      for (const username of usernames) {
+        const conn = makeConn(connectionHost, { ...creds, username, host: connectionHost, port: connectionPort });
+        try {
+          logger.debug({ host: label, username, attempt }, "RouterOS API connect");
+          await withTimeout(conn.connect(), stageTimeoutMs(connectMs));
+          logger.debug({ host: label, username, attempt }, "RouterOS API connected");
+          return {
+            conn,
+            connectedHost: host,
+            connectedUsername: username,
+            probe,
+            closeForward: forward ? () => forward!.close() : undefined,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn({ host: label, username, attempt, err: msg }, "RouterOS API connect failed");
+          lastErr = new Error(
+            `Port ${creds.port} is open on ${isVpn ? "VPN" : "public"} host ${label} ` +
+            `but RouterOS API login failed for ${username} (attempt ${attempt}/${MAX_RETRIES}): ${msg}. ` +
+            `Check the API username and password, and that the API service is enabled.`
+          );
+          try { conn.close(); } catch { /* ignore */ }
+          if (remainingMs() <= 0) {
+            budgetExpired = true;
+            break;
+          }
+        }
+      }
+      await forward?.close();
+      if (remainingMs() <= 0) {
+        budgetExpired = true;
+        break outer;
+      }
+    }
+
+    /* Exponential backoff between full retry rounds */
+    if (attempt < MAX_RETRIES) {
+      const delay = Math.min(500 * Math.pow(2, attempt - 1), 4000);
+      if (remainingMs() <= 0) {
+        budgetExpired = true;
+        break;
+      }
+      logger.debug({ attempt, delayMs: delay }, "Retry backoff");
+      await new Promise(r => setTimeout(r, Math.min(delay, remainingMs())));
+    }
+  }
+
+  if (budgetExpired || remainingMs() <= 0) {
+    const seconds = totalBudgetMs === null ? "the configured time limit" : `${Math.ceil(totalBudgetMs / 1000)} seconds`;
+    throw new Error(
+      `RouterOS could not be reached within ${seconds}. Check this router's management VPN route, API service, and credentials.`,
+    );
+  }
+  throw Object.assign(lastErr, { probe: lastProbe });
+}
+
+/* ─── Helper: run a command with a connected client ─────────────────────── */
+
+async function withConn<T>(
+  creds: RouterCredentials,
+  fn: (conn: RouterOSAPI, connectedHost: string) => Promise<T>
+): Promise<T> {
+  const { conn, connectedHost, closeForward } = await connectWithRetry(creds);
+  try {
+    return await fn(conn, connectedHost);
+  } finally {
+    try { conn.close(); } catch { /* ignore */ }
+    await closeForward?.();
+  }
+}
+
+/* Read-only probes may retry the alternate account if login succeeds but
+ * RouterOS denies the identity/resource commands. Never use this wrapper for
+ * mutations: retrying a partially completed write could duplicate changes. */
+async function withReadConn<T>(
+  creds: RouterCredentials,
+  fn: (conn: RouterOSAPI, connectedHost: string) => Promise<T>
+): Promise<T> {
+  const usernames = Array.from(new Set([
+    creds.username,
+    ...(creds.alternateUsernames ?? []),
+  ].map(username => username.trim()).filter(Boolean)));
+  let remainingUsernames = usernames;
+  let lastError: unknown;
+
+  while (remainingUsernames.length > 0) {
+    let connection: Awaited<ReturnType<typeof connectWithRetry>> | undefined;
+    const username = remainingUsernames[0];
+    const usingAlternateAccount = username !== creds.username;
+    try {
+      connection = await connectWithRetry({
+        ...creds,
+        ...(usingAlternateAccount
+          ? { connectTimeoutMs: Math.max(creds.connectTimeoutMs ?? DEFAULT_CONNECT_MS, 15_000) }
+          : {}),
+        username,
+        alternateUsernames: [],
+      });
+      try {
+        const result = await fn(connection.conn, connection.connectedHost);
+        if (connection.connectedUsername !== creds.username) {
+          logger.info(
+            { host: connection.connectedHost, accountUsed: "configured-alternate" },
+            "RouterOS read-only check succeeded with the management-account fallback",
+          );
+        }
+        return result;
+      } catch (error) {
+        lastError = error;
+        if (connection.connectedUsername === creds.username && remainingUsernames.length > 1) {
+          const message = error instanceof Error ? error.message : String(error);
+          const reason = /not enough permissions|permission denied|not permitted|policy/i.test(message)
+            ? "permission-denied"
+            : /identity and version|did not return|empty|no rows/i.test(message)
+              ? "empty-or-incomplete-reply"
+              : "read-check-failed";
+          logger.info(
+            { host: connection.connectedHost, reason },
+            "RouterOS saved-account read check failed; retrying with the management account",
+          );
+        }
+        remainingUsernames = remainingUsernames.filter(
+          username => username !== connection?.connectedUsername,
+        );
+      }
+    } catch (error) {
+      lastError = error;
+      remainingUsernames = remainingUsernames.filter(candidate => candidate !== username);
+    } finally {
+      if (connection) {
+        try { connection.conn.close(); } catch { /* ignore */ }
+        try { await connection.closeForward?.(); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  if (lastError instanceof Error) throw lastError;
+  throw new Error("RouterOS API commands failed for all configured accounts");
+}
+
+/* ─── Managed-service reset (never touches management/network resources) ─── */
+
+export const MANAGED_RESET_PATHS = [
+  "/ip/pool",
+  "/ip/dhcp-server",
+  "/ip/dhcp-server/network",
+  "/ip/hotspot",
+  "/ip/hotspot/profile",
+  "/ip/hotspot/user",
+  "/ip/hotspot/user/profile",
+  "/ip/hotspot/walled-garden",
+  "/ip/hotspot/walled-garden/ip",
+  "/ppp/profile",
+  "/ppp/secret",
+  "/interface/pppoe-server/server",
+  "/queue/simple",
+  "/queue/tree",
+] as const;
+
+const MANAGED_RESET_ACCESS_MARKERS = [
+  "api", "vpn", "management", "mainbillingvpn", "certificate",
+  "do not delete", "failover", "vps tunnel",
+];
+
+export interface ManagedResetItem {
+  id: string;
+  path: string;
+  name: string;
+  comment: string;
+}
+
+export interface ManagedResetPlan {
+  id: string;
+  routerId: number;
+  routerName: string;
+  identity: string;
+  version: string;
+  connectedHost: string;
+  apiServiceAvailable: boolean;
+  protectedVpnClients: string[];
+  eligible: boolean;
+  blockedReason?: string;
+  items: ManagedResetItem[];
+  skippedPaths: string[];
+  createdAt: number;
+}
+
+export interface ManagedResetResult {
+  backupFile: string;
+  removed: Array<{ path: string; name: string }>;
+}
+
+export function isManagedResetPath(path: string): path is typeof MANAGED_RESET_PATHS[number] {
+  return (MANAGED_RESET_PATHS as readonly string[]).includes(path);
+}
+
+function isManagementVpnHost(host: string): boolean {
+  return /^10\.8\.[56]\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(host);
+}
+
+export function isManagedResetComment(
+  comment: string,
+  routerId: number,
+): boolean {
+  const value = String(comment ?? "").trim();
+  const tags = [`ochola-services-${routerId}`, `ochola-coexist-${routerId}`];
+  const hasTag = tags.some(tag => {
+    const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`^${escaped}(?:$|[ -])`, "i").test(value);
+  });
+  return hasTag && !MANAGED_RESET_ACCESS_MARKERS.some(marker => value.toLowerCase().includes(marker));
+}
+
+export function isManagedResetItem(
+  row: { name?: unknown; comment?: unknown; [key: string]: unknown },
+  path: string,
+  routerId: number,
+): boolean {
+  if (!isManagedResetPath(path) || !row[".id"]) return false;
+  const name = String(row.name ?? "").trim();
+  const comment = String(row.comment ?? "").trim();
+  if (MANAGED_RESET_ACCESS_MARKERS.some(marker =>
+    `${name} ${comment}`.toLowerCase().includes(marker),
+  )) return false;
+  return isManagedResetComment(comment, routerId);
+}
+
+function managedResetRows(
+  rows: Record<string, string>[],
+  path: typeof MANAGED_RESET_PATHS[number],
+  routerId: number,
+): ManagedResetItem[] {
+  return rows
+    .filter(row => isManagedResetItem(row, path, routerId))
+    .map(row => ({
+      id: String(row[".id"]),
+      path,
+      name: String(row.name ?? ""),
+      comment: String(row.comment ?? ""),
+    }));
+}
+
+export async function buildManagedResetPlan(
+  creds: RouterCredentials,
+  routerId: number,
+  routerName: string,
+): Promise<ManagedResetPlan> {
+  const id = randomBytes(18).toString("base64url");
+  return withReadConn(creds, async (conn, connectedHost) => {
+    const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000);
+    const read = async (command: string[]): Promise<Record<string, string>[]> =>
+      withTimeout(conn.write(command), timeoutMs) as Promise<Record<string, string>[]>;
+    const identityRows = await read(["/system/identity/print", "=.proplist=name"]);
+    const resourceRows = await read(["/system/resource/print", "=.proplist=version"]);
+    const serviceRows = await read(["/ip/service/print", "=.proplist=name,disabled"]);
+    const vpnRows = await read([
+      "/interface/ovpn-client/print",
+      "=.proplist=name,comment,disabled",
+    ]);
+    const identity = String(identityRows[0]?.name ?? "").trim();
+    const version = String(resourceRows[0]?.version ?? "").trim();
+    const apiServiceAvailable = serviceRows.some(row =>
+      (row.name === "api" || row.name === "api-ssl")
+      && String(row.disabled ?? "").toLowerCase() !== "true",
+    );
+    const protectedVpnClients = vpnRows
+      .filter(row => /mainbillingvpn|ochola.*management|vps tunnel/i.test(
+        `${row.name ?? ""} ${row.comment ?? ""}`,
+      ))
+      .map(row => `${String(row.name ?? "")}${row.comment ? ` — ${row.comment}` : ""}`);
+    if (!identity || !version) {
+      throw new Error("Router identity and version did not return rows.");
+    }
+    if (!apiServiceAvailable || protectedVpnClients.length === 0) {
+      throw new Error("Router API service or management VPN inventory returned incomplete rows.");
+    }
+    const items: ManagedResetItem[] = [];
+    const skippedPaths: string[] = [];
+    for (const path of MANAGED_RESET_PATHS) {
+      try {
+        const rows = await read([path + "/print", "=.proplist=.id,name,comment"]);
+        items.push(...managedResetRows(Array.isArray(rows) ? rows : [], path, routerId));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/not enough permissions|permission denied|not permitted|policy/i.test(message)) {
+          throw error;
+        }
+        skippedPaths.push(`${path}: unavailable`);
+      }
+    }
+    const blockedReason = !identity || !version
+      ? "Router identity or RouterOS version could not be verified."
+      : !isManagementVpnHost(connectedHost)
+        ? "The read-only check did not connect through the 10.8.5.x or 10.8.6.x management VPN."
+      : !apiServiceAvailable
+        ? "No enabled RouterOS API service (api or api-ssl) could be verified."
+        : protectedVpnClients.length === 0
+          ? "The mainbillingvpn/Ochola management VPN client could not be verified."
+          : undefined;
+    return {
+      id, routerId, routerName, identity, version, connectedHost,
+      apiServiceAvailable, protectedVpnClients, eligible: !blockedReason,
+      ...(blockedReason ? { blockedReason } : {}),
+      items, skippedPaths, createdAt: Date.now(),
+    };
+  });
+}
+
+export async function executeManagedReset(
+  creds: RouterCredentials,
+  plan: ManagedResetPlan,
+  onProgress?: (
+    current: string,
+    processed: number,
+    backupFile?: string,
+    removed?: Array<{ path: string; name: string }>,
+  ) => void,
+): Promise<ManagedResetResult> {
+  if (!plan.eligible) throw new Error(plan.blockedReason ?? "Managed reset plan is not eligible.");
+  const connection = await connectWithRetry(creds);
+  const { conn, connectedHost, closeForward } = connection;
+  try {
+    if (!isManagementVpnHost(connectedHost)) {
+      throw new Error("The reset must run through the 10.8.5.x or 10.8.6.x management VPN.");
+    }
+    const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000);
+    const write = async (command: string[]): Promise<Record<string, string>[]> =>
+      await withTimeout(conn.write(command), timeoutMs) as Record<string, string>[];
+    const services = await write(["/ip/service/print", "=.proplist=name,disabled"]);
+    if (!services.some(row =>
+      (row.name === "api" || row.name === "api-ssl")
+      && String(row.disabled ?? "").toLowerCase() !== "true",
+    )) throw new Error("Enabled RouterOS API service could not be revalidated.");
+    const vpnRows = await write(["/interface/ovpn-client/print", "=.proplist=name,comment,disabled"]);
+    const protectedVpnClients = vpnRows.filter(row =>
+      /mainbillingvpn|ochola.*management|vps tunnel/i.test(`${row.name ?? ""} ${row.comment ?? ""}`),
+    ).map(row => `${String(row.name ?? "")}${row.comment ? ` — ${row.comment}` : ""}`);
+    if (protectedVpnClients.length === 0
+      || !plan.protectedVpnClients.every(expected => protectedVpnClients.includes(expected))) {
+      throw new Error("The protected management VPN client could not be revalidated.");
+    }
+    const backupBase = `ochola-managed-reset-${plan.routerId}-${Date.now()}`;
+    onProgress?.("Creating router backup", 0);
+    await write(["/system/backup/save", `=name=${backupBase}`]);
+    const backupRows = await write(["/file/print", "=.proplist=name"]);
+    const backupFile = String(backupRows.find(row =>
+      String(row.name ?? "").split("/").pop() === `${backupBase}.backup`,
+    )?.name ?? "");
+    if (!backupFile) throw new Error("RouterOS did not verify the managed-reset backup file.");
+    onProgress?.("Backup verified", 0, backupFile, []);
+    const removed: Array<{ path: string; name: string }> = [];
+    for (const item of plan.items) {
+      onProgress?.(`${item.path}/${item.name}`, removed.length, backupFile, [...removed]);
+      const rows = await write([item.path + "/print", "=.proplist=.id,name,comment"]);
+      const row = rows.find(candidate => candidate[".id"] === item.id);
+      if (!row || !isManagedResetItem(row, item.path, plan.routerId)
+        || String(row.comment ?? "") !== item.comment
+        || String(row.name ?? "") !== item.name) {
+        throw new Error(`Managed reset stopped: resource ${item.path}/${item.name} changed or is no longer owned.`);
+      }
+      await write([item.path + "/remove", `=.id=${item.id}`]);
+      removed.push({ path: item.path, name: item.name });
+      onProgress?.(`${item.path}/${item.name}`, removed.length, backupFile, [...removed]);
+    }
+    const finalServices = await write(["/ip/service/print", "=.proplist=name,disabled"]);
+    const finalVpnRows = await write(["/interface/ovpn-client/print", "=.proplist=name,comment,disabled"]);
+    if (!finalServices.some(row =>
+      (row.name === "api" || row.name === "api-ssl")
+      && String(row.disabled ?? "").toLowerCase() !== "true",
+    ) || !plan.protectedVpnClients.every(protectedClient => finalVpnRows.some(row =>
+      `${String(row.name ?? "")}${row.comment ? ` — ${row.comment}` : ""}` === protectedClient,
+    ))) throw new Error("Managed reset completed with an access verification failure.");
+    onProgress?.("Access verification complete", removed.length, backupFile, [...removed]);
+    return { backupFile, removed };
+  } finally {
+    try { conn.close(); } catch { /* ignore */ }
+    await closeForward?.();
+  }
+}
+
+/** Run a caller-supplied RouterOS command through the existing connection path.
+ * This deliberately exports no connection object, so callers cannot retain or
+ * accidentally reuse an authenticated connection. */
+async function runRouterCommandOnConnection(
+  conn: RouterOSAPI,
+  creds: RouterCredentials,
+  command: string[],
+): Promise<Record<string, string>[]> {
+  const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+  try {
+    return await withTimeout(conn.write(command), ms) as Record<string, string>[];
+  } catch (error) {
+    const path = command[0] || "(empty command)";
+    const parameters = command
+      .slice(1)
+      .map((value) => value.replace(/=.+=.*/, (match) => `${match.split("=")[1]}=<value>`))
+      .join(", ");
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`RouterOS command ${path} failed [${parameters}]: ${message}`, { cause: error });
+  }
+}
+
+export async function runRouterCommand(
+  creds: RouterCredentials,
+  command: string[]
+): Promise<Record<string, string>[]> {
+  return withConn(creds, (conn) => runRouterCommandOnConnection(conn, creds, command));
+}
+
+export async function runRouterCommands(
+  creds: RouterCredentials,
+  commands: string[][]
+): Promise<Record<string, string>[][]> {
+  return withConn(creds, async conn => {
+    const results: Record<string, string>[][] = [];
+    for (const command of commands) {
+      results.push(await runRouterCommandOnConnection(conn, creds, command));
+    }
+    return results;
+  });
+}
+
+export async function readRouterSystemIdentity(creds: RouterCredentials): Promise<string> {
+  return withReadConn(creds, async (conn) => {
+    const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 15_000);
+    const rows = await withTimeout(
+      conn.write(["/system/identity/print", "=.proplist=name"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const identity = String(Array.isArray(rows) ? rows[0]?.name ?? "" : "");
+    if (!identity || identity !== identity.trim()) {
+      throw new Error("MikroTik System Identity read did not return a valid value.");
+    }
+    return identity;
+  });
+}
+
+/**
+ * Multiport Hotspot servers own their address pool. Reconcile the pool before
+ * creating a paid user so a stale or partially deployed router does not leave
+ * a successful payment with an unusable login.
+ */
+export async function ensureHotspotServerAddressPool(
+  creds: RouterCredentials,
+  opts: { serverName: string; poolName: string; poolRanges: string; comment?: string },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const poolRows = await runRouterCommandOnConnection(conn, creds, [
+      "/ip/pool/print",
+      "=.proplist=.id,name,ranges",
+      `?name=${opts.poolName}`,
+    ]);
+    const pool = (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === opts.poolName);
+    const existingRanges = String(pool?.ranges ?? "").trim();
+    if (!existingRanges) {
+      const poolCommand = pool?.[".id"]
+        ? ["/ip/pool/set", `=.id=${pool[".id"]}`]
+        : ["/ip/pool/add", `=name=${opts.poolName}`];
+      poolCommand.push(`=ranges=${opts.poolRanges}`);
+      if (opts.comment) poolCommand.push(`=comment=${opts.comment}`);
+      await runRouterCommandOnConnection(conn, creds, poolCommand);
+    }
+
+    const serverRows = await runRouterCommandOnConnection(conn, creds, [
+      "/ip/hotspot/print",
+      "=.proplist=.id,name,address-pool",
+      `?name=${opts.serverName}`,
+    ]);
+    const server = (Array.isArray(serverRows) ? serverRows : []).find(row => row.name === opts.serverName);
+    if (!server?.[".id"]) {
+      throw new Error(`Hotspot server "${opts.serverName}" is not deployed on the router.`);
+    }
+    if (server["address-pool"] !== opts.poolName) {
+      await runRouterCommandOnConnection(conn, creds, [
+        "/ip/hotspot/set",
+        `=.id=${server[".id"]}`,
+        `=address-pool=${opts.poolName}`,
+      ]);
+    }
+  });
+}
+
+/**
+ * Emergency recovery for an admin who enabled the generated customer Hotspot
+ * on their own management WLAN. Only the generated server for this router is
+ * disabled; bridge, DHCP, PPPoE, users, and files are left untouched.
+ */
+export async function disableGeneratedHotspot(
+  creds: RouterCredentials,
+  routerId: number,
+): Promise<{ name: string; alreadyDisabled: boolean }> {
+  const legacy = legacySharedHotspotResourceNames(routerId);
+  const rows = await runRouterCommand(creds, [
+    "/ip/hotspot/print",
+    "=.proplist=.id,name,disabled",
+  ]);
+  const server = (Array.isArray(rows) ? rows : []).find(row => row.name === SHARED_HOTSPOT_SERVER_NAME)
+    ?? (Array.isArray(rows) ? rows : []).find(row => row.name === legacy.serverName);
+  const name = server?.name ?? SHARED_HOTSPOT_SERVER_NAME;
+  if (!server?.[".id"]) {
+    throw new Error(`Generated Hotspot server "${name}" was not found on the router.`);
+  }
+  const alreadyDisabled = String(server.disabled ?? "").toLowerCase() === "true";
+  if (!alreadyDisabled) {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/set",
+      `=.id=${server[".id"]}`,
+      "=disabled=yes",
+    ]);
+  }
+  return { name, alreadyDisabled };
+}
+
+/**
+ * Reconcile the installed service resources to the current shared-bridge
+ * contract. The generated Hotspot remains disabled during this operation so
+ * it cannot interrupt the management WLAN again.
+ */
+export async function reconcileGeneratedServiceConfiguration(
+  creds: RouterCredentials,
+  routerId: number,
+): Promise<{ bridgeName: string; hotspotNetwork: string; pppoeInterface: string }> {
+  const tag = `ochola-services-${routerId}`;
+  const hotspotName = SHARED_HOTSPOT_SERVER_NAME;
+  const hotspotPool = SHARED_HOTSPOT_POOL_NAME;
+  const hotspotProfile = SHARED_HOTSPOT_PROFILE_NAME;
+  const legacy = legacySharedHotspotResourceNames(routerId);
+  const dhcpServer = `${tag}-dhcp`;
+  const pppoePool = `${tag}-pppoe-pool`;
+  const pppoeProfile = `${tag}-pppoe-profile`;
+  const pppoeServiceName = `${tag}-pppoe`;
+  const hotspotGateway = "192.168.180.1";
+  const hotspotNetwork = "192.168.180.0/22";
+  const hotspotPoolRange = "192.168.180.10-192.168.183.254";
+  const pppoeGateway = hotspotGateway;
+  const pppoePoolRange = "192.168.192.10-192.168.192.254";
+
+  const hotspotRows = await runRouterCommand(creds, [
+    "/ip/hotspot/print",
+    "=.proplist=.id,name,interface,disabled",
+  ]);
+  const hotspot = (Array.isArray(hotspotRows) ? hotspotRows : [])
+    .find(row => row.name === hotspotName)
+    ?? (Array.isArray(hotspotRows) ? hotspotRows : []).find(row => row.name === legacy.serverName);
+  if (hotspot?.name === legacy.serverName && hotspot[".id"]) {
+    const canonicalServer = (Array.isArray(hotspotRows) ? hotspotRows : [])
+      .find(row => row.name === hotspotName);
+    if (!canonicalServer) {
+      await runRouterCommand(creds, [
+        "/ip/hotspot/set",
+        `=.id=${hotspot[".id"]}`,
+        `=name=${hotspotName}`,
+      ]);
+      hotspot.name = hotspotName;
+    }
+  }
+  const bridgeName = String(hotspot?.interface || "hotspot-bridge").trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(bridgeName)) {
+    throw new Error("The generated Hotspot has no valid bridge interface.");
+  }
+
+  const bridgeRows = await runRouterCommand(creds, [
+    "/interface/bridge/print",
+    "=.proplist=.id,name,comment",
+    `?name=${bridgeName}`,
+  ]);
+  const bridge = (Array.isArray(bridgeRows) ? bridgeRows : []).find(row => row.name === bridgeName);
+  if (!bridge) {
+    throw new Error(`The required service bridge "${bridgeName}" was not found on the router.`);
+  }
+  if (bridgeName === "hotspot-bridge" && String(bridge.comment ?? "").trim()) {
+    await runRouterCommand(creds, [
+      "/interface/bridge/set",
+      `=.id=${bridge[".id"]}`,
+      "=comment=",
+    ]);
+  }
+
+  const addressRows = await runRouterCommand(creds, [
+    "/ip/address/print",
+    "=.proplist=.id,address,interface,comment",
+  ]);
+  for (const row of (Array.isArray(addressRows) ? addressRows : [])
+    .filter(item => item.comment === `${tag} hotspot gateway`)) {
+    if (row[".id"]) await runRouterCommand(creds, ["/ip/address/remove", `=.id=${row[".id"]}`]);
+  }
+  if (!(Array.isArray(addressRows) ? addressRows : [])
+    .some(row => row.address === `${hotspotGateway}/22` && row.interface === bridgeName)) {
+    await runRouterCommand(creds, [
+      "/ip/address/add",
+      `=address=${hotspotGateway}/22`,
+      `=interface=${bridgeName}`,
+      `=comment=${tag} hotspot gateway`,
+    ]);
+  }
+
+  const poolRows = await runRouterCommand(creds, [
+    "/ip/pool/print",
+    "=.proplist=.id,name",
+  ]);
+  const pool = (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === hotspotPool)
+    ?? (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === legacy.poolName);
+  if (pool?.name === legacy.poolName && pool[".id"]) {
+    const canonicalPool = (Array.isArray(poolRows) ? poolRows : []).find(row => row.name === hotspotPool);
+    if (!canonicalPool) {
+      await runRouterCommand(creds, [
+        "/ip/pool/set",
+        `=.id=${pool[".id"]}`,
+        `=name=${hotspotPool}`,
+      ]);
+      pool.name = hotspotPool;
+    }
+  }
+  if (pool?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/pool/set",
+      `=.id=${pool[".id"]}`,
+      `=ranges=${hotspotPoolRange}`,
+      `=comment=${tag} Hotspot pool`,
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/pool/add",
+      `=name=${hotspotPool}`,
+      `=ranges=${hotspotPoolRange}`,
+      `=comment=${tag} Hotspot pool`,
+    ]);
+  }
+
+  const dhcpNetworkRows = await runRouterCommand(creds, [
+    "/ip/dhcp-server/network/print",
+    "=.proplist=.id,address,comment",
+  ]);
+  for (const row of (Array.isArray(dhcpNetworkRows) ? dhcpNetworkRows : [])
+    .filter(item => item.comment === `${tag} Hotspot DHCP network`)) {
+    if (row[".id"]) await runRouterCommand(creds, ["/ip/dhcp-server/network/remove", `=.id=${row[".id"]}`]);
+  }
+  await runRouterCommand(creds, [
+    "/ip/dhcp-server/network/add",
+    `=address=${hotspotNetwork}`,
+    `=gateway=${hotspotGateway}`,
+    `=dns-server=${hotspotGateway},8.8.8.8`,
+    `=comment=${tag} Hotspot DHCP network`,
+  ]);
+
+  const dhcpRows = await runRouterCommand(creds, [
+    "/ip/dhcp-server/print",
+    "=.proplist=.id,name",
+    `?name=${dhcpServer}`,
+  ]);
+  const dhcp = (Array.isArray(dhcpRows) ? dhcpRows : []).find(row => row.name === dhcpServer);
+  if (dhcp?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/dhcp-server/set",
+      `=.id=${dhcp[".id"]}`,
+      `=interface=${bridgeName}`,
+      `=address-pool=${hotspotPool}`,
+      "=disabled=no",
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/dhcp-server/add",
+      `=name=${dhcpServer}`,
+      `=interface=${bridgeName}`,
+      `=address-pool=${hotspotPool}`,
+      "=disabled=no",
+    ]);
+  }
+
+  const profileRows = await runRouterCommand(creds, [
+    "/ip/hotspot/profile/print",
+    "=.proplist=.id,name,html-directory",
+  ]);
+  const profile = (Array.isArray(profileRows) ? profileRows : []).find(row => row.name === hotspotProfile)
+    ?? (Array.isArray(profileRows) ? profileRows : []).find(row => row.name === "hprofile");
+  if (profile?.name === "hprofile" && profile[".id"]) {
+    const canonicalProfile = (Array.isArray(profileRows) ? profileRows : []).find(row => row.name === hotspotProfile);
+    if (!canonicalProfile) {
+      await runRouterCommand(creds, [
+        "/ip/hotspot/profile/set",
+        `=.id=${profile[".id"]}`,
+        `=name=${hotspotProfile}`,
+      ]);
+      profile.name = hotspotProfile;
+    }
+  }
+  const configuredHotspotDirectory = String(profile?.["html-directory"] ?? "")
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\/+|\/+$/g, "");
+  const hotspotDirectory = configuredHotspotDirectory
+    && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/.test(configuredHotspotDirectory)
+    && !configuredHotspotDirectory.includes("..")
+    ? configuredHotspotDirectory
+    : "hotspot";
+  const profileFields = [
+    `=hotspot-address=${hotspotGateway}`,
+    `=html-directory=${hotspotDirectory}`,
+    "=login-by=http-chap,http-pap,cookie",
+  ];
+  if (profile?.[".id"]) {
+    await runRouterCommand(creds, ["/ip/hotspot/profile/set", `=.id=${profile[".id"]}`, ...profileFields]);
+  } else {
+    await runRouterCommand(creds, ["/ip/hotspot/profile/add", `=name=${hotspotProfile}`, ...profileFields]);
+  }
+  if (hotspot?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/set",
+      `=.id=${hotspot[".id"]}`,
+      `=interface=${bridgeName}`,
+      `=profile=${hotspotProfile}`,
+      `=address-pool=${hotspotPool}`,
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/hotspot/add",
+      `=name=${hotspotName}`,
+      `=interface=${bridgeName}`,
+      `=profile=${hotspotProfile}`,
+      `=address-pool=${hotspotPool}`,
+      "=disabled=yes",
+    ]);
+  }
+
+  const pppoePoolRows = await runRouterCommand(creds, [
+    "/ip/pool/print",
+    "=.proplist=.id,name",
+    `?name=${pppoePool}`,
+  ]);
+  const pppoePoolRow = (Array.isArray(pppoePoolRows) ? pppoePoolRows : []).find(row => row.name === pppoePool);
+  if (pppoePoolRow?.[".id"]) {
+    await runRouterCommand(creds, [
+      "/ip/pool/set",
+      `=.id=${pppoePoolRow[".id"]}`,
+      `=ranges=${pppoePoolRange}`,
+      `=comment=${tag} PPPoE pool`,
+    ]);
+  } else {
+    await runRouterCommand(creds, [
+      "/ip/pool/add",
+      `=name=${pppoePool}`,
+      `=ranges=${pppoePoolRange}`,
+      `=comment=${tag} PPPoE pool`,
+    ]);
+  }
+  const pppoeProfileRows = await runRouterCommand(creds, [
+    "/ppp/profile/print",
+    "=.proplist=.id,name",
+    `?name=${pppoeProfile}`,
+  ]);
+  const pppoeProfileRow = (Array.isArray(pppoeProfileRows) ? pppoeProfileRows : [])
+    .find(row => row.name === pppoeProfile);
+  const pppoeProfileFields = [
+    `=local-address=${pppoeGateway}`,
+    `=remote-address=${pppoePool}`,
+    `=dns-server=${hotspotGateway},8.8.8.8`,
+    "=only-one=yes",
+    "=use-encryption=yes",
+    "=change-tcp-mss=yes",
+  ];
+  if (pppoeProfileRow?.[".id"]) {
+    await runRouterCommand(creds, ["/ppp/profile/set", `=.id=${pppoeProfileRow[".id"]}`, ...pppoeProfileFields]);
+  } else {
+    await runRouterCommand(creds, ["/ppp/profile/add", `=name=${pppoeProfile}`, ...pppoeProfileFields]);
+  }
+  const pppoeRows = await runRouterCommand(creds, [
+    "/interface/pppoe-server/server/print",
+    "=.proplist=.id,service-name",
+    `?service-name=${pppoeServiceName}`,
+  ]);
+  const pppoe = (Array.isArray(pppoeRows) ? pppoeRows : []).find(row => row["service-name"] === pppoeServiceName);
+  const pppoeFields = [
+    `=interface=${bridgeName}`,
+    `=default-profile=${pppoeProfile}`,
+    "=one-session-per-host=yes",
+    "=disabled=no",
+  ];
+  if (pppoe?.[".id"]) {
+    await runRouterCommand(creds, ["/interface/pppoe-server/server/set", `=.id=${pppoe[".id"]}`, ...pppoeFields]);
+  } else {
+    await runRouterCommand(creds, [
+      "/interface/pppoe-server/server/add",
+      `=service-name=${pppoeServiceName}`,
+      ...pppoeFields,
+    ]);
+  }
+
+  return { bridgeName, hotspotNetwork, pppoeInterface: bridgeName };
+}
+
+/**
+ * Repair the tagged service-network policy without enabling or disabling the
+ * Hotspot server. This is used by the emergency website recovery flow when a
+ * router received the service bridge but not the matching firewall/DNS/NAT
+ * policy.
+ */
+export async function repairGeneratedServiceNetworking(
+  creds: RouterCredentials,
+  routerId: number,
+  requestedBridgeName?: string,
+): Promise<{
+  bridgeName: string;
+  wanInterfaceListFound: boolean;
+  egressInterface: string | null;
+  dnsEnabled: boolean;
+  activeDefaultRouteFound: boolean;
+}> {
+  const tag = `ochola-services-${routerId}`;
+  const pppoeSubnet = "192.168.192.0/24";
+  const safeRequestedBridge = String(requestedBridgeName ?? "").trim();
+  if (safeRequestedBridge && !/^[A-Za-z0-9_.-]+$/.test(safeRequestedBridge)) {
+    throw new Error("The service bridge name is not a valid RouterOS resource name.");
+  }
+
+  const hotspotRows = await runRouterCommand(creds, [
+    "/ip/hotspot/print",
+    "=.proplist=name,interface",
+    `?name=${tag}-hotspot`,
+  ]);
+  const hotspot = (Array.isArray(hotspotRows) ? hotspotRows : [])
+    .find(row => row.name === `${tag}-hotspot`);
+  const bridgeName = String((hotspot?.interface ?? safeRequestedBridge) || "hotspot-bridge").trim();
+  if (!/^[A-Za-z0-9_.-]+$/.test(bridgeName)) {
+    throw new Error("The router has no valid generated Hotspot bridge name.");
+  }
+
+  const bridgeRows = await runRouterCommand(creds, [
+    "/interface/bridge/print",
+    "=.proplist=name",
+    `?name=${bridgeName}`,
+  ]);
+  if (!(Array.isArray(bridgeRows) ? bridgeRows : []).some(row => row.name === bridgeName)) {
+    throw new Error(`The generated service bridge "${bridgeName}" was not found on the router.`);
+  }
+
+  const interfaceLists = await runRouterCommand(creds, [
+    "/interface/list/print",
+    "=.proplist=name",
+  ]);
+  const listRows = Array.isArray(interfaceLists) ? interfaceLists : [];
+  if (!listRows.some(row => row.name === "LAN")) {
+    await runRouterCommand(creds, ["/interface/list/add", "=name=LAN"]);
+  }
+  const members = await runRouterCommand(creds, [
+    "/interface/list/member/print",
+    "=.proplist=.id,list,interface",
+  ]);
+  if (!(Array.isArray(members) ? members : []).some(row => row.list === "LAN" && row.interface === bridgeName)) {
+    await runRouterCommand(creds, [
+      "/interface/list/member/add",
+      "=list=LAN",
+      `=interface=${bridgeName}`,
+    ]);
+  }
+
+  await runRouterCommand(creds, ["/ip/dns/set", "=allow-remote-requests=yes"]);
+  const routeRows = await runRouterCommand(creds, [
+    "/ip/route/print",
+    "=.proplist=dst-address,active,disabled,interface,immediate-gw,gateway",
+  ]);
+  const defaultRoute = (Array.isArray(routeRows) ? routeRows : []).find(row =>
+    row["dst-address"] === "0.0.0.0/0"
+    && String(row.disabled ?? "").toLowerCase() !== "true"
+    && String(row.active ?? "").toLowerCase() !== "false"
+  );
+  const immediateGatewayInterface = String(defaultRoute?.["immediate-gw"] ?? "")
+    .split("%")[1]
+    ?.trim() ?? "";
+  const gatewayValue = String(defaultRoute?.gateway ?? "").trim();
+  const rawEgressInterface = [
+    defaultRoute?.interface,
+    immediateGatewayInterface,
+    /^(?:\d{1,3}\.){3}\d{1,3}$/.test(gatewayValue) ? "" : gatewayValue,
+  ]
+    .map(value => String(value ?? "").trim())
+    .find(Boolean) ?? "";
+  const egressInterface = /^[A-Za-z0-9_.-]+$/.test(rawEgressInterface)
+    ? rawEgressInterface
+    : null;
+
+  const filterRows = await runRouterCommand(creds, [
+    "/ip/firewall/filter/print",
+    "=.proplist=.id,comment",
+  ]);
+  const removeTaggedFilters = async (comment: string) => {
+    for (const row of (Array.isArray(filterRows) ? filterRows : []).filter(item => item.comment === comment)) {
+      if (row[".id"]) {
+        await runRouterCommand(creds, ["/ip/firewall/filter/remove", `=.id=${row[".id"]}`]);
+      }
+    }
+  };
+  const addFilter = async (comment: string, fields: string[]) => {
+    await removeTaggedFilters(comment);
+    await runRouterCommand(creds, [
+      "/ip/firewall/filter/add",
+      ...fields,
+      `=comment=${comment}`,
+      "=place-before=0",
+    ]);
+  };
+
+  const wanInterfaceListFound = listRows.some(row => row.name === "WAN");
+  const egressField = wanInterfaceListFound
+    ? "=out-interface-list=WAN"
+    : egressInterface
+      ? `=out-interface=${egressInterface}`
+      : null;
+  if (egressField) {
+    await addFilter(`${tag} service-to-wan`, [
+      "=chain=forward",
+      "=action=accept",
+      `=in-interface=${bridgeName}`,
+      egressField,
+      "=hotspot=auth",
+      "=connection-state=new,established,related",
+    ]);
+    await addFilter(`${tag} pppoe-to-wan`, [
+      "=chain=forward",
+      "=action=accept",
+      `=src-address=${pppoeSubnet}`,
+      egressField,
+      "=connection-state=new,established,related",
+    ]);
+  }
+  await addFilter(`${tag} allow-service-dns-udp`, [
+    "=chain=input",
+    "=action=accept",
+    `=in-interface=${bridgeName}`,
+    "=protocol=udp",
+    "=dst-port=53",
+  ]);
+  await addFilter(`${tag} allow-service-dns-tcp`, [
+    "=chain=input",
+    "=action=accept",
+    `=in-interface=${bridgeName}`,
+    "=protocol=tcp",
+    "=dst-port=53",
+  ]);
+  if (wanInterfaceListFound) {
+    await addFilter(`${tag} block-wan-dns-udp`, [
+      "=chain=input",
+      "=action=drop",
+      "=in-interface-list=WAN",
+      "=protocol=udp",
+      "=dst-port=53",
+    ]);
+    await addFilter(`${tag} block-wan-dns-tcp`, [
+      "=chain=input",
+      "=action=drop",
+      "=in-interface-list=WAN",
+      "=protocol=tcp",
+      "=dst-port=53",
+    ]);
+  }
+
+  if (egressField) {
+    const natRows = await runRouterCommand(creds, [
+      "/ip/firewall/nat/print",
+      "=.proplist=.id,comment",
+    ]);
+    const removeTaggedNat = async (comment: string) => {
+      for (const row of (Array.isArray(natRows) ? natRows : []).filter(item => item.comment === comment)) {
+        if (row[".id"]) {
+          await runRouterCommand(creds, ["/ip/firewall/nat/remove", `=.id=${row[".id"]}`]);
+        }
+      }
+    };
+    for (const [comment, source] of [
+      [`${tag} Hotspot masquerade`, "192.168.180.0/22"],
+      [`${tag} PPPoE masquerade`, pppoeSubnet],
+    ] as const) {
+      await removeTaggedNat(comment);
+      await runRouterCommand(creds, [
+        "/ip/firewall/nat/add",
+        "=chain=srcnat",
+        "=action=masquerade",
+        `=src-address=${source}`,
+        egressField,
+        `=comment=${comment}`,
+      ]);
+    }
+  }
+
+  return {
+    bridgeName,
+    wanInterfaceListFound,
+    egressInterface,
+    dnsEnabled: true,
+    activeDefaultRouteFound: Boolean(defaultRoute),
+  };
+}
+
+/**
+ * Add or refresh one tenant portal hostname on the router's active hotspot
+ * gateway. The gateway is read from the active hotspot profile instead of
+ * reusing the management VPN address.
+ */
+export async function syncHotspotPortalHostname(
+  creds: RouterCredentials,
+  hostname: string,
+): Promise<{ hostname: string; hotspotAddress: string; hotspotServer: string; connectedHost: string }> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000);
+    const profiles = await withTimeout(
+      conn.write([
+        "/ip/hotspot/profile/print",
+        "=.proplist=name,hotspot-address",
+      ]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const rawHotspotAddress = profiles.find((row) => {
+      const value = row["hotspot-address"]?.trim() ?? "";
+      return value !== "" && value !== "0.0.0.0";
+    })?.["hotspot-address"] ?? "";
+    const hotspotAddress = rawHotspotAddress.trim().split("/")[0] ?? "";
+    logger.info({ rawHotspotAddress, hotspotAddress, hostname }, "Preparing tenant hotspot DNS entry");
+    if (!hotspotAddress || !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(hotspotAddress)) {
+      throw new Error("The router has no active hotspot gateway address.");
+    }
+
+    const existing = await withTimeout(
+      conn.write([
+        "/ip/dns/static/print",
+        "=.proplist=.id,name",
+      ]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    for (const row of Array.isArray(existing) ? existing : []) {
+      if (row.name?.toLowerCase() === hostname.toLowerCase() && row[".id"]) {
+        await withTimeout(
+          conn.write(["/ip/dns/static/remove", `=.id=${row[".id"]}`]),
+          timeoutMs,
+        );
+      }
+    }
+    await withTimeout(
+      conn.write([
+        "/ip/dns/static/add",
+        `=name=${hostname}`,
+        `=address=${hotspotAddress}`,
+        "=ttl=10s",
+        `=comment=tenant portal ${hostname}`,
+      ]),
+      timeoutMs,
+    );
+
+    const hotspotServers = await withTimeout(
+      conn.write([
+        "/ip/hotspot/print",
+        "=.proplist=.id,name,disabled",
+      ]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const hotspotServer = hotspotServers.find(row => row.name === SHARED_HOTSPOT_SERVER_NAME && row.disabled !== "true")?.name
+      ?? hotspotServers.find(row => row.disabled !== "true")?.name
+      ?? "";
+    if (!hotspotServer) throw new Error("The router has no enabled hotspot server.");
+
+    const walledGardenRows = await withTimeout(
+      conn.write([
+        "/ip/hotspot/walled-garden/ip/print",
+        "=.proplist=.id,server,dst-host",
+      ]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const allowedHostnames = Array.from(new Set([
+      hostname.trim().toLowerCase(),
+      ...PAYMENT_WALLED_GARDEN_HOSTNAMES,
+    ]));
+    for (const allowedHostname of allowedHostnames) {
+      for (const row of Array.isArray(walledGardenRows) ? walledGardenRows : []) {
+        if (
+          row["dst-host"]?.toLowerCase() === allowedHostname
+          && row.server === hotspotServer
+          && row[".id"]
+        ) {
+          await withTimeout(
+            conn.write(["/ip/hotspot/walled-garden/ip/remove", `=.id=${row[".id"]}`]),
+            timeoutMs,
+          );
+        }
+      }
+      await withTimeout(
+        conn.write([
+          "/ip/hotspot/walled-garden/ip/add",
+          `=server=${hotspotServer}`,
+          `=dst-host=${allowedHostname}`,
+          "=action=accept",
+          `=comment=${allowedHostname === hostname.trim().toLowerCase()
+            ? `tenant portal ${hostname}`
+            : `payment walled garden ${allowedHostname}`}`,
+        ]),
+        timeoutMs,
+      );
+    }
+    return { hostname, hotspotAddress, hotspotServer, connectedHost };
+  });
+}
+
+/**
+ * Repair the RouterOS management identities and API access in place. This is
+ * intentionally idempotent and never removes users, VPN interfaces, or
+ * firewall rules. The existing stored router password is reused for the
+ * named OcholaSupernet account so the backend can switch to it without
+ * exposing a new credential.
+ */
+export async function ensureRouterManagementAccess(
+  creds: RouterCredentials,
+  routerName: string,
+): Promise<{
+  connectedHost: string;
+  verifiedLoginHost: string;
+  users: string[];
+  apiPorts: number[];
+  firewallRulesAdded: number;
+}> {
+  if (!creds.password) throw new Error("The router has no stored management password.");
+  const result = await withConn(creds, async (conn, connectedHost) => {
+    const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000);
+    const managementComment = "DO NOT DELETE - OcholaSupernet management API";
+    const routerComment = `DO NOT DELETE - ${routerOsString(routerName)} router management API`;
+    const users = await withTimeout(
+      conn.write(["/user/print", "=.proplist=.id,name"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const desiredUsers = Array.from(new Set(["ocholasupernet", creds.username].filter(Boolean)));
+    for (const username of desiredUsers) {
+      const existing = users.find(row => row.name === username)?.[".id"];
+      const command = existing
+        ? ["/user/set", `=.id=${existing}`]
+        : ["/user/add", `=name=${username}`];
+      command.push(
+        `=password=${creds.password}`,
+        "=group=full",
+        "=disabled=no",
+        "=address=",
+        `=comment=${username === "ocholasupernet" ? managementComment : routerComment}`,
+      );
+      await withTimeout(conn.write(command), timeoutMs);
+    }
+
+    const services = await withTimeout(
+      conn.write(["/ip/service/print", "=.proplist=.id,name"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    for (const service of ["api", "api-ssl"]) {
+      const serviceId = services.find(row => row.name === service)?.[".id"];
+      if (!serviceId) continue;
+      await withTimeout(
+        conn.write([
+          "/ip/service/set",
+          `=.id=${serviceId}`,
+          "=disabled=no",
+          "=address=10.8.5.0/24,10.8.6.0/24",
+        ]),
+        timeoutMs,
+      );
+    }
+
+    const desiredRules = [
+      { source: "10.8.5.0/24", comment: "DO NOT DELETE - OcholaSupernet management API" },
+      { source: "10.8.6.0/24", comment: "DO NOT DELETE - OcholaSupernet backup management API" },
+    ];
+    const existingRules = await withTimeout(
+      conn.write(["/ip/firewall/filter/print", "=.proplist=.id,comment"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    let firewallRulesAdded = 0;
+    for (const rule of desiredRules) {
+      if (existingRules.some(row => row.comment === rule.comment)) continue;
+      await withTimeout(
+        conn.write([
+          "/ip/firewall/filter/add",
+          "=chain=input",
+          "=action=accept",
+          "=protocol=tcp",
+          "=dst-port=8728,8729",
+          `=src-address=${rule.source}`,
+          `=comment=${rule.comment}`,
+          "=place-before=0",
+        ]),
+        timeoutMs,
+      );
+      firewallRulesAdded++;
+    }
+
+    const interfaces = await withTimeout(
+      conn.write(["/interface/ovpn-client/print", "=.proplist=.id,name,comment"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    for (const iface of interfaces) {
+      if (iface[".id"] && /mainbillingvpn|ochola.*management|vps tunnel/i.test(iface.comment ?? "")) {
+        await withTimeout(
+          conn.write([
+            "/interface/ovpn-client/set",
+            `=.id=${iface[".id"]}`,
+            "=comment=DO NOT DELETE - OcholaSupernet management VPN",
+          ]),
+          timeoutMs,
+        );
+      }
+    }
+    return { connectedHost, users: desiredUsers, apiPorts: [8728, 8729], firewallRulesAdded };
+  });
+
+  /* Reconnect with the named account. A successful mutation through the old
+     account is not proof that the new RouterOS API login works. */
+  const verifiedLoginHost = await withConn(
+    { ...creds, username: "ocholasupernet" },
+    async (conn, connectedHost) => {
+      await withTimeout(
+        conn.write(["/system/identity/print", "=.proplist=name"]),
+        Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 30_000),
+      );
+      return connectedHost;
+    },
+  );
+  return { ...result, verifiedLoginHost };
+}
+
+/**
+ * Probes all candidate hosts (primary + VPN) in parallel without attempting
+ * a full RouterOS API connection. Useful for pre-flight diagnostics.
+ */
+export async function probeAllHosts(
+  creds: RouterCredentials,
+  timeoutMs = 6000
+): Promise<PortProbeResult[]> {
+  const hosts: string[] = [];
+  if (creds.host)     hosts.push(creds.host);
+  if (creds.bridgeIp && creds.bridgeIp !== creds.host) hosts.push(creds.bridgeIp);
+  if (hosts.length === 0) return [];
+  return Promise.all(hosts.map(h => probePort(h, creds.port, timeoutMs)));
+}
+
+/* ═══ Router health ping ════════════════════════════════════════════════════
+ * Quick connectivity + identity check. Returns status info on success,
+ * throws on failure so the caller can mark the router as offline.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+export interface RouterPingResult {
+  online:      boolean;
+  identity:    string;
+  uptime:      string;
+  version:     string;
+  board:       string;
+  cpuLoad:     number;
+  freeMemory:  number;
+  connectedAt: string;          /* ISO timestamp */
+  connectedHost: string;        /* which IP was used */
+}
+
+export async function pingRouter(creds: RouterCredentials): Promise<RouterPingResult> {
+  return withReadConn(creds, async (conn, connectedHost) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const caBase = `${ROUTER_HTTPS_CERTIFICATE_NAME}-bootstrap`;
+    const caFileName = `${caBase}.txt`;
+
+    const [identRows, resRows] = await Promise.all([
+      withTimeout(conn.write(["/system/identity/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/system/resource/print"]), ms) as Promise<Record<string, string>[]>,
+    ]);
+
+    const id  = identRows[0] ?? {};
+    const res = resRows[0]   ?? {};
+    if (!id.name || !res.version) {
+      throw new Error("RouterOS API connected but did not return identity and version.");
+    }
+
+    return {
+      online:        true,
+      identity:      id.name,
+      uptime:        res.uptime     ?? "",
+      version:       res.version,
+      board:         res["board-name"] ?? res["board"] ?? "",
+      cpuLoad:       parseInt(res["cpu-load"] ?? "0", 10),
+      freeMemory:    parseInt(res["free-memory"] ?? "0", 10),
+      connectedAt:   new Date().toISOString(),
+      connectedHost,
+    };
+  });
+}
+
+/* ═══ Router files ══════════════════════════════════════════════════════════
+ * Lists RouterOS files without reading their contents. This is used by the
+ * admin Files page to verify that hotspot assets and imported .rsc scripts
+ * have reached the selected router.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+export interface RouterFile {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  creationTime: string;
+}
+
+export interface RouterFilesResult {
+  files: RouterFile[];
+  connectedHost: string;
+}
+
+export interface RouterScriptTemplateFile {
+  name: string;
+  size: number;
+  content: string;
+}
+
+export const ROUTER_SCRIPT_TEMPLATE_MAX_BYTES = 56 * 1024;
+
+export interface DeployRouterFileOptions {
+  /** RouterOS destination, e.g. hotspot/login.html or router-setup.rsc. */
+  destinationPath: string;
+  /** One-time server URL that the router fetches; never contains credentials. */
+  sourceUrl: string;
+  /** Only true after the administrator explicitly confirmed replacement. */
+  overwrite: boolean;
+  /** Unique suffix for the temporary RouterOS file used during transfer. */
+  uploadId: string;
+}
+
+export interface DeployRouterFileResult {
+  destinationPath: string;
+  size: number;
+  connectedHost: string;
+  replaced: boolean;
+}
+
+export class RouterFileExistsError extends Error {
+  readonly code = "FILE_EXISTS";
+  readonly existingFile: RouterFile;
+
+  constructor(existingFile: RouterFile) {
+    super(`A file named "${existingFile.name}" already exists on the router`);
+    this.name = "RouterFileExistsError";
+    this.existingFile = existingFile;
+  }
+}
+
+function routerFileFromRow(row: Record<string, string>): RouterFile {
+  return {
+    id: row[".id"] ?? row.name ?? "",
+    name: row.name ?? "",
+    type: row.type ?? "file",
+    size: parseBytes(row.size),
+    creationTime: row["creation-time"] ?? "",
+  };
+}
+
+/**
+ * Install the public Let's Encrypt trust anchor through the authenticated API.
+ * This avoids an insecure first HTTPS fetch when an older RouterOS trust store
+ * does not yet recognize the current certificate chain.
+ */
+export async function ensureRouterHttpsTrust(
+  creds: RouterCredentials,
+): Promise<{ connectedHost: string; alreadyTrusted: boolean }> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const caBase = `${ROUTER_HTTPS_CERTIFICATE_NAME}-bootstrap`;
+    const caFileName = `${caBase}.txt`;
+    const certificateRows = await withTimeout(
+      conn.write([
+        "/certificate/print",
+        "=.proplist=.id,name,trusted,flags",
+      ]),
+      ms,
+    ) as Record<string, string>[];
+    const current = (Array.isArray(certificateRows) ? certificateRows : [])
+      .find(row => row.name === ROUTER_HTTPS_CERTIFICATE_NAME);
+    const trusted = current && (
+      String(current.trusted ?? "").toLowerCase() === "true"
+      || String(current.flags ?? "").toUpperCase().includes("T")
+    );
+    if (trusted) return { connectedHost, alreadyTrusted: true };
+
+    if (current?.[".id"]) {
+      await withTimeout(conn.write(["/certificate/remove", `=.id=${current[".id"]}`]), ms);
+    }
+
+    const fileRows = await withTimeout(
+      conn.write([
+        "/file/print",
+        "=.proplist=.id,name,type,size",
+      ]),
+      ms,
+    ) as Record<string, string>[];
+    const oldFiles = (Array.isArray(fileRows) ? fileRows : [])
+      .filter(row => [ROUTER_HTTPS_CERTIFICATE_FILE, `${ROUTER_HTTPS_CERTIFICATE_FILE}.txt`, caFileName].includes(row.name));
+    for (const oldFile of oldFiles) {
+      if (oldFile[".id"]) {
+        await withTimeout(conn.write(["/file/remove", `=.id=${oldFile[".id"]}`]), ms);
+      }
+    }
+
+    /* RouterOS 6 creates an empty file through /file/print file=...; unlike
+       /file/add, this is supported by the target RouterOS 6.49 device. */
+    await withTimeout(
+      conn.write(["/file/print", `=file=${caBase}`]),
+      ms,
+    );
+    const createdRows = await withTimeout(
+      conn.write([
+        "/file/print",
+        "=.proplist=.id,name,type,size",
+      ]),
+      ms,
+    ) as Record<string, string>[];
+    const createdFile = (Array.isArray(createdRows) ? createdRows : [])
+      .find(row => row.name === caFileName);
+    if (!createdFile?.[".id"]) {
+      throw new Error("The router could not create the temporary HTTPS trust file");
+    }
+
+    try {
+      const lines = ISRG_ROOT_X1_PEM.replace(/\r\n?/g, "\n").split("\n");
+      let contents = "";
+      for (const [index, line] of lines.entries()) {
+        contents += line;
+        if (index < lines.length - 1) contents += "\n";
+        await withTimeout(
+          conn.write([
+            "/file/set",
+            `=.id=${createdFile[".id"]}`,
+            `=contents=${contents}`,
+          ]),
+          Math.max(ms, 30_000),
+        );
+      }
+
+      await withTimeout(
+        conn.write([
+          "/certificate/import",
+          `=file-name=${createdFile.name}`,
+          `=name=${ROUTER_HTTPS_CERTIFICATE_NAME}`,
+          "=passphrase=",
+        ]),
+        Math.max(ms, 30_000),
+      );
+      const importedRows = await withTimeout(
+        conn.write([
+          "/certificate/print",
+          "=.proplist=.id,name,trusted,flags",
+        ]),
+        ms,
+      ) as Record<string, string>[];
+      const imported = (Array.isArray(importedRows) ? importedRows : [])
+        .find(row => row.name === ROUTER_HTTPS_CERTIFICATE_NAME);
+      if (!imported?.[".id"]) {
+        throw new Error("The router did not import the HTTPS trust certificate");
+      }
+      await withTimeout(
+        conn.write(["/certificate/set", `=.id=${imported[".id"]}`, "=trusted=yes"]),
+        ms,
+      );
+      const verifiedRows = await withTimeout(
+        conn.write([
+          "/certificate/print",
+          "=.proplist=.id,name,trusted,flags",
+        ]),
+        ms,
+      ) as Record<string, string>[];
+      const verified = (Array.isArray(verifiedRows) ? verifiedRows : [])
+        .find(row => row.name === ROUTER_HTTPS_CERTIFICATE_NAME);
+      const verifiedTrusted = verified && (
+        String(verified.trusted ?? "").toLowerCase() === "true"
+        || String(verified.flags ?? "").toUpperCase().includes("T")
+      );
+      if (!verifiedTrusted) {
+        throw new Error("The router imported the HTTPS certificate but did not trust it");
+      }
+      return { connectedHost, alreadyTrusted: false };
+    } finally {
+      await withTimeout(
+        conn.write(["/file/remove", `=.id=${createdFile[".id"]}`]),
+        ms,
+      ).catch(() => undefined);
+    }
+  });
+}
+
+export async function deployRouterFile(
+  creds: RouterCredentials,
+  options: DeployRouterFileOptions,
+): Promise<DeployRouterFileResult> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const listFiles = async (): Promise<RouterFile[]> => {
+      const rows = await withTimeout(
+        conn.write([
+          "/file/print",
+          "=.proplist=.id,name,type,size,creation-time",
+        ]),
+        ms,
+      ) as Record<string, string>[];
+      return (Array.isArray(rows) ? rows : [])
+        .map(routerFileFromRow)
+        .filter(file => file.name.length > 0);
+    };
+
+    const existing = (await listFiles()).find(file => file.name === options.destinationPath);
+    if (existing?.type.toLowerCase().includes("directory")) {
+      throw new Error(`"${options.destinationPath}" is a directory, not a file`);
+    }
+    if (existing && !options.overwrite) {
+      throw new RouterFileExistsError(existing);
+    }
+
+    try {
+      /*
+       * RouterOS 6.49 accepts a nested dst-path but does not expose a
+       * portable /file/set rename operation through the API. Fetch directly
+       * to the final destination instead of creating a temporary sibling that
+       * cannot be finalized. The preflight above still prevents accidental
+       * replacement unless overwrite was explicitly confirmed.
+       */
+      await withTimeout(
+        conn.write([
+          "/tool/fetch",
+          `=url=${options.sourceUrl}`,
+          `=dst-path=${options.destinationPath}`,
+          `=mode=${options.sourceUrl.startsWith("https://") ? "https" : "http"}`,
+          ...(options.sourceUrl.startsWith("https://") ? ["=check-certificate=yes"] : []),
+          "=keep-result=yes",
+        ]),
+        Math.max(ms, 120_000),
+      );
+
+      let transferredFile: RouterFile | undefined;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        transferredFile = (await listFiles()).find(file => file.name === options.destinationPath);
+        if (transferredFile) break;
+        if (attempt < 4) {
+          await new Promise(resolve => setTimeout(resolve, 750));
+        }
+      }
+      if (!transferredFile) {
+        throw new Error("The router did not create the destination upload file");
+      }
+
+      return {
+        destinationPath: options.destinationPath,
+        size: transferredFile.size,
+        connectedHost,
+        replaced: Boolean(existing),
+      };
+    } catch (error) {
+      /* Direct RouterOS fetch may leave a partial destination on failure.
+         Keep it available for diagnosis rather than deleting an existing
+         file that an explicit overwrite operation was replacing. */
+      throw error;
+    }
+  });
+}
+
+/** Execute an already-uploaded RouterOS script file. */
+export async function runRouterScript(
+  creds: RouterCredentials,
+  fileName: string,
+): Promise<void> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}\.rsc$/i.test(fileName) || fileName.includes("..")) {
+    throw new Error("Router script filename is invalid.");
+  }
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    await withTimeout(conn.write(["/import", `=file-name=${fileName}`]), ms);
+  });
+}
+
+/** Remove one exact uploaded script or profile file after use. */
+export async function removeRouterFile(
+  creds: RouterCredentials,
+  fileName: string,
+): Promise<void> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}\.(?:rsc|ovpn)$/i.test(fileName) || fileName.includes("..")) {
+    throw new Error("Router file path is invalid.");
+  }
+  const wanted = fileName
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\/+|\/+$/g, "")
+    .toLowerCase();
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write(["/file/print", "=.proplist=.id,name,type"]),
+      ms,
+    ) as Record<string, string>[];
+    const match = (Array.isArray(rows) ? rows : []).find(row =>
+      String(row.name ?? "").trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "").toLowerCase() === wanted
+      && !String(row.type ?? "").toLowerCase().includes("directory"),
+    );
+    if (match?.[".id"]) {
+      await withTimeout(conn.write(["/file/remove", `=.id=${match[".id"]}`]), ms);
+    }
+  });
+}
+
+export async function ensureRouterFileDirectory(
+  creds: RouterCredentials,
+  directoryPath: string,
+): Promise<void> {
+  const directory = directoryPath
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\/+|\/+$/g, "");
+  const segments = directory.split("/");
+  if (
+    !directory
+    || segments.some(segment =>
+      !segment
+      || segment === "."
+      || segment === ".."
+      || !/^[A-Za-z0-9_.-]+$/.test(segment),
+    )
+  ) {
+    throw new Error("A valid RouterOS directory path is required.");
+  }
+
+  const findDirectory = async (): Promise<Record<string, string> | undefined> => {
+    /* A filtered no-match /file/print can return RouterOS !empty, which
+       node-routeros treats as an unknown reply. Inspect the full file list. */
+    const rows = await runRouterCommand(creds, [
+      "/file/print",
+      "=.proplist=.id,name,type",
+    ]);
+    const files = Array.isArray(rows) ? rows : [];
+    const normalisePath = (value: string): string => value
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^\/+|\/+$/g, "")
+      .toLowerCase();
+    const wantedPath = normalisePath(directory);
+    const exact = files.find(row => normalisePath(row.name ?? "") === wantedPath);
+    if (exact) return exact;
+
+    /* RouterOS may list children by full path without a separate row for
+       their parent directory. A child entry proves that the parent exists. */
+    if (files.some(row => normalisePath(row.name ?? "").startsWith(`${wantedPath}/`))) {
+      return { name: directory, type: "directory" };
+    }
+    return undefined;
+  };
+  const isDirectory = (row: Record<string, string> | undefined): boolean =>
+    String(row?.type ?? "").toLowerCase().includes("directory");
+
+  const existing = await findDirectory();
+  if (existing) {
+    if (isDirectory(existing)) return;
+    throw new Error(`RouterOS path "${directory}" already exists as a file.`);
+  }
+
+  try {
+    await runRouterCommand(creds, [
+      "/file/add",
+      `=name=${directory}`,
+      "=type=directory",
+    ]);
+  } catch (error) {
+    /* A concurrent retry may have created the directory before the write
+       response was lost. Accept only a verified directory, never a file. */
+    const afterError = await findDirectory().catch(() => undefined);
+    if (isDirectory(afterError)) return;
+    throw error;
+  }
+
+  const created = await findDirectory();
+  if (!isDirectory(created)) {
+    throw new Error(`RouterOS did not verify the directory "${directory}".`);
+  }
+}
+
+export async function fetchRouterFiles(creds: RouterCredentials): Promise<RouterFilesResult> {
+  return withConn(creds, async (conn, connectedHost) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write([
+        "/file/print",
+        "=.proplist=.id,name,type,size,creation-time",
+      ]),
+      ms,
+    ) as Record<string, string>[];
+
+    const files = (Array.isArray(rows) ? rows : [])
+      .map(routerFileFromRow)
+      .filter((file) => file.name.length > 0);
+
+    return { files, connectedHost };
+  });
+}
+
+/**
+ * Reads the single mainhotspot.rsc Takeover reference file.
+ * The source router is only queried; no files or configuration are changed.
+ * RouterOS /file/get has a practical string-size ceiling, so larger files are
+ * rejected rather than accepted as partial templates.
+ */
+export async function fetchRouterScriptTemplateFile(
+  creds: RouterCredentials,
+  requestedName: string,
+): Promise<RouterScriptTemplateFile> {
+  const name = String(requestedName ?? "").trim();
+  const pathParts = name.replace(/\\/g, "/").split("/");
+  if (
+    pathParts.at(-1)?.toLowerCase() !== "mainhotspot.rsc"
+    || pathParts.some(part => part === "." || part === "..")
+  ) {
+    throw new Error('Takeover reads only the source router file named "mainhotspot.rsc".');
+  }
+
+  return withReadConn(creds, async (conn) => {
+    const timeoutMs = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const listedRows = await withTimeout(
+      conn.write(["/file/print", "=.proplist=.id,name,type,size"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const listedFiles = (Array.isArray(listedRows) ? listedRows : [])
+      .map(routerFileFromRow)
+      .filter(file => file.name.length > 0);
+    const file = listedFiles.find(candidate => candidate.name === name);
+    if (!file || file.type.toLowerCase() === "directory") {
+      throw new Error(`The source file "${name}" is not present on the router.`);
+    }
+    if (file.size <= 0) throw new Error(`The source file "${name}" is empty.`);
+    if (file.size > ROUTER_SCRIPT_TEMPLATE_MAX_BYTES) {
+      throw new Error(
+        `"${name}" is larger than the ${Math.floor(ROUTER_SCRIPT_TEMPLATE_MAX_BYTES / 1024)} KiB Takeover file limit.`,
+      );
+    }
+    if (!/^\*[0-9a-f]+$/i.test(file.id)) {
+      throw new Error(`RouterOS did not return a valid file identifier for "${name}".`);
+    }
+
+    const rows = await withTimeout(
+      conn.write(["/file/get", `=.id=${file.id}`, "=value-name=contents"]),
+      timeoutMs,
+    ) as Record<string, string>[];
+    const content = rows.find(row => typeof row.ret === "string")?.ret
+      ?? rows.find(row => typeof row.contents === "string")?.contents;
+    if (typeof content !== "string" || content.length === 0) {
+      throw new Error(`RouterOS could not return the contents of "${name}".`);
+    }
+    const contentBytes = Buffer.byteLength(content, "utf8");
+    if (
+      content.includes("\0")
+      || contentBytes > ROUTER_SCRIPT_TEMPLATE_MAX_BYTES
+      || contentBytes < Math.floor(file.size * 0.9)
+    ) {
+      throw new Error(`RouterOS returned incomplete or non-text contents for "${name}".`);
+    }
+    return { name, size: contentBytes, content };
+  });
+}
+
+/* ─── Data types ─────────────────────────────────────────────────────────── */
+
+export interface ActiveHotspotUser {
+  id: string;
+  user: string;
+  address: string;
+  macAddress: string;
+  uptime: string;
+  bytesIn: number;
+  bytesOut: number;
+  server: string;
+}
+
+export interface HotspotConnectedDevice {
+  name: string;
+  macAddress: string;
+  address: string;
+  source: "hotspot" | "dhcp" | "host" | "arp";
+  uptime?: string;
+  bytesIn?: number;
+  bytesOut?: number;
+}
+
+function validRouterMac(value: unknown): string {
+  const mac = String(value ?? "").trim();
+  return /^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(mac) ? mac.toUpperCase() : "";
+}
+
+/**
+ * Return client identities visible on the router with a MAC address. The
+ * hotspot and DHCP tables are preferred, while host/ARP entries include
+ * devices that are connected but have not authenticated or received a
+ * hostname yet.
+ */
+export async function fetchHotspotConnectedDevices(
+  creds: RouterCredentials,
+  targetMacAddress?: string,
+): Promise<HotspotConnectedDevice[]> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const targetMac = validRouterMac(targetMacAddress);
+    const byMac = new Map<string, HotspotConnectedDevice>();
+    const hasTargetAddress = (): boolean => {
+      if (!targetMac) return false;
+      const target = byMac.get(targetMac);
+      return !!target?.address;
+    };
+    const add = (row: Record<string, string>, source: HotspotConnectedDevice["source"]): void => {
+      const mac = validRouterMac(row["mac-address"]);
+      const reportedName = String(
+        source === "hotspot"
+          ? row.user ?? row.comment ?? row["host-name"]
+          : row["host-name"] ?? row.comment ?? row.user,
+      ).trim();
+      if (!mac) return;
+      const address = String(row.address ?? "").trim();
+      const name = (reportedName || `Network device ${mac}`).slice(0, 64);
+      const previous = byMac.get(mac);
+      const candidate: HotspotConnectedDevice = {
+        name,
+        macAddress: mac,
+        address,
+        source,
+        uptime: String(row.uptime ?? "").trim() || undefined,
+        bytesIn: parseBytes(row["bytes-in"]),
+        bytesOut: parseBytes(row["bytes-out"]),
+      };
+      if (!previous) {
+        byMac.set(mac, candidate);
+      } else if (source === "hotspot" || source === "host") {
+        byMac.set(mac, {
+          ...previous,
+          ...candidate,
+          name: reportedName || previous.name,
+          address: address || previous.address,
+          uptime: candidate.uptime || previous.uptime,
+          bytesIn: Math.max(previous.bytesIn ?? 0, candidate.bytesIn ?? 0),
+          bytesOut: Math.max(previous.bytesOut ?? 0, candidate.bytesOut ?? 0),
+        });
+      } else if (!previous.address && address) {
+        byMac.set(mac, { ...candidate, uptime: previous.uptime, bytesIn: previous.bytesIn, bytesOut: previous.bytesOut });
+      }
+    };
+
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/hotspot/active/print", "=.proplist=user,address,mac-address,comment,host-name"]),
+        ms,
+      ) as Record<string, string>[];
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "hotspot");
+      if (hasTargetAddress()) return [...byMac.values()];
+    } catch {
+      /* A router may expose DHCP but not the hotspot active table. */
+    }
+
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/dhcp-server/lease/print", "?status=bound", "=.proplist=host-name,address,mac-address,comment"]),
+        ms,
+      ) as Record<string, string>[];
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "dhcp");
+      if (hasTargetAddress()) return [...byMac.values()];
+    } catch {
+      /* DHCP is optional on some RouterOS hotspot installations. */
+    }
+
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/hotspot/host/print", "=.proplist=address,mac-address,host-name,comment"]),
+        ms,
+      ) as Record<string, string>[];
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "host");
+      if (hasTargetAddress()) return [...byMac.values()];
+    } catch {
+      /* Host entries are optional on non-hotspot RouterOS installations. */
+    }
+
+    try {
+      const rows = await withTimeout(
+        conn.write(["/ip/arp/print", "=.proplist=address,mac-address,interface,complete"]),
+        ms,
+      ) as Record<string, string>[];
+      for (const row of Array.isArray(rows) ? rows : []) add(row, "arp");
+    } catch {
+      /* ARP is optional when the management account cannot read it. */
+    }
+
+    return [...byMac.values()].sort((a, b) => a.name.localeCompare(b.name));
+  });
+}
+
+export function hotspotDeviceAddressForMac(
+  devices: ReadonlyArray<Pick<HotspotConnectedDevice, "macAddress" | "address">>,
+  macAddress: string,
+): string | null {
+  const targetMac = validRouterMac(macAddress);
+  if (!targetMac) return null;
+  const match = devices.find((device) =>
+    validRouterMac(device.macAddress) === targetMac && String(device.address ?? "").trim(),
+  );
+  return match ? String(match.address).trim() : null;
+}
+
+export async function resolveHotspotClientIpByMac(
+  creds: RouterCredentials,
+  macAddress: string,
+): Promise<string | null> {
+  if (!validRouterMac(macAddress)) return null;
+  const devices = await fetchHotspotConnectedDevices(creds, macAddress);
+  return hotspotDeviceAddressForMac(devices, macAddress);
+}
+
+export interface ActivePPPoESession {
+  id: string;
+  name: string;
+  address: string;
+  uptime: string;
+  bytesIn: number;
+  bytesOut: number;
+  service: string;
+}
+
+export interface RouterInterface {
+  id: string;
+  name: string;
+  type: string;
+  running: boolean;
+  disabled: boolean;
+  macAddress: string;
+  comment: string;
+  txBps: number;
+  rxBps: number;
+}
+
+export interface TrafficStats {
+  iface: string;
+  rxBitsPerSecond: number;
+  txBitsPerSecond: number;
+}
+
+export interface VlanCustomerQueueLiveData {
+  name: string;
+  target: string;
+  parent: string;
+  comment: string;
+  disabled: boolean;
+  bytesIn: number | null;
+  bytesOut: number | null;
+  rate: string;
+  statsAvailable: boolean;
+}
+
+export interface RouterLiveData {
+  hotspotUsers: ActiveHotspotUser[];
+  hotspotUsersAvailable?: boolean;
+  hotspotUserCounters: Array<{ name: string; bytesIn: number; bytesOut: number }> | null;
+  pppoeUsers: ActivePPPoESession[];
+  pppoeUsersAvailable?: boolean;
+  vlanCustomerQueues: VlanCustomerQueueLiveData[];
+  vlanQueueStatsAvailable: boolean;
+  interfaces: RouterInterface[];
+  traffic: TrafficStats[];
+  fetchedAt: string;
+  usingSSL: boolean;
+  connectedHost: string;
+}
+
+/* ─── Parsers ────────────────────────────────────────────────────────────── */
+
+function parseBytes(val: unknown): number {
+  const n = parseInt(String(val ?? "0"), 10);
+  return isNaN(n) ? 0 : n;
+}
+
+function parseBool(val: unknown): boolean {
+  return String(val ?? "false").toLowerCase() !== "false";
+}
+
+/* ─── Fetch functions ────────────────────────────────────────────────────── */
+
+export async function fetchHotspotUsers(
+  creds: RouterCredentials
+): Promise<ActiveHotspotUser[]> {
+  return withConn(creds, async (conn) => {
+    const requestMs = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write(["/ip/hotspot/active/print"]),
+      requestMs
+    )) as Record<string, string>[];
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      id:         r[".id"]         ?? "",
+      user:       r.user           ?? "",
+      address:    r.address        ?? "",
+      macAddress: r["mac-address"] ?? "",
+      uptime:     r.uptime         ?? "",
+      bytesIn:    parseBytes(r["bytes-in"]),
+      bytesOut:   parseBytes(r["bytes-out"]),
+      server:     r.server         ?? "",
+    }));
+  });
+}
+
+/**
+ * Resolve a captive-portal client from the address RouterOS assigned it.
+ * Browsers cannot read a Wi-Fi adapter MAC, but the router can identify the
+ * same client from its hotspot host table or DHCP lease table.
+ */
+export async function resolveHotspotClientMac(
+  creds: RouterCredentials,
+  clientIp: string,
+): Promise<string | null> {
+  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(clientIp)) return null;
+
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const queries: Array<{ path: string; macKey: string }> = [
+      { path: "/ip/hotspot/host/print", macKey: "mac-address" },
+      { path: "/ip/dhcp-server/lease/print", macKey: "mac-address" },
+    ];
+
+    for (const query of queries) {
+      try {
+        const rows = (await withTimeout(
+          conn.write([query.path, `?address=${clientIp}`]),
+          ms,
+        )) as Record<string, string>[];
+        const match = (Array.isArray(rows) ? rows : []).find((row) => row.address === clientIp);
+        const rawMac = String(match?.[query.macKey] ?? "").trim();
+        if (/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(rawMac)) {
+          return rawMac.toUpperCase();
+        }
+      } catch {
+        /* Some RouterOS versions or permissions may not expose one table. */
+      }
+    }
+    return null;
+  });
+}
+
+/* ══ Hotspot User Management ═══════════════════════════════════════════════ */
+export interface HotspotUser {
+  id: string;
+  name: string;
+  password: string;
+  profile: string;
+  comment: string;
+  macAddress?: string;
+  server?: string;
+  disabled: boolean;
+  limitUptime: string;
+  limitBytesTotal: number;
+  bytesIn: number;
+  bytesOut: number;
+}
+
+export async function fetchHotspotUserList(creds: RouterCredentials): Promise<HotspotUser[]> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/user/print"]), ms)) as Record<string, string>[];
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      id:              r[".id"]             ?? "",
+      name:            r.name              ?? "",
+      password:        r.password          ?? "",
+      profile:         r.profile           ?? "default",
+      comment:         r.comment           ?? "",
+      macAddress:      r["mac-address"]    ?? "",
+      server:          r.server            ?? "",
+      disabled:        parseBool(r.disabled),
+      limitUptime:     r["limit-uptime"]   ?? "",
+      limitBytesTotal: parseBytes(r["limit-bytes-total"]),
+      bytesIn:         parseBytes(r["bytes-in"]),
+      bytesOut:        parseBytes(r["bytes-out"]),
+    }));
+  });
+}
+
+export interface HotspotUserProfile {
+  id: string;
+  name: string;
+  rateLimit: string;
+  sharedUsers: number;
+  sessionTimeout: string;
+  idleTimeout: string;
+  keepaliveTimeout: string;
+  statusAutorefresh: string;
+  macCookieTimeout: string;
+  comment: string;
+}
+
+export async function fetchHotspotUserProfiles(creds: RouterCredentials): Promise<HotspotUserProfile[]> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write(["/ip/hotspot/user/profile/print"]),
+      ms,
+    )) as Record<string, string>[];
+    return (Array.isArray(rows) ? rows : []).map((r) => ({
+      id: r[".id"] ?? "",
+      name: r.name ?? "",
+      rateLimit: r["rate-limit"] ?? "",
+      sharedUsers: Math.max(0, Number.parseInt(r["shared-users"] ?? "0", 10) || 0),
+      sessionTimeout: r["session-timeout"] ?? "",
+      idleTimeout: r["idle-timeout"] ?? "",
+      keepaliveTimeout: r["keepalive-timeout"] ?? "",
+      statusAutorefresh: r["status-autorefresh"] ?? "",
+      macCookieTimeout: r["mac-cookie-timeout"] ?? "",
+      comment: r.comment ?? "",
+    }));
+  });
+}
+
+export async function fetchHotspotUserUsage(
+  creds: RouterCredentials,
+  name: string,
+): Promise<{ bytesIn: number; bytesOut: number; disabled: boolean } | null> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write([
+        "/ip/hotspot/user/print",
+        "=.proplist=.id,name,disabled,bytes-in,bytes-out",
+        `?name=${name}`,
+      ]),
+      ms,
+    )) as Record<string, string>[];
+    const matches = (Array.isArray(rows) ? rows : []).filter((row) => row.name === name);
+    if (matches.length === 0) return null;
+    if (matches.length !== 1) throw new Error("RouterOS returned duplicate hotspot users for this account.");
+    return {
+      bytesIn: parseBytes(matches[0]["bytes-in"]),
+      bytesOut: parseBytes(matches[0]["bytes-out"]),
+      disabled: parseBool(matches[0].disabled),
+    };
+  });
+}
+
+export async function addHotspotUser(
+  creds: RouterCredentials,
+  opts: {
+    name: string; password: string; profile?: string; comment?: string;
+    server?: string; email?: string; disabled?: boolean;
+    address?: string; limitUptime?: string; limitBytesTotal?: string;
+  }
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const params = [
+      "/ip/hotspot/user/add",
+      `=name=${opts.name}`,
+      `=password=${opts.password}`,
+      `=profile=${opts.profile ?? "default"}`,
+    ];
+    if (opts.disabled !== undefined) params.push(`=disabled=${opts.disabled ? "yes" : "no"}`);
+    if (opts.comment)         params.push(`=comment=${opts.comment}`);
+    if (opts.server)          params.push(`=server=${opts.server}`);
+    if (opts.email)           params.push(`=email=${opts.email}`);
+    if (opts.address)         params.push(`=address=${opts.address}`);
+    if (opts.limitUptime)     params.push(`=limit-uptime=${opts.limitUptime}`);
+    if (opts.limitBytesTotal) params.push(`=limit-bytes-total=${opts.limitBytesTotal}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+/**
+ * Disable a paid hotspot user at the end of the package validity window.
+ * RouterOS hotspot users do not have a wall-clock expiry field, so use a
+ * one-shot scheduler and disconnect an active session when it fires.
+ */
+function hotspotExpirySchedulerName(name: string): string {
+  return `ochola-user-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+
+function hotspotFupSchedulerName(name: string): string {
+  return `ochola-fup-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+
+function hotspotPaidExpirySchedulerName(name: string): string {
+  return `ochola-paid-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+
+function isLegacyPaidHotspotBinding(row: Record<string, string>): boolean {
+  return String(row.type ?? "").trim().toLowerCase() === "bypassed" &&
+    /^(?:OcholaSupernet paid|OcholaSupernet SMS reconnect)\b/i.test(row.comment ?? "");
+}
+
+function sameMacAddress(left: string | undefined, right: string): boolean {
+  const normalize = (value: string | undefined) =>
+    String(value ?? "").trim().replace(/[:-]/g, "").toUpperCase();
+  return normalize(left) === normalize(right);
+}
+
+function normalizeRouterBindingAddress(value: unknown): string {
+  return String(value ?? "").trim().split("/")[0]?.trim() ?? "";
+}
+
+function paidHotspotBindingRowsForCustomer(
+  rows: ReadonlyArray<Record<string, string>>,
+  opts: { name: string; macAddress?: string | null; ipAddress?: string | null },
+): Record<string, string>[] {
+  const name = String(opts.name ?? "").trim();
+  if (!name) return [];
+  const macAddress = validRouterMac(opts.macAddress);
+  const ipAddress = normalizeRouterBindingAddress(opts.ipAddress);
+  const exactByName = rows.filter((row) => String(row.comment ?? "").trim() === name);
+  if (macAddress) {
+    const exact = exactByName.filter((row) => validRouterMac(row["mac-address"]) === macAddress);
+    if (
+      exact.length > 1 &&
+      new Set(exact.map((row) => String(row.type ?? "").trim().toLowerCase())).size === 1 &&
+      ipAddress
+    ) {
+      const ipMatches = exact.filter((row) => normalizeRouterBindingAddress(row.address) === ipAddress);
+      if (ipMatches.length) return ipMatches;
+    }
+    if (exact.length) return exact;
+    if (ipAddress) {
+      const ipMatches = exactByName.filter((row) => normalizeRouterBindingAddress(row.address) === ipAddress);
+      if (ipMatches.length) return ipMatches;
+    }
+    // The customer row can retain an old MAC after a device reconnect. Keep
+    // exact username rows as candidates; the async resolver below requires the
+    // app-owned expiry scheduler before accepting a row that matches neither
+    // the saved MAC nor the saved IP.
+    if (exactByName.length) return exactByName;
+  } else if (exactByName.length <= 1) {
+    return exactByName;
+  } else {
+    const sameDeviceAndType = new Set(exactByName.map((row) => JSON.stringify([
+      validRouterMac(row["mac-address"]),
+      String(row.type ?? "").trim().toLowerCase(),
+    ]))).size === 1;
+    if (sameDeviceAndType && ipAddress) {
+      const ipMatches = exactByName.filter((row) => normalizeRouterBindingAddress(row.address) === ipAddress);
+      if (ipMatches.length) return ipMatches;
+    }
+    return exactByName;
+  }
+  if (!macAddress) return [];
+  return rows.filter((row) =>
+    validRouterMac(row["mac-address"]) === macAddress && isLegacyPaidHotspotBinding(row),
+  );
+}
+
+function isManagedPaidExpiryScheduler(
+  rows: ReadonlyArray<Record<string, string>>,
+  username: string,
+): boolean {
+  const name = String(username ?? "").trim();
+  if (!name) return false;
+  const schedulerName = hotspotPaidExpirySchedulerName(name);
+  return rows.some((row) => {
+    const event = String(row["on-event"] ?? "");
+    return row.name === schedulerName
+      && String(row.comment ?? "").trim().toLowerCase() === "ocholasupernet paid access expiry"
+      && event.includes(`comment="${name}"`)
+      && event.includes(`user="${name}"`);
+  });
+}
+
+export function paidHotspotBindingMatchesCustomer(
+  row: Record<string, string>,
+  opts: { name: string; macAddress?: string | null },
+): boolean {
+  return String(row.comment ?? "").trim() === String(opts.name ?? "").trim()
+    || (Boolean(opts.macAddress) && sameMacAddress(row["mac-address"], opts.macAddress!) && isLegacyPaidHotspotBinding(row));
+}
+
+export type PaidHotspotBindingIdentity = {
+  macAddress: string;
+  ipAddress: string | null;
+  comment: string;
+  bindingType: "regular" | "bypassed";
+  duplicateCount?: number;
+};
+
+export type PaidHotspotBindingSnapshot = PaidHotspotBindingIdentity & {
+  /** Multiple device bindings are accepted only after the paid-expiry scheduler is verified. */
+  bindings?: PaidHotspotBindingIdentity[];
+  duplicateCount?: number;
+};
+
+export function paidHotspotBindingSnapshotForCustomer(
+  rows: ReadonlyArray<Record<string, string>>,
+  opts: { name: string; macAddress?: string | null; ipAddress?: string | null },
+  includeAllAccountBindings = false,
+): PaidHotspotBindingSnapshot | null {
+  const customerName = String(opts.name ?? "").trim();
+  if (!customerName) return null;
+  const savedMac = validRouterMac(opts.macAddress);
+  const savedIp = normalizeRouterBindingAddress(opts.ipAddress);
+  const exactCommentMatches = rows.filter(
+    (row) => String(row.comment ?? "").trim() === customerName,
+  );
+  const useAllExactAccountRows = includeAllAccountBindings && exactCommentMatches.length > 0;
+  const matches = useAllExactAccountRows
+    ? exactCommentMatches
+    : paidHotspotBindingRowsForCustomer(rows, { ...opts, name: customerName });
+  if (!matches.length) return null;
+  if (!useAllExactAccountRows) {
+    const signatures = new Set(matches.map((row) => JSON.stringify([
+      validRouterMac(row["mac-address"]),
+      normalizeRouterBindingAddress(row.address),
+      String(row.comment ?? "").trim(),
+      String(row.type ?? "").trim().toLowerCase(),
+    ])));
+    if (signatures.size !== 1) return null;
+  }
+
+  const identities = new Map<string, {
+    macAddress: string;
+    ipAddresses: Set<string>;
+    comment: string;
+    bindingType: "regular" | "bypassed";
+    rowCount: number;
+  }>();
+  let savedMacFallbackUsed = Boolean(
+    savedMac && exactCommentMatches.some((row) => validRouterMac(row["mac-address"]) === savedMac),
+  );
+  for (const row of matches) {
+    const comment = String(row.comment ?? "").trim();
+    const rawBindingType = String(row.type ?? "").trim().toLowerCase();
+    if (!comment) return null;
+    if (!useAllExactAccountRows && rawBindingType !== "regular" && rawBindingType !== "bypassed") {
+      return null;
+    }
+    // In the managed-account path the scheduler is checked before this
+    // snapshot is returned. Preserve an existing bypass, but normalize blocked,
+    // missing, or unsupported types to regular Hotspot access.
+    const bindingType = rawBindingType === "bypassed" ? "bypassed" : "regular";
+    const address = normalizeRouterBindingAddress(row.address);
+    let macAddress = validRouterMac(row["mac-address"])
+      || (exactCommentMatches.length === 1 ? savedMac : "")
+      || (useAllExactAccountRows && savedMac && savedIp && address === savedIp ? savedMac : "");
+    if (!macAddress && useAllExactAccountRows && savedMac && !savedMacFallbackUsed) {
+      macAddress = savedMac;
+    }
+    if (!macAddress) {
+      if (useAllExactAccountRows) continue;
+      return null;
+    }
+    if (savedMac && sameMacAddress(macAddress, savedMac)) savedMacFallbackUsed = true;
+    const key = `${macAddress.replace(/[:-]/g, "").toUpperCase()}:${useAllExactAccountRows ? "managed" : bindingType}:${comment}`;
+    const existing = identities.get(key);
+    if (existing) {
+      if (address) existing.ipAddresses.add(address);
+      if (existing.bindingType !== bindingType) existing.bindingType = "regular";
+      existing.rowCount += 1;
+    } else {
+      identities.set(key, {
+        macAddress,
+        ipAddresses: new Set(address ? [address] : []),
+        comment,
+        bindingType,
+        rowCount: 1,
+      });
+    }
+  }
+
+  const bindings: PaidHotspotBindingIdentity[] = [];
+  const typesByMac = new Map<string, Set<string>>();
+  for (const identity of identities.values()) {
+    const macKey = identity.macAddress.replace(/[:-]/g, "").toUpperCase();
+    const types = typesByMac.get(macKey) ?? new Set<string>();
+    types.add(identity.bindingType);
+    typesByMac.set(macKey, types);
+
+    const allIdentityRows = rows.filter((candidate) =>
+      sameMacAddress(candidate["mac-address"], identity.macAddress)
+      && String(candidate.comment ?? "").trim() === identity.comment,
+    );
+    if (
+      !useAllExactAccountRows &&
+      allIdentityRows.some((candidate) =>
+        String(candidate.type ?? "").trim().toLowerCase() !== identity.bindingType,
+      )
+    ) return null;
+
+    const ipAddress = savedIp && identity.ipAddresses.has(savedIp)
+      ? savedIp
+      : identity.ipAddresses.size === 1
+        ? Array.from(identity.ipAddresses)[0]
+        : null;
+    const duplicateCount = useAllExactAccountRows
+      ? identity.rowCount
+      : allIdentityRows.length;
+    bindings.push({
+      macAddress: identity.macAddress,
+      ipAddress: ipAddress || null,
+      comment: identity.comment,
+      bindingType: identity.bindingType,
+      ...(duplicateCount > 1 ? { duplicateCount } : {}),
+    });
+  }
+  if (Array.from(typesByMac.values()).some((types) => types.size > 1)) return null;
+  bindings.sort((left, right) => left.macAddress.localeCompare(right.macAddress));
+  const primary = bindings.find((binding) => savedMac && sameMacAddress(binding.macAddress, savedMac))
+    ?? bindings[0];
+  if (!primary) return null;
+  return bindings.length === 1 ? primary : { ...primary, bindings };
+}
+
+export async function getPaidHotspotBindingSnapshot(
+  creds: RouterCredentials,
+  opts: { name: string; macAddress?: string | null; ipAddress?: string | null },
+): Promise<PaidHotspotBindingSnapshot | null> {
+  const macAddress = validRouterMac(opts.macAddress);
+  const name = String(opts.name ?? "").trim();
+  const ipAddress = normalizeRouterBindingAddress(opts.ipAddress);
+  if (!name) return null;
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write(["/ip/hotspot/ip-binding/print", "=.proplist=.id,mac-address,address,comment,type"]),
+      ms,
+    ) as Record<string, string>[];
+    if (!Array.isArray(rows)) throw new Error("MikroTik did not return its paid Hotspot binding details.");
+    const exactCommentMatches = rows.filter(
+      (row) => String(row.comment ?? "").trim() === name,
+    );
+    const snapshot = paidHotspotBindingSnapshotForCustomer(rows, { ...opts, name, macAddress });
+    const accountSnapshot = exactCommentMatches.length > 0
+      ? paidHotspotBindingSnapshotForCustomer(
+          rows,
+          { ...opts, name, macAddress },
+          true,
+        )
+      : null;
+    let managedExpiry: boolean | undefined;
+    const hasManagedExpiry = async (): Promise<boolean> => {
+      if (managedExpiry !== undefined) return managedExpiry;
+      const schedulerName = hotspotPaidExpirySchedulerName(name);
+      const schedulers = await withTimeout(
+        conn.write(["/system/scheduler/print", `?name=${schedulerName}`, "=.proplist=.id,name,comment,on-event"]),
+        ms,
+      ) as Record<string, string>[];
+      if (!Array.isArray(schedulers)) {
+        throw new Error("MikroTik did not return the paid Hotspot expiry scheduler details.");
+      }
+      managedExpiry = isManagedPaidExpiryScheduler(schedulers, name);
+      return managedExpiry;
+    };
+
+    // A customer can have multiple device bindings or stale RouterOS rows
+    // under one paid username. Only normalize that complete account set after
+    // the app-owned expiry scheduler proves ownership.
+    if (
+      accountSnapshot
+      && (!snapshot || exactCommentMatches.length > 1)
+      && await hasManagedExpiry()
+    ) return accountSnapshot;
+
+    if (snapshot) {
+      const matchedRow = rows.find((row) =>
+        sameMacAddress(row["mac-address"], snapshot.macAddress)
+        && String(row.comment ?? "").trim() === snapshot.comment,
+      );
+      if (matchedRow && isLegacyPaidHotspotBinding(matchedRow)) return snapshot;
+      const savedMacMatches = Boolean(macAddress && snapshot.macAddress === macAddress);
+      const savedIpMatches = Boolean(ipAddress && snapshot.ipAddress === ipAddress);
+      // Exact saved device identity remains sufficient for current regular
+      // bindings, even if an earlier write missed its expiry scheduler.
+      if (
+        snapshot.bindingType === "regular"
+        && snapshot.comment === name
+        && (savedMacMatches || savedIpMatches)
+      ) return snapshot;
+    }
+
+    if (snapshot) {
+      if (await hasManagedExpiry()) return snapshot;
+      if (snapshot.bindingType === "regular" && snapshot.comment === name) {
+        throw new Error(
+          "The exact Hotspot account binding was found, but its saved device identity is stale and no managed expiry scheduler confirms it. No changes were saved; verify the router binding.",
+        );
+      }
+      return null;
+    }
+    if (exactCommentMatches.length) {
+      throw new Error(
+        await hasManagedExpiry()
+          ? "The managed paid Hotspot binding is incomplete or ambiguous. Verify its router MAC and binding type before saving."
+          : "RouterOS has multiple or incomplete Hotspot bindings for this username. No changes were saved; resolve the binding before editing this account.",
+      );
+    }
+
+    // A verified app-owned scheduler can be left behind if a binding write
+    // failed. Recreate only when this MAC has no other RouterOS binding, so an
+    // administrator's or another account's binding is never guessed at.
+    if (!macAddress || rows.some((row) => validRouterMac(row["mac-address"]) === macAddress)) return null;
+    if (!await hasManagedExpiry()) return null;
+    return {
+      macAddress,
+      ipAddress: null,
+      comment: name,
+      bindingType: "regular",
+    };
+  });
+}
+
+export type PaidHotspotBindingEditIdentity = {
+  macAddress: string;
+  comment: string;
+};
+
+export function paidHotspotBindingEditPlan(opts: {
+  snapshot: PaidHotspotBindingSnapshot;
+  currentName: string;
+  currentMacAddress?: string | null;
+  nextName: string;
+  nextMacAddress?: string | null;
+  enabled: boolean;
+  replaceBindings?: boolean;
+}): {
+  remove: PaidHotspotBindingEditIdentity[];
+  ensure: PaidHotspotBindingIdentity[];
+} {
+  const identity = (name: string, macAddress?: string | null): PaidHotspotBindingEditIdentity | null => {
+    const comment = String(name ?? "").trim();
+    const mac = validRouterMac(String(macAddress ?? "").trim().replace(/-/g, ":"));
+    return comment && mac ? { macAddress: mac, comment } : null;
+  };
+  const key = (value: PaidHotspotBindingEditIdentity) =>
+    `${value.macAddress.replace(/[:-]/g, "").toUpperCase()}:${value.comment}`;
+  const originalBindings = opts.snapshot.bindings?.length
+    ? opts.snapshot.bindings
+    : [opts.snapshot];
+  const originals = originalBindings
+    .map((binding) => identity(binding.comment, binding.macAddress))
+    .filter((value): value is PaidHotspotBindingEditIdentity => Boolean(value));
+  const current = identity(opts.currentName, opts.currentMacAddress);
+  const replaceBindings = opts.replaceBindings
+    ?? Boolean(current && opts.nextMacAddress && !sameMacAddress(current.macAddress, opts.nextMacAddress));
+  const nextName = String(opts.nextName ?? "").trim();
+  let ensure: PaidHotspotBindingIdentity[] = [];
+  if (opts.enabled && nextName) {
+    if (replaceBindings) {
+      const desired = identity(nextName, opts.nextMacAddress);
+      if (desired) {
+        const matchingOriginal = originalBindings.find((binding) =>
+          sameMacAddress(binding.macAddress, desired.macAddress),
+        );
+        const typeSource = matchingOriginal ?? originalBindings[0] ?? opts.snapshot;
+        ensure = [{
+          ...desired,
+          ipAddress: matchingOriginal?.ipAddress ?? null,
+          bindingType: typeSource.bindingType,
+        }];
+      }
+    } else {
+      ensure = originalBindings.map((binding) => ({
+        macAddress: binding.macAddress,
+        ipAddress: binding.ipAddress,
+        comment: nextName,
+        bindingType: binding.bindingType,
+      }));
+    }
+  }
+  const shouldRemoveAll = !opts.enabled
+    || replaceBindings
+    || String(opts.currentName ?? "").trim() !== nextName;
+  const remove = new Map<string, PaidHotspotBindingEditIdentity>();
+  const duplicateKeys = new Set<string>();
+  for (const binding of originalBindings) {
+    const value = identity(binding.comment, binding.macAddress);
+    if (!value) continue;
+    if (
+      (binding.duplicateCount ?? 0) > 1 ||
+      (originalBindings.length === 1 && (opts.snapshot.duplicateCount ?? 0) > 1)
+    ) duplicateKeys.add(key(value));
+  }
+  for (const value of [...originals, ...(shouldRemoveAll && current ? [current] : [])]) {
+    const isDesired = ensure.some((target) => key(value) === key(target));
+    if (duplicateKeys.has(key(value)) || (shouldRemoveAll && !isDesired)) {
+      remove.set(key(value), value);
+    }
+  }
+  return { remove: Array.from(remove.values()), ensure };
+}
+
+export async function reconcilePaidHotspotBinding(
+  creds: RouterCredentials,
+  opts: {
+    snapshot: PaidHotspotBindingSnapshot;
+    currentName: string;
+    currentMacAddress?: string | null;
+    nextName: string;
+    nextMacAddress?: string | null;
+    expiresAt: string | null;
+    enabled: boolean;
+    replaceBindings?: boolean;
+  },
+): Promise<void> {
+  const plan = paidHotspotBindingEditPlan(opts);
+  let expiryMs: number | null = null;
+  if (plan.ensure.length) {
+    if (!opts.expiresAt) {
+      throw new Error("Paid Hotspot access must keep an expiry date. Choose a specific date and time.");
+    }
+    expiryMs = Date.parse(opts.expiresAt);
+    if (!Number.isFinite(expiryMs)) {
+      throw new Error("A valid expiry date is required for the paid Hotspot binding.");
+    }
+    if (expiryMs <= Date.now()) {
+      throw new Error("The paid Hotspot binding expiry must be in the future.");
+    }
+  }
+  for (const binding of plan.remove) {
+    await removeHotspotIpBinding(creds, { ...binding, includeLegacyPaidForMac: false });
+  }
+  if (!plan.ensure.length || expiryMs === null) return;
+
+  for (const binding of plan.ensure) {
+    const sameDevice = sameMacAddress(binding.macAddress, opts.snapshot.macAddress);
+    const updated = await addHotspotIpBinding(creds, {
+      macAddress: binding.macAddress,
+      ipAddress: sameDevice ? binding.ipAddress ?? undefined : undefined,
+      comment: binding.comment,
+      expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
+      bindingType: binding.bindingType,
+    });
+    if (!updated) {
+      throw new Error("The paid Hotspot device binding could not be synchronized. No customer changes were saved.");
+    }
+  }
+}
+
+/** Detect paid bypasses and their expiry schedulers before an admin edit. */
+export async function hasPaidHotspotAccess(
+  creds: RouterCredentials,
+  opts: { name: string; macAddress?: string | null; ipAddress?: string | null },
+): Promise<boolean> {
+  return Boolean(await getPaidHotspotBindingSnapshot(creds, opts));
+}
+
+export async function removeHotspotIpBinding(
+  creds: RouterCredentials,
+  opts: { macAddress: string; comment: string; includeLegacyPaidForMac?: boolean },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    let rows = (await withTimeout(
+      conn.write(["/ip/hotspot/ip-binding/print", `?mac-address=${opts.macAddress}`]),
+      ms,
+    )) as Record<string, string>[];
+    if (!Array.isArray(rows) || rows.length === 0) {
+      rows = (await withTimeout(
+        conn.write(["/ip/hotspot/ip-binding/print"]),
+        ms,
+      )) as Record<string, string>[];
+    }
+    const bindings = (Array.isArray(rows) ? rows : [])
+      .filter((row) =>
+        sameMacAddress(row["mac-address"], opts.macAddress) &&
+        (String(row.comment ?? "").trim() === String(opts.comment ?? "").trim()
+          || (opts.includeLegacyPaidForMac !== false && isLegacyPaidHotspotBinding(row))),
+      );
+    for (const binding of bindings) {
+      if (binding[".id"]) {
+        await withTimeout(
+          conn.write(["/ip/hotspot/ip-binding/remove", `=.id=${binding[".id"]}`]),
+          ms,
+        );
+      }
+    }
+
+    const schedulerNames = new Set([
+      hotspotPaidExpirySchedulerName(opts.comment),
+      ...bindings
+        .map((binding) => binding.comment)
+        .filter((comment): comment is string => Boolean(comment))
+        .map(hotspotPaidExpirySchedulerName),
+    ]);
+    for (const schedulerName of schedulerNames) {
+      const schedulers = (await withTimeout(
+        conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+        ms,
+      )) as Record<string, string>[];
+      for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+        if (scheduler[".id"]) {
+          await withTimeout(
+            conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]),
+            ms,
+          );
+        }
+      }
+    }
+  });
+}
+
+export async function removeHotspotUserExpiry(
+  creds: RouterCredentials,
+  name: string,
+  options: { beforeMutation?: () => Promise<void> } = {},
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const schedulerName = hotspotExpirySchedulerName(name);
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+      if (scheduler[".id"]) {
+        await options.beforeMutation?.();
+        await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), ms);
+      }
+    }
+  });
+}
+
+export async function scheduleHotspotUserExpiry(
+  creds: RouterCredentials,
+  opts: { name: string; expiresInSeconds: number; beforeMutation?: () => Promise<void> },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    if (!Number.isFinite(opts.expiresInSeconds) || opts.expiresInSeconds <= 0) {
+      throw new Error("A positive hotspot user duration is required.");
+    }
+
+    const clockRows = (await withTimeout(
+      conn.write(["/system/clock/print"]),
+      ms,
+    )) as Record<string, string>[];
+    const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
+    if (!routerNow) throw new Error("The hotspot router did not provide a usable clock.");
+
+    const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1000);
+    const schedulerName = hotspotExpirySchedulerName(opts.name);
+    const fupSchedulerName = hotspotFupSchedulerName(opts.name);
+    const expiryScript =
+      `:foreach id in=[/ip hotspot active find where user="${opts.name}"] do={/ip hotspot active remove $id}; ` +
+      `:foreach id in=[/ip hotspot user find where name="${opts.name}"] do={/ip hotspot user set $id disabled=yes}; ` +
+      `:foreach id in=[/ip hotspot ip-binding find where comment="${opts.name}"] do={/ip hotspot ip-binding remove $id}; ` +
+      `:foreach id in=[/queue simple find where name="${hotspotRateQueueName(opts.name)}"] do={/queue simple remove $id}; ` +
+      `/system scheduler remove [find where name="${fupSchedulerName}"]; ` +
+      `/system scheduler remove [find where name="${schedulerName}"]`;
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    const schedulerCommand = schedulers[0]?.[".id"]
+      ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`]
+      : ["/system/scheduler/add", `=name=${schedulerName}`];
+    schedulerCommand.push(
+      `=start-date=${formatRouterDate(expiresAt)}`,
+      `=start-time=${formatRouterTime(expiresAt)}`,
+      "=interval=00:00:00",
+      "=disabled=no",
+      `=on-event=${expiryScript}`,
+      "=comment=OcholaSupernet hotspot user expiry",
+    );
+    await opts.beforeMutation?.();
+    await withTimeout(conn.write(schedulerCommand), ms);
+  });
+}
+
+export async function removeHotspotUserFup(
+  creds: RouterCredentials,
+  username: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const schedulerName = hotspotFupSchedulerName(username);
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+      if (scheduler[".id"]) {
+        await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), ms);
+      }
+    }
+  });
+}
+
+/**
+ * A router-local recurring check enforces FUP even while the app server is
+ * unavailable. It samples each paid account every five seconds and applies a
+ * simple queue to all active addresses for that account after its byte cap.
+ */
+export async function scheduleHotspotUserFup(
+  creds: RouterCredentials,
+  opts: {
+    username: string;
+    thresholdBytes: number;
+    speedDownMbps: number;
+    speedUpMbps: number;
+  },
+): Promise<void> {
+  const username = String(opts.username ?? "").trim();
+  if (!/^[A-Za-z0-9_.@-]{1,64}$/.test(username)) {
+    throw new Error("The hotspot username is invalid for FUP scheduling.");
+  }
+  if (!Number.isSafeInteger(opts.thresholdBytes) || opts.thresholdBytes < 1) {
+    throw new Error("A positive byte threshold is required for FUP scheduling.");
+  }
+  const rateLimit = fupRateLimitFromMbps(opts.speedDownMbps, opts.speedUpMbps);
+  if (!isValidSimpleQueueRateLimit(rateLimit)) {
+    throw new Error("The FUP rate limit is not supported by RouterOS.");
+  }
+
+  const schedulerName = hotspotFupSchedulerName(username);
+  const queueName = hotspotRateQueueName(username);
+  const queueComment = hotspotRateQueueComment(username);
+  const userLiteral = routerOsString(username);
+  const queueLiteral = routerOsString(queueName);
+  const queueCommentLiteral = routerOsString(queueComment);
+  const legacyCommentLiteral = routerOsString(username);
+  const rateLiteral = routerOsString(rateLimit);
+  const script = [
+    `:local userIds [/ip hotspot user find where name=${userLiteral}];`,
+    `:if ([:len $userIds] > 0) do={`,
+    `:local userId [:pick $userIds 0];`,
+    `:local usedBytes (([/ip hotspot user get $userId bytes-in]) + ([/ip hotspot user get $userId bytes-out]));`,
+    `:if ($usedBytes >= ${opts.thresholdBytes}) do={`,
+    `:local activeIds [/ip hotspot active find where user=${userLiteral}];`,
+    `:local target "";`,
+    `:foreach activeId in=$activeIds do={`,
+    `:local address [/ip hotspot active get $activeId address];`,
+    `:if ([:len $address] > 0) do={`,
+    `:if ([:len $target] = 0) do={ :set target ($address . "/32"); } else={ :set target ($target . "," . $address . "/32"); }`,
+    `}`,
+    `};`,
+    `:if ([:len $target] > 0) do={`,
+    `:local queueIds [/queue simple find where name=${queueLiteral}];`,
+    `:if ([:len $queueIds] = 0) do={`,
+    `/queue simple add name=${queueLiteral} target=$target max-limit=${rateLiteral} comment=${queueCommentLiteral} disabled=no;`,
+    `} else={`,
+    `:local queueId [:pick $queueIds 0];`,
+    `:if (([/queue simple get $queueId comment] = ${legacyCommentLiteral}) || ([/queue simple get $queueId comment] = ${queueCommentLiteral})) do={`,
+    `:if (([/queue simple get $queueId max-limit] != ${rateLiteral}) || ([/queue simple get $queueId target] != $target) || ([/queue simple get $queueId disabled] = true)) do={`,
+    `/queue simple set $queueId target=$target max-limit=${rateLiteral} comment=${queueCommentLiteral} disabled=no;`,
+    `}`,
+    `}`,
+    `}`,
+    `}`,
+    `}`,
+    `}`,
+  ].join(" ");
+
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    const schedulerCommand = schedulers[0]?.[".id"]
+      ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`]
+      : ["/system/scheduler/add", `=name=${schedulerName}`];
+    schedulerCommand.push(
+      "=start-time=startup",
+      "=interval=00:00:05",
+      "=disabled=no",
+      `=on-event=${script}`,
+      "=comment=OcholaSupernet hotspot FUP enforcement",
+    );
+    await withTimeout(conn.write(schedulerCommand), ms);
+  });
+}
+
+/**
+ * Reconcile one hotspot account after an admin changes its plan, expiry, or
+ * lifecycle status. Keep enabled sessions online; their live queue is updated
+ * separately and RouterOS applies profile changes on the next authentication.
+ * Disabled or expired accounts are still disconnected immediately.
+ */
+export async function reconcileHotspotUserAccess(
+  creds: RouterCredentials,
+  opts: {
+    name: string;
+    password: string;
+    profile: string;
+    server?: string;
+    preserveActiveSession?: boolean;
+    comment?: string;
+    expiresAt?: string | null;
+    enabled: boolean;
+    limitBytesTotal?: string;
+    address?: string | null;
+    updateUserAddress?: boolean;
+    macAddress?: string | null;
+    rateLimit?: string;
+    dataCapMode?: "disconnect" | "throttle";
+    fupLimitBytes?: number;
+    fupSpeedDownMbps?: number;
+    fupSpeedUpMbps?: number;
+    sharedUsers?: number;
+    resetCounters?: boolean;
+    beforeMutation?: () => Promise<void>;
+  },
+): Promise<void> {
+  const expiryMs = opts.expiresAt ? Date.parse(opts.expiresAt) : NaN;
+  const expired = Number.isFinite(expiryMs) && expiryMs <= Date.now();
+  const enabled = opts.enabled && !expired;
+
+  await requireHotspotUserProfile(creds, opts.profile);
+
+  if (Number.isFinite(expiryMs) && enabled) {
+    await scheduleHotspotUserExpiry(creds, {
+      name: opts.name,
+      expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
+      beforeMutation: opts.beforeMutation,
+    });
+  } else if (enabled) {
+    await removeHotspotUserExpiry(creds, opts.name, { beforeMutation: opts.beforeMutation });
+  }
+
+  await upsertHotspotUser(creds, {
+    name: opts.name,
+    password: opts.password,
+    profile: opts.profile,
+    server: opts.server,
+    comment: opts.comment,
+    address: opts.updateUserAddress === false
+      ? undefined
+      : opts.address !== undefined
+        ? opts.address ?? ""
+        : undefined,
+    limitBytesTotal: opts.limitBytesTotal,
+    disabled: !enabled,
+    beforeMutation: opts.beforeMutation,
+  });
+
+  if (!enabled) {
+    await disconnectHotspotActiveUser(creds, opts.name);
+    await removeHotspotUserRateQueue(creds, opts.name);
+    await removeHotspotUserExpiry(creds, opts.name);
+    if (opts.macAddress) {
+      await removeHotspotIpBinding(creds, {
+        macAddress: opts.macAddress,
+        comment: opts.name,
+      });
+    }
+    return;
+  }
+
+  if (opts.limitBytesTotal !== undefined && opts.resetCounters !== false) {
+    await resetHotspotUserCounters(creds, opts.name).catch(() => {});
+  }
+  if (opts.address && opts.rateLimit) {
+    await ensureHotspotUserRateQueue(creds, {
+      username: opts.name,
+      address: opts.address,
+      maxLimit: opts.rateLimit,
+    });
+  } else if (opts.address !== undefined) {
+    await removeHotspotUserRateQueue(creds, opts.name);
+  }
+
+  if (
+    opts.dataCapMode === "throttle"
+    && Number.isSafeInteger(opts.fupLimitBytes)
+    && Number(opts.fupLimitBytes) > 0
+    && Number(opts.fupSpeedDownMbps) > 0
+    && Number(opts.fupSpeedUpMbps) > 0
+  ) {
+    await scheduleHotspotUserFup(creds, {
+      username: opts.name,
+      thresholdBytes: Number(opts.fupLimitBytes),
+      speedDownMbps: Number(opts.fupSpeedDownMbps),
+      speedUpMbps: Number(opts.fupSpeedUpMbps),
+    });
+  } else {
+    await removeHotspotUserFup(creds, opts.name);
+  }
+}
+
+function pppExpirySchedulerName(name: string): string {
+  return `ochola-ppp-${name.replace(/[^A-Za-z0-9_-]/g, "-").slice(-48)}`;
+}
+
+export async function removePppUserExpiry(
+  creds: RouterCredentials,
+  name: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const schedulerName = pppExpirySchedulerName(name);
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+      if (scheduler[".id"]) {
+        await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), ms);
+      }
+    }
+  });
+}
+
+export async function schedulePppUserExpiry(
+  creds: RouterCredentials,
+  opts: { name: string; expiresInSeconds: number },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    if (!Number.isFinite(opts.expiresInSeconds) || opts.expiresInSeconds <= 0) {
+      throw new Error("A positive PPP user duration is required.");
+    }
+    const clockRows = (await withTimeout(conn.write(["/system/clock/print"]), ms)) as Record<string, string>[];
+    const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
+    if (!routerNow) throw new Error("The PPP router did not provide a usable clock.");
+    const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1000);
+    const schedulerName = pppExpirySchedulerName(opts.name);
+    const expiryScript =
+      `:foreach id in=[/ppp active find where name="${opts.name}"] do={/ppp active remove $id}; ` +
+      `:foreach id in=[/ppp secret find where name="${opts.name}"] do={/ppp secret set $id disabled=yes}; ` +
+      `/system scheduler remove [find where name="${schedulerName}"]`;
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    const command = schedulers[0]?.[".id"]
+      ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`]
+      : ["/system/scheduler/add", `=name=${schedulerName}`];
+    command.push(
+      `=start-date=${formatRouterDate(expiresAt)}`,
+      `=start-time=${formatRouterTime(expiresAt)}`,
+      "=interval=00:00:00",
+      "=disabled=no",
+      `=on-event=${expiryScript}`,
+      "=comment=OcholaSupernet PPP user expiry",
+    );
+    await withTimeout(conn.write(command), ms);
+  });
+}
+
+export async function reconcilePppoeUserAccess(
+  creds: RouterCredentials,
+  opts: {
+    name: string;
+    password: string;
+    profile: string;
+    comment?: string;
+    expiresAt?: string | null;
+    enabled: boolean;
+    remoteAddress?: string | null;
+  },
+): Promise<void> {
+  const expiryMs = opts.expiresAt ? Date.parse(opts.expiresAt) : NaN;
+  const expired = Number.isFinite(expiryMs) && expiryMs <= Date.now();
+  const enabled = opts.enabled && !expired;
+  const secrets = await fetchPPPSecrets(creds);
+  const existing = secrets.find(secret => secret.name === opts.name);
+  if (existing?.id) {
+    await updatePPPSecret(creds, existing.id, {
+      password: opts.password,
+      profile: opts.profile,
+      disabled: !enabled,
+      comment: opts.comment,
+      ...(opts.remoteAddress !== undefined
+        ? { remoteAddress: opts.remoteAddress ?? "" }
+        : {}),
+    });
+  } else {
+    await addPPPSecret(creds, {
+      name: opts.name,
+      password: opts.password,
+      profile: opts.profile,
+      service: "pppoe",
+      comment: opts.comment,
+      ...(opts.remoteAddress ? { remoteAddress: opts.remoteAddress } : {}),
+    });
+    if (!enabled) {
+      const created = (await fetchPPPSecrets(creds)).find(secret => secret.name === opts.name);
+      if (created?.id) await updatePPPSecret(creds, created.id, { disabled: true });
+    }
+  }
+
+  await disconnectPPPActiveByName(creds, opts.name);
+  if (!enabled) {
+    await removePppUserExpiry(creds, opts.name);
+  } else if (Number.isFinite(expiryMs)) {
+    await schedulePppUserExpiry(creds, {
+      name: opts.name,
+      expiresInSeconds: Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)),
+    });
+  } else {
+    await removePppUserExpiry(creds, opts.name);
+  }
+}
+
+export async function removeHotspotUser(creds: RouterCredentials, name: string): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/user/print", `?name=${name}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (id) await withTimeout(conn.write(["/ip/hotspot/user/remove", `=.id=${id}`]), ms);
+  });
+}
+
+export async function removeHotspotUsersById(
+  creds: RouterCredentials,
+  targets: Array<{ id: string; name: string; commentMarker: string }>,
+): Promise<void> {
+  const uniqueTargets = [...new Map(
+    targets
+      .filter(target => target.id.trim() && target.name.trim() && target.commentMarker)
+      .map(target => [target.id, target] as const),
+  ).values()];
+  if (uniqueTargets.length === 0) return;
+
+  return withConn(creds, async conn => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const currentRows = (await withTimeout(
+      conn.write(["/ip/hotspot/user/print"]),
+      ms,
+    )) as Record<string, string>[];
+    if (!Array.isArray(currentRows)) {
+      throw new Error("MikroTik did not return Hotspot users for the removal check.");
+    }
+    for (const target of uniqueTargets) {
+      const current = currentRows.find(row => row[".id"] === target.id);
+      if (
+        !current
+        || current.name !== target.name
+        || !String(current.comment ?? "").includes(target.commentMarker)
+      ) {
+        throw new Error("A selected Hotspot user changed after inventory; no selected users were removed.");
+      }
+    }
+    for (const target of uniqueTargets) {
+      await withTimeout(conn.write(["/ip/hotspot/user/remove", `=.id=${target.id}`]), ms);
+    }
+    const remaining = (await withTimeout(
+      conn.write(["/ip/hotspot/user/print"]),
+      ms,
+    )) as Record<string, string>[];
+    const remainingIds = new Set(
+      (Array.isArray(remaining) ? remaining : []).map(row => row[".id"]).filter(Boolean),
+    );
+    if (uniqueTargets.some(target => remainingIds.has(target.id))) {
+      throw new Error("MikroTik still reports one or more selected Hotspot users.");
+    }
+  });
+}
+
+export async function updateHotspotUser(
+  creds: RouterCredentials,
+  name: string,
+  fields: {
+    password?: string; profile?: string; disabled?: boolean; comment?: string;
+    server?: string; email?: string; address?: string; limitUptime?: string; limitBytesTotal?: string;
+  }
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/user/print", `?name=${name}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (!id) throw new Error(`Hotspot user '${name}' not found`);
+    const params: string[] = ["/ip/hotspot/user/set", `=.id=${id}`];
+    if (fields.password        !== undefined) params.push(`=password=${fields.password}`);
+    if (fields.profile         !== undefined) params.push(`=profile=${fields.profile}`);
+    if (fields.disabled        !== undefined) params.push(`=disabled=${fields.disabled ? "yes" : "no"}`);
+    if (fields.comment         !== undefined) params.push(`=comment=${fields.comment}`);
+    if (fields.server          !== undefined) params.push(`=server=${fields.server}`);
+    if (fields.email           !== undefined) params.push(`=email=${fields.email}`);
+    if (fields.address         !== undefined) params.push(`=address=${fields.address}`);
+    if (fields.limitUptime     !== undefined) params.push(`=limit-uptime=${fields.limitUptime}`);
+    if (fields.limitBytesTotal !== undefined) params.push(`=limit-bytes-total=${fields.limitBytesTotal}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+/**
+ * Create or update a paid Hotspot user without opening a second RouterOS
+ * connection when a new account is being created.
+ */
+export async function upsertHotspotUser(
+  creds: RouterCredentials,
+  opts: {
+    name: string; password: string; profile?: string; disabled?: boolean; comment?: string;
+    server?: string; email?: string; address?: string; limitUptime?: string; limitBytesTotal?: string;
+    beforeMutation?: () => Promise<void>;
+  },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write(["/ip/hotspot/user/print", `?name=${opts.name}`]),
+      ms,
+    )) as Record<string, string>[];
+    const selectExisting = (records: Record<string, string>[]) => {
+      const matches = records.filter(row =>
+        row.name === opts.name && Boolean(row[".id"]),
+      );
+      if (matches.length <= 1) return matches[0];
+      if (opts.server) {
+        const serverMatches = matches.filter(row => row.server === opts.server);
+        if (serverMatches.length === 1) return serverMatches[0];
+        if (serverMatches.length > 1) {
+          throw new Error(`RouterOS returned multiple Hotspot users named '${opts.name}' on server '${opts.server}'.`);
+        }
+        const allServerMatches = matches.filter(row => !row.server || row.server === "all");
+        if (allServerMatches.length === 1) return allServerMatches[0];
+        if (allServerMatches.length > 1) {
+          throw new Error(`RouterOS returned multiple all-server Hotspot users named '${opts.name}'.`);
+        }
+      }
+      throw new Error(`RouterOS returned multiple Hotspot users named '${opts.name}'; the server binding is ambiguous.`);
+    };
+    const existing = selectExisting(Array.isArray(rows) ? rows : []);
+
+    const writeForExistingUser = async (userId: string) => {
+      const params = ["/ip/hotspot/user/set", `=.id=${userId}`, `=password=${opts.password}`];
+      if (opts.profile !== undefined) params.push(`=profile=${opts.profile}`);
+      if (opts.disabled !== undefined) params.push(`=disabled=${opts.disabled ? "yes" : "no"}`);
+      if (opts.comment !== undefined) params.push(`=comment=${opts.comment}`);
+      if (opts.server !== undefined) params.push(`=server=${opts.server}`);
+      if (opts.email) params.push(`=email=${opts.email}`);
+      if (opts.address !== undefined) params.push(`=address=${opts.address}`);
+      if (opts.limitUptime) params.push(`=limit-uptime=${opts.limitUptime}`);
+      if (opts.limitBytesTotal) params.push(`=limit-bytes-total=${opts.limitBytesTotal}`);
+      await opts.beforeMutation?.();
+      await withTimeout(conn.write(params), ms);
+    };
+
+    if (existing?.[".id"]) {
+      // A failed update must remain an update failure; never mask it by trying
+      // to add the same username and replacing the useful error with a
+      // duplicate-name failure.
+      await writeForExistingUser(existing[".id"]);
+      return;
+    }
+
+    const addParams = [
+      "/ip/hotspot/user/add",
+      `=name=${opts.name}`,
+      `=password=${opts.password}`,
+      `=profile=${opts.profile ?? "default"}`,
+    ];
+    if (opts.disabled !== undefined) addParams.push(`=disabled=${opts.disabled ? "yes" : "no"}`);
+    if (opts.comment) addParams.push(`=comment=${opts.comment}`);
+    if (opts.server) addParams.push(`=server=${opts.server}`);
+    if (opts.email) addParams.push(`=email=${opts.email}`);
+    if (opts.address) addParams.push(`=address=${opts.address}`);
+    if (opts.limitUptime) addParams.push(`=limit-uptime=${opts.limitUptime}`);
+    if (opts.limitBytesTotal) addParams.push(`=limit-bytes-total=${opts.limitBytesTotal}`);
+
+    try {
+      await opts.beforeMutation?.();
+      await withTimeout(conn.write(addParams), ms);
+    } catch (addError) {
+      const message = addError instanceof Error ? addError.message : String(addError);
+      if (!/already have user with this name/i.test(message)) throw addError;
+
+      // The name query can miss a pre-existing RouterOS row, and a concurrent
+      // payment can create it between the read and add. On the specific
+      // duplicate-name response, re-read exact names and update the existing
+      // row instead of failing the paid account or creating a second one.
+      const allRows = (await withTimeout(
+        conn.write([
+          "/ip/hotspot/user/print",
+          "=.proplist=.id,name,server,profile,comment",
+        ]),
+        ms,
+      )) as Record<string, string>[];
+      const conflictedUser = selectExisting(Array.isArray(allRows) ? allRows : []);
+      if (!conflictedUser?.[".id"]) throw addError;
+      await writeForExistingUser(conflictedUser[".id"]);
+    }
+  });
+}
+
+/**
+ * Start a fresh RouterOS byte counter for a renewed prepaid hotspot account.
+ * `limit-bytes-total` is cumulative on the user record; changing the limit
+ * alone does not give a renewed package a fresh allowance.
+ */
+export async function resetHotspotUserCounters(
+  creds: RouterCredentials,
+  name: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write(["/ip/hotspot/user/print", `?name=${name}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (row[".id"]) {
+        await withTimeout(
+          conn.write(["/ip/hotspot/user/reset-counters", `=.id=${row[".id"]}`]),
+          ms,
+        );
+      }
+    }
+  });
+}
+
+export async function changeHotspotUsername(
+  creds: RouterCredentials,
+  fromName: string,
+  toName: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/user/print", `?name=${fromName}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (!id) throw new Error(`Hotspot user '${fromName}' not found`);
+    await withTimeout(conn.write(["/ip/hotspot/user/set", `=.id=${id}`, `=name=${toName}`]), ms);
+    await disconnectHotspotActiveUser(creds, fromName).catch(() => {});
+  });
+}
+
+export async function disconnectHotspotActiveUser(
+  creds: RouterCredentials,
+  username: string,
+): Promise<boolean> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/active/print", `?user=${username}`]), ms)) as Record<string, string>[];
+    if (!Array.isArray(rows)) throw new Error("MikroTik did not return its active Hotspot sessions.");
+    let disconnected = false;
+    for (const row of rows) {
+      const id = row[".id"];
+      if (id) {
+        await withTimeout(conn.write(["/ip/hotspot/active/remove", `=.id=${id}`]), ms);
+        disconnected = true;
+      }
+    }
+    return disconnected;
+  });
+}
+
+export async function connectHotspotUser(
+  creds: RouterCredentials,
+  opts: {
+    user: string;
+    password: string;
+    ip: string;
+    macAddress: string;
+    /** Ignored: RouterOS infers the service from client IP/interface and rejects server on active/login. */
+    server?: string;
+  },
+): Promise<boolean> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const readActive = async (): Promise<Record<string, string>[]> => {
+      const rows = await withTimeout(
+        conn.write(["/ip/hotspot/active/print", `?user=${opts.user}`, "=.proplist=user,address,mac-address"]),
+        ms,
+      );
+      return Array.isArray(rows) ? rows as Record<string, string>[] : [];
+    };
+    const isTargetSessionActive = (rows: Record<string, string>[]): boolean =>
+      hotspotActiveSessionMatchesDevice(rows, opts);
+
+    if (isTargetSessionActive(await readActive())) return true;
+
+    const command = [
+      "/ip/hotspot/active/login",
+      `=user=${opts.user}`,
+      `=password=${opts.password}`,
+      `=ip=${opts.ip}`,
+      `=mac-address=${opts.macAddress}`,
+    ];
+    // Do not serialize opts.server: /ip/hotspot/active/login does not accept it.
+    await withTimeout(conn.write(command), ms);
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      if (isTargetSessionActive(await readActive())) return true;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return false;
+  });
+}
+
+export function hotspotActiveSessionMatchesDevice(
+  sessions: ReadonlyArray<Record<string, string>>,
+  opts: { user: string; macAddress: string; ip?: string },
+): boolean {
+  const targetMac = validRouterMac(opts.macAddress);
+  const targetIp = opts.ip?.trim().split("/")[0] ?? "";
+  return !!targetMac && sessions.some((session) =>
+    session.user === opts.user
+    && validRouterMac(session["mac-address"]) === targetMac
+    && (!targetIp || session.address?.trim().split("/")[0] === targetIp),
+  );
+}
+
+async function resolveHotspotClientIpByMacOnConnection(
+  conn: RouterOSAPI,
+  creds: RouterCredentials,
+  macAddress: string,
+  initialActiveRows: Record<string, string>[],
+): Promise<string | null> {
+  const targetMac = validRouterMac(macAddress);
+  if (!targetMac) return null;
+  const addressForTarget = (rows: Record<string, string>[]): string | null => {
+    const row = rows.find(candidate => validRouterMac(candidate["mac-address"]) === targetMac
+      && String(candidate.address ?? "").trim());
+    return row ? String(row.address).trim() : null;
+  };
+  const activeAddress = addressForTarget(initialActiveRows);
+  if (activeAddress) return activeAddress;
+
+  const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+  const readOptionalRows = async (command: string[]): Promise<Record<string, string>[]> => {
+    try {
+      const rows = await withTimeout(conn.write(command), ms);
+      return Array.isArray(rows) ? rows as Record<string, string>[] : [];
+    } catch {
+      return [];
+    }
+  };
+  const dhcpRows = await readOptionalRows([
+    "/ip/dhcp-server/lease/print",
+    "?status=bound",
+    "=.proplist=host-name,address,mac-address,comment",
+  ]);
+  const dhcpAddress = addressForTarget(dhcpRows);
+  if (dhcpAddress) return dhcpAddress;
+
+  // Host and ARP are independent read-only fallbacks. Run them together only
+  // after DHCP misses, while preferring the Hotspot host result when both match.
+  const [hostRows, arpRows] = await Promise.all([
+    readOptionalRows(["/ip/hotspot/host/print", "=.proplist=address,mac-address,host-name,comment"]),
+    readOptionalRows(["/ip/arp/print", "=.proplist=address,mac-address,interface,complete"]),
+  ]);
+  const hostAddress = addressForTarget(hostRows);
+  if (hostAddress) return hostAddress;
+  return addressForTarget(arpRows);
+}
+
+export type HotspotMacReconnectKind =
+  | "connected"
+  | "device-ready"
+  | "device-not-found"
+  | "ip-mismatch"
+  | "login-pending";
+
+export interface HotspotMacReconnectResult {
+  kind: HotspotMacReconnectKind;
+  stageDurationsMs: Record<string, number>;
+}
+
+/**
+ * Verify a paid Hotspot device and, unless verifyOnly is set, log it in using
+ * one RouterOS connection for the session read, device-IP lookup, login, and
+ * confirmation. The verify-only mode is read-only for the route's safe preflight.
+ */
+export async function reconnectHotspotUserByMac(
+  creds: RouterCredentials,
+  opts: {
+    user: string;
+    password: string;
+    macAddress: string;
+    expectedIp?: string;
+    expectedServer?: string;
+    loginIp?: string;
+    verifyOnly?: boolean;
+  },
+): Promise<HotspotMacReconnectResult> {
+  const stageDurationsMs: Record<string, number> = {};
+  const result = (kind: HotspotMacReconnectKind): HotspotMacReconnectResult => ({ kind, stageDurationsMs });
+  const targetMac = validRouterMac(opts.macAddress);
+  if (!targetMac) return result("device-not-found");
+
+  const startedAt = process.hrtime.bigint();
+  const measure = async <T>(stage: string, operation: () => Promise<T>): Promise<T> => {
+    const stageStartedAt = process.hrtime.bigint();
+    try {
+      return await operation();
+    } finally {
+      stageDurationsMs[stage] = Number(process.hrtime.bigint() - stageStartedAt) / 1e6;
+    }
+  };
+
+  return withConn(creds, async conn => {
+    stageDurationsMs.router_connection_setup = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const activeRows = await measure("router_active_session_read", async () => {
+      const rows = await withTimeout(conn.write([
+        "/ip/hotspot/active/print",
+        "=.proplist=user,address,mac-address,server,comment,host-name",
+      ]), ms);
+      return Array.isArray(rows) ? rows as Record<string, string>[] : [];
+    });
+    const sessionMatchesTarget = (rows: Record<string, string>[], ip?: string): boolean =>
+      rows.some(session =>
+        hotspotActiveSessionMatchesDevice([session], { user: opts.user, macAddress: targetMac, ip })
+        && (!opts.expectedServer || opts.expectedServer === "all" || session.server === opts.expectedServer),
+      );
+
+    if (sessionMatchesTarget(activeRows, opts.expectedIp)) return result("connected");
+
+    const discoveredIp = await measure("router_ip_discovery", () =>
+      resolveHotspotClientIpByMacOnConnection(conn, creds, targetMac, activeRows),
+    );
+    if (!discoveredIp) return result("device-not-found");
+    if (opts.expectedIp && discoveredIp !== opts.expectedIp) return result("ip-mismatch");
+    if (opts.verifyOnly) return result("device-ready");
+
+    const loginIp = opts.loginIp?.trim() || discoveredIp;
+    const loginAccepted = await measure("routeros_login_and_confirmation", async () => {
+      const readActiveForUser = async (): Promise<Record<string, string>[]> => {
+        const rows = await withTimeout(conn.write([
+          "/ip/hotspot/active/print",
+          "?user=" + opts.user,
+          "=.proplist=user,address,mac-address,server",
+        ]), ms);
+        return Array.isArray(rows) ? rows as Record<string, string>[] : [];
+      };
+      if (sessionMatchesTarget(await readActiveForUser(), loginIp)) return true;
+
+      await measure("routeros_active_login_command", () => withTimeout(conn.write([
+        "/ip/hotspot/active/login",
+        "=user=" + opts.user,
+        "=password=" + opts.password,
+        "=ip=" + loginIp,
+        "=mac-address=" + targetMac,
+      ]), ms));
+
+      // Do not hold the portal request open for four serial RouterOS reads.
+      // If the session is not visible after two confirmations, the portal's
+      // existing retry loop will check again without risking a second purchase.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const confirmed = await measure(
+          `routeros_login_confirmation_${attempt + 1}`,
+          async () => sessionMatchesTarget(await readActiveForUser(), loginIp),
+        );
+        if (confirmed) return true;
+        if (attempt < 1) await new Promise(resolve => setTimeout(resolve, 120));
+      }
+      return false;
+    });
+    return result(loginAccepted ? "connected" : "login-pending");
+  });
+}
+
+/**
+ * Allow a paid hotspot device through the captive portal without exposing
+ * RouterOS credentials to the browser. RouterOS keeps this binding until it
+ * is changed or removed by an administrator.
+ */
+export async function addHotspotIpBinding(
+  creds: RouterCredentials,
+  opts: {
+    macAddress: string;
+    ipAddress?: string;
+    comment: string;
+    expiresInSeconds: number;
+    queueName?: string;
+    bindingType?: "bypassed" | "regular";
+  },
+): Promise<boolean> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const existing = (await withTimeout(
+      conn.write(["/ip/hotspot/ip-binding/print", `?mac-address=${opts.macAddress}`]),
+      ms,
+    )) as Record<string, string>[];
+    const paidBinding = existing.find((row) => row.comment === opts.comment)
+      ?? existing.find((row) =>
+        row.type === "bypassed" &&
+        /^(?:OcholaSupernet paid|OcholaSupernet SMS reconnect)\b/i.test(row.comment ?? ""),
+      );
+    /* An administrator's existing bypass remains untouched. It already grants
+       access and must not be removed by a later paid-device expiry. */
+    if (!paidBinding && existing.some((row) => row.type === "bypassed")) return false;
+    if (!Number.isFinite(opts.expiresInSeconds) || opts.expiresInSeconds <= 0) {
+      throw new Error("A positive hotspot access duration is required.");
+    }
+
+    const clockRows = (await withTimeout(
+      conn.write(["/system/clock/print"]),
+      ms,
+    )) as Record<string, string>[];
+    const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
+    if (!routerNow) throw new Error("The hotspot router did not provide a usable clock.");
+    const expiresAt = new Date(routerNow.getTime() + Math.ceil(opts.expiresInSeconds) * 1000);
+    const schedulerName = hotspotPaidExpirySchedulerName(opts.comment);
+    const queueName = opts.queueName ?? hotspotRateQueueName(opts.comment);
+    const queueExpiry = queueName
+      ? `:foreach id in=[/queue simple find where name="${queueName}"] do={/queue simple remove $id}; `
+      : "";
+    const expiryScript =
+      `:foreach id in=[/ip hotspot ip-binding find where comment="${opts.comment}"] do={/ip hotspot ip-binding remove $id}; ` +
+      `:foreach id in=[/ip hotspot active find where user="${opts.comment}"] do={/ip hotspot active remove $id}; ` +
+      `:foreach id in=[/ip hotspot user find where name="${opts.comment}"] do={/ip hotspot user set $id disabled=yes}; ` +
+      queueExpiry +
+      `/system scheduler remove [find where name="${schedulerName}"]`;
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    const schedulerCommand = schedulers[0]?.[".id"]
+      ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`]
+      : ["/system/scheduler/add", `=name=${schedulerName}`];
+    schedulerCommand.push(
+      `=start-date=${formatRouterDate(expiresAt)}`,
+      `=start-time=${formatRouterTime(expiresAt)}`,
+      "=interval=00:00:00",
+      "=disabled=no",
+      `=on-event=${expiryScript}`,
+      `=comment=OcholaSupernet paid access expiry`,
+    );
+
+    await withTimeout(conn.write(schedulerCommand), ms);
+    try {
+      const id = paidBinding?.[".id"];
+      const params: string[] = id
+        ? ["/ip/hotspot/ip-binding/set", `=.id=${id}`]
+        : ["/ip/hotspot/ip-binding/add", `=mac-address=${opts.macAddress}`];
+      params.push(`=type=${opts.bindingType ?? "bypassed"}`, `=comment=${opts.comment}`);
+      if (opts.ipAddress) params.push(`=address=${opts.ipAddress}`);
+      await withTimeout(conn.write(params), ms);
+    } catch (error) {
+      const schedulerId = schedulers[0]?.[".id"];
+      if (schedulerId) {
+        const previous = schedulers[0];
+        const restore = ["/system/scheduler/set", `=.id=${schedulerId}`];
+        for (const field of ["start-date", "start-time", "interval", "on-event", "comment"]) {
+          if (previous[field]) restore.push(`=${field}=${previous[field]}`);
+        }
+        await withTimeout(conn.write(restore), ms).catch(() => undefined);
+      } else {
+        await withTimeout(conn.write(["/system/scheduler/print", `?name=${schedulerName}`]), ms)
+          .then((rows) => {
+            const id = (rows as Record<string, string>[])[0]?.[".id"];
+            return id ? conn.write(["/system/scheduler/remove", `=.id=${id}`]) : undefined;
+          })
+          .catch(() => undefined);
+      }
+      throw error;
+    }
+    return true;
+  });
+}
+
+function hotspotRateQueueName(username: string): string {
+  return `ochola-rate-${username.replace(/[^A-Za-z0-9_-]/g, "-").slice(-52)}`;
+}
+
+function hotspotRateQueueComment(username: string): string {
+  return `OcholaSupernet hotspot user:${username}`;
+}
+
+function vlanCustomerExpirySchedulerName(adminId: number, customerId: number): string {
+  return `ochola-vlan-exp-${adminId}-${customerId}`;
+}
+
+async function removeVlanCustomerExpiryScheduler(
+  conn: RouterOSAPI,
+  schedulerName: string,
+  requestMs: number,
+): Promise<void> {
+  const schedulers = await withTimeout(
+    conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+    requestMs,
+  ) as Record<string, string>[];
+  for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+    if (scheduler[".id"]) {
+      await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), requestMs);
+    }
+  }
+}
+
+/**
+ * Reconcile a VLAN customer's assigned-IP queue beneath the already provisioned
+ * VLAN aggregate queue. The account id and tenant id are part of the generated
+ * RouterOS identity; the address is the queue target, never the sole identity.
+ */
+export async function reconcileVlanCustomerQueue(
+  creds: RouterCredentials,
+  opts: {
+    adminId: number;
+    customerId: number;
+    ipAddress: string;
+    parentQueue: string;
+    parentComment: string;
+    maxLimit: string;
+    enabled: boolean;
+    expiresAt?: string | null;
+  },
+): Promise<void> {
+  const identity = vlanCustomerQueueIdentity(opts.adminId, opts.customerId, opts.ipAddress);
+  const parentQueue = String(opts.parentQueue ?? "").trim();
+  if (!/^[A-Za-z0-9_.-]{1,64}$/.test(parentQueue)) {
+    throw new Error("The VLAN aggregate bandwidth queue name is invalid.");
+  }
+  if (!isValidSimpleQueueRateLimit(opts.maxLimit)) {
+    throw new Error("A valid per-customer download and upload speed is required for the VLAN queue.");
+  }
+  const expiryMs = opts.expiresAt ? Date.parse(opts.expiresAt) : Number.NaN;
+  if (opts.expiresAt && !Number.isFinite(expiryMs)) {
+    throw new Error("A valid expiry date is required for the VLAN customer queue.");
+  }
+  const isEnabled = opts.enabled && (!Number.isFinite(expiryMs) || expiryMs > Date.now());
+  const schedulerName = vlanCustomerExpirySchedulerName(opts.adminId, opts.customerId);
+
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const parentRows = await withTimeout(
+      conn.write(["/queue/simple/print", "=.proplist=.id,name,comment", `?name=${parentQueue}`]),
+      ms,
+    ) as Record<string, string>[];
+    if (
+      !Array.isArray(parentRows)
+      || !parentRows.some(row => row.name === parentQueue && row.comment === opts.parentComment)
+    ) {
+      throw new Error(`The VLAN aggregate bandwidth queue "${parentQueue}" is not deployed on the router.`);
+    }
+
+    const rows = await withTimeout(
+      conn.write([
+        "/queue/simple/print",
+        "=.proplist=.id,name,target,parent,max-limit,disabled,comment,bytes,rate",
+        `?name=${identity.name}`,
+      ]),
+      ms,
+    ) as Record<string, string>[];
+    const matches = (Array.isArray(rows) ? rows : []).filter(row => row.name === identity.name);
+    if (matches.length > 1) {
+      throw new Error(`Multiple RouterOS queues use the VLAN customer identity "${identity.name}".`);
+    }
+    const existing = matches[0];
+    if (existing && existing.comment !== identity.comment) {
+      throw new Error(`The RouterOS queue "${identity.name}" is owned by another resource and was not changed.`);
+    }
+
+    const command = existing?.[".id"]
+      ? ["/queue/simple/set", `=.id=${existing[".id"]}`]
+      : ["/queue/simple/add", `=name=${identity.name}`];
+    command.push(
+      `=target=${identity.target}`,
+      `=parent=${parentQueue}`,
+      `=max-limit=${opts.maxLimit}`,
+      `=comment=${identity.comment}`,
+      `=disabled=${isEnabled ? "no" : "yes"}`,
+    );
+    await withTimeout(conn.write(command), ms);
+
+    try {
+      if (isEnabled && Number.isFinite(expiryMs)) {
+        const clockRows = await withTimeout(conn.write(["/system/clock/print"]), ms) as Record<string, string>[];
+        const routerNow = parseRouterClock(clockRows[0]?.date, clockRows[0]?.time);
+        if (!routerNow) throw new Error("The VLAN router did not provide a usable clock for expiry scheduling.");
+        const expiresAt = new Date(routerNow.getTime() + Math.max(1, Math.ceil((expiryMs - Date.now()) / 1000)) * 1000);
+        const expiryScript =
+          `/queue simple set [find where name="${identity.name}"] disabled=yes; ` +
+          `/system scheduler remove [find where name="${schedulerName}"]`;
+        const schedulers = await withTimeout(
+          conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+          ms,
+        ) as Record<string, string>[];
+        const schedulerCommand = schedulers[0]?.[".id"]
+          ? ["/system/scheduler/set", `=.id=${schedulers[0][".id"]}`]
+          : ["/system/scheduler/add", `=name=${schedulerName}`];
+        schedulerCommand.push(
+          `=start-date=${formatRouterDate(expiresAt)}`,
+          `=start-time=${formatRouterTime(expiresAt)}`,
+          "=interval=00:00:00",
+          "=disabled=no",
+          `=on-event=${expiryScript}`,
+          "=comment=OcholaSupernet VLAN customer expiry",
+        );
+        await withTimeout(conn.write(schedulerCommand), ms);
+      } else {
+        await removeVlanCustomerExpiryScheduler(conn, schedulerName, ms);
+      }
+    } catch (error) {
+      const currentRows = await withTimeout(
+        conn.write(["/queue/simple/print", "=.proplist=.id,name,comment", `?name=${identity.name}`]),
+        ms,
+      ).catch(() => [] as Record<string, string>[]) as Record<string, string>[];
+      for (const row of Array.isArray(currentRows) ? currentRows : []) {
+        if (row[".id"] && row.name === identity.name && row.comment === identity.comment) {
+          await withTimeout(
+            conn.write(["/queue/simple/set", `=.id=${row[".id"]}`, "=disabled=yes"]),
+            ms,
+          ).catch(() => {});
+        }
+      }
+      await removeVlanCustomerExpiryScheduler(conn, schedulerName, ms).catch(() => {});
+      throw error;
+    }
+  });
+}
+
+export async function removeVlanCustomerQueue(
+  creds: RouterCredentials,
+  opts: { adminId: number; customerId: number; ipAddress: string; preserveExpiry?: boolean },
+): Promise<void> {
+  const identity = vlanCustomerQueueIdentity(opts.adminId, opts.customerId, opts.ipAddress);
+  const schedulerName = vlanCustomerExpirySchedulerName(opts.adminId, opts.customerId);
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write(["/queue/simple/print", "=.proplist=.id,name,comment", `?name=${identity.name}`]),
+      ms,
+    ) as Record<string, string>[];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (row.name !== identity.name || row.comment !== identity.comment) continue;
+      if (row[".id"]) {
+        await withTimeout(conn.write(["/queue/simple/remove", `=.id=${row[".id"]}`]), ms);
+      }
+    }
+    if (!opts.preserveExpiry) {
+      await removeVlanCustomerExpiryScheduler(conn, schedulerName, ms);
+    }
+  });
+}
+
+/**
+ * A `bypassed` hotspot binding skips the hotspot login queue. Keep a
+ * per-device simple queue for paid MAC access so the plan speed is enforced
+ * even when the client is admitted without a captive-portal login.
+ */
+export async function ensureHotspotUserRateQueue(
+  creds: RouterCredentials,
+  opts: { username: string; address?: string | null; maxLimit?: string },
+): Promise<void> {
+  const address = opts.address;
+  if (!address || !opts.maxLimit) return;
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const name = hotspotRateQueueName(opts.username);
+    const target = address.includes("/") ? address : `${address}/32`;
+    const rows = (await withTimeout(
+      conn.write(["/queue/simple/print", `?name=${name}`]),
+      ms,
+    )) as Record<string, string>[];
+    const existing = Array.isArray(rows) ? rows[0] : undefined;
+    if (
+      existing
+      && existing.comment !== opts.username
+      && existing.comment !== hotspotRateQueueComment(opts.username)
+    ) {
+      throw new Error("A simple queue with this generated hotspot name belongs to another resource.");
+    }
+    const command = existing?.[".id"]
+      ? ["/queue/simple/set", `=.id=${existing[".id"]}`]
+      : ["/queue/simple/add", `=name=${name}`];
+    command.push(
+      `=target=${target}`,
+      `=max-limit=${opts.maxLimit}`,
+      `=comment=${hotspotRateQueueComment(opts.username)}`,
+      "=disabled=no",
+    );
+    await withTimeout(conn.write(command), ms);
+  });
+}
+
+export async function fetchHotspotUserRateQueueStatsBulk(
+  creds: RouterCredentials,
+  usernames: string[],
+): Promise<Record<string, { bytesIn: number; bytesOut: number; totalBytes: number; rate: string; maxLimit: string }>> {
+  const requested = new Map<string, { username: string; comment: string }>();
+  for (const rawUsername of usernames) {
+    const username = String(rawUsername ?? "").trim();
+    if (!username) continue;
+    requested.set(hotspotRateQueueName(username), {
+      username,
+      comment: hotspotRateQueueComment(username),
+    });
+  }
+  if (!requested.size) return {};
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(
+      conn.write([
+        "/queue/simple/print",
+        "=.proplist=name,comment,bytes,bytes-in,bytes-out,rate,max-limit",
+      ]),
+      ms,
+    ) as Record<string, string>[];
+    const result: Record<string, { bytesIn: number; bytesOut: number; totalBytes: number; rate: string; maxLimit: string }> = {};
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const expected = requested.get(String(row.name ?? ""));
+      if (!expected || (row.comment !== expected.comment && row.comment !== expected.username)) continue;
+      const byteParts = String(row.bytes ?? "").split("/");
+      const bytesIn = row["bytes-in"] !== undefined ? parseBytes(row["bytes-in"]) : parseBytes(byteParts[1]);
+      const bytesOut = row["bytes-out"] !== undefined ? parseBytes(row["bytes-out"]) : parseBytes(byteParts[0]);
+      result[expected.username] = {
+        bytesIn,
+        bytesOut,
+        totalBytes: bytesIn + bytesOut,
+        rate: String(row.rate ?? ""),
+        maxLimit: String(row["max-limit"] ?? ""),
+      };
+    }
+    return result;
+  });
+}
+
+export async function fetchHotspotUserRateQueueStats(
+  creds: RouterCredentials,
+  username: string,
+): Promise<{ bytesIn: number; bytesOut: number; totalBytes: number; rate: string; maxLimit: string } | null> {
+  const cleanUsername = String(username ?? "").trim();
+  if (!cleanUsername) return null;
+  const stats = await fetchHotspotUserRateQueueStatsBulk(creds, [cleanUsername]);
+  return stats[cleanUsername] ?? null;
+}
+
+export async function removeHotspotUserRateQueue(
+  creds: RouterCredentials,
+  username: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const name = hotspotRateQueueName(username);
+    const rows = (await withTimeout(
+      conn.write(["/queue/simple/print", `?name=${name}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (
+        row[".id"]
+        && (row.comment === username || row.comment === hotspotRateQueueComment(username))
+      ) {
+        await withTimeout(conn.write(["/queue/simple/remove", `=.id=${row[".id"]}`]), ms);
+      }
+    }
+    const schedulerName = hotspotFupSchedulerName(username);
+    const schedulers = (await withTimeout(
+      conn.write(["/system/scheduler/print", `?name=${schedulerName}`]),
+      ms,
+    )) as Record<string, string>[];
+    for (const scheduler of Array.isArray(schedulers) ? schedulers : []) {
+      if (scheduler[".id"]) {
+        await withTimeout(conn.write(["/system/scheduler/remove", `=.id=${scheduler[".id"]}`]), ms);
+      }
+    }
+  });
+}
+
+function parseRouterClock(dateValue: string | undefined, timeValue: string | undefined): Date | null {
+  if (!dateValue || !timeValue) return null;
+  const slashDate = /^([a-z]{3})\/(\d{1,2})\/(\d{4})$/i.exec(dateValue.trim());
+  const isoDate = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateValue.trim());
+  const dateParts = slashDate
+    ? { year: Number(slashDate[3]), month: MONTH_NAMES.indexOf(slashDate[1].toLowerCase()), day: Number(slashDate[2]) }
+    : isoDate
+      ? { year: Number(isoDate[1]), month: Number(isoDate[2]) - 1, day: Number(isoDate[3]) }
+      : null;
+  const timeParts = /^(\d{1,2}):(\d{2}):(\d{2})$/.exec(timeValue.trim());
+  if (!dateParts || !timeParts || dateParts.month < 0 || dateParts.day < 1) return null;
+  return new Date(Date.UTC(dateParts.year, dateParts.month, dateParts.day, Number(timeParts[1]), Number(timeParts[2]), Number(timeParts[3])));
+}
+
+function formatRouterDate(value: Date): string {
+  return `${MONTH_NAMES[value.getUTCMonth()]}/${String(value.getUTCDate()).padStart(2, "0")}/${value.getUTCFullYear()}`;
+}
+
+function formatRouterTime(value: Date): string {
+  return [value.getUTCHours(), value.getUTCMinutes(), value.getUTCSeconds()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
+}
+
+const MONTH_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+export async function isHotspotUserOnline(
+  creds: RouterCredentials,
+  username: string,
+): Promise<boolean> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/active/print", `?user=${username}`]), ms)) as Record<string, string>[];
+    return rows.length > 0 && !!rows[0]?.[".id"];
+  });
+}
+
+export async function getHotspotUserIp(
+  creds: RouterCredentials,
+  username: string,
+): Promise<string | null> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/active/print", `?user=${username}`]), ms)) as Record<string, string>[];
+    return rows[0]?.address ?? null;
+  });
+}
+
+export async function addHotspotUserProfile(
+  creds: RouterCredentials,
+  opts: { name: string; sharedUsers?: number; rateLimit?: string },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const params = [
+      "/ip/hotspot/user/profile/add",
+      `=name=${opts.name}`,
+      `=shared-users=${opts.sharedUsers ?? 1}`,
+    ];
+    if (opts.rateLimit) params.push(`=rate-limit=${opts.rateLimit}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+/**
+ * Create or update a tenant-owned hotspot profile. Paid users should never
+ * inherit an existing profile with a broader rate limit just because a plan
+ * happens to share its display name with that profile.
+ */
+export async function ensureHotspotUserProfile(
+  creds: RouterCredentials,
+  opts: { name: string; sharedUsers?: number; rateLimit?: string },
+): Promise<void> {
+  try {
+    await updateHotspotUserProfile(creds, opts.name, {
+      sharedUsers: opts.sharedUsers,
+      rateLimit: opts.rateLimit,
+    });
+  } catch {
+    try {
+      await addHotspotUserProfile(creds, opts);
+    } catch {
+      /* A concurrent request may have created it between update and add. */
+      await updateHotspotUserProfile(creds, opts.name, {
+        sharedUsers: opts.sharedUsers,
+        rateLimit: opts.rateLimit,
+      });
+    }
+  }
+}
+
+/**
+ * Paid-user provisioning must not invent a RouterOS profile. Profiles are
+ * created and maintained only by the explicit admin plan-sync operation.
+ */
+export async function requireHotspotUserProfile(
+  creds: RouterCredentials,
+  name: string,
+): Promise<void> {
+  const normalizedName = name.trim();
+  if (!normalizedName) throw new Error("The hotspot plan has no RouterOS profile name");
+  await withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write(["/ip/hotspot/user/profile/print", `?name=${normalizedName}`]),
+      ms,
+    )) as Record<string, string>[];
+    if (!Array.isArray(rows) || !rows.some(row => row[".id"])) {
+      throw new Error(
+        `Hotspot plan profile '${normalizedName}' does not exist on this router. ` +
+        "Sync the created plan before provisioning paid users.",
+      );
+    }
+  });
+}
+
+export async function updateHotspotUserProfile(
+  creds: RouterCredentials,
+  name: string,
+  fields: { newName?: string; sharedUsers?: number; rateLimit?: string; onLogin?: string; onLogout?: string },
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/user/profile/print", `?name=${name}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (!id) throw new Error(`Hotspot profile '${name}' not found`);
+    const params: string[] = ["/ip/hotspot/user/profile/set", `=.id=${id}`];
+    if (fields.newName     !== undefined) params.push(`=name=${fields.newName}`);
+    if (fields.sharedUsers !== undefined) params.push(`=shared-users=${fields.sharedUsers}`);
+    if (fields.rateLimit   !== undefined) params.push(`=rate-limit=${fields.rateLimit}`);
+    if (fields.onLogin     !== undefined) params.push(`=on-login=${fields.onLogin}`);
+    if (fields.onLogout    !== undefined) params.push(`=on-logout=${fields.onLogout}`);
+    await withTimeout(conn.write(params), ms);
+  });
+}
+
+export async function removeHotspotUserProfile(
+  creds: RouterCredentials,
+  name: string,
+): Promise<void> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(conn.write(["/ip/hotspot/user/profile/print", `?name=${name}`]), ms)) as Record<string, string>[];
+    const id = rows[0]?.[".id"];
+    if (id) await withTimeout(conn.write(["/ip/hotspot/user/profile/remove", `=.id=${id}`]), ms);
+  });
+}
+
+/* ─── Wireless interfaces ────────────────────────────────────────────────── */
+
+export interface WirelessInterface {
+  id: string;
+  name: string;
+  ssid: string;
+  disabled: boolean;
+  band: string;
+  channel: string;
+  macAddress: string;
+  securityProfile: string;
+  mode: string;
+  masterInterface: string;
+  managedByApp: boolean;
+  securitySummary?: string;
+  channelLabel?: string;
+  securityMode?: "open" | "wpa2";
+}
+
+export interface WirelessSecurityProfile {
+  id: string;
+  name: string;
+  wpa2PreSharedKey: string;
+  authentication: string;
+  mode: string;
+}
+
+export async function fetchWireless(
+  creds: RouterCredentials,
+  routerId?: number,
+): Promise<{
+  apiMode: "legacy" | "wifi";
+  interfaces: WirelessInterface[];
+  profiles: WirelessSecurityProfile[];
+}> {
+  return withConn(creds, async (conn) => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+
+    let ifaceRows: Record<string, string>[];
+    try {
+      ifaceRows = await withTimeout(
+        conn.write(["/interface/wireless/print"]),
+        ms,
+      ) as Record<string, string>[];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/no such command|unknown command|bad command|not found|invalid item/i.test(message)) {
+        throw error;
+      }
+
+      const wifiRows = await withTimeout(
+        conn.write(["/interface/wifi/print"]),
+        ms,
+      ) as Record<string, string>[];
+      const rawWifiInterfaces = Array.isArray(wifiRows) ? wifiRows : [];
+      const namesById = new Map(
+        rawWifiInterfaces.map(row => [String(row[".id"] ?? ""), String(row.name ?? "")]),
+      );
+      const interfaces: WirelessInterface[] = rawWifiInterfaces.map(row => {
+        const authenticationTypes = String(row["security.authentication-types"] ?? "").trim();
+        const hasAuthenticationTypes = Object.prototype.hasOwnProperty.call(row, "security.authentication-types");
+        const frequency = String(row["channel.frequency"] ?? "").trim();
+        const masterId = String(row["master-interface"] ?? "");
+        return {
+          id: row[".id"] ?? "",
+          name: row.name ?? "",
+          ssid: row["configuration.ssid"] ?? row.ssid ?? "",
+          disabled: parseBool(row.disabled),
+          band: row["channel.band"] ?? row.band ?? "",
+          channel: frequency || row["channel.number"] || row.channel || "",
+          channelLabel: frequency ? "freq" : "ch",
+          macAddress: row["mac-address"] ?? "",
+          securityProfile: row.security ?? row["configuration.security"] ?? "",
+          mode: row["configuration.mode"] ?? row.mode ?? "",
+          masterInterface: namesById.get(masterId) ?? masterId,
+          managedByApp: routerId !== undefined
+            ? new RegExp(`^ochola-wireless-app:${routerId}:`, "i").test(String(row.comment ?? "").trim())
+            : false,
+          securitySummary: authenticationTypes
+            ? `Secured (${authenticationTypes})`
+            : hasAuthenticationTypes
+              ? "Open Wi-Fi"
+              : "Security not reported",
+          securityMode: hasAuthenticationTypes
+            ? authenticationTypes ? "wpa2" : "open"
+            : undefined,
+        };
+      });
+      return { apiMode: "wifi", interfaces, profiles: [] };
+    }
+
+    const profileRows = await withTimeout(
+      conn.write(["/interface/wireless/security-profiles/print"]),
+      ms,
+    ) as Record<string, string>[];
+    const rawInterfaces = Array.isArray(ifaceRows) ? ifaceRows : [];
+    const namesById = new Map(rawInterfaces.map(row => [String(row[".id"] ?? ""), String(row.name ?? "")]));
+    const interfaces: WirelessInterface[] = rawInterfaces.map(r => ({
+      id:              r[".id"]              ?? "",
+      name:            r.name               ?? "",
+      ssid:            r.ssid               ?? "",
+      disabled:        parseBool(r.disabled),
+      band:            r.band               ?? "",
+      channel:         r.channel            ?? "",
+      macAddress:      r["mac-address"]     ?? "",
+      securityProfile: r["security-profile"] ?? "default",
+      mode:            r.mode               ?? "",
+      masterInterface: namesById.get(String(r["master-interface"] ?? "")) ?? String(r["master-interface"] ?? ""),
+      managedByApp:    routerId !== undefined
+        ? new RegExp(`^ochola-wireless-app:${routerId}:`, "i").test(String(r.comment ?? "").trim())
+        : false,
+    }));
+
+    const profiles: WirelessSecurityProfile[] = (Array.isArray(profileRows) ? profileRows : []).map(r => ({
+      id:               r[".id"]                  ?? "",
+      name:             r.name                    ?? "",
+      wpa2PreSharedKey: r["wpa2-pre-shared-key"]   ?? "",
+      authentication:   r["authentication-types"] ?? "",
+      mode:             r.mode                    ?? "",
+    }));
+    const profilesByName = new Map(profiles.map(profile => [profile.name, profile]));
+    for (const iface of interfaces) {
+      iface.securityMode = profilesByName.get(iface.securityProfile)?.mode === "none" ? "open" : "wpa2";
+    }
+
+    return { apiMode: "legacy", interfaces, profiles };
+  });
+}
+
+export interface WirelessCreateParams {
+  routerId: number;
+  name: string;
+  ssid: string;
+  masterInterfaceId: string;
+  password?: string;
+  securityMode?: "open" | "wpa2";
+  disabled?: boolean;
+}
+
+, "i").test(String(comment ?? "").trim());
+
+function isWirelessMenuMissing(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no such command|unknown command|bad command|not found|invalid item/i.test(message);
+}
 
 function unsupportedWirelessError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
   return /no such command|unknown command|bad command|input does not match any value|unknown parameter/i.test(message)
-    ? new Error(`RouterOS legacy wireless package is unsupported: ${message}`)
+    ? new Error(`RouterOS does not support this wireless operation: ${message}`)
     : (error instanceof Error ? error : new Error(message));
 }
 
@@ -4720,7 +9433,16 @@ export async function createWirelessVirtualAp(
   try {
     await withConn(creds, async (conn) => {
       const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-      const interfaces = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+      let apiMode: "legacy" | "wifi";
+      let interfaces: Record<string, string>[];
+      try {
+        interfaces = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+        apiMode = "legacy";
+      } catch (error) {
+        if (!isWirelessMenuMissing(error)) throw error;
+        interfaces = await withTimeout(conn.write(["/interface/wifi/print"]), ms) as Record<string, string>[];
+        apiMode = "wifi";
+      }
       const master = interfaces.find(row => row[".id"] === params.masterInterfaceId);
       if (!master || String(master["master-interface"] ?? "").trim()) {
         throw new Error("masterInterfaceId must identify a physical wireless radio.");
@@ -4732,6 +9454,35 @@ export async function createWirelessVirtualAp(
         throw new Error("A wireless interface with that name already exists.");
       }
       const comment = wirelessAppComment(params.routerId);
+      if (apiMode === "wifi") {
+        const command = [
+          "/interface/wifi/add",
+          `=name=${params.name}`,
+          `=master-interface=${masterName}`,
+          "=configuration.mode=ap",
+          `=configuration.ssid=${params.ssid}`,
+          `=disabled=${params.disabled ? "yes" : "no"}`,
+          `=comment=${comment}`,
+          ...(securityMode === "wpa2"
+            ? ["=security.authentication-types=wpa2-psk", `=security.passphrase=${params.password}`]
+            : ["=security.authentication-types=", "=security.passphrase="]),
+        ];
+        await withTimeout(conn.write(command), ms);
+        const createdRows = await withTimeout(
+          conn.write(["/interface/wifi/print", `?name=${params.name}`]),
+          ms,
+        ) as Record<string, string>[];
+        const created = createdRows.find(row => row.name === params.name);
+        const authenticationTypes = String(created?.["security.authentication-types"] ?? "").trim();
+        if (!created || created["master-interface"] !== masterName ||
+            created["configuration.ssid"] !== params.ssid ||
+            !isWirelessAppComment(created.comment, params.routerId) ||
+            (params.disabled !== undefined && parseBool(created.disabled) !== params.disabled) ||
+            (securityMode === "open" ? authenticationTypes !== "" : !authenticationTypes.includes("wpa2-psk"))) {
+          throw new Error("Post-write verification failed: virtual WiFi interface settings did not persist.");
+        }
+        return;
+      }
       const profileCommand = [
         "/interface/wireless/security-profiles/add",
         `=name=${profileName}`,
@@ -4799,11 +9550,51 @@ export async function patchWirelessInterface(
   try {
     await withConn(creds, async (conn) => {
       const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-      const rows = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+      let apiMode: "legacy" | "wifi";
+      let rows: Record<string, string>[];
+      try {
+        rows = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+        apiMode = "legacy";
+      } catch (error) {
+        if (!isWirelessMenuMissing(error)) throw error;
+        rows = await withTimeout(conn.write(["/interface/wifi/print"]), ms) as Record<string, string>[];
+        apiMode = "wifi";
+      }
       const current = rows.find(row => row[".id"] === params.interfaceId);
       if (!current) throw new Error("Wireless interface was not found.");
-      const oldProfile = String(current["security-profile"] ?? "");
       const requestedSecurityMode = params.securityMode ?? (params.password !== undefined ? "wpa2" : undefined);
+      if (apiMode === "wifi") {
+        const currentAuthentication = String(current["security.authentication-types"] ?? "").trim();
+        const currentIsOpen = currentAuthentication === "";
+        if (requestedSecurityMode === "wpa2" && currentIsOpen && params.password === undefined) {
+          throw new Error("Provide a WPA2 password before enabling Wi-Fi security.");
+        }
+        const command = ["/interface/wifi/set", `=.id=${params.interfaceId}`];
+        if (params.ssid !== undefined) command.push(`=configuration.ssid=${params.ssid}`);
+        if (params.disabled !== undefined) command.push(`=disabled=${params.disabled ? "yes" : "no"}`);
+        if (requestedSecurityMode === "open") {
+          command.push("=security.authentication-types=", "=security.passphrase=");
+        } else if (requestedSecurityMode === "wpa2") {
+          command.push("=security.authentication-types=wpa2-psk");
+          if (params.password !== undefined) command.push(`=security.passphrase=${params.password}`);
+        }
+        if (command.length > 2) await withTimeout(conn.write(command), ms);
+        const verifiedRows = await withTimeout(
+          conn.write(["/interface/wifi/print", `?.id=${params.interfaceId}`]),
+          ms,
+        ) as Record<string, string>[];
+        const updated = verifiedRows.find(row => row[".id"] === params.interfaceId);
+        const updatedAuthentication = String(updated?.["security.authentication-types"] ?? "").trim();
+        if (!updated ||
+            (params.ssid !== undefined && updated["configuration.ssid"] !== params.ssid) ||
+            (params.disabled !== undefined && parseBool(updated.disabled) !== params.disabled) ||
+            (requestedSecurityMode === "open" && updatedAuthentication !== "") ||
+            (requestedSecurityMode === "wpa2" && !updatedAuthentication.includes("wpa2-psk"))) {
+          throw new Error("Post-write verification failed: WiFi settings did not persist.");
+        }
+        return;
+      }
+      const oldProfile = String(current["security-profile"] ?? "");
       let selectedProfile: string | undefined;
       let newProfile: string | undefined;
 
@@ -4900,21 +9691,33 @@ export async function deleteWirelessVirtualAp(
   try {
     await withConn(creds, async (conn) => {
       const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
-      const rows = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+      let apiMode: "legacy" | "wifi";
+      let rows: Record<string, string>[];
+      try {
+        rows = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+        apiMode = "legacy";
+      } catch (error) {
+        if (!isWirelessMenuMissing(error)) throw error;
+        rows = await withTimeout(conn.write(["/interface/wifi/print"]), ms) as Record<string, string>[];
+        apiMode = "wifi";
+      }
       const current = rows.find(row => row[".id"] === interfaceId);
       const masterId = String(current?.["master-interface"] ?? "");
       if (!current || !masterId || !isWirelessAppComment(current.comment, routerId)) {
         throw new Error("Only app-owned virtual wireless interfaces may be deleted.");
       }
-      await withTimeout(conn.write(["/interface/wireless/remove", `=.id=${interfaceId}`]), ms);
-      const remaining = await withTimeout(conn.write(["/interface/wireless/print", `?.id=${interfaceId}`]), ms) as Record<string, string>[];
+      const menu = apiMode === "wifi" ? "/interface/wifi" : "/interface/wireless";
+      await withTimeout(conn.write([`${menu}/remove`, `=.id=${interfaceId}`]), ms);
+      const remaining = await withTimeout(conn.write([`${menu}/print`, `?.id=${interfaceId}`]), ms) as Record<string, string>[];
       if (remaining.some(row => row[".id"] === interfaceId)) throw new Error("Post-delete verification failed.");
-      const profileRows = await withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Record<string, string>[];
-      const used = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
-      for (const profile of profileRows) {
-        if (isWirelessAppComment(profile.comment, routerId) && profile[".id"] &&
-            !used.some(row => row["security-profile"] === profile.name)) {
-          await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${profile[".id"]}`]), ms);
+      if (apiMode === "legacy") {
+        const profileRows = await withTimeout(conn.write(["/interface/wireless/security-profiles/print"]), ms) as Record<string, string>[];
+        const used = await withTimeout(conn.write(["/interface/wireless/print"]), ms) as Record<string, string>[];
+        for (const profile of profileRows) {
+          if (isWirelessAppComment(profile.comment, routerId) && profile[".id"] &&
+              !used.some(row => row["security-profile"] === profile.name)) {
+            await withTimeout(conn.write(["/interface/wireless/security-profiles/remove", `=.id=${profile[".id"]}`]), ms);
+          }
         }
       }
     });
