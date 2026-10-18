@@ -88,8 +88,8 @@ assert.match(
 );
 assert.match(
   reactSource,
-  /setTroubleshootAction\("login"\);\s*try\s*\{\s*await requestHotspotTroubleshoot\("login"\)/,
-  "opening the React connection-help dialog must attempt sign-in rather than only checking entitlement",
+  /const handleTroubleshoot\s*=\s*async\s*\(\)\s*=>\s*\{[\s\S]*?const savedLogin = await signInWithSavedCredentials\(\);\s*if \(!savedLogin\.signedIn && !savedLogin\.activePlan\) \{\s*const result = await requestHotspotTroubleshoot\("login"\)/,
+  "connection help must try saved credentials first and only fall back to purchase lookup when no active account was confirmed",
 );
 assert.match(
   reactSource,

@@ -3019,7 +3019,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   const plan = customerRow.plan_id
     ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
-        `id=eq.${customerRow.plan_id}&admin_id=eq.${planAdminId}&select=id,router_id,port_id,owner_reseller_id,type,plan_type&limit=1`,
+        `id=eq.${customerRow.plan_id}&admin_id=eq.${planAdminId}&select=id,name,router_id,port_id,owner_reseller_id,type,plan_type&limit=1`,
       ))[0]
     : undefined;
   if (
@@ -3088,18 +3088,61 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   }
 
   const customerMac = normalisePortalMac(customerRow.mac_address);
-  if (customerMac && requestedMac && customerMac !== requestedMac) {
+  const macChanged = Boolean(customerMac && requestedMac && customerMac !== requestedMac);
+  if (customerMac && !requestedMac) {
     res.status(409).json({ error: "These hotspot credentials are linked to a different device." });
     return;
   }
-  const targetMac = customerMac || requestedMac;
+  if (macChanged && customerRow.type !== "hotspot") {
+    res.status(409).json({ error: "These credentials are linked to a different device." });
+    return;
+  }
+  if (macChanged) {
+    const purchaseAdminId = portalScope?.adminId ?? adminId;
+    const paidPurchases = await sbSelectStrict<{
+      id: number;
+      mac_address: string | null;
+    }>(
+      "isp_transactions",
+      `admin_id=eq.${purchaseAdminId}&customer_id=eq.${customerRow.id}&plan_id=eq.${customerRow.plan_id}&status=in.(completed,paid,success)&select=id,mac_address&order=created_at.desc.nullslast,id.desc&limit=25`,
+    );
+    const hasPaidPurchaseForSavedDevice = paidPurchases.some(transaction =>
+      normalisePortalMac(transaction.mac_address) === customerMac,
+    );
+    if (!hasPaidPurchaseForSavedDevice) {
+      res.status(403).json({
+        error: "A different device address can only be used for an account linked to a completed purchase.",
+      });
+      return;
+    }
+  }
+  const activePlanDetails = {
+    activePlan: true,
+    planName: plan?.name ?? null,
+    expiresAt: typeof customer.expires_at === "string" ? customer.expires_at : null,
+  };
+  // A saved, valid Hotspot username/password can recover access after a private
+  // Wi-Fi MAC rotation. The paid-transaction check above proves this is the
+  // purchased account. Keep its stored MAC unchanged; only use the new MAC
+  // after proving the old session is no longer active.
+  const targetMac = macChanged ? requestedMac : customerMac || requestedMac;
   let activeUsers: Awaited<ReturnType<typeof fetchHotspotUsers>> = [];
   try {
     activeUsers = await fetchHotspotUsers(creds);
   } catch (error) {
     logger.warn({ err: error, adminId, routerId }, "[customers/hotspot-login] could not read hotspot sessions");
     res.status(503).json({
+      ...activePlanDetails,
       error: "Your plan is active, but the hotspot router has not accepted the connection yet.",
+    });
+    return;
+  }
+  if (macChanged && activeUsers.some(user =>
+    user.user === username && normalisePortalMac(user.macAddress) !== targetMac,
+  )) {
+    res.status(409).json({
+      ...activePlanDetails,
+      error: "This account is still connected on its previous device address. Disconnect that session, then try again.",
     });
     return;
   }
@@ -3111,6 +3154,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     const discoveredIp = targetMac ? await resolveHotspotClientIpByMac(creds, targetMac).catch(() => null) : null;
     if (!discoveredIp || !targetMac) {
       res.status(409).json({
+        ...activePlanDetails,
         error: "Credentials are valid, but the router cannot find this device on the hotspot Wi-Fi yet. Connect the device to Wi-Fi and try again.",
       });
       return;
@@ -3129,6 +3173,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
       });
       if (!loginAccepted) {
         res.status(503).json({
+        ...activePlanDetails,
           error: "The router has not confirmed this device's login yet. Please try again.",
         });
         return;
@@ -3136,6 +3181,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     } catch (error) {
       logger.warn({ err: error, adminId, routerId, username }, "[customers/hotspot-login] router login attempt failed");
       res.status(503).json({
+        ...activePlanDetails,
         error: "Your plan is active, but the hotspot router has not accepted the connection yet.",
       });
       return;
@@ -3147,6 +3193,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   res.json({
     ok: true,
     customer: safe,
+    planName: plan?.name ?? null,
     connected: true,
     session: {
       status: "active",

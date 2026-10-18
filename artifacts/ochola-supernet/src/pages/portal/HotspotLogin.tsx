@@ -327,12 +327,13 @@ function normalizeClientIp(value: string): string {
   return octets.every(octet => octet >= 0 && octet <= 255) ? trimmed : "";
 }
 
-function hotspotLoginStorageKey(adminId: number | null): string {
+function hotspotLoginStorageKey(adminId: number | null, mode: "data" | "tv" = "data"): string {
   const host = typeof window !== "undefined" ? window.location.host : "portal";
   return [
     "ochola_hotspot_login_v1",
     host,
     adminId ? String(adminId) : "tenant",
+    mode,
   ].map(value => encodeURIComponent(value)).join(":");
 }
 
@@ -574,7 +575,12 @@ function HotspotLoginView({
   const [tvDiagnostic, setTvDiagnostic] = useState<TvPackageDiagnostic | null>(null);
   const [tvDiagnosticLoading, setTvDiagnosticLoading] = useState(false);
   const [paymentFailed, setPaymentFailed] = useState(false);
-  const [hotspotCredentials, setHotspotCredentials] = useState<HotspotCredentials | null>(null);
+  const [hotspotCredentials, setHotspotCredentials] = useState<HotspotCredentials | null>(
+    () => readStoredHotspotCredentials(
+      typeof window !== "undefined" ? window.localStorage : null,
+      hotspotLoginStorageKey(adminId, paymentMode),
+    ),
+  );
   const paymentStartInFlight = useRef(false);
   const bindingInFlight = useRef(false);
   const statusPollInFlight = useRef(false);
@@ -597,11 +603,19 @@ function HotspotLoginView({
   const loyaltyRedeemInFlight = useRef(false);
   const [loyaltyBalance, setLoyaltyBalance] = useState<{ key: string; balance: number; hasAccount: boolean } | null>(null);
   const [loyaltyBalanceError, setLoyaltyBalanceError] = useState<{ key: string; message: string } | null>(null);
-  const loginCredentialsStorageKey = hotspotLoginStorageKey(adminId);
+  const loginCredentialsStorageKey = hotspotLoginStorageKey(adminId, paymentMode);
   // Proof of account ownership for points: only credentials this portal saved or the user typed.
   const [loyaltyCreds, setLoyaltyCreds] = useState<HotspotCredentials | null>(
-    () => readStoredHotspotCredentials(typeof window !== "undefined" ? window.localStorage : null, hotspotLoginStorageKey(adminId)),
+    () => readStoredHotspotCredentials(typeof window !== "undefined" ? window.localStorage : null, loginCredentialsStorageKey),
   );
+  useEffect(() => {
+    const saved = readStoredHotspotCredentials(
+      typeof window !== "undefined" ? window.localStorage : null,
+      loginCredentialsStorageKey,
+    );
+    setHotspotCredentials(saved);
+    setLoyaltyCreds(saved);
+  }, [loginCredentialsStorageKey]);
   const [loginSession, setLoginSession] = useState<HotspotSession | null>(null);
   const [troubleshootLoading, setTroubleshootLoading] = useState(false);
   const [troubleshootMessage, setTroubleshootMessage] = useState("");
@@ -1687,6 +1701,90 @@ function HotspotLoginView({
     return () => window.clearTimeout(timer);
   }, [accessReady, hotspotCredentials?.username, paidAccessExpiresAt, selectedPlan?.name]);
 
+  const signInWithSavedCredentials = useCallback(async (): Promise<{
+    attempted: boolean;
+    signedIn: boolean;
+    activePlan?: boolean;
+    retryable?: boolean;
+    error?: string;
+  }> => {
+    const savedCredentials = paymentMode === "data" ? hotspotCredentials ?? loyaltyCreds : null;
+    if (!savedCredentials?.username || !savedCredentials.password || !adminId || !portalContext.mac) {
+      return { attempted: false, signedIn: false };
+    }
+    try {
+      const response = await hotspotPortalFetch(hotspotApiUrl("/api/customers/hotspot-login"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adminId,
+          username: savedCredentials.username,
+          password: savedCredentials.password,
+          mac_address: portalContext.mac,
+          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+        }),
+      });
+      const data = await response.json().catch(() => ({})) as {
+        ok?: boolean;
+        error?: string;
+        activePlan?: boolean;
+        planName?: string | null;
+        expiresAt?: string | null;
+        customer?: { expires_at?: string | null; username?: string | null };
+      };
+      if (!response.ok || !data.ok) {
+        if (data.activePlan) {
+          setLoginSession({
+            found: true,
+            status: "active",
+            connected: false,
+            expiresAt: data.expiresAt ?? null,
+            planName: data.planName ?? null,
+            username: savedCredentials.username,
+          });
+          setTroubleshootMessage(data.error || "Your package is active, but the router has not confirmed sign-in.");
+          setTroubleshootError("");
+          return {
+            attempted: true,
+            signedIn: false,
+            activePlan: true,
+            retryable: response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500,
+            error: data.error,
+          };
+        }
+        throw new Error(data.error || "The saved hotspot account could not sign in.");
+      }
+      storeHotspotCredentials(loginCredentialsStorageKey, savedCredentials);
+      setHotspotCredentials(savedCredentials);
+      setLoyaltyCreds(savedCredentials);
+      setLoginSession({
+        found: true,
+        status: "active",
+        connected: true,
+        expiresAt: data.customer?.expires_at ?? null,
+        planName: data.planName ?? null,
+        username: data.customer?.username ?? savedCredentials.username,
+      });
+      setTroubleshootMessage("Your saved package account is signed in.");
+      setTroubleshootError("");
+      return { attempted: true, signedIn: true };
+    } catch (error) {
+      return {
+        attempted: true,
+        signedIn: false,
+        error: error instanceof Error ? error.message : "Could not sign in with the saved hotspot account.",
+      };
+    }
+  }, [
+    adminId,
+    hotspotCredentials,
+    loginCredentialsStorageKey,
+    loyaltyCreds,
+    paymentMode,
+    portalContext.ip,
+    portalContext.mac,
+  ]);
+
   const handleTroubleshoot = async () => {
     if (troubleshootInFlight.current) return;
     troubleshootInFlight.current = true;
@@ -1696,7 +1794,11 @@ function HotspotLoginView({
     setTroubleshootError("");
     setTroubleshootAction("login");
     try {
-      await requestHotspotTroubleshoot("login");
+      const savedLogin = await signInWithSavedCredentials();
+      if (!savedLogin.signedIn && !savedLogin.activePlan) {
+        const result = await requestHotspotTroubleshoot("login");
+        if (!result && savedLogin.error) setTroubleshootError(savedLogin.error);
+      }
     } finally {
       troubleshootInFlight.current = false;
       setTroubleshootLoading(false);
@@ -1706,7 +1808,11 @@ function HotspotLoginView({
 
   const openAlreadyPaidReconnect = () => {
     setTroubleshootDialogOpen(true);
-    void handleTroubleshoot();
+    if (paymentMode === "data" && (hotspotCredentials || loyaltyCreds)) {
+      void handlePlanLogin();
+    } else {
+      void handleTroubleshoot();
+    }
   };
 
   useEffect(() => {
@@ -1730,8 +1836,17 @@ function HotspotLoginView({
         setTroubleshootAction("login");
       }
       let result: TroubleshootResult | null = null;
+      let shouldRetry = false;
       try {
-        result = await requestHotspotTroubleshoot("login");
+        const savedLogin = await signInWithSavedCredentials();
+        if (savedLogin.signedIn) {
+          setAutoReconnectInProgress(false);
+        } else if (savedLogin.activePlan) {
+          shouldRetry = savedLogin.retryable === true;
+        } else {
+          result = await requestHotspotTroubleshoot("login");
+          shouldRetry = result?.retryable === true;
+        }
       } finally {
         troubleshootInFlight.current = false;
         if (troubleshootingOnly) {
@@ -1741,7 +1856,7 @@ function HotspotLoginView({
       }
       if (cancelled) return;
 
-      if (result?.retryable) {
+      if (shouldRetry) {
         attempts += 1;
         setAutoReconnectInProgress(true);
         const delayMs = Math.min(1_000 * 2 ** Math.min(attempts - 1, 5), 30_000);
@@ -1759,7 +1874,7 @@ function HotspotLoginView({
       if (retryTimer) window.clearTimeout(retryTimer);
       if (autoTroubleshootKey.current === lookupKey) autoTroubleshootKey.current = "";
     };
-  }, [troubleshootingOnly, adminId, portalContext.mac, requestHotspotTroubleshoot]);
+  }, [troubleshootingOnly, adminId, portalContext.mac, requestHotspotTroubleshoot, signInWithSavedCredentials]);
 
   useEffect(() => {
     if (!troubleshootDialogOpen) return;
@@ -1777,9 +1892,17 @@ function HotspotLoginView({
     setTroubleshootAction("login");
     setTroubleshootError("");
     try {
+      const savedLogin = await signInWithSavedCredentials();
+      if (savedLogin.signedIn) return;
+      if (savedLogin.activePlan) return;
+
+      // Reconcile against the purchase record, not the visible, purchasable
+      // plan cards. The server resolves the account's linked plan by ID.
       const result = await requestHotspotTroubleshoot("login");
-      if (result && result.status === "active" && !result.connected && !result.error) {
+      if (result && result.status === "active" && !result.connected) {
         setTroubleshootMessage("Your package is active. Automatic sign-in will keep retrying while this device stays connected to Wi-Fi.");
+      } else if (result && savedLogin.error && result.status === "unavailable") {
+        setTroubleshootMessage(result.error || savedLogin.error);
       }
     } finally {
       troubleshootInFlight.current = false;

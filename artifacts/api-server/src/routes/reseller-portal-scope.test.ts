@@ -1438,6 +1438,109 @@ test("signed reseller portal requests stay within their assigned service", async
     assert.equal(dbRequests.some(row => row.table === "isp_routers"), false);
   });
 
+  await t.test("troubleshooting fetches the paid plan even when it is hidden from purchase cards", async () => {
+    const previousTransactions = transactions;
+    const previousPlanActive = assignedPlan.is_active;
+    const previousPlanPurchasable = assignedPlan.client_can_purchase;
+    try {
+      customers = [{ ...assignedCustomer }];
+      transactions = [{ ...assignedTransaction }];
+      assignedPlan.is_active = false;
+      assignedPlan.client_can_purchase = false;
+      routerOperations.length = 0;
+      clearRequests();
+
+      const check = await request("/api/customers/hotspot-troubleshoot", {
+        method: "POST",
+        body: {
+          action: "check",
+          mac_address: assignedCustomer.mac_address,
+        },
+      });
+      assert.equal(check.status, 200, await check.clone().text());
+      const result = await check.json() as { status: string; planName: string | null };
+      assert.equal(result.status, "active");
+      assert.equal(result.planName, assignedPlan.name);
+      const relatedPlanQueries = dbRequests.filter(row => row.table === "isp_plans"
+        && row.rawQuery.includes("id=eq.501")
+      );
+      assert.ok(relatedPlanQueries.length > 0);
+      assert.ok(relatedPlanQueries.every(row =>
+        !row.rawQuery.includes("is_active=eq.true")
+        && !row.rawQuery.includes("client_can_purchase=eq.true"),
+      ));
+      assert.equal(routerOperations.length, 0);
+    } finally {
+      transactions = previousTransactions;
+      assignedPlan.is_active = previousPlanActive;
+      assignedPlan.client_can_purchase = previousPlanPurchasable;
+    }
+  });
+
+  await t.test("hotspot credential login rejects an elapsed plan before contacting the router", async () => {
+    const previousCustomers = customers;
+    const previousRouterFixture = includeRouterFixture;
+    try {
+      customers = [{
+        ...assignedCustomer,
+        status: "expired",
+        expires_at: new Date(Date.now() - 60_000).toISOString(),
+      }];
+      includeRouterFixture = false;
+      routerOperations.length = 0;
+      clearRequests();
+
+      const login = await request("/api/customers/hotspot-login", {
+        method: "POST",
+        body: {
+          username: assignedCustomer.username,
+          password: assignedCustomer.password,
+        },
+      });
+      assert.equal(login.status, 403);
+      assert.match((await login.json() as { error: string }).error, /expired/i);
+      assert.equal(dbRequests.some(row => row.table === "isp_routers"), false);
+      assert.equal(routerOperations.length, 0);
+      assert.equal(dbRequests.some(row => row.method !== "GET"), false);
+    } finally {
+      customers = previousCustomers;
+      includeRouterFixture = previousRouterFixture;
+    }
+  });
+
+  await t.test("randomized-MAC login is denied when no paid purchase matches the saved account", async () => {
+    const previousTransactions = transactions;
+    const previousCustomers = customers;
+    const previousRouterFixture = includeRouterFixture;
+    try {
+      transactions = [];
+      customers = [{ ...assignedCustomer }];
+      includeRouterFixture = true;
+      routerOperations.length = 0;
+      clearRequests();
+
+      const login = await request("/api/customers/hotspot-login", {
+        method: "POST",
+        body: {
+          username: assignedCustomer.username,
+          password: assignedCustomer.password,
+          mac_address: "11:22:33:44:55:66",
+        },
+      });
+      assert.equal(login.status, 403);
+      assert.match((await login.json() as { error: string }).error, /completed purchase/i);
+      assert.ok(dbRequests.some(row => row.table === "isp_transactions"
+        && row.rawQuery.includes(`customer_id=eq.${assignedCustomer.id}`)
+        && row.rawQuery.includes(`plan_id=eq.${assignedCustomer.plan_id}`)
+        && row.rawQuery.includes("status=in.(completed,paid,success)")));
+      assert.equal(routerOperations.some(row => row.name === "connectUser"), false);
+    } finally {
+      transactions = previousTransactions;
+      customers = previousCustomers;
+      includeRouterFixture = previousRouterFixture;
+    }
+  });
+
   await t.test("TV package status stays purchase-scoped and read-only", async () => {
     const previousTransactions = transactions;
     const previousCustomers = customers;
