@@ -81,10 +81,13 @@
     .already-paid-link{display:inline-flex;align-items:center;min-height:36px;color:rgba(240,171,252,.95);font-size:.8125rem;font-weight:700;white-space:nowrap;text-decoration:none}
     .already-paid-link:hover{text-decoration:underline;color:#fff}
     .already-paid-link:focus-visible{outline:2px solid rgba(240,171,252,.9);outline-offset:3px;border-radius:3px}
+    #tvAlreadyPaidReconnect{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;margin:.75rem 0 0;padding:.75rem 1.15rem;border:1px solid #047857;border-radius:.7rem;background:#047857;color:#fff;font:800 .75rem inherit;cursor:pointer;box-shadow:0 4px 15px rgba(4,120,87,.28)}
+    #tvAlreadyPaidReconnect:hover{background:#065f46;border-color:#065f46}
     @media(max-width:520px){
       .hdr-inner{padding:0 .875rem;gap:.5rem}
       #portalNameHeader{max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .already-paid-link{font-size:.75rem}
+      #tvConnectButton,#tvAlreadyPaidReconnect{width:100%}
       #portalHeaderPhone{padding:.375rem .5rem!important;font-size:.6875rem!important}
       #portalHeaderPhoneText{max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     }
@@ -201,6 +204,8 @@
     <h2 style="font-size:clamp(1.5rem,3vw,2rem);font-weight:800;letter-spacing:-.025em;color:white;margin-bottom:.625rem">Choose Your Plan</h2>
     <p style="color:rgba(255,255,255,.4);font-size:.9375rem">Plans activate after your online payment is confirmed</p>
     <button id="tvConnectButton" type="button" onclick="openTvModal()" disabled style="margin-top:1rem;padding:.7rem 1.15rem;border-radius:.7rem;border:1px solid var(--portal-accent-border);background:var(--portal-accent-soft);color:white;font-size:.75rem;font-weight:800;letter-spacing:.03em;cursor:not-allowed;opacity:.55">Checking payment availability…</button>
+    <br>
+    <button id="tvAlreadyPaidReconnect" type="button" onclick="openTroubleshootModule()" aria-controls="troubleshootModule" aria-haspopup="dialog">Already paid? Reconnect TV</button>
   </div>
   <div id="mpesaBanner" style="max-width:1200px;margin:0 auto 1.5rem">
     <div style="border-radius:.875rem;padding:.875rem 1.5rem;display:flex;align-items:center;gap:.875rem;background:linear-gradient(90deg,rgba(5,150,105,.15),rgba(6,182,212,.08));border:1px solid rgba(5,150,105,.25)">

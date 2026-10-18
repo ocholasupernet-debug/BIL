@@ -107,6 +107,8 @@ test("TV reconnect retries the existing paid checkout while package checking rem
 test("already-paid links open troubleshooting and immediately request the existing sign-in check", () => {
   const staticTroubleshootOpener = portalTemplate.match(/function openTroubleshootModule\(\)\{([\s\S]*?)\n\}/)?.[1] ?? "";
   assert.match(portalTemplate, /id="alreadyPaidReconnect"[^>]+onclick="openTroubleshootModule\(\);return false"/);
+  assert.match(portalTemplate, /id="tvAlreadyPaidReconnect"[^>]+onclick="openTroubleshootModule\(\)"/);
+  assert.match(portalTemplate, /Already paid\? Reconnect TV/);
   assert.match(staticTroubleshootOpener, /troubleshootConnection\(true\)/);
   assert.match(reactPortal, /className="hp-header-reconnect"/);
   assert.match(reactPortal, /Already paid\?/);
