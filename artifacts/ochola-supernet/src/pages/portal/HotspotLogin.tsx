@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Wifi, Phone, Zap, CheckCircle2, Ticket,
-  AlertCircle, Loader2, Shield, Clock, Users,
+  AlertCircle, Loader2, Shield, Clock, Users, XCircle,
   ArrowRight, ArrowUpRight, CreditCard, Tv, Sparkles, Database,
 } from "lucide-react";
 import { useBrand } from "@/context/BrandContext";
@@ -3803,9 +3803,9 @@ function HotspotLoginView({
                                     )}
 
                                     {payError && (
-                                      <div className="hp-error">
-                                        <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                                        {payError}
+                                      <div className="hp-error" role="alert" style={{ borderColor: "rgba(248, 113, 113, .55)", background: "rgba(127, 29, 29, .28)", color: "#fecaca" }}>
+                                        <XCircle size={16} style={{ flexShrink: 0, marginTop: 1, color: "#f87171" }} />
+                                        <span><strong>Oops 😞.</strong> {payError}</span>
                                       </div>
                                     )}
 

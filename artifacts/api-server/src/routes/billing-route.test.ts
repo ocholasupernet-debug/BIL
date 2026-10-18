@@ -13,7 +13,7 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   delete process.env.SUPABASE_SERVICE_KEY;
 
-  const [{ default: billingRouter, activeBillingStatus }, { default: mpesaRouter }, { generateAdminSessionToken }] = await Promise.all([
+  const [{ default: billingRouter, activeBillingStatus, platformBillingAccessRestricted }, { default: mpesaRouter }, { generateAdminSessionToken }] = await Promise.all([
     import("./billing-route.js"),
     import("./mpesa-route.js"),
     import("../lib/api-auth.js"),
@@ -245,6 +245,53 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     });
     assert.equal(paidCurrent.status, 200);
     assert.equal((await paidCurrent.json() as { invoice: { status: string } }).invoice.status, "paid");
+
+    accountCreatedAt = beforeCutoffDate.toISOString();
+    invoice = {
+      id: 91,
+      account_id: 42,
+      billing_period: currentBillingPeriod.toISOString().slice(0, 10),
+      status: "pending",
+      amount_due: 500,
+      due_date: "2026-09-05",
+    };
+    assert.equal(
+      await platformBillingAccessRestricted(42, new Date("2026-10-18T12:00:00.000Z")),
+      true,
+      "an eligible tenant with an unsettled overdue invoice is restricted",
+    );
+    const expiredCurrent = await originalFetch(`${endpoint}/current`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(expiredCurrent.status, 200);
+    assert.equal((await expiredCurrent.json() as { accessRestricted: boolean }).accessRestricted, true);
+
+    const blockedPurchase = await originalFetch(endpoint.replace("/billing", "/mpesa/intent"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ adminId: 42, plan_id: 501, phone: "0700000000" }),
+    });
+    assert.equal(blockedPurchase.status, 503);
+    const blockedPurchaseBody = await blockedPurchase.json() as { code?: string; error: string };
+    assert.equal(blockedPurchaseBody.error, "Failed to fetch");
+    assert.equal(blockedPurchaseBody.code, undefined);
+    assert.doesNotMatch(JSON.stringify(blockedPurchaseBody), /renewal|expired|billing/i);
+    assert.equal(
+      requests.some(row => row.path.endsWith("/isp_plans") && row.method === "GET"),
+      false,
+      "an overdue tenant cannot create a purchase intent or reach plan checkout",
+    );
+
+    invoice = {
+      ...invoice,
+      status: "failed",
+      due_date: "2026-11-05",
+    };
+    assert.equal(
+      await platformBillingAccessRestricted(42, new Date("2026-10-18T12:00:00.000Z")),
+      true,
+      "a failed renewal stays restricted even before the due date",
+    );
   } finally {
     globalThis.fetch = originalFetch;
     poolPrototype.query = originalPoolQuery;

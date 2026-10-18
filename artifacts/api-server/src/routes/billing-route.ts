@@ -162,6 +162,22 @@ export function activeBillingStatus(invoice: Record<string, unknown>, now = new 
   return todayInNairobi >= dueDate ? "expired" : status;
 }
 
+export async function platformBillingAccessRestricted(adminId: number, now = new Date()): Promise<boolean> {
+  const accounts = await sbSelectStrict<AccountRow>(
+    "isp_admins",
+    `id=eq.${encodeURIComponent(String(adminId))}&select=id,parent_id,role,name,phone,payment_phone,created_at&limit=1`,
+  );
+  const account = accounts[0];
+  if (!account || !["isp_admin", "reseller"].includes(account.role)) return false;
+
+  const result = await currentInvoice(account);
+  if (!result.invoice) return false;
+  const billingPeriod = String(result.invoice.billing_period ?? utcMonthStart());
+  const invoice = { ...result.invoice, status: activeBillingStatus(result.invoice, now) };
+  if (!eligibleForRenewalBanner(account.created_at, billingPeriod)) return false;
+  return invoice.status === "expired" || invoice.status === "failed";
+}
+
 router.get("/billing/current", requireAdmin(), async (req: Request, res: Response): Promise<void> => {
   try {
     const account = await currentAccount(req);
@@ -174,9 +190,11 @@ router.get("/billing/current", requireAdmin(), async (req: Request, res: Respons
     const invoice = result.invoice
       ? { ...result.invoice, status: activeBillingStatus(result.invoice) }
       : null;
+    const eligible = !!invoice && eligibleForRenewalBanner(account.created_at, billingPeriod);
     res.json({
       ok: true,
-      eligible: !!invoice && eligibleForRenewalBanner(account.created_at, billingPeriod),
+      eligible,
+      accessRestricted: eligible && !!invoice && (invoice.status === "expired" || invoice.status === "failed"),
       paymentsAvailable: supabaseServiceRoleConfigured,
       account: { id: account.id, role: account.role, name: account.name },
       invoice,

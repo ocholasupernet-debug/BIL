@@ -1,5 +1,5 @@
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -9,7 +9,7 @@ import { TypographyProvider } from "@/context/TypographyContext";
 import { AdminPageVisibilityProvider } from "@/context/AdminPageVisibilityContext";
 import { DashboardPreferencesProvider } from "@/context/DashboardPreferencesContext";
 import { getHostSubdomain } from "@/lib/subdomain";
-import { getAdminRole } from "@/lib/supabase";
+import { getAdminApiToken, getAdminRole, isImpersonating } from "@/lib/supabase";
 
 import LandingPage from "./pages/LandingPage";
 import AdminLogin from "./pages/admin/AdminLogin";
@@ -139,8 +139,66 @@ function NotFound() {
 
 const queryClient = new QueryClient();
 
+function TenantRenewalRouteGate({ children }: { children: React.ReactNode }) {
+  const [location, setLocation] = useLocation();
+  const role = getAdminRole();
+  const token = getAdminApiToken();
+  const [billingState, setBillingState] = useState<{ token: string; checked: boolean; restricted: boolean }>({
+    token: "",
+    checked: false,
+    restricted: false,
+  });
+  const route = location.split("?")[0];
+  const isAdminRoute = route.startsWith("/admin/")
+    && !["/admin/login", "/admin/register", "/admin/set-password"].includes(route);
+  const isDashboard = route === "/admin/dashboard";
+  const isExempt = role === "superadmin" || isImpersonating() || !token;
+
+  useEffect(() => {
+    if (!isAdminRoute || isExempt) {
+      setBillingState({ token, checked: true, restricted: false });
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await fetch("/api/billing/current", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = response.ok
+          ? await response.json() as { accessRestricted?: boolean }
+          : { accessRestricted: false };
+        if (!cancelled) setBillingState({ token, checked: true, restricted: data.accessRestricted === true });
+      } catch {
+        if (!cancelled) setBillingState({ token, checked: true, restricted: false });
+      }
+    };
+    void load();
+    const refresh = window.setInterval(() => void load(), 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(refresh);
+    };
+  }, [isAdminRoute, isExempt, location, role, token]);
+
+  const currentState = billingState.token === token ? billingState : null;
+  const routeRestricted = isAdminRoute && !isDashboard && !isExempt && currentState?.restricted === true;
+
+  useEffect(() => {
+    if (routeRestricted) setLocation("/admin/dashboard");
+  }, [routeRestricted, setLocation]);
+
+  if (isAdminRoute && !isDashboard && !isExempt && !currentState?.checked) {
+    return <div role="status" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Checking account renewal…</div>;
+  }
+  if (routeRestricted) return null;
+  return <>{children}</>;
+}
+
 function Router() {
   return (
+    <TenantRenewalRouteGate>
     <Switch>
       {import.meta.env.DEV && <Route path="/__visual/:page" component={VisualCheckHarness} />}
       <Route path="/" component={SubdomainGuard} />
@@ -239,6 +297,7 @@ function Router() {
       
       <Route component={NotFound} />
     </Switch>
+    </TenantRenewalRouteGate>
   );
 }
 

@@ -13,6 +13,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { randomBytes, randomUUID } from "crypto";
 import { sbDelete, sbInsert, sbInsertStrict, sbRpc, sbSelect, sbSelectStrict, sbUpdate, sbUpdateStrict, SupabaseHttpError, supabaseServiceRoleConfigured } from "../lib/supabase-client.js";
 import { billingSelect } from "../lib/platform-billing-store.js";
+import { platformBillingAccessRestricted } from "./billing-route.js";
 import { logger } from "../lib/logger.js";
 import { sendRegistrationConfirmationEmail } from "../lib/platform-email.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
@@ -1903,6 +1904,13 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     res.status(404).json({ ok: false, error: "This ISP account is not available for payments." });
     return;
   }
+  if (await platformBillingAccessRestricted(adminId)) {
+    res.status(503).json({
+      ok: false,
+      error: "Failed to fetch",
+    });
+    return;
+  }
   timing("activeAdminCheck");
   const plans = await sbSelect<{
     id: number;
@@ -2384,6 +2392,15 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     (intent.customerId ?? null) === (Number.isSafeInteger(requestedCustomerId) ? requestedCustomerId : null) &&
     (intent.routerId ?? null) === portalRouterId &&
     (intent.portId ?? null) === portalPortId;
+  const isPlatformBillingRenewal = billing_invoice_id !== undefined
+    && !(Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0);
+  if (!isPlatformBillingRenewal && await platformBillingAccessRestricted(scopedAdminId)) {
+    res.status(503).json({
+      ok: false,
+      error: "Failed to fetch",
+    });
+    return;
+  }
   if (intent && (intent.macAddress ?? "") !== mac.value) {
     res.status(400).json({ ok: false, error: "The TV MAC address changed. Start the payment again." });
     return;

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
-  ArrowRight, Check, CheckCircle2, ChevronRight, Eye, EyeOff, HelpCircle,
+  ArrowRight, Check, CheckCircle2, ChevronRight, Eye, EyeOff, HelpCircle, XCircle,
   KeyRound, LifeBuoy, LockKeyhole, Mail, MessageCircle, Router, Send, CreditCard,
   ShieldCheck, Ticket, UserRound, Wifi, X, Zap,
 } from "lucide-react";
@@ -673,7 +673,12 @@ export function PPPoELogin({
                   {purchaseState === "pending" && (
                     <div className="pppoe-alert"><CreditCard size={16} /> Approve the M-Pesa prompt on {customerContext?.phone || "your registered phone"}. We’ll activate the package after the callback is confirmed.</div>
                   )}
-                  {purchaseError && <div className="pppoe-alert maintenance">{purchaseError}</div>}
+                  {purchaseError && (
+                    <div role="alert" className="pppoe-alert" style={{ color: "#fecaca", background: "rgba(127, 29, 29, .28)", border: "1px solid rgba(248, 113, 113, .55)", display: "flex", alignItems: "flex-start", gap: 9 }}>
+                      <XCircle size={18} style={{ color: "#f87171", flexShrink: 0 }} />
+                      <span><strong>Oops 😞.</strong> {purchaseError}</span>
+                    </div>
+                  )}
                   {packagesLoading ? (
                     <p className="pppoe-form-note">Loading available PPPoE packages…</p>
                   ) : packages.length === 0 ? (

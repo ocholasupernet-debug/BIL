@@ -300,6 +300,7 @@ const SIDEBAR_COLLAPSED_W = 64;
 type PlatformBillingState = {
   eligible: boolean;
   paymentsAvailable: boolean;
+  accessRestricted?: boolean;
   invoice?: {
     id?: number;
     amount_due: number;
@@ -311,7 +312,7 @@ type PlatformBillingState = {
   } | null;
 };
 
-function PlatformBillingBanner() {
+function PlatformBillingBanner({ onAccessRestrictionChange }: { onAccessRestrictionChange?: (restricted: boolean) => void }) {
   const [state, setState] = useState<PlatformBillingState | null>(null);
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
@@ -321,12 +322,16 @@ function PlatformBillingBanner() {
   const token = getAdminApiToken();
 
   const load = async () => {
-    if (!token || role === "superadmin") return;
+    if (!token || role === "superadmin") {
+      onAccessRestrictionChange?.(false);
+      return;
+    }
     try {
       const response = await fetch("/api/billing/current", { headers: { Authorization: `Bearer ${token}` } });
       if (!response.ok) return;
       const data = await response.json() as PlatformBillingState;
       setState(data);
+      onAccessRestrictionChange?.(data.accessRestricted === true);
       if (data.invoice?.payment_phone) {
         setPhone(currentPhone => currentPhone || data.invoice!.payment_phone!);
       }
@@ -501,6 +506,7 @@ export function AdminLayout({
   const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === "undefined" || window.innerWidth > 768);
   const [expanded, setExpanded]       = useState<string[]>([]);
   const [notice, setNotice] = useState("");
+  const [billingRestricted, setBillingRestricted] = useState(false);
   const [reauthStatus, setReauthStatus] = useState<"checking" | "not-required" | "required" | "verified" | "failed">("checking");
   const [reauthCheckedFeature, setReauthCheckedFeature] = useState<string | null>(null);
   const [reauthUntil, setReauthUntil] = useState(0);
@@ -577,6 +583,7 @@ export function AdminLayout({
 
   const visibleNavSections = navSections
      .filter(section => isVisible(section.visibilityKey) && (!isResellerAccount || resellerSections.has(section.label)))
+     .filter(section => !billingRestricted || section.label === "Overview")
     .map(section => ({
       ...section,
       items: section.items
@@ -1171,7 +1178,7 @@ export function AdminLayout({
               {notice}
             </div>
           )}
-          <PlatformBillingBanner />
+          <PlatformBillingBanner onAccessRestrictionChange={setBillingRestricted} />
           {requiresReauthGate && !reauthCheckPending && reauthStatus !== "verified" && reauthStatus !== "not-required" ? (
             <div role="dialog" aria-modal="true" aria-labelledby="reauth-title" style={{ position: "fixed", inset: 0, zIndex: 90, background: "rgba(5,10,20,0.78)", display: "grid", placeItems: "center", padding: 20 }}>
               <form onSubmit={pagePasswordSetupNeeded ? handlePagePasswordSetup : reauthMethod === "password" ? handlePasswordRecheck : handlePageOtpVerify} style={{ width: "min(100%, 420px)", background: "var(--isp-card)", color: "var(--isp-text)", border: "1px solid var(--isp-border)", borderRadius: 16, padding: 24, boxShadow: "0 20px 70px rgba(0,0,0,0.4)" }}>
