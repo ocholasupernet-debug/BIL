@@ -189,7 +189,8 @@ type CustomerBasic = {
   ip_address: string | null;
   service_online: boolean | null;
 };
-type CustomerPlanScope = { id: number; router_id: number | null; port_id: number | null };
+type CustomerPlanScope = { id: number; router_id: number | null };
+type CustomerPortScope = { id: number; router_id: number };
 
 async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
   const response = await adminApiFetch(`/api/customers?adminId=${ADMIN_ID}`, { cache: "no-store" });
@@ -200,11 +201,14 @@ async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
   return result;
 }
 
-async function fetchCustomerPlanScopes(): Promise<CustomerPlanScope[]> {
+async function fetchCustomerPlanScopes(): Promise<{ plans: CustomerPlanScope[]; ports: CustomerPortScope[] }> {
   const context = await fetchAdminRouterContext();
-  return context.plans
-    .filter(plan => !plan.owner_reseller_id)
-    .map(plan => ({ id: plan.id, router_id: plan.router_id ?? null, port_id: plan.port_id ?? null }));
+  return {
+    plans: context.plans
+      .filter(plan => !plan.owner_reseller_id)
+      .map(plan => ({ id: plan.id, router_id: plan.router_id ?? null })),
+    ports: context.ports.map(port => ({ id: port.id, router_id: port.router_id })),
+  };
 }
 
 async function fetchTransactions(customerIds: number[]): Promise<DbTransaction[]> {
@@ -215,7 +219,7 @@ async function fetchTransactions(customerIds: number[]): Promise<DbTransaction[]
     throw new Error(!Array.isArray(result) && result.error ? result.error : "Transaction data could not be loaded.");
   }
   const ids = new Set(customerIds);
-  return result.filter(transaction => transaction.customer_id != null && ids.has(transaction.customer_id)).slice(0, 50);
+  return result.filter(transaction => transaction.customer_id != null && ids.has(transaction.customer_id));
 }
 
 type PaymentSettingsResponse = {
@@ -506,7 +510,7 @@ export default function Dashboard() {
     refetchInterval: 60_000,
   });
   const {
-    data: customerPlanScopes = [],
+    data: customerPlanScopes = { plans: [], ports: [] },
     isLoading: customerPlanScopesLoading,
     isError: customerPlanScopesError,
     refetch: refetchCustomerPlanScopes,
@@ -517,6 +521,22 @@ export default function Dashboard() {
     staleTime: 30_000,
   });
 
+  const customerPlanScopeMap = useMemo(
+    () => Object.fromEntries(customerPlanScopes.plans.map(plan => [plan.id, plan])),
+    [customerPlanScopes.plans],
+  );
+  const customerPortRouterMap = useMemo(
+    () => new Map(customerPlanScopes.ports.map(port => [port.id, port.router_id])),
+    [customerPlanScopes.ports],
+  );
+  const filteredCustomers = useMemo(() => selectedRouter === "all"
+    ? customers
+    : customers.filter(customer => {
+      const routerId = customer.router_id
+        ?? (customer.plan_id != null ? customerPlanScopeMap[customer.plan_id]?.router_id : null)
+        ?? (customer.port_id != null ? customerPortRouterMap.get(customer.port_id) : null);
+      return Number(routerId) === selectedRouter;
+    }), [customers, customerPlanScopeMap, customerPortRouterMap, selectedRouter]);
   const customerIds = useMemo(() => customers.map((customer) => customer.id), [customers]);
   const {
     data: transactions = [],
@@ -533,8 +553,6 @@ export default function Dashboard() {
   const incomeToday = revenueSummary?.incomeToday ?? 0;
   const incomeMonth = revenueSummary?.incomeMonth ?? 0;
 
-  const onlineRouters = routers.filter(routerOnline).length;
-  const offlineRouters = routers.length - onlineRouters;
   const liveQueries = usePrepaidLiveQueries(routers);
   const livePresenceByRouter = useMemo(
     () => buildLivePresenceByRouter(routers, liveQueries),
@@ -542,13 +560,9 @@ export default function Dashboard() {
   );
   const liveCountUnavailable = liveQueries.some(result => result.isError);
   const liveCountRefreshing = liveQueries.some(result => result.isFetching);
-  const customerPlanScopeMap = useMemo(
-    () => Object.fromEntries(customerPlanScopes.map(plan => [plan.id, plan])),
-    [customerPlanScopes],
-  );
   const uniqueServiceCustomers = useMemo(
-    () => mergeCustomerServiceIdentities(customers, customerPlanScopeMap),
-    [customers, customerPlanScopeMap],
+    () => mergeCustomerServiceIdentities(filteredCustomers, customerPlanScopeMap),
+    [filteredCustomers, customerPlanScopeMap],
   );
   const onlineServiceCustomers = useMemo(
     () => uniqueServiceCustomers.filter(customer =>
@@ -572,7 +586,7 @@ export default function Dashboard() {
   const expiredUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "expired").length;
   const serviceCountsLoading = customersLoading || customerPlanScopesLoading;
   const serviceCountsUnavailable = (customersError && customers.length === 0)
-    || (customerPlanScopesError && customerPlanScopes.length === 0);
+    || (customerPlanScopesError && customerPlanScopes.plans.length === 0 && customerPlanScopes.ports.length === 0);
   const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredUsers}`;
   const onlineCountValue = (count: number) => serviceCountsLoading
     ? "…"
@@ -593,23 +607,25 @@ export default function Dashboard() {
 
   const monthlyData = useMemo(() => MONTHS.map((month, index) => ({
     month,
-    count: customers.filter((customer) => {
+    count: filteredCustomers.filter((customer) => {
       const date = new Date(customer.created_at);
       return date.getFullYear() === now.getFullYear() && date.getMonth() === index;
     }).length,
-  })), [customers, now]);
+  })), [filteredCustomers, now]);
   const maxCount = Math.max(...monthlyData.map((month) => month.count), 1);
   const userInsights = useMemo(() => [
-    { label: "Hotspot", count: customers.filter((customer) => customer.type === "hotspot").length, color: "var(--dashboard-accent, var(--isp-accent))" },
-    { label: "PPPoE", count: customers.filter((customer) => customer.type === "pppoe").length, color: "#8879b7" },
-    { label: "Static", count: customers.filter((customer) => customer.type === "static").length, color: "var(--isp-green)" },
-  ], [customers]);
+    { label: "Hotspot", count: filteredCustomers.filter((customer) => customer.type === "hotspot").length, color: "var(--dashboard-accent, var(--isp-accent))" },
+    { label: "PPPoE", count: filteredCustomers.filter((customer) => customer.type === "pppoe").length, color: "#8879b7" },
+    { label: "Static", count: filteredCustomers.filter((customer) => customer.type === "static").length, color: "var(--isp-green)" },
+  ], [filteredCustomers]);
   const routerOptions: { key: number | "all"; label: string; online: boolean | null }[] = [
     { key: "all", label: "All routers", online: null },
     ...routers.map((router) => ({ key: router.id, label: router.name, online: routerOnline(router) })),
   ];
   const selectedRouterObj = selectedRouter === "all" ? null : routers.find((router) => router.id === selectedRouter);
   const visibleRouters = selectedRouter === "all" ? routers : routers.filter((router) => router.id === selectedRouter);
+  const onlineRouters = visibleRouters.filter(routerOnline).length;
+  const offlineRouters = visibleRouters.length - onlineRouters;
   const telemetryQuery = useQuery({
     queryKey: ["network-telemetry", selectedRouter, selectedTelemetryPort, selectedTelemetryReseller],
     queryFn: () => fetchNetworkTelemetry(selectedRouter, selectedTelemetryPort, selectedTelemetryReseller),
@@ -618,7 +634,12 @@ export default function Dashboard() {
   });
   const telemetry = telemetryQuery.data;
   const telemetryPorts = telemetry?.filters.ports.filter((port) => selectedRouter === "all" || port.routerId === selectedRouter) ?? [];
-  const recentTxs = transactions.slice(0, 5);
+  const filteredCustomerIds = useMemo(() => new Set(filteredCustomers.map(customer => customer.id)), [filteredCustomers]);
+  const filteredTransactions = useMemo(
+    () => transactions.filter(transaction => transaction.customer_id != null && filteredCustomerIds.has(transaction.customer_id)),
+    [transactions, filteredCustomerIds],
+  );
+  const recentTxs = filteredTransactions.slice(0, 5);
   const completedRevenue = revenueSummary?.totalRevenue ?? 0;
   const greeting = now.getHours() < 12 ? "Good morning" : now.getHours() < 17 ? "Good afternoon" : "Good evening";
   const displayName = getAdminDisplayName();
@@ -681,9 +702,39 @@ export default function Dashboard() {
           </div>
         )}
 
+        <section className="router-filter-bar" aria-label="Filter dashboard by router">
+          <div className="router-filter-label"><SlidersHorizontal size={15} /> Filter dashboard by router</div>
+          <div className="router-filter-options">
+            {routerOptions.map((option) => {
+              const active = selectedRouter === option.key;
+              return (
+                <button
+                  type="button"
+                  key={String(option.key)}
+                  className={`router-filter-pill ${active ? "router-filter-pill--active" : ""}`}
+                  onClick={() => {
+                    setSelectedRouter(option.key);
+                    setSelectedTelemetryPort("all");
+                  }}
+                  aria-pressed={active}
+                >
+                  {option.online !== null && <span className={`status-dot ${option.online ? "status-dot--green" : "status-dot--red"}`} />}
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+          {selectedRouterObj && (
+            <div className="router-filter-selected">
+              Showing dashboard data for <strong>{selectedRouterObj.name}</strong>
+              <button type="button" onClick={() => { setSelectedRouter("all"); setSelectedTelemetryPort("all"); }} title="Show all routers" aria-label="Show all routers"><X size={13} /></button>
+            </div>
+          )}
+        </section>
+
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>
           Financial pulse
-          <span className="dashboard-section-meta">Updated from live payment activity</span>
+          <span className="dashboard-section-meta">{selectedRouterObj ? "Revenue and total transaction figures remain ISP-wide; activity below is router-filtered" : "Updated from live payment activity"}</span>
           <button
             type="button"
             className="dashboard-amount-toggle"
@@ -796,33 +847,6 @@ export default function Dashboard() {
           </div>
         </section>
 
-        <section className="router-filter-bar" aria-label="Filter dashboard by router">
-          <div className="router-filter-label"><SlidersHorizontal size={15} /> Filter by router</div>
-          <div className="router-filter-options">
-            {routerOptions.map((option) => {
-              const active = selectedRouter === option.key;
-              return (
-                <button
-                  type="button"
-                  key={String(option.key)}
-                  className={`router-filter-pill ${active ? "router-filter-pill--active" : ""}`}
-                  onClick={() => setSelectedRouter(option.key)}
-                  aria-pressed={active}
-                >
-                  {option.online !== null && <span className={`status-dot ${option.online ? "status-dot--green" : "status-dot--red"}`} />}
-                  {option.label}
-                </button>
-              );
-            })}
-          </div>
-          {selectedRouterObj && (
-            <div className="router-filter-selected">
-              Showing <strong>{selectedRouterObj.name}</strong>
-              <button type="button" onClick={() => setSelectedRouter("all")} title="Clear router filter" aria-label="Clear router filter"><X size={13} /></button>
-            </div>
-          )}
-        </section>
-
         <section className="section-card" aria-label="Network telemetry overview" style={{ marginTop: "1rem" }}>
           <div className="panel-heading">
             <div className="panel-title">
@@ -835,13 +859,6 @@ export default function Dashboard() {
             {telemetry?.fetchedAt && <span className="panel-heading-meta">Updated {new Date(telemetry.fetchedAt).toLocaleTimeString()}</span>}
           </div>
           <div className="dashboard-telemetry-filters">
-            <label style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", fontWeight: 650 }}>
-              Filter by router
-              <select value={selectedRouter} onChange={(event) => { setSelectedRouter(event.target.value === "all" ? "all" : Number(event.target.value)); setSelectedTelemetryPort("all"); }} style={{ ...inputStyle, marginTop: "0.3rem" }}>
-                <option value="all">All routers</option>
-                {routers.map((router) => <option key={router.id} value={router.id}>{router.name}</option>)}
-              </select>
-            </label>
             <label style={{ color: "var(--isp-text-muted)", fontSize: "0.7rem", fontWeight: 650 }}>
               Filter by port
               <select value={selectedTelemetryPort} onChange={(event) => setSelectedTelemetryPort(event.target.value === "all" ? "all" : Number(event.target.value))} style={{ ...inputStyle, marginTop: "0.3rem" }}>
@@ -865,7 +882,7 @@ export default function Dashboard() {
             <>
               <div className="dashboard-telemetry-totals">
                 {[
-                  { label: "System-wide online users", value: telemetry.totals.onlineUsers, tone: "green" },
+                  { label: selectedRouterObj ? `${selectedRouterObj.name} online users` : "System-wide online users", value: telemetry.totals.onlineUsers, tone: "green" },
                   { label: "Active PPPoE sessions", value: telemetry.totals.pppoeActive, tone: "accent" },
                   { label: "Active Hotspot leases", value: telemetry.totals.hotspotActive, tone: "teal" },
                 ].map(({ label, value, tone }) => (
@@ -1031,7 +1048,7 @@ export default function Dashboard() {
           <div className="panel-heading">
             <div className="panel-title">
               <span className="panel-title-icon panel-title-icon--soft"><ReceiptText size={16} /></span>
-              <div><h2>Recent transactions</h2><p>Latest payment activity across subscribers</p></div>
+              <div><h2>Recent transactions</h2><p>{selectedRouterObj ? `Latest payment activity on ${selectedRouterObj.name}` : "Latest payment activity across subscribers"}</p></div>
             </div>
             <Link href="/admin/transactions" className="panel-link">View all <ArrowUpRight size={13} /></Link>
           </div>
