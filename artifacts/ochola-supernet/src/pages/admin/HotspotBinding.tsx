@@ -133,6 +133,7 @@ async function fetchConnectedDevices(routerId: string): Promise<ConnectedDevices
 
 async function bindConnectedDevice(input: {
   customerId: number; routerId: number; macAddress: string; ipAddress: string;
+  paidMacRecovery?: boolean;
 }): Promise<void> {
   await hotspotBindingApi("/api/customers/hotspot-bind-device", {
     method: "POST",
@@ -486,6 +487,7 @@ export default function HotspotBinding() {
   const [showAdd, setShowAdd] = useState(false);
   const [bindingDevice, setBindingDevice] = useState<ConnectedDevice | null>(null);
   const [selectedBindCustomerId, setSelectedBindCustomerId] = useState("");
+  const [confirmPaidMacMove, setConfirmPaidMacMove] = useState(false);
   const [deleting, setDeleting] = useState<Binding | null>(null);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const qc = useQueryClient();
@@ -549,23 +551,30 @@ export default function HotspotBinding() {
         const expiresAt = customer.expires_at ? Date.parse(customer.expires_at) : Infinity;
         const effectiveRouterId = Number(customer.router_id ?? plan?.router_id ?? 0);
         return customer.type === "hotspot"
-          && customer.status === "active"
+          && ["active", "payment_cleared_router_pending"].includes(customer.status)
           && expiresAt > Date.now()
           && !customer.port_id
-          && (!customer.mac_address || formatMac(customer.mac_address) === formatMac(bindingDevice.macAddress))
           && (!effectiveRouterId || effectiveRouterId === bindingDevice.routerId)
           && Boolean(plan);
       })
     : [];
+  const selectedBindCustomer = bindableAccounts.find(customer => String(customer.id) === selectedBindCustomerId);
+  const requiresPaidMacRecovery = Boolean(
+    selectedBindCustomer?.mac_address
+    && formatMac(selectedBindCustomer.mac_address) !== formatMac(bindingDevice?.macAddress ?? ""),
+  );
 
   const bindDeviceMutation = useMutation({
     mutationFn: bindConnectedDevice,
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
       qc.invalidateQueries({ queryKey: ["hotspot-connected-devices", ADMIN_ID] });
       qc.invalidateQueries({ queryKey: ["hotspot_binding_config", ADMIN_ID] });
       setBindingDevice(null);
       setSelectedBindCustomerId("");
-      showToast("Device is bound to the prepaid account and can connect without signing in.");
+      setConfirmPaidMacMove(false);
+      showToast(variables.paidMacRecovery
+        ? "The paid account was moved to this device. Its original payment MAC was preserved."
+        : "Device is bound to the prepaid account and can connect without signing in.");
     },
     onError: (error: Error) => showToast(`Could not bind device: ${error.message}`, false),
   });
@@ -628,18 +637,21 @@ export default function HotspotBinding() {
                   {bindingDevice.name || "Device"} · {formatMac(bindingDevice.macAddress)} · {bindingDevice.routerName}
                 </p>
               </div>
-              <button type="button" onClick={() => { setBindingDevice(null); setSelectedBindCustomerId(""); }}
+              <button type="button" onClick={() => { setBindingDevice(null); setSelectedBindCustomerId(""); setConfirmPaidMacMove(false); }}
                 style={{ background: "transparent", border: "none", color: "var(--isp-text-muted)", cursor: "pointer" }} aria-label="Close">
                 <X size={18} />
               </button>
             </div>
             <p style={{ fontSize: "0.78rem", lineHeight: 1.5, color: "var(--isp-text-muted)", marginBottom: 14 }}>
-              Choose an active prepaid Hotspot account. This device will get direct access without entering a username and password, using the account’s expiry and speed.
+              Choose an active prepaid Hotspot account. A different saved MAC requires a paid-purchase check and confirmation that its old session is offline.
             </p>
             {bindableAccounts.length ? (
               <select
                 value={selectedBindCustomerId}
-                onChange={event => setSelectedBindCustomerId(event.target.value)}
+                onChange={event => {
+                  setSelectedBindCustomerId(event.target.value);
+                  setConfirmPaidMacMove(false);
+                }}
                 style={{ ...inp, marginBottom: 14 }}
               >
                 <option value="">Choose prepaid account…</option>
@@ -648,30 +660,45 @@ export default function HotspotBinding() {
                   return (
                     <option key={customer.id} value={customer.id}>
                       {customer.phone || customer.username || customer.name || `Account ${customer.id}`} — {plan?.name ?? "Hotspot plan"}
+                      {customer.mac_address && formatMac(customer.mac_address) !== formatMac(bindingDevice?.macAddress ?? "")
+                        ? " — paid MAC recovery"
+                        : ""}
                     </option>
                   );
                 })}
               </select>
             ) : (
               <div style={{ padding: "0.8rem", marginBottom: 14, borderRadius: 8, background: "rgba(245,158,11,0.08)", color: "#fbbf24", fontSize: "0.78rem" }}>
-                No unbound active prepaid Hotspot accounts are available for this router.
+                No eligible prepaid Hotspot accounts are available for this router.
               </div>
             )}
+            {requiresPaidMacRecovery && selectedBindCustomer && (
+              <label style={{ display: "flex", gap: 9, alignItems: "flex-start", padding: "0.75rem", marginBottom: 14, borderRadius: 8, background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)", color: "#fbbf24", fontSize: "0.76rem", lineHeight: 1.45 }}>
+                <input
+                  type="checkbox"
+                  checked={confirmPaidMacMove}
+                  onChange={event => setConfirmPaidMacMove(event.target.checked)}
+                  style={{ marginTop: 2 }}
+                />
+                I confirm this is the paid device. The server will verify its completed purchase, check that the old session is offline, and replace its current MAC binding.
+              </label>
+            )}
             <div style={{ display: "flex", gap: 10 }}>
-              <button type="button" onClick={() => { setBindingDevice(null); setSelectedBindCustomerId(""); }}
+              <button type="button" onClick={() => { setBindingDevice(null); setSelectedBindCustomerId(""); setConfirmPaidMacMove(false); }}
                 style={{ flex: 1, padding: "0.65rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
                 Cancel
               </button>
               <button
                 type="button"
-                disabled={!selectedBindCustomerId || bindDeviceMutation.isPending}
+                disabled={!selectedBindCustomerId || bindDeviceMutation.isPending || (requiresPaidMacRecovery && !confirmPaidMacMove)}
                 onClick={() => bindDeviceMutation.mutate({
                   customerId: Number(selectedBindCustomerId),
                   routerId: bindingDevice.routerId,
                   macAddress: bindingDevice.macAddress,
                   ipAddress: bindingDevice.ipAddress,
+                  paidMacRecovery: requiresPaidMacRecovery && confirmPaidMacMove,
                 })}
-                style={{ flex: 1, padding: "0.65rem", borderRadius: 8, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, cursor: !selectedBindCustomerId || bindDeviceMutation.isPending ? "not-allowed" : "pointer", opacity: !selectedBindCustomerId ? 0.55 : 1, fontFamily: "inherit", display: "flex", justifyContent: "center", alignItems: "center", gap: 7 }}
+                style={{ flex: 1, padding: "0.65rem", borderRadius: 8, background: "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, cursor: !selectedBindCustomerId || bindDeviceMutation.isPending || (requiresPaidMacRecovery && !confirmPaidMacMove) ? "not-allowed" : "pointer", opacity: !selectedBindCustomerId || (requiresPaidMacRecovery && !confirmPaidMacMove) ? 0.55 : 1, fontFamily: "inherit", display: "flex", justifyContent: "center", alignItems: "center", gap: 7 }}
               >
                 {bindDeviceMutation.isPending ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <ShieldCheck size={14} />}
                 {bindDeviceMutation.isPending ? "Binding…" : "Bind device"}

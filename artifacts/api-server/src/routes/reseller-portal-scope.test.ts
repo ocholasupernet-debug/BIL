@@ -196,7 +196,12 @@ function matches(row: Record<string, unknown>, query: URLSearchParams): boolean 
 test("signed reseller portal requests stay within their assigned service", async (t) => {
   const [
     { generateAdminSessionToken, generatePaymentIntent, resolveVlanHotspotPortalRequest },
-    { default: customersRouter, hotspotTroubleshootOperations },
+    {
+      default: customersRouter,
+      hotspotTroubleshootOperations,
+      hotspotLoginOperations,
+      hotspotBindDeviceOperations,
+    },
     {
       default: mpesaRouter,
       loadHotspotPortContext,
@@ -250,7 +255,57 @@ test("signed reseller portal requests stay within their assigned service", async
   };
   const originalHotspotOperations = { ...hotspotPaymentOperations };
   const originalHotspotTroubleshootOperations = { ...hotspotTroubleshootOperations };
+  const originalHotspotLoginOperations = { ...hotspotLoginOperations };
+  const originalHotspotBindDeviceOperations = { ...hotspotBindDeviceOperations };
+  let activeHotspotLoginSessions: Array<{
+    id: string;
+    user: string;
+    address: string;
+    macAddress: string;
+    uptime: string;
+    bytesIn: number;
+    bytesOut: number;
+    server: string;
+  }> = [];
+  let activeBindSessions: Array<{ user: string; macAddress: string }> = [];
 
+  hotspotLoginOperations.fetchHotspotUsers = async () => {
+    recordRouterOperation("readLoginSessions");
+    return activeHotspotLoginSessions;
+  };
+  hotspotLoginOperations.resolveHotspotClientIpByMac = async (_credentials, mac) => {
+    recordRouterOperation("resolveLoginClientIp", { mac });
+    return visibleHotspotClientIp;
+  };
+  hotspotLoginOperations.connectHotspotUser = async (_credentials, options) => {
+    recordRouterOperation("connectLoginUser", {
+      username: options.user,
+      macAddress: options.macAddress,
+    });
+    return true;
+  };
+  hotspotBindDeviceOperations.fetchHotspotUsers = async () => activeBindSessions as never;
+  hotspotBindDeviceOperations.fetchHotspotConnectedDevices = async (_credentials, mac) => [{
+    id: "live-device",
+    name: "TV",
+    macAddress: mac,
+    address: visibleHotspotClientIp ?? "",
+    server: "hotspot",
+    source: "host",
+  }] as never;
+  hotspotBindDeviceOperations.addHotspotIpBinding = async (_credentials, options) => {
+    recordRouterOperation("addPaidRecoveryBinding", { mac: options.macAddress, comment: options.comment });
+    return true;
+  };
+  hotspotBindDeviceOperations.ensureHotspotUserRateQueue = async (_credentials, options) => {
+    recordRouterOperation("preparePaidRecoveryQueue", { username: options.username });
+  };
+  hotspotBindDeviceOperations.removeHotspotIpBinding = async (_credentials, options) => {
+    recordRouterOperation("removeOldPaidBinding", { mac: options.macAddress, comment: options.comment });
+  };
+  hotspotBindDeviceOperations.removeHotspotUserRateQueue = async (_credentials, username) => {
+    recordRouterOperation("removePaidRecoveryQueue", { username });
+  };
   hotspotTroubleshootOperations.fetchHotspotUsers = async () => {
     recordRouterOperation("readActiveUsers");
     return [];
@@ -562,6 +617,8 @@ test("signed reseller portal requests stay within their assigned service", async
     globalThis.fetch = originalFetch;
     Object.assign(hotspotPaymentOperations, originalHotspotOperations);
     Object.assign(hotspotTroubleshootOperations, originalHotspotTroubleshootOperations);
+    Object.assign(hotspotLoginOperations, originalHotspotLoginOperations);
+    Object.assign(hotspotBindDeviceOperations, originalHotspotBindDeviceOperations);
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   });
 
@@ -1576,6 +1633,151 @@ test("signed reseller portal requests stay within their assigned service", async
       transactions = previousTransactions;
       customers = previousCustomers;
       includeRouterFixture = previousRouterFixture;
+    }
+  });
+
+  await t.test("paid Hotspot credentials can recover on a visible new MAC without changing purchase history", async () => {
+    const previousTransactions = transactions;
+    const previousCustomers = customers;
+    const previousRouterFixture = includeRouterFixture;
+    const previousActiveSessions = activeHotspotLoginSessions;
+    const purchaseMac = assignedCustomer.mac_address;
+    const newTvMac = "88:00:33:77:E6:A5";
+    try {
+      transactions = [{ ...assignedTransaction, mac_address: purchaseMac }];
+      customers = [{ ...assignedCustomer, mac_address: purchaseMac }];
+      includeRouterFixture = true;
+      activeHotspotLoginSessions = [];
+      visibleHotspotClientIp = "10.43.0.10";
+      routerOperations.length = 0;
+      clearRequests();
+
+      const login = await request("/api/customers/hotspot-login", {
+        method: "POST",
+        body: {
+          username: assignedCustomer.username,
+          password: assignedCustomer.password,
+          mac_address: newTvMac,
+        },
+      });
+      assert.equal(login.status, 200, await login.clone().text());
+      assert.equal((await login.json() as { connected: boolean }).connected, true);
+      assert.deepEqual(
+        routerOperations.filter(row => ["readLoginSessions", "resolveLoginClientIp", "connectLoginUser"].includes(row.name)).map(row => row.name),
+        ["readLoginSessions", "resolveLoginClientIp", "connectLoginUser"],
+      );
+      assert.ok(routerOperations.some(row => row.name === "resolveLoginClientIp" && row.mac === newTvMac));
+      assert.ok(routerOperations.some(row => row.name === "connectLoginUser" && row.macAddress === newTvMac));
+      assert.equal(transactions[0].mac_address, purchaseMac, "the original paid device MAC remains unchanged");
+      assert.equal(dbRequests.some(row => row.method !== "GET"), false);
+
+      activeHotspotLoginSessions = [{
+        id: "*1",
+        user: assignedCustomer.username,
+        address: "10.43.0.10",
+        macAddress: purchaseMac,
+        uptime: "00:01:00",
+        bytesIn: 0,
+        bytesOut: 0,
+        server: "HS_RS19_VLAN143",
+      }];
+      routerOperations.length = 0;
+      clearRequests();
+      const oldSessionStillLive = await request("/api/customers/hotspot-login", {
+        method: "POST",
+        body: {
+          username: assignedCustomer.username,
+          password: assignedCustomer.password,
+          mac_address: newTvMac,
+        },
+      });
+      assert.equal(oldSessionStillLive.status, 409);
+      assert.match((await oldSessionStillLive.json() as { error: string }).error, /previous device/i);
+      assert.equal(routerOperations.some(row => row.name === "connectLoginUser"), false);
+    } finally {
+      transactions = previousTransactions;
+      customers = previousCustomers;
+      includeRouterFixture = previousRouterFixture;
+      activeHotspotLoginSessions = previousActiveSessions;
+    }
+  });
+
+  await t.test("admin paid-MAC recovery moves only a verified account with its old session offline", async () => {
+    const previousTransactions = transactions;
+    const previousCustomers = customers;
+    const previousRouterFixture = includeRouterFixture;
+    const previousPlanPortId = assignedPlan.port_id;
+    const previousPlanOwnerId = assignedPlan.owner_reseller_id;
+    const previousActiveSessions = activeBindSessions;
+    const oldMac = "88:00:33:77:EC:68";
+    const targetMac = "88:00:33:77:E6:A5";
+    const secondTargetMac = "88:00:33:77:AA:BB";
+    try {
+      Object.assign(assignedPlan, { port_id: null, owner_reseller_id: null });
+      includeRouterFixture = true;
+      transactions = [{
+        ...assignedTransaction,
+        admin_id: 7,
+        customer_id: assignedCustomer.id,
+        mac_address: oldMac,
+        status: "completed",
+      }];
+      customers = [{
+        ...assignedCustomer,
+        admin_id: 7,
+        port_id: null,
+        mac_address: oldMac,
+        status: "payment_cleared_router_pending",
+        expires_at: "2027-09-29T00:00:00.000Z",
+      }];
+      activeBindSessions = [];
+      visibleHotspotClientIp = "10.43.0.10";
+      routerOperations.length = 0;
+      clearRequests();
+
+      const recover = (macAddress: string) => request("/api/customers/hotspot-bind-device", {
+        method: "POST",
+        adminToken: generateAdminSessionToken("7", 1),
+        body: {
+          adminId: 7,
+          customerId: assignedCustomer.id,
+          routerId: 31,
+          macAddress,
+          ipAddress: visibleHotspotClientIp,
+          paidMacRecovery: true,
+        },
+      });
+
+      const recovered = await recover(targetMac);
+      assert.equal(recovered.status, 200, await recovered.clone().text());
+      assert.equal(customers[0].mac_address, targetMac);
+      assert.equal(transactions[0].mac_address, oldMac, "the completed purchase MAC remains historical evidence");
+      assert.ok(routerOperations.some(row => row.name === "addPaidRecoveryBinding" && row.mac === targetMac));
+      assert.ok(routerOperations.some(row => row.name === "removeOldPaidBinding" && row.mac === oldMac));
+      assert.equal(dbRequests.some(row => row.table === "isp_transactions" && row.method !== "GET"), false);
+
+      routerOperations.length = 0;
+      const secondMove = await recover(secondTargetMac);
+      assert.equal(secondMove.status, 403, await secondMove.clone().text());
+      assert.equal(routerOperations.some(row => row.name === "addPaidRecoveryBinding"), false,
+        "the old paid MAC cannot authorize a second move");
+
+      customers[0].mac_address = oldMac;
+      activeBindSessions = [{ user: String(assignedCustomer.username), macAddress: oldMac }];
+      routerOperations.length = 0;
+      const oldSessionLive = await recover(targetMac);
+      assert.equal(oldSessionLive.status, 409);
+      assert.match((await oldSessionLive.json() as { error: string }).error, /previous device/i);
+      assert.equal(routerOperations.some(row => row.name === "addPaidRecoveryBinding"), false);
+    } finally {
+      transactions = previousTransactions;
+      customers = previousCustomers;
+      includeRouterFixture = previousRouterFixture;
+      Object.assign(assignedPlan, {
+        port_id: previousPlanPortId,
+        owner_reseller_id: previousPlanOwnerId,
+      });
+      activeBindSessions = previousActiveSessions;
     }
   });
 

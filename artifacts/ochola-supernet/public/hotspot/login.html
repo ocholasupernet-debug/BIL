@@ -81,13 +81,10 @@
     .already-paid-link{display:inline-flex;align-items:center;min-height:36px;color:rgba(240,171,252,.95);font-size:.8125rem;font-weight:700;white-space:nowrap;text-decoration:none}
     .already-paid-link:hover{text-decoration:underline;color:#fff}
     .already-paid-link:focus-visible{outline:2px solid rgba(240,171,252,.9);outline-offset:3px;border-radius:3px}
-    #tvAlreadyPaidReconnect{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;margin:.75rem 0 0;padding:.75rem 1.15rem;border:1px solid #047857;border-radius:.7rem;background:#047857;color:#fff;font:800 .75rem inherit;cursor:pointer;box-shadow:0 4px 15px rgba(4,120,87,.28)}
-    #tvAlreadyPaidReconnect:hover{background:#065f46;border-color:#065f46}
     @media(max-width:520px){
       .hdr-inner{padding:0 .875rem;gap:.5rem}
       #portalNameHeader{max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .already-paid-link{font-size:.75rem}
-      #tvConnectButton,#tvAlreadyPaidReconnect{width:100%}
       #portalHeaderPhone{padding:.375rem .5rem!important;font-size:.6875rem!important}
       #portalHeaderPhoneText{max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     }
@@ -204,8 +201,6 @@
     <h2 style="font-size:clamp(1.5rem,3vw,2rem);font-weight:800;letter-spacing:-.025em;color:white;margin-bottom:.625rem">Choose Your Plan</h2>
     <p style="color:rgba(255,255,255,.4);font-size:.9375rem">Plans activate after your online payment is confirmed</p>
     <button id="tvConnectButton" type="button" onclick="openTvModal()" disabled style="margin-top:1rem;padding:.7rem 1.15rem;border-radius:.7rem;border:1px solid var(--portal-accent-border);background:var(--portal-accent-soft);color:white;font-size:.75rem;font-weight:800;letter-spacing:.03em;cursor:not-allowed;opacity:.55">Checking payment availability…</button>
-    <br>
-    <button id="tvAlreadyPaidReconnect" type="button" onclick="openTroubleshootModule(true)" aria-controls="troubleshootModule" aria-haspopup="dialog">Already paid? Reconnect TV</button>
   </div>
   <div id="mpesaBanner" style="max-width:1200px;margin:0 auto 1.5rem">
     <div style="border-radius:.875rem;padding:.875rem 1.5rem;display:flex;align-items:center;gap:.875rem;background:linear-gradient(90deg,rgba(5,150,105,.15),rgba(6,182,212,.08));border:1px solid rgba(5,150,105,.25)">
@@ -320,19 +315,8 @@
     <h2 id="troubleshootTitle" style="font-size:1.4rem;font-weight:850;color:#fff;margin:0 2.5rem .5rem 0">Troubleshoot connection</h2>
     <p style="font-size:.9rem;line-height:1.55;color:rgba(255,255,255,.55);margin:0 0 1.25rem">We’ll check your package and attempt sign-in automatically. If the router does not confirm it, you can retry.</p>
     <div style="padding:1.15rem;border-radius:1rem;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.12);box-shadow:0 18px 50px rgba(0,0,0,.25)">
-      <div id="troubleshootDeviceIdentity">
-        <div id="troubleshootDeviceCard" style="font-size:.65rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.42);margin-bottom:.4rem">This device</div>
-        <div id="troubleshootDevice" style="font:700 .8rem monospace;color:rgba(255,255,255,.82);word-break:break-all"></div>
-      </div>
-      <div id="troubleshootTvPicker" hidden style="margin-top:.75rem">
-        <label class="lbl" for="tvTroubleshootDeviceSelect" style="color:#6ee7b7">Choose a saved or active TV</label>
-        <select id="tvTroubleshootDeviceSelect" class="inp" style="margin-bottom:.75rem">
-          <option value="">Select a TV</option>
-        </select>
-        <label class="lbl" for="tvTroubleshootMac" style="color:#6ee7b7">Or enter the TV MAC address</label>
-        <input id="tvTroubleshootMac" class="inp" autocomplete="off" autocapitalize="characters" placeholder="AA:BB:CC:DD:EE:FF" />
-        <p id="tvTroubleshootPickerStatus" role="status" aria-live="polite" style="margin:.5rem 0 0;color:rgba(255,255,255,.5);font-size:.72rem;line-height:1.45">Detecting active devices…</p>
-      </div>
+      <div style="font-size:.65rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.42);margin-bottom:.4rem">This device</div>
+      <div id="troubleshootDevice" style="font:700 .8rem monospace;color:rgba(255,255,255,.82);word-break:break-all"></div>
       <div id="troubleshootResult" role="status" aria-live="polite" style="min-height:4rem;margin-top:1rem;padding:.9rem;border-radius:.75rem;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.72);font-size:.82rem;line-height:1.55">The check result will appear here.</div>
       <button type="button" id="troubleshootBtn" class="btn btn-full" onclick="troubleshootConnection()" style="margin-top:1rem;background:linear-gradient(135deg,#7c3aed,#4f46e5);border:1px solid rgba(216,180,254,.35);color:#fff">Check connection</button>
     </div>
@@ -2146,55 +2130,9 @@ window.sendStk=sendStk;
 
 var troubleshootReturnFocus=null;
 var troubleshootPreviousOverflow="";
-var tvTroubleshootMode=false;
-var tvTroubleshootMac="";
-function renderTvTroubleshootPicker(){
-  var select=document.getElementById("tvTroubleshootDeviceSelect");
-  var input=document.getElementById("tvTroubleshootMac");
-  var status=document.getElementById("tvTroubleshootPickerStatus");
-  var saved=readSavedTvDevices();
-  var active=tvDevices.filter(function(device){
-    return !saved.some(function(item){return item.macAddress===normaliseMac(device.macAddress);});
-  });
-  if(select){
-    select.innerHTML='<option value="">Select a saved or active TV</option>'+
-      (saved.length?'<optgroup label="Saved TVs">'+saved.map(function(device){
-        return '<option value="'+tvEsc(device.macAddress)+'">'+tvEsc(device.name)+' · '+tvEsc(device.macAddress)+' · saved</option>';
-      }).join("")+'</optgroup>':"")+
-      (active.length?'<optgroup label="Active on this hotspot">'+active.map(function(device){
-        return '<option value="'+tvEsc(normaliseMac(device.macAddress))+'">'+tvEsc(device.name)+' · '+tvEsc(device.macAddress)+'</option>';
-      }).join("")+'</optgroup>':"");
-    select.value=saved.concat(active.map(function(device){return {macAddress:normaliseMac(device.macAddress)}})
-      .some(function(device){return device.macAddress===tvTroubleshootMac;})?tvTroubleshootMac:"");
-    select.onchange=function(){setTvTroubleshootMac(this.value);};
-  }
-  if(input){
-    input.value=tvTroubleshootMac;
-    input.oninput=function(){setTvTroubleshootMac(this.value,true);};
-  }
-  if(status)status.textContent=tvDevicesLoading?"Detecting active devices…":
-    (tvDevices.length?tvDevices.length+" active device"+(tvDevices.length===1?"":"s")+" detected.":"No active devices detected. Saved devices and manual MAC entry are still available.");
-  setPortalTroubleshootButton("Troubleshoot / reconnect TV",!normaliseMac(tvTroubleshootMac),false);
-}
-function setTvTroubleshootMac(value,fromInput){
-  var normalized=normaliseMac(value);
-  tvTroubleshootMac=normalized||String(value||"").trim().toUpperCase();
-  portalTroubleshootStatus="idle";
-  portalTroubleshootDetails={};
-  var result=document.getElementById("troubleshootResult");
-  if(result)result.textContent="Selected TV: "+(tvTroubleshootMac||"choose a saved device or enter a MAC address")+". Start troubleshooting when ready.";
-  if(!fromInput)renderTvTroubleshootPicker();
-  else{
-    var select=document.getElementById("tvTroubleshootDeviceSelect");
-    if(select)select.value="";
-    setPortalTroubleshootButton("Troubleshoot / reconnect TV",!normalized,false);
-  }
-}
-function openTroubleshootModule(tvReconnect){
+function openTroubleshootModule(){
   var module=document.getElementById("troubleshootModule");
   var device=document.getElementById("troubleshootDevice");
-  var identity=document.getElementById("troubleshootDeviceIdentity");
-  var picker=document.getElementById("troubleshootTvPicker");
   var result=document.getElementById("troubleshootResult");
   if(!module)return;
   if(module.style.display!=="flex"){
@@ -2204,27 +2142,12 @@ function openTroubleshootModule(tvReconnect){
   module.style.display="flex";
   module.setAttribute("aria-hidden","false");
   document.body.style.overflow="hidden";
-  tvTroubleshootMode=tvReconnect===true;
-  if(identity)identity.style.display=tvTroubleshootMode?"none":"block";
-  if(picker)picker.style.display=tvTroubleshootMode?"block":"none";
+  if(device)device.textContent=DEVICE_MAC||"Device MAC unavailable";
+  if(result&&!portalTroubleshootBusy)result.textContent="Checking your package and trying to sign in…";
   document.addEventListener("keydown",handleTroubleshootModuleKeydown);
   var closeButton=document.getElementById("troubleshootClose");
   if(closeButton)closeButton.focus();
-  if(tvTroubleshootMode){
-    tvTroubleshootMac=readSavedTvDevices()[0]?.macAddress||normaliseMac(DEVICE_MAC)||"";
-    tvDevicesLoading=true;
-    if(result&&!portalTroubleshootBusy)result.textContent="Choose a saved TV, select an active device, or enter its MAC address.";
-    renderTvTroubleshootPicker();
-    fetch(apiUrl("/api/mpesa/hotspot-devices?adminId="+encodeURIComponent(PORTAL_ADMIN_ID)+(PORTAL_ROUTER_ID>0?"&routerId="+encodeURIComponent(PORTAL_ROUTER_ID):"")))
-      .then(function(response){return response.ok?response.json():{devices:[]};})
-      .then(function(data){tvDevices=Array.isArray(data.devices)?data.devices:[];})
-      .catch(function(){tvDevices=[];})
-      .then(function(){tvDevicesLoading=false;renderTvTroubleshootPicker();});
-  }else{
-    if(device)device.textContent=DEVICE_MAC||"Device MAC unavailable";
-    if(result&&!portalTroubleshootBusy)result.textContent="Checking your package and trying to sign in…";
-    troubleshootConnection(true);
-  }
+  troubleshootConnection(true);
 }
 function closeTroubleshootModuleFromBackdrop(event){
   if(event&&event.target===event.currentTarget)closeTroubleshootModule();
@@ -2260,7 +2183,6 @@ function closeTroubleshootModule(){
     module.setAttribute("aria-hidden","true");
   }
   document.removeEventListener("keydown",handleTroubleshootModuleKeydown);
-  tvTroubleshootMode=false;
   document.body.style.overflow=troubleshootPreviousOverflow;
   try{
     var url=new URL(window.location.href);
@@ -2317,9 +2239,8 @@ function setPortalTroubleshootButton(label,disabled,green){
 }
 function troubleshootConnection(preferLogin){
   if(portalTroubleshootBusy)return;
-   var action=tvTroubleshootMode||preferLogin||portalTroubleshootStatus==="active"?"login":"check";
-   var targetMac=tvTroubleshootMode?normaliseMac(tvTroubleshootMac):DEVICE_MAC;
-   if(!targetMac){
+   var action=preferLogin||portalTroubleshootStatus==="active"?"login":"check";
+  if(!DEVICE_MAC){
      setPortalSessionStatus("unavailable",null,"This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.",null,null,false);
     return;
   }
@@ -2335,8 +2256,8 @@ function troubleshootConnection(preferLogin){
      body:JSON.stringify({
        adminId:PORTAL_ADMIN_ID,
        action:action,
-        mac_address:targetMac,
-         ...(targetMac===DEVICE_MAC&&DEVICE_IP?{client_ip:DEVICE_IP}:{}),
+       mac_address:DEVICE_MAC,
+        ...(DEVICE_IP?{client_ip:DEVICE_IP}:{}),
         ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
         ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})
      })

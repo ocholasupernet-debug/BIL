@@ -3471,7 +3471,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
       "isp_transactions",
       `id=eq.${transaction.id}&admin_id=eq.${adminId}`,
       {
-        notes: `M-Pesa payment verified; hotspot credentials assigned on ${routerRow.name}${routerConnected ? " and the device session is active." : paidBindingApplied ? "; MAC access is set up and session activation is pending." : "; device binding is pending."}`,
+        notes: `M-Pesa payment verified; hotspot credentials assigned on ${routerRow.name}${routerConnected ? " and the device session is active." : portalLoginHandoff ? "; captive-portal login handoff is ready." : paidBindingApplied ? "; MAC access is set up and session activation is pending." : "; device binding is pending."}`,
       },
     )).catch(error => {
       logger.warn(
@@ -3586,7 +3586,7 @@ async function runAutomaticHotspotActivationSweep(): Promise<void> {
       notes: string | null;
     }>(
       "isp_transactions",
-      `status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&customer_id=not.is.null&plan_id=not.is.null&mac_address=not.is.null&notes=ilike.*RouterOS%20account%20activation%20is%20pending*&select=id,admin_id,plan_id,reference,mac_address,notes&order=created_at.asc,id.asc&limit=${AUTOMATIC_HOTSPOT_ACTIVATION_BATCH}`,
+      `status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&customer_id=not.is.null&plan_id=not.is.null&mac_address=not.is.null&or=(notes.ilike.*RouterOS%20account%20activation%20is%20pending*,notes.ilike.*device%20binding%20is%20pending*,notes.ilike.*session%20activation%20is%20pending*)&select=id,admin_id,plan_id,reference,mac_address,notes&order=created_at.asc,id.asc&limit=${AUTOMATIC_HOTSPOT_ACTIVATION_BATCH}`,
     );
 
     const work: Array<{
@@ -3629,7 +3629,11 @@ async function runAutomaticHotspotActivationSweep(): Promise<void> {
       if (
         !transaction.reference
         || !transaction.mac_address
-        || !transaction.notes?.includes("RouterOS account activation is pending")
+        || !(
+          transaction.notes?.includes("RouterOS account activation is pending")
+          || transaction.notes?.includes("device binding is pending")
+          || transaction.notes?.includes("session activation is pending")
+        )
         || !await isHotspotPlan(transaction.admin_id, transaction.plan_id)
       ) continue;
       work.push({

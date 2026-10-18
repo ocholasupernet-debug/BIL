@@ -129,6 +129,21 @@ export const hotspotTroubleshootOperations = {
   reconnectHotspotUserByMac,
 };
 
+export const hotspotLoginOperations = {
+  fetchHotspotUsers,
+  resolveHotspotClientIpByMac,
+  connectHotspotUser,
+};
+
+export const hotspotBindDeviceOperations = {
+  fetchHotspotUsers,
+  fetchHotspotConnectedDevices,
+  addHotspotIpBinding,
+  ensureHotspotUserRateQueue,
+  removeHotspotIpBinding,
+  removeHotspotUserRateQueue,
+};
+
 type CustomerRow = {
   id: number;
   admin_id: number;
@@ -2489,6 +2504,7 @@ router.post("/customers/hotspot-bind-device", requireAdmin(), async (req, res): 
   const routerId = Number(req.body?.routerId);
   const macAddress = normalizeHotspotMac(req.body?.macAddress);
   const requestedIp = String(req.body?.ipAddress ?? "").trim();
+  const paidMacRecovery = req.body?.paidMacRecovery === true;
   if (!Number.isSafeInteger(customerId) || customerId < 1 || !Number.isSafeInteger(routerId) || routerId < 1 || !macAddress) {
     res.status(400).json({ error: "Choose a prepaid Hotspot account and a valid connected device." });
     return;
@@ -2509,7 +2525,10 @@ router.post("/customers/hotspot-bind-device", requireAdmin(), async (req, res): 
       res.status(404).json({ error: "Active prepaid Hotspot account not found." });
       return;
     }
-    if (customer.status !== "active" || (customer.expires_at && Date.parse(customer.expires_at) <= Date.now())) {
+    if (
+      !["active", "payment_cleared_router_pending"].includes(customer.status)
+      || !isPrepaidCustomerEntitled(customer.status, customer.expires_at, customer.depletion_reason, Date.now())
+    ) {
       res.status(409).json({ error: "This account is expired or suspended and cannot be bound." });
       return;
     }
@@ -2517,9 +2536,26 @@ router.post("/customers/hotspot-bind-device", requireAdmin(), async (req, res): 
       res.status(409).json({ error: "This account has no valid expiry time, so the router cannot safely schedule its device access." });
       return;
     }
-    if (customer.mac_address && normalizeHotspotMac(customer.mac_address) !== macAddress) {
+    const originalMacAddress = normalizeHotspotMac(customer.mac_address);
+    const isMacMove = Boolean(originalMacAddress && originalMacAddress !== macAddress);
+    if (isMacMove && !paidMacRecovery) {
       res.status(409).json({ error: "This account is already bound to another device. Unbind it before moving the account." });
       return;
+    }
+    if (isMacMove) {
+      const paidTransactions = await sbSelectStrict<HotspotPurchaseTransaction>(
+        "isp_transactions",
+        `admin_id=eq.${adminId}&customer_id=eq.${customerId}&plan_id=eq.${customer.plan_id}&status=in.(completed,paid,success)&select=id,customer_id,plan_id,mac_address,status&limit=100`,
+      );
+      const purchaseMatchesSavedMac = paidTransactions.some(transaction =>
+        Number(transaction.customer_id) === customerId
+        && Number(transaction.plan_id) === Number(customer.plan_id)
+        && normalisePortalMac(transaction.mac_address) === originalMacAddress,
+      );
+      if (!purchaseMatchesSavedMac) {
+        res.status(403).json({ error: "A different device can only be assigned to this account when its saved MAC is backed by a completed paid transaction." });
+        return;
+      }
     }
     accountAlreadyHadMac = normalizeHotspotMac(customer.mac_address) === macAddress;
 
@@ -2548,7 +2584,7 @@ router.post("/customers/hotspot-bind-device", requireAdmin(), async (req, res): 
       Number(row.id) !== customerId
       && normalizeHotspotMac(row.mac_address) === macAddress
       && Number(row.router_id ?? plan.router_id ?? 0) === routerId
-      && row.status === "active",
+      && isPrepaidCustomerEntitled(row.status, row.expires_at, row.depletion_reason, Date.now()),
     );
     if (conflictingAccount) {
       res.status(409).json({ error: "This device is already linked to another active Hotspot account." });
@@ -2565,7 +2601,17 @@ router.post("/customers/hotspot-bind-device", requireAdmin(), async (req, res): 
       return;
     }
     creds = routerCredentials(routerRow);
-    const connectedDevices = await fetchHotspotConnectedDevices(creds, macAddress);
+    if (isMacMove) {
+      const activeSessions = await hotspotBindDeviceOperations.fetchHotspotUsers(creds);
+      if (activeSessions.some(user =>
+        user.user === customer.username?.trim()
+        && normalizeHotspotMac(user.macAddress) !== macAddress,
+      )) {
+        res.status(409).json({ error: "This paid account is still active on its previous device. Disconnect that session before moving it." });
+        return;
+      }
+    }
+    const connectedDevices = await hotspotBindDeviceOperations.fetchHotspotConnectedDevices(creds, macAddress);
     const liveDevice = connectedDevices.find((device) =>
       normalizeHotspotMac(device.macAddress) === macAddress
       && (device.source === "hotspot" || device.source === "host"),
@@ -2592,7 +2638,7 @@ router.post("/customers/hotspot-bind-device", requireAdmin(), async (req, res): 
     );
     const expiresInSeconds = Math.max(1, Math.ceil((Date.parse(customer.expires_at) - Date.now()) / 1000));
 
-    bindingApplied = await addHotspotIpBinding(creds, {
+    bindingApplied = await hotspotBindDeviceOperations.addHotspotIpBinding(creds, {
       macAddress,
       ipAddress,
       comment: bindingComment,
@@ -2604,7 +2650,7 @@ router.post("/customers/hotspot-bind-device", requireAdmin(), async (req, res): 
       return;
     }
     try {
-      await ensureHotspotUserRateQueue(creds, {
+      await hotspotBindDeviceOperations.ensureHotspotUserRateQueue(creds, {
         username: bindingComment,
         address: ipAddress,
         maxLimit: rateLimit,
@@ -2621,10 +2667,21 @@ router.post("/customers/hotspot-bind-device", requireAdmin(), async (req, res): 
           updated_at: new Date().toISOString(),
         },
       );
+      if (isMacMove && originalMacAddress) {
+        await hotspotBindDeviceOperations.removeHotspotIpBinding(creds, {
+          macAddress: originalMacAddress,
+          comment: bindingComment,
+        }).catch(error => {
+          logger.warn(
+            { err: error, adminId, customerId, routerId, originalMacAddress },
+            "[customers/hotspot-bind-device] old paid MAC binding cleanup deferred",
+          );
+        });
+      }
     } catch (error) {
       if (!accountAlreadyHadMac) {
-        await removeHotspotIpBinding(creds, { macAddress, comment: bindingComment }).catch(() => {});
-        if (queuePrepared) await removeHotspotUserRateQueue(creds, bindingComment).catch(() => {});
+        await hotspotBindDeviceOperations.removeHotspotIpBinding(creds, { macAddress, comment: bindingComment }).catch(() => {});
+        if (queuePrepared) await hotspotBindDeviceOperations.removeHotspotUserRateQueue(creds, bindingComment).catch(() => {});
       }
       throw error;
     }
@@ -2642,8 +2699,8 @@ router.post("/customers/hotspot-bind-device", requireAdmin(), async (req, res): 
   } catch (error) {
     logger.error({ err: error, adminId, customerId, routerId }, "[customers/hotspot-bind-device] failed");
     if (bindingApplied && creds && !accountAlreadyHadMac && bindingComment) {
-      await removeHotspotIpBinding(creds, { macAddress, comment: bindingComment }).catch(() => {});
-      if (queuePrepared) await removeHotspotUserRateQueue(creds, bindingComment).catch(() => {});
+      await hotspotBindDeviceOperations.removeHotspotIpBinding(creds, { macAddress, comment: bindingComment }).catch(() => {});
+      if (queuePrepared) await hotspotBindDeviceOperations.removeHotspotUserRateQueue(creds, bindingComment).catch(() => {});
     }
     res.status(500).json({ error: error instanceof Error ? error.message : "Could not bind this device." });
   }
@@ -3128,7 +3185,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   const targetMac = macChanged ? requestedMac : customerMac || requestedMac;
   let activeUsers: Awaited<ReturnType<typeof fetchHotspotUsers>> = [];
   try {
-    activeUsers = await fetchHotspotUsers(creds);
+    activeUsers = await hotspotLoginOperations.fetchHotspotUsers(creds);
   } catch (error) {
     logger.warn({ err: error, adminId, routerId }, "[customers/hotspot-login] could not read hotspot sessions");
     res.status(503).json({
@@ -3151,7 +3208,9 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     user.user === username && !!targetMac && normalisePortalMac(user.macAddress) === targetMac,
   );
   if (!connected) {
-    const discoveredIp = targetMac ? await resolveHotspotClientIpByMac(creds, targetMac).catch(() => null) : null;
+    const discoveredIp = targetMac
+      ? await hotspotLoginOperations.resolveHotspotClientIpByMac(creds, targetMac).catch(() => null)
+      : null;
     if (!discoveredIp || !targetMac) {
       res.status(409).json({
         ...activePlanDetails,
@@ -3164,7 +3223,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
       return;
     }
     try {
-      const loginAccepted = await connectHotspotUser(creds, {
+      const loginAccepted = await hotspotLoginOperations.connectHotspotUser(creds, {
         user: username,
         password,
         ip: customerRow.type === "vlan" ? String(customerRow.ip_address) : discoveredIp,
@@ -3457,7 +3516,11 @@ async function lookupLatestHotspotPurchase(
   for (const transaction of [...directTransactions, ...linkedTransactions]) {
     const rawMac = String(transaction.mac_address ?? "").trim();
     const transactionMac = normalisePortalMac(rawMac);
-    if ((rawMac && transactionMac !== requestedMac) || (!rawMac && !customerIds.includes(Number(transaction.customer_id)))) continue;
+    const linkedToCurrentMacCustomer = customerIds.includes(Number(transaction.customer_id));
+    if (
+      (rawMac && transactionMac !== requestedMac && !linkedToCurrentMacCustomer)
+      || (!rawMac && !linkedToCurrentMacCustomer)
+    ) continue;
     if (
       (targetScope || portalScope)
       && (!transaction.plan_id || !scopedPlanIds?.has(transaction.plan_id))
@@ -3598,10 +3661,11 @@ async function lookupLatestHotspotPurchase(
   const customerMac = normalisePortalMac(customerMacRaw);
   const transactionMacRaw = String(latestTransaction.mac_address ?? "").trim();
   const transactionMac = normalisePortalMac(transactionMacRaw);
+  const transactionLinkedToCustomer = Number(latestTransaction.customer_id) === Number(customer.id);
   if (
     (customerMacRaw && customerMac !== requestedMac)
     || (!transactionMacRaw && customerMac !== requestedMac)
-    || (transactionMacRaw && transactionMac !== requestedMac)
+    || (transactionMacRaw && transactionMac !== requestedMac && !transactionLinkedToCustomer)
   ) {
     return {
       found: false,
