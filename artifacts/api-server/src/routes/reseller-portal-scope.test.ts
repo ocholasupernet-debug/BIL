@@ -1021,6 +1021,44 @@ test("signed reseller portal requests stay within their assigned service", async
     }
   });
 
+  await t.test("paid captive-portal handoff skips slow IP binding and direct login work", async () => {
+    transactions = [{ ...assignedTransaction }];
+    customers = [{ ...assignedCustomer }];
+    routerOperations.length = 0;
+    clearRequests();
+    includeRouterFixture = true;
+    try {
+      const activation = await request("/api/mpesa/hotspot-mac-access", {
+        method: "POST",
+        body: {
+          checkout_id: assignedTransaction.reference,
+          mac_address: assignedCustomer.mac_address,
+          portal_login_handoff: true,
+        },
+      });
+      assert.equal(activation.status, 200, await activation.clone().text());
+      const body = await activation.json() as {
+        ok: boolean;
+        connected?: boolean;
+        portal_login_handoff?: boolean;
+        credentials?: { username: string; password: string };
+      };
+      assert.equal(body.ok, true);
+      assert.equal(body.portal_login_handoff, true);
+      assert.equal(body.connected, false);
+      assert.equal(body.credentials?.username, assignedCustomer.username);
+      assert.ok(routerOperations.some(row => row.name === "upsertUser"), "the paid RouterOS account is ready before handoff");
+      assert.ok(routerOperations.some(row => row.name === "scheduleFup"), "the paid quota policy is installed before handoff");
+      assert.ok(routerOperations.some(row => row.name === "ensureProfile"), "the plan profile is verified before handoff");
+      assert.equal(routerOperations.some(row => row.name === "resolveClientIp"), false);
+      assert.equal(routerOperations.some(row => row.name === "addBinding"), false);
+      assert.equal(routerOperations.some(row => row.name === "ensureRateQueue"), false);
+      assert.equal(routerOperations.some(row => row.name === "connectUser"), false);
+    } finally {
+      includeRouterFixture = false;
+    }
+  });
+
   await t.test("loyalty-point activation creates and links its prepaid Hotspot account", async () => {
     const loyaltyTransaction = {
       ...assignedTransaction,

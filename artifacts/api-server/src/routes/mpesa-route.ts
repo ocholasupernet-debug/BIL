@@ -3286,10 +3286,14 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     return;
   }
   timing("routerCredentialsLoaded");
-  const routerAddressPromise = hotspotPaymentOperations.resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
-    logger.warn({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] target device address lookup failed");
-    return null;
-  });
+  // A normal captive-portal handoff authenticates with the paid username and
+  // password. It does not need a RouterOS host-IP lookup or a direct API login.
+  const routerAddressPromise = portalLoginHandoff
+    ? Promise.resolve(null)
+    : hotspotPaymentOperations.resolveHotspotClientIpByMac(credentials, mac).catch((error) => {
+      logger.warn({ err: error, checkoutId, routerId: routerRow.id, mac }, "[mpesa/hotspot-mac-access] target device address lookup failed");
+      return null;
+    });
   let hotspotServer: string | undefined;
   if (plan.port_id) {
     const portResult = loadHotspotPortContext(
@@ -3373,7 +3377,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     ]);
     const [, resolvedRouterAddress] = await Promise.all([accountPrerequisites, routerAddressPromise]);
     const routerAddress = resolvedRouterAddress ?? "";
-    timing("radiusProfileAndDeviceLookupReady");
+    timing(portalLoginHandoff ? "radiusProfileReady" : "radiusProfileAndDeviceLookupReady");
     if (routerAddress && customer?.id) {
       void sbUpdateStrict(
         "isp_customers",
@@ -3425,23 +3429,29 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     timing("routerUserProvisioned");
 
     let paidBindingApplied = false;
-    try {
-      paidBindingApplied = await hotspotPaymentOperations.addHotspotIpBinding(credentials, {
-        macAddress: mac,
-        ipAddress: routerAddress || undefined,
-        comment: hotspotUsername,
-        expiresInSeconds: remainingExpirySeconds,
-        bindingType: "regular",
-      });
-    } catch (error) {
-      logger.warn({ err: error, router: routerRow.name, username: hotspotUsername, mac }, "[mpesa/hotspot-mac-access] device binding deferred; credentials remain available");
-    }
-    if (paidBindingApplied) {
-      await hotspotPaymentOperations.ensureHotspotUserRateQueue(credentials, {
-        username: hotspotUsername,
-        address: routerAddress || undefined,
-        maxLimit: rateLimit,
-      });
+    // The verified plan profile applies rate limits/shared-user policy, while
+    // RouterOS user quotas and FUP are already installed above. A normal
+    // captive-portal login authenticates the paid credentials directly, so
+    // don't block that handoff on optional IP binding and simple-queue work.
+    if (!portalLoginHandoff) {
+      try {
+        paidBindingApplied = await hotspotPaymentOperations.addHotspotIpBinding(credentials, {
+          macAddress: mac,
+          ipAddress: routerAddress || undefined,
+          comment: hotspotUsername,
+          expiresInSeconds: remainingExpirySeconds,
+          bindingType: "regular",
+        });
+      } catch (error) {
+        logger.warn({ err: error, router: routerRow.name, username: hotspotUsername, mac }, "[mpesa/hotspot-mac-access] device binding deferred; credentials remain available");
+      }
+      if (paidBindingApplied) {
+        await hotspotPaymentOperations.ensureHotspotUserRateQueue(credentials, {
+          username: hotspotUsername,
+          address: routerAddress || undefined,
+          maxLimit: rateLimit,
+        });
+      }
     }
     let routerConnected = false;
     if (routerAddress && !portalLoginHandoff) {
