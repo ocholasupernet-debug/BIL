@@ -9,6 +9,7 @@ import {
 } from "../lib/supabase-client.js";
 import {
   billingCreateInvoice,
+  billingRouterRevenueSummary,
   billingRevenueSummary,
   billingSelect,
   billingUpdateInvoice,
@@ -210,12 +211,51 @@ router.get("/billing/revenue-summary", requireAdmin(), async (req: Request, res:
       res.status(403).json({ ok: false, error: "An active account is required." });
       return;
     }
-    const [summary] = await billingRevenueSummary<{
+    const rawRouterId = req.query.routerId;
+    let summaryRows: {
       income_today: number | string;
       income_month: number | string;
       total_revenue: number | string;
       total_transactions: number | string;
-    }>(account.id);
+    }[];
+    if (rawRouterId !== undefined) {
+      const routerId = typeof rawRouterId === "string" ? Number(rawRouterId) : Number.NaN;
+      if (!Number.isSafeInteger(routerId) || routerId < 1) {
+        res.status(400).json({ ok: false, error: "Choose a valid router." });
+        return;
+      }
+
+      const ownedRouter = account.role === "isp_admin"
+        ? await sbSelectStrict<{ id: number }>(
+          "isp_routers",
+          `id=eq.${routerId}&admin_id=eq.${account.id}&select=id&limit=1`,
+        )
+        : [];
+      const assignedResellerRouter = account.role === "reseller" && Number.isSafeInteger(Number(account.parent_id))
+        ? await sbSelectStrict<{ id: number }>(
+          "isp_reseller_ports",
+          `admin_id=eq.${Number(account.parent_id)}&assigned_reseller_id=eq.${account.id}&router_id=eq.${routerId}&status=neq.disabled&select=id&limit=1`,
+        )
+        : [];
+      if (!ownedRouter.length && !assignedResellerRouter.length) {
+        res.status(404).json({ ok: false, error: "That router is not available in this account." });
+        return;
+      }
+      summaryRows = await billingRouterRevenueSummary<{
+        income_today: number | string;
+        income_month: number | string;
+        total_revenue: number | string;
+        total_transactions: number | string;
+      }>(account.id, routerId);
+    } else {
+      summaryRows = await billingRevenueSummary<{
+        income_today: number | string;
+        income_month: number | string;
+        total_revenue: number | string;
+        total_transactions: number | string;
+      }>(account.id);
+    }
+    const summary = summaryRows[0];
     res.json({
       ok: true,
       incomeToday: Number(summary?.income_today ?? 0),

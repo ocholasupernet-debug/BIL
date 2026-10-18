@@ -98,6 +98,14 @@ export function billingRevenueSummary<T>(accountId: number): Promise<T[]> {
   });
 }
 
+export function billingRouterRevenueSummary<T>(accountId: number, routerId: number): Promise<T[]> {
+  return request<T>("rpc/get_router_revenue_summary", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ p_account_id: accountId, p_router_id: routerId }),
+  });
+}
+
 export function billingPlatformIncomeSummary<T>(): Promise<T[]> {
   return request<T>("rpc/get_platform_income_summary", {
     method: "POST",

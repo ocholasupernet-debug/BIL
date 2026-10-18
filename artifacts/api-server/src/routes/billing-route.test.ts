@@ -114,6 +114,12 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
         { amount: 2500, payment_method: "mpesa_registration" },
         { amount: 800, payment_method: "manual_registration" },
       ];
+    } else if (url.pathname.endsWith("/isp_routers")) {
+      if (url.searchParams.get("id") === "eq.17" && url.searchParams.get("admin_id") === "eq.42") {
+        rows = [{ id: 17 }];
+      }
+    } else if (url.pathname.endsWith("/rpc/get_router_revenue_summary")) {
+      rows = [{ income_today: 175, income_month: 950, total_revenue: 12250, total_transactions: 31 }];
     } else if (url.pathname.endsWith("/platform_billing_invoices")) {
       if (method === "POST") {
         const created = invoice ?? { ...JSON.parse(String(init?.body)) as Record<string, unknown>, id: 91 };
@@ -187,6 +193,31 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     });
     assert.equal(currentMonthAccountPreview.status, 200);
     assert.equal((await currentMonthAccountPreview.json() as { eligible: boolean }).eligible, false);
+
+    requests.splice(0);
+    const routerRevenue = await originalFetch(`${endpoint}/revenue-summary?routerId=17`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(routerRevenue.status, 200);
+    assert.deepEqual(await routerRevenue.json(), {
+      ok: true,
+      incomeToday: 175,
+      incomeMonth: 950,
+      totalRevenue: 12250,
+      totalTransactions: 31,
+    });
+    assert.deepEqual(
+      requests.find(row => row.path.endsWith("/rpc/get_router_revenue_summary"))?.body,
+      { p_account_id: 42, p_router_id: 17 },
+      "router-scoped ledger totals must be requested for the authenticated account",
+    );
+
+    requests.splice(0);
+    const foreignRouterRevenue = await originalFetch(`${endpoint}/revenue-summary?routerId=18`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(foreignRouterRevenue.status, 404);
+    assert.ok(!requests.some(row => row.path.endsWith("/rpc/get_router_revenue_summary")), "unowned routers must not reach the ledger summary");
 
     const prepared = await originalFetch(`${endpoint}/renew`, {
       method: "POST",

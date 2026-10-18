@@ -65,11 +65,12 @@ type ResellerSummary = {
   totalResellers: number;
 };
 
-async function fetchRevenueSummary(): Promise<RevenueSummary> {
+async function fetchRevenueSummary(routerId: number | "all"): Promise<RevenueSummary> {
   const token = (() => {
     try { return localStorage.getItem("ochola_api_token") || ""; } catch { return ""; }
   })();
-  const response = await fetch("/api/billing/revenue-summary", {
+  const query = routerId === "all" ? "" : `?routerId=${encodeURIComponent(String(routerId))}`;
+  const response = await fetch(`/api/billing/revenue-summary${query}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   const data = await response.json() as RevenueSummary & { error?: string };
@@ -435,8 +436,8 @@ export default function Dashboard() {
     isError: revenueError,
     refetch: refetchRevenue,
   } = useQuery({
-    queryKey: ["immutable-revenue-summary", ADMIN_ID],
-    queryFn: fetchRevenueSummary,
+    queryKey: ["immutable-revenue-summary", ADMIN_ID, selectedRouter],
+    queryFn: () => fetchRevenueSummary(selectedRouter),
     refetchInterval: 60_000,
   });
   const {
@@ -734,7 +735,7 @@ export default function Dashboard() {
 
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>
           Financial pulse
-          <span className="dashboard-section-meta">{selectedRouterObj ? "Revenue and total transaction figures remain ISP-wide; activity below is router-filtered" : "Updated from live payment activity"}</span>
+          <span className="dashboard-section-meta">{selectedRouterObj ? `Revenue figures for ${selectedRouterObj.name} · immutable payment ledger` : "Updated from the immutable payment ledger"}</span>
           <button
             type="button"
             className="dashboard-amount-toggle"
