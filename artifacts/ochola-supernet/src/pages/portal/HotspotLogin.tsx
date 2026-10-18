@@ -265,6 +265,19 @@ function hotspotPortalFetch(input: RequestInfo | URL, init: RequestInit = {}): P
   return fetch(input, { ...init, headers });
 }
 
+async function fetchActiveHotspotDevices(adminId: number | null, routerId: number | null): Promise<ConnectedDevice[]> {
+  const params = new URLSearchParams();
+  if (adminId) params.set("adminId", String(adminId));
+  if (routerId) params.set("routerId", String(routerId));
+  const query = params.toString();
+  const response = await hotspotPortalFetch(
+    hotspotApiUrl(`/api/mpesa/hotspot-devices${query ? `?${query}` : ""}`),
+  );
+  const data = await response.json() as { ok?: boolean; devices?: ConnectedDevice[]; error?: string };
+  if (!response.ok || !data.ok) throw new Error(data.error || "The active TV devices could not be detected.");
+  return Array.isArray(data.devices) ? data.devices : [];
+}
+
 type PortalBranding = {
   ispName?: string;
   tagline?: string;
@@ -624,6 +637,9 @@ function HotspotLoginView({
   const [autoReconnectInProgress, setAutoReconnectInProgress] = useState(false);
   const troubleshootInFlight = useRef(false);
   const autoTroubleshootKey = useRef("");
+  const [tvTroubleshootMode, setTvTroubleshootMode] = useState(false);
+  const [troubleshootMacAddress, setTroubleshootMacAddress] = useState(portalContext.mac);
+  const [tvReconnectMac, setTvReconnectMac] = useState("");
   const [troubleshootDialogOpen, setTroubleshootDialogOpen] = useState(() => (
     initialTroubleshootOpen
     || (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("page") === "troubleshoot")
@@ -1558,8 +1574,13 @@ function HotspotLoginView({
     error?: string;
   };
 
-  const requestHotspotTroubleshoot = useCallback(async (action: "check" | "login", expiryOnly = false): Promise<TroubleshootResult | null> => {
-    if (!adminId || !portalContext.mac) {
+  const requestHotspotTroubleshoot = useCallback(async (
+    action: "check" | "login",
+    expiryOnly = false,
+    deviceMacAddress = portalContext.mac,
+  ): Promise<TroubleshootResult | null> => {
+    const targetMac = normalizeMacAddress(deviceMacAddress);
+    if (!adminId || !targetMac) {
       setTroubleshootError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
       return null;
     }
@@ -1574,7 +1595,7 @@ function HotspotLoginView({
           ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
           ...(expiryOnly ? { expiry_only: true } : {}),
           ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
-          mac_address: portalContext.mac,
+          mac_address: targetMac,
         }),
       });
       const data = await res.json() as {
@@ -1807,12 +1828,65 @@ function HotspotLoginView({
   };
 
   const openAlreadyPaidReconnect = () => {
+    setTvTroubleshootMode(false);
+    setTvReconnectMac("");
+    setTroubleshootMacAddress(portalContext.mac);
     setTroubleshootDialogOpen(true);
     if (paymentMode === "data" && (hotspotCredentials || loyaltyCreds)) {
       void handlePlanLogin();
     } else {
       void handleTroubleshoot();
     }
+  };
+
+  const openTvTroubleshooting = async (macHint = "") => {
+    setTvTroubleshootMode(true);
+    setTvReconnectMac("");
+    setLoginSession(null);
+    setTroubleshootError("");
+    setTroubleshootMessage("Detecting active TV devices on this hotspot…");
+    setTroubleshootMacAddress(normalizeMacAddress(macHint) || portalContext.mac);
+    setTroubleshootDialogOpen(true);
+    setTvDevicesLoading(true);
+    try {
+      const devices = await fetchActiveHotspotDevices(adminId, portalScope.routerId);
+      setTvDevices(devices);
+      const explicitHint = normalizeMacAddress(macHint);
+      const portalMac = normalizeMacAddress(portalContext.mac);
+      const hintedMac = explicitHint || portalMac;
+      const detected = devices.find(device => normalizeMacAddress(device.macAddress) === hintedMac)
+        ?? devices.find(device => normalizeMacAddress(device.macAddress) === portalMac)
+        ?? (devices.length === 1 ? devices[0] : null);
+      if (detected) {
+        setTroubleshootMacAddress(detected.macAddress);
+        setTroubleshootMessage(`Detected ${detected.name} (${detected.macAddress}) on ${detected.routerName}. Checking its package and reconnecting…`);
+        setTvReconnectMac(detected.macAddress);
+      } else if (explicitHint) {
+        setTroubleshootMacAddress(explicitHint);
+        setTroubleshootMessage("That MAC address is not currently visible on the router. Keep the TV connected to this Wi-Fi and start troubleshooting to keep checking.");
+      } else {
+        setTroubleshootMacAddress("");
+        setTroubleshootMessage(devices.length > 1
+          ? "More than one device is active. Select the TV from the list, then start troubleshooting."
+          : "No active device was detected. Connect the TV to this Wi-Fi, then refresh or enter its MAC address.");
+      }
+    } catch (error) {
+      setTroubleshootError(error instanceof Error ? error.message : "The active TV devices could not be detected.");
+    } finally {
+      setTvDevicesLoading(false);
+    }
+  };
+
+  const startSelectedTvTroubleshooting = () => {
+    const mac = normalizeMacAddress(troubleshootMacAddress);
+    if (!mac) {
+      setTroubleshootError("Select an active TV or enter a valid TV MAC address first.");
+      return;
+    }
+    setTroubleshootError("");
+    setLoginSession(null);
+    setTroubleshootMessage("Checking the TV package and asking the router to reconnect it. We’ll keep retrying while this window stays open.");
+    setTvReconnectMac(mac);
   };
 
   useEffect(() => {
@@ -1875,6 +1949,83 @@ function HotspotLoginView({
       if (autoTroubleshootKey.current === lookupKey) autoTroubleshootKey.current = "";
     };
   }, [troubleshootingOnly, adminId, portalContext.mac, requestHotspotTroubleshoot, signInWithSavedCredentials]);
+
+  useEffect(() => {
+    if (!tvTroubleshootMode || !troubleshootDialogOpen || !tvReconnectMac) return;
+    let cancelled = false;
+    let retryTimer = 0;
+    let attempts = 0;
+    const retry = async () => {
+      if (cancelled) return;
+      if (troubleshootInFlight.current) {
+        retryTimer = window.setTimeout(() => void retry(), 200);
+        return;
+      }
+      troubleshootInFlight.current = true;
+      setTroubleshootLoading(true);
+      setTroubleshootAction("login");
+      let result: TroubleshootResult | null = null;
+      try {
+        result = await requestHotspotTroubleshoot("login", false, tvReconnectMac);
+      } finally {
+        troubleshootInFlight.current = false;
+        setTroubleshootLoading(false);
+        setTroubleshootAction(null);
+      }
+      if (cancelled) return;
+      if (result?.connected) {
+        setTroubleshootMessage("The TV is connected. Keep it on this Wi-Fi.");
+        setTvReconnectMac("");
+        return;
+      }
+      if (result?.retryable) {
+        attempts += 1;
+        setTroubleshootMessage("The TV package is being checked. Reconnecting automatically while this window stays open…");
+        retryTimer = window.setTimeout(() => void retry(), Math.min(2_000 * 2 ** Math.min(attempts - 1, 4), 30_000));
+        return;
+      }
+      setTvReconnectMac("");
+    };
+    void retry();
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, [tvTroubleshootMode, troubleshootDialogOpen, tvReconnectMac, requestHotspotTroubleshoot]);
+
+  useEffect(() => {
+    if (!tvTroubleshootMode || !troubleshootDialogOpen || !adminId) return;
+    let cancelled = false;
+    let timer = 0;
+    const refresh = async () => {
+      try {
+        const devices = await fetchActiveHotspotDevices(adminId, portalScope.routerId);
+        if (cancelled) return;
+        setTvDevices(devices);
+        if (!troubleshootMacAddress) {
+          const portalMac = normalizeMacAddress(portalContext.mac);
+          const detected = devices.find(device => normalizeMacAddress(device.macAddress) === portalMac)
+            ?? (devices.length === 1 ? devices[0] : null);
+          if (detected) {
+            setTroubleshootMacAddress(detected.macAddress);
+            setTroubleshootMessage(`Detected ${detected.name} (${detected.macAddress}) on ${detected.routerName}.`);
+            setTvReconnectMac(detected.macAddress);
+          }
+        }
+      } catch (error) {
+        if (!cancelled && !tvReconnectMac) {
+          setTroubleshootError(error instanceof Error ? error.message : "Could not refresh active TV devices.");
+        }
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => void refresh(), 15_000);
+      }
+    };
+    timer = window.setTimeout(() => void refresh(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [tvTroubleshootMode, troubleshootDialogOpen, adminId, portalScope.routerId, portalContext.mac, troubleshootMacAddress, tvReconnectMac]);
 
   useEffect(() => {
     if (!troubleshootDialogOpen) return;
@@ -3014,6 +3165,19 @@ function HotspotLoginView({
               >
                 Already paid?
               </a>
+              <a
+                className="hp-header-reconnect"
+                href="#troubleshoot-tv"
+                aria-label="Detect and troubleshoot a TV connection"
+                aria-controls="hp-troubleshoot-dialog"
+                aria-haspopup="dialog"
+                onClick={event => {
+                  event.preventDefault();
+                  void openTvTroubleshooting();
+                }}
+              >
+                Troubleshoot TV
+              </a>
               <div className="hp-status">
                 <span className="hp-status-dot" />
                 Online
@@ -3133,8 +3297,45 @@ function HotspotLoginView({
                 </div>
                 <div className="hp-glass-body">
                   <div className="hp-troubleshoot-device">
-                    <span className="hp-troubleshoot-device-label">Checking this device</span>
-                    <strong>{portalContext.mac || "Device MAC unavailable"}</strong>
+                    <span className="hp-troubleshoot-device-label">{tvTroubleshootMode ? "Active TV device" : "Checking this device"}</span>
+                    {tvTroubleshootMode ? (
+                      <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                        <select
+                          className="hp-tv-select"
+                          aria-label="Select an active TV device"
+                          value={troubleshootMacAddress}
+                          onChange={event => {
+                            setTroubleshootMacAddress(event.target.value);
+                            setTvReconnectMac("");
+                            setTroubleshootError("");
+                            setLoginSession(null);
+                          }}
+                        >
+                          <option value="">Select a TV detected on this hotspot</option>
+                          {tvDevices.map(device => (
+                            <option key={`${device.routerId}-${device.macAddress}`} value={device.macAddress}>
+                              {device.name} · {device.macAddress}{device.address ? ` · ${device.address}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          className="hp-tv-input"
+                          aria-label="TV MAC address"
+                          value={troubleshootMacAddress}
+                          onChange={event => {
+                            setTroubleshootMacAddress(event.target.value.toUpperCase());
+                            setTvReconnectMac("");
+                            setTroubleshootError("");
+                            setLoginSession(null);
+                          }}
+                          placeholder="Or enter TV MAC: AA:BB:CC:DD:EE:FF"
+                          autoCapitalize="characters"
+                        />
+                        <small>{tvDevicesLoading ? "Detecting devices…" : `${tvDevices.length} active device${tvDevices.length === 1 ? "" : "s"} detected · refreshing every 15 seconds`}</small>
+                      </div>
+                    ) : (
+                      <strong>{portalContext.mac || "Device MAC unavailable"}</strong>
+                    )}
                   </div>
 
                   {troubleshootLoading ? (
@@ -3184,6 +3385,25 @@ function HotspotLoginView({
                   )}
 
                   <div className="hp-troubleshoot-modal-actions">
+                    {tvTroubleshootMode && (
+                      <>
+                        <button
+                          type="button"
+                          className="hp-troubleshoot-modal-action primary"
+                          onClick={startSelectedTvTroubleshooting}
+                          disabled={troubleshootLoading || Boolean(tvReconnectMac) || !normalizeMacAddress(troubleshootMacAddress)}
+                        >
+                          {tvReconnectMac
+                            ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Troubleshooting TV…</>
+                            : <><Tv size={15} /> Troubleshoot / reconnect TV</>}
+                        </button>
+                        {tvReconnectMac && (
+                          <button type="button" className="hp-troubleshoot-modal-action" onClick={() => setTvReconnectMac("")}>
+                            Stop checking
+                          </button>
+                        )}
+                      </>
+                    )}
                     {loginSession?.status === "active" && !loginSession.connected && (
                       <button
                         type="button"
@@ -4151,6 +4371,16 @@ function HotspotLoginView({
                   <div className="hp-tv-actions">
                     <button type="button" className="hp-btn hp-tv-cancel" onClick={() => setTvDialogOpen(false)}>
                       Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="hp-btn hp-tv-cancel"
+                      onClick={() => {
+                        setTvDialogOpen(false);
+                        void openTvTroubleshooting(tvMacAddress);
+                      }}
+                    >
+                      <Wifi size={15} /> Troubleshoot TV
                     </button>
                     <button type="submit" className="hp-btn hp-btn-mpesa" disabled={payLoading || plansLoading}>
                       {payLoading ? (
