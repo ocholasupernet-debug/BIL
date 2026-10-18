@@ -1840,35 +1840,30 @@ function HotspotLoginView({
   };
 
   const openTvTroubleshooting = async (macHint = "") => {
+    const hintedMac = normalizeMacAddress(macHint);
+    const savedMac = savedTvDevices[0]?.macAddress ?? "";
     setTvTroubleshootMode(true);
     setTvReconnectMac("");
     setLoginSession(null);
     setTroubleshootError("");
-    setTroubleshootMessage("Detecting active TV devices on this hotspot…");
-    setTroubleshootMacAddress(normalizeMacAddress(macHint) || portalContext.mac);
+    setTroubleshootMessage("Choose a saved TV, select an active device, or enter its MAC address to start troubleshooting.");
+    setTroubleshootMacAddress(hintedMac || savedMac);
     setTroubleshootDialogOpen(true);
     setTvDevicesLoading(true);
     try {
       const devices = await fetchActiveHotspotDevices(adminId, portalScope.routerId);
       setTvDevices(devices);
-      const explicitHint = normalizeMacAddress(macHint);
-      const portalMac = normalizeMacAddress(portalContext.mac);
-      const hintedMac = explicitHint || portalMac;
-      const detected = devices.find(device => normalizeMacAddress(device.macAddress) === hintedMac)
-        ?? devices.find(device => normalizeMacAddress(device.macAddress) === portalMac)
+      const selectedMac = hintedMac || savedMac;
+      const detected = devices.find(device => normalizeMacAddress(device.macAddress) === selectedMac)
         ?? (devices.length === 1 ? devices[0] : null);
       if (detected) {
-        setTroubleshootMacAddress(detected.macAddress);
-        setTroubleshootMessage(`Detected ${detected.name} (${detected.macAddress}) on ${detected.routerName}. Checking its package and reconnecting…`);
-        setTvReconnectMac(detected.macAddress);
-      } else if (explicitHint) {
-        setTroubleshootMacAddress(explicitHint);
-        setTroubleshootMessage("That MAC address is not currently visible on the router. Keep the TV connected to this Wi-Fi and start troubleshooting to keep checking.");
+        setTroubleshootMacAddress(current => normalizeMacAddress(current) || detected.macAddress);
+        setTroubleshootMessage(`Detected ${detected.name} (${detected.macAddress}) on ${detected.routerName}. Confirm the device, then start troubleshooting.`);
+      } else if (hintedMac || savedMac) {
+        setTroubleshootMessage("The selected MAC is not currently visible on the router. You can still try it, or choose another saved/active device.");
       } else {
         setTroubleshootMacAddress("");
-        setTroubleshootMessage(devices.length > 1
-          ? "More than one device is active. Select the TV from the list, then start troubleshooting."
-          : "No active device was detected. Connect the TV to this Wi-Fi, then refresh or enter its MAC address.");
+        setTroubleshootMessage("No active device was detected. Connect the TV to this Wi-Fi, choose a saved device, or enter its MAC address.");
       }
     } catch (error) {
       setTroubleshootError(error instanceof Error ? error.message : "The active TV devices could not be detected.");
@@ -2003,13 +1998,10 @@ function HotspotLoginView({
         if (cancelled) return;
         setTvDevices(devices);
         if (!troubleshootMacAddress) {
-          const portalMac = normalizeMacAddress(portalContext.mac);
-          const detected = devices.find(device => normalizeMacAddress(device.macAddress) === portalMac)
-            ?? (devices.length === 1 ? devices[0] : null);
+          const detected = devices.length === 1 ? devices[0] : null;
           if (detected) {
             setTroubleshootMacAddress(detected.macAddress);
-            setTroubleshootMessage(`Detected ${detected.name} (${detected.macAddress}) on ${detected.routerName}.`);
-            setTvReconnectMac(detected.macAddress);
+            setTroubleshootMessage(`Detected ${detected.name} (${detected.macAddress}) on ${detected.routerName}. Confirm the device, then start troubleshooting.`);
           }
         }
       } catch (error) {
@@ -2025,7 +2017,7 @@ function HotspotLoginView({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [tvTroubleshootMode, troubleshootDialogOpen, adminId, portalScope.routerId, portalContext.mac, troubleshootMacAddress, tvReconnectMac]);
+  }, [tvTroubleshootMode, troubleshootDialogOpen, adminId, portalScope.routerId, troubleshootMacAddress, tvReconnectMac]);
 
   useEffect(() => {
     if (!troubleshootDialogOpen) return;
@@ -3329,8 +3321,17 @@ function HotspotLoginView({
                             setLoginSession(null);
                           }}
                         >
-                          <option value="">Select a TV detected on this hotspot</option>
-                          {tvDevices.map(device => (
+                          <option value="">Choose a saved or active TV</option>
+                          {savedTvDevices.length > 0 && (
+                            <optgroup label="Saved TVs">
+                              {savedTvDevices.map(device => (
+                                <option key={`saved-${device.macAddress}`} value={device.macAddress}>
+                                  {device.name} · {device.macAddress} · saved
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {tvDevices.filter(device => !savedTvDevices.some(saved => saved.macAddress === device.macAddress)).map(device => (
                             <option key={`${device.routerId}-${device.macAddress}`} value={device.macAddress}>
                               {device.name} · {device.macAddress}{device.address ? ` · ${device.address}` : ""}
                             </option>
@@ -3346,7 +3347,7 @@ function HotspotLoginView({
                             setTroubleshootError("");
                             setLoginSession(null);
                           }}
-                          placeholder="Or enter TV MAC: AA:BB:CC:DD:EE:FF"
+                          placeholder="Or add a TV MAC: AA:BB:CC:DD:EE:FF"
                           autoCapitalize="characters"
                         />
                         <small>{tvDevicesLoading ? "Detecting devices…" : `${tvDevices.length} active device${tvDevices.length === 1 ? "" : "s"} detected · refreshing every 15 seconds`}</small>
