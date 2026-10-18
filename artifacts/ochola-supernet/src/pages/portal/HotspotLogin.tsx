@@ -2592,6 +2592,22 @@ function HotspotLoginView({
            transition: transform .2s ease, background .2s ease;
          }
          .hp-tv-trigger:hover { transform: translateY(-1px); background: var(--isp-accent-border); }
+         .hp-tv-paid-trigger {
+           display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+           min-height: 42px; margin-top: 14px; padding: 10px 15px; border-radius: 11px;
+           border: 1px solid #047857; background: #047857; color: #fff;
+           font: 800 12px 'Plus Jakarta Sans', sans-serif; cursor: pointer;
+           box-shadow: 0 4px 12px rgba(4,120,87,.22);
+         }
+         .hp-tv-paid-trigger:hover { background: #065f46; border-color: #065f46; }
+         .hp-tv-purchase-actions {
+           display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
+           gap: 8px; margin-bottom: 14px;
+         }
+         @media (max-width: 560px) {
+           .hp-tv-purchase-actions { justify-content: stretch; }
+           .hp-tv-purchase-actions button { flex: 1 1 100%; }
+         }
          .hp-modal-backdrop {
            position: fixed; inset: 0; z-index: 100; display: flex; align-items: center;
            justify-content: center; padding: 18px; background: rgba(0,5,12,.78);
@@ -3641,9 +3657,16 @@ function HotspotLoginView({
                        {isTvMode ? <Tv size={27} strokeWidth={1.8} /> : <Sparkles size={27} strokeWidth={1.8} />}
                      </div>
                    </div>
-                    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+                    <div className="hp-tv-purchase-actions">
                       <button type="button" className="hp-tv-trigger" onClick={openTvDialog}>
                         <Tv size={15} /> Connect to TV
+                      </button>
+                      <button
+                        type="button"
+                        className="hp-tv-paid-trigger"
+                        onClick={() => void openTvTroubleshooting(tvMacAddress)}
+                      >
+                        <Wifi size={15} /> Already paid? Reconnect TV
                       </button>
                     </div>
                    <div className="hp-trust-row">
