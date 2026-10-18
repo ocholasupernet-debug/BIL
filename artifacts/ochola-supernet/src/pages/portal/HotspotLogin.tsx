@@ -2826,6 +2826,8 @@ function HotspotLoginView({
          .hp-tv-actions { display:flex; gap:9px; margin-top:20px; }
          .hp-tv-actions .hp-btn { flex:1; }
          .hp-tv-cancel { background:rgba(255,255,255,.06); color:rgba(255,255,255,.65); border:1px solid rgba(255,255,255,.1); box-shadow:none; }
+         .hp-tv-reconnect { width:100%; margin-top:14px; background:rgba(52,211,153,.12); color:#6ee7b7; border:1px solid rgba(52,211,153,.35); box-shadow:none; }
+         .hp-tv-reconnect:hover { background:rgba(52,211,153,.2); color:#a7f3d0; }
 
         .hp-plans-grid {
           display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
@@ -4368,19 +4370,20 @@ function HotspotLoginView({
                     </div>
                   )}
 
+                  <button
+                    type="button"
+                    className="hp-btn hp-tv-reconnect"
+                    onClick={() => {
+                      setTvDialogOpen(false);
+                      void openTvTroubleshooting(tvMacAddress);
+                    }}
+                  >
+                    <Wifi size={15} /> Already paid? Reconnect TV
+                  </button>
+
                   <div className="hp-tv-actions">
                     <button type="button" className="hp-btn hp-tv-cancel" onClick={() => setTvDialogOpen(false)}>
                       Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="hp-btn hp-tv-cancel"
-                      onClick={() => {
-                        setTvDialogOpen(false);
-                        void openTvTroubleshooting(tvMacAddress);
-                      }}
-                    >
-                      <Wifi size={15} /> Troubleshoot TV
                     </button>
                     <button type="submit" className="hp-btn hp-btn-mpesa" disabled={payLoading || plansLoading}>
                       {payLoading ? (
