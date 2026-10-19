@@ -503,7 +503,7 @@ var COLORS=[
 
  var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=false;
  var PAYMENT_STATUS_LOADED=false, PAYMENT_METHOD_READY=false, PAYMENT_STATUS_FAILED=false, PAYMENT_GATEWAY="";
- var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="";
+ var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="", tvPurchaseRefreshTimer=0;
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
    var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalAutoReconnectStartedAt=0, portalPaidLoginHandoff=false;
@@ -942,6 +942,27 @@ function normaliseMac(value){
   if(!/^(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(raw)&&!/^[0-9a-f]{12}$/i.test(raw))return "";
   var compact=raw.replace(/[:-]/g,"");
   return compact.toUpperCase().match(/.{2}/g).join(":");
+}
+function formatMacInputElement(input){
+  var raw=String(input.value||"");
+  var cursor=input.selectionStart===null?raw.length:input.selectionStart;
+  var digitsBefore=raw.slice(0,cursor).replace(/[^0-9a-f]/gi,"").length;
+  var digits=raw.replace(/[^0-9a-f]/gi,"").slice(0,12).toUpperCase();
+  input.value=digits.match(/.{1,2}/g)?.join(":")||"";
+  var nextCursor=digitsBefore?digitsBefore+Math.floor((digitsBefore-1)/2):0;
+  try{input.setSelectionRange(nextCursor,nextCursor);}catch(e){}
+  return input.value;
+}
+function paymentPhoneStorageKey(){
+  return "ochola_hotspot_payment_phone_v1:"+window.location.host+":"+(PORTAL_ADMIN_ID||"tenant");
+}
+function readLastPaymentPhone(){
+  try{return (window.localStorage.getItem(paymentPhoneStorageKey())||"").slice(0,24);}catch(e){return "";}
+}
+function rememberPaymentPhone(value){
+  var phone=String(value||"").trim().slice(0,24);
+  if(!phone)return;
+  try{window.localStorage.setItem(paymentPhoneStorageKey(),phone);}catch(e){}
 }
 var DEVICE_MAC=normaliseMac(ROUTER_MAC)||normaliseMac(PORTAL_QUERY.get("mac")||PORTAL_QUERY.get("mac-address")||"");
 var PORTAL_DEVICE_MAC=DEVICE_MAC;
@@ -1614,7 +1635,7 @@ function renderModal(){
     }
     var phoneHtml=mode==="points"?'':
       '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
-      '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+escapePortalText(stkPhone)+'" />';
+      '<input id="stkPhoneInput" type="tel" placeholder="'+escapePortalText(readLastPaymentPhone()||"07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX")+'" onblur="rememberPaymentPhone(this.value)" class="inp" style="margin-bottom:1.25rem" value="'+escapePortalText(stkPhone)+'" />';
     var noMethod=!mpesaOk&&mode!=="points"&&loyState!=="loading";
     b.innerHTML='<div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.22)">'+
        '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">'+(mode==="points"
@@ -1784,6 +1805,7 @@ function sendStk(){
   if(!canStartPaymentCheckout())return;
   var phone=document.getElementById("stkPhoneInput")?document.getElementById("stkPhoneInput").value:"";
   if(!phone.trim())return;
+  rememberPaymentPhone(phone);
   if((!DEVICE_MAC&&!DEVICE_IP)||PORTAL_ADMIN_ID<1){stkError="The router could not identify this Wi-Fi session. Open the sign-in page from the connected Wi-Fi network and try again.";stkState="error";renderModal();return;}
   stkPhone=phone; stkError=""; stkState="loading"; renderModal();
     var checkout={phone:phone,plan_id:selectedPlan?selectedPlan.id:0,adminId:PORTAL_ADMIN_ID,
@@ -1842,6 +1864,7 @@ function sendStk(){
 }
 
  function closeTvModal(){
+   if(tvPurchaseRefreshTimer){window.clearInterval(tvPurchaseRefreshTimer);tvPurchaseRefreshTimer=0;}
    document.getElementById("tvModal").style.display="none";
    tvError=""; tvDevicesLoading=false;
  }
@@ -2004,7 +2027,8 @@ function sendStk(){
        (tvDevicesLoading?"Checking devices currently visible on this hotspot network…":(tvDevices.length?"Connected devices are listed here. Saved devices can be reused even when they are offline.":"Saved devices remain available here. You can also enter a new TV's MAC address manually."))+
      '</p>'+
      '<label class="lbl" style="color:#6ee7b7">Device MAC address</label>'+
-     '<input id="tvMacAddress" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvMacAddress)+'" placeholder="AA:BB:CC:DD:EE:FF" />'+
+     '<input id="tvMacAddress" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvMacAddress)+'" placeholder="Enter MAC; colons are added automatically" list="tvMacAddressSuggestions" />'+
+     '<datalist id="tvMacAddressSuggestions">'+savedDevices.map(function(device){return '<option value="'+tvEsc(device.macAddress)+'" label="'+tvEsc(device.name)+'"></option>';}).join("")+connectedDevices.map(function(device){return '<option value="'+tvEsc(device.macAddress)+'" label="'+tvEsc(device.name)+'"></option>';}).join("")+"</datalist>"+
      '<label class="lbl" style="color:#6ee7b7">Device name</label>'+
      '<input id="tvDeviceName" class="inp" style="margin-bottom:.75rem" value="'+tvEsc(tvDeviceName)+'" maxlength="64" placeholder="e.g. Living Room TV" />'+
      '<label class="hp-tv-save-device" style="display:flex;align-items:flex-start;gap:.6rem;margin-bottom:1rem;padding:.75rem;border:1px solid rgba(74,222,128,.18);border-radius:.65rem;background:rgba(34,197,94,.06);cursor:pointer">'+
@@ -2014,7 +2038,7 @@ function sendStk(){
      '<label class="lbl" style="color:#6ee7b7">Package to purchase</label>'+
      '<select id="tvPlanId" class="inp" style="margin-bottom:1rem">'+planOptions+'</select>'+
      '<label class="lbl" style="color:#6ee7b7">Phone number</label>'+
-     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" />'+
+     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="'+escapePortalText(readLastPaymentPhone()||"07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX")+'" onblur="rememberPaymentPhone(this.value)" />'+
      '<div id="tvError" style="display:'+(tvError?"block":"none")+';margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem">'+tvEsc(tvError)+'</div>'+
      '<div style="display:flex;gap:.625rem">'+
        '<button type="button" onclick="closeTvModal()" class="btn btn-full" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);box-shadow:none">Cancel</button>'+
@@ -2049,7 +2073,7 @@ function sendStk(){
    if(deviceSelect)deviceSelect.addEventListener("change",function(){tvDeviceChanged(this.value);});
    var macInput=document.getElementById("tvMacAddress");
    if(macInput)macInput.addEventListener("input",function(){
-     tvMacAddress=this.value.toUpperCase();
+     tvMacAddress=formatMacInputElement(this);
      var mac=normaliseMac(tvMacAddress);
      var saved=mac?readSavedTvDevices().find(function(item){return item.macAddress===mac;}):null;
      var connected=mac?tvDevices.find(function(item){return item.macAddress===mac;}):null;
@@ -2090,12 +2114,22 @@ function sendStk(){
      .then(function(data){tvDevices=Array.isArray(data.devices)?data.devices:[];})
      .catch(function(){tvDevices=[];})
      .then(function(){tvDevicesLoading=false;renderTvModal();});
+   if(tvPurchaseRefreshTimer)window.clearInterval(tvPurchaseRefreshTimer);
+   tvPurchaseRefreshTimer=window.setInterval(function(){
+     var modal=document.getElementById("tvModal");
+     if(!modal||modal.style.display!=="flex")return;
+     fetch(apiUrl("/api/mpesa/hotspot-devices?adminId="+encodeURIComponent(PORTAL_ADMIN_ID)+(PORTAL_ROUTER_ID>0?"&routerId="+encodeURIComponent(PORTAL_ROUTER_ID):"")))
+       .then(function(r){return r.ok?r.json():{ok:false};})
+       .then(function(data){if(Array.isArray(data.devices)){tvDevices=data.devices;renderTvModal();}})
+       .catch(function(){});
+   },15000);
  }
  function bindAndPayTv(){
    tvMacAddress=(document.getElementById("tvMacAddress")||{}).value||tvMacAddress;
    tvDeviceName=(document.getElementById("tvDeviceName")||{}).value||tvDeviceName;
    tvPlanId=(document.getElementById("tvPlanId")||{}).value||tvPlanId;
    tvPhone=(document.getElementById("tvPhone")||{}).value||tvPhone;
+   rememberPaymentPhone(tvPhone);
    tvRememberDevice=!!(document.getElementById("tvRememberDevice")||{}).checked;
    var mac=normaliseMac(tvMacAddress);
    if(!mac){tvError="Enter a valid TV MAC address, for example AA:BB:CC:DD:EE:FF.";renderTvModal();return;}

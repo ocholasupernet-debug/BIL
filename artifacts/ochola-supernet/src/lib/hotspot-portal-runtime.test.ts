@@ -118,3 +118,16 @@ test("already-paid links open troubleshooting and immediately request the existi
   assert.match(reactPortal, /const runAutomaticReconnect = async \(\) =>/);
   assert.match(reactPortal, /result = await requestHotspotTroubleshoot\("login"\)/);
 });
+
+test("payment phone is remembered and TV MAC input suggests saved and active devices", () => {
+  assert.match(reactPortal, /function hotspotPaymentPhoneKey/);
+  assert.match(reactPortal, /localStorage\.setItem\(paymentPhoneStorageKey/);
+  assert.match(reactPortal, /placeholder=\{lastPaymentPhone \|\|/);
+  assert.match(reactPortal, /function formatMacEntry/);
+  assert.match(reactPortal, /list="hp-tv-mac-suggestions"/);
+  assert.match(reactPortal, /setTimeout\(\(\) => void refreshDevices\(\), 15_000\)/);
+  assert.match(portalTemplate, /function paymentPhoneStorageKey\(\)/);
+  assert.match(portalTemplate, /function formatMacInputElement\(input\)/);
+  assert.match(portalTemplate, /list="tvMacAddressSuggestions"/);
+  assert.match(portalTemplate, /tvPurchaseRefreshTimer=window\.setInterval/);
+});

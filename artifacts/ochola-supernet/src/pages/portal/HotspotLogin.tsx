@@ -320,6 +320,31 @@ function normalizeMacAddress(value: string): string {
   return compact.toUpperCase().match(/.{2}/g)?.join(":") ?? "";
 }
 
+function formatMacEntry(value: string): string {
+  const digits = value.replace(/[^0-9a-f]/gi, "").slice(0, 12).toUpperCase();
+  return digits.match(/.{1,2}/g)?.join(":") ?? "";
+}
+
+function formatMacInputElement(input: HTMLInputElement): string {
+  const cursor = input.selectionStart ?? input.value.length;
+  const digitsBeforeCursor = input.value.slice(0, cursor).replace(/[^0-9a-f]/gi, "").length;
+  const formatted = formatMacEntry(input.value);
+  const nextCursor = digitsBeforeCursor ? digitsBeforeCursor + Math.floor((digitsBeforeCursor - 1) / 2) : 0;
+  window.requestAnimationFrame(() => {
+    if (document.activeElement === input) input.setSelectionRange(nextCursor, nextCursor);
+  });
+  return formatted;
+}
+
+function hotspotPaymentPhoneKey(host: string, adminId: number | null): string {
+  return ["ochola_hotspot_payment_phone_v1", host, adminId ? String(adminId) : "tenant"]
+    .map(value => encodeURIComponent(value)).join(":");
+}
+
+function readHotspotPaymentPhone(key: string): string {
+  try { return window.localStorage.getItem(key)?.slice(0, 24) ?? ""; } catch { return ""; }
+}
+
 function normalizeClientIp(value: string): string {
   const trimmed = value.trim();
   if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(trimmed)) return "";
@@ -536,6 +561,10 @@ function HotspotLoginView({
     portalScope.routerId,
     portalScope.portId,
   );
+  const paymentPhoneStorageKey = hotspotPaymentPhoneKey(
+    typeof window !== "undefined" ? window.location.host : "portal",
+    adminId,
+  );
 
   const [plans, setPlans] = useState<Plan[]>(HOTSPOT_RUNTIME_CONFIG.plans);
   const [plansLoading, setPlansLoading] = useState(
@@ -544,6 +573,13 @@ function HotspotLoginView({
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
   const [paymentMode, setPaymentMode] = useState<"data" | "tv">("data");
   const [phone, setPhone] = useState("");
+  const [lastPaymentPhone, setLastPaymentPhone] = useState(() => readHotspotPaymentPhone(paymentPhoneStorageKey));
+  const rememberPaymentPhone = (value: string) => {
+    const phoneValue = value.trim();
+    if (!phoneValue) return;
+    setLastPaymentPhone(phoneValue);
+    try { window.localStorage.setItem(paymentPhoneStorageKey, phoneValue.slice(0, 24)); } catch {}
+  };
   const [deviceMacAddress, setDeviceMacAddress] = useState(portalContext.mac);
   const [deviceName, setDeviceName] = useState("");
   const [tvDialogOpen, setTvDialogOpen] = useState(false);
@@ -925,21 +961,32 @@ function HotspotLoginView({
     if (!tvDialogOpen) return;
     setTvDevicesLoading(true);
     setTvDialogError("");
-    const deviceQuery = [
-      adminId ? `adminId=${encodeURIComponent(String(adminId))}` : "",
-      portalScope.routerId ? `routerId=${encodeURIComponent(String(portalScope.routerId))}` : "",
-    ].filter(Boolean).join("&");
-    hotspotPortalFetch(hotspotApiUrl(`/api/mpesa/hotspot-devices${deviceQuery ? `?${deviceQuery}` : ""}`))
-      .then(async response => {
+    let cancelled = false;
+    let timer = 0;
+    const refreshDevices = async () => {
+      const deviceQuery = [
+        adminId ? `adminId=${encodeURIComponent(String(adminId))}` : "",
+        portalScope.routerId ? `routerId=${encodeURIComponent(String(portalScope.routerId))}` : "",
+      ].filter(Boolean).join("&");
+      try {
+        const response = await hotspotPortalFetch(hotspotApiUrl(`/api/mpesa/hotspot-devices${deviceQuery ? `?${deviceQuery}` : ""}`));
         const data = await response.json() as { ok?: boolean; devices?: ConnectedDevice[]; error?: string };
         if (!response.ok || !data.ok) throw new Error(data.error || "Connected devices could not be loaded.");
-        setTvDevices(Array.isArray(data.devices) ? data.devices : []);
-      })
-      .catch(error => {
-        setTvDevices([]);
-        setTvDialogError(error instanceof Error ? error.message : "Connected devices could not be loaded.");
-      })
-      .finally(() => setTvDevicesLoading(false));
+        if (!cancelled) {
+          setTvDevices(Array.isArray(data.devices) ? data.devices : []);
+          setTvDialogError("");
+        }
+      } catch (error) {
+        if (!cancelled) setTvDialogError(error instanceof Error ? error.message : "Connected devices could not be loaded.");
+      } finally {
+        if (!cancelled) {
+          setTvDevicesLoading(false);
+          timer = window.setTimeout(() => void refreshDevices(), 15_000);
+        }
+      }
+    };
+    void refreshDevices();
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [adminId, portalScope.routerId, tvDialogOpen]);
 
   const [pollTimedOut, setPollTimedOut] = useState(false);
@@ -1228,6 +1275,7 @@ function HotspotLoginView({
     setRememberTvDevice(rememberDevice);
     setTvDeviceSaveNotice("");
     setPhone(phoneValue);
+    rememberPaymentPhone(phoneValue);
     setDeviceMacAddress(macAddress);
     setDeviceName(normalizedDeviceName);
     setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setLoyaltyPaidWithPoints(false); setAccessReady(false); setPortalHandoffReady(false); setShowTvSuccess(false); setPaidAccessExpiresAt(null); setHotspotCredentials(null); setPollTimedOut(false); setTvDiagnostic(null);
@@ -3541,8 +3589,8 @@ function HotspotLoginView({
                                     <div className="hp-input-group">
                                       <div className="hp-input-wrap">
                                         <input className="hp-input hp-input-phone" type="tel"
-                                          inputMode="tel" placeholder="07XX XXX XXX or 01XX XXX XXX (for M-Pesa)" required={effectiveLoyaltyPayment !== "points"}
-                                          value={phone} onChange={e => setPhone(e.target.value)} />
+                                          inputMode="tel" placeholder={lastPaymentPhone || "07XX XXX XXX or 01XX XXX XXX (for M-Pesa)"} required={effectiveLoyaltyPayment !== "points"}
+                                          value={phone} onChange={e => setPhone(e.target.value)} onBlur={() => rememberPaymentPhone(phone)} />
                                       </div>
                                     </div>
 
@@ -4065,7 +4113,7 @@ function HotspotLoginView({
                       className="hp-tv-input"
                       value={tvMacAddress}
                       onChange={e => {
-                        const value = e.target.value.toUpperCase();
+                        const value = formatMacInputElement(e.currentTarget);
                         const macAddress = normalizeMacAddress(value);
                         setTvMacAddress(value);
                         setTvDeviceChoice(savedTvDevices.some(device => device.macAddress === macAddress)
@@ -4074,11 +4122,20 @@ function HotspotLoginView({
                           : "");
                         setRememberTvDevice(savedTvDevices.some(device => device.macAddress === macAddress));
                       }}
-                      placeholder="AA:BB:CC:DD:EE:FF"
+                      placeholder="Enter MAC; colons are added automatically"
+                      list="hp-tv-mac-suggestions"
                       inputMode="text"
                       autoCapitalize="characters"
                       required
                     />
+                    <datalist id="hp-tv-mac-suggestions">
+                      {savedTvDevices.map(device => (
+                        <option key={`saved-suggestion-${device.macAddress}`} value={device.macAddress}>{device.name}</option>
+                      ))}
+                      {tvDevices.filter(device => !savedTvDevices.some(saved => saved.macAddress === device.macAddress)).map(device => (
+                        <option key={`active-suggestion-${device.routerId}-${device.macAddress}`} value={device.macAddress}>{device.name}</option>
+                      ))}
+                    </datalist>
                   </div>
 
                   <div className="hp-tv-field">
@@ -4134,7 +4191,8 @@ function HotspotLoginView({
                       type="tel"
                       value={tvPhone}
                       onChange={e => setTvPhone(e.target.value)}
-                      placeholder="07XX XXX XXX or 01XX XXX XXX"
+                      onBlur={() => rememberPaymentPhone(tvPhone)}
+                      placeholder={lastPaymentPhone || "07XX XXX XXX or 01XX XXX XXX"}
                       inputMode="tel"
                       required
                     />
