@@ -8,43 +8,40 @@ import {
   parseHotspotTetherTtlValues,
 } from "./hotspot-tether-guard.js";
 
-test("tether guard is inert unless the router ID is explicitly allowlisted", () => {
-  assert.equal(
-    hotspotTetherGuardConfigForRouter(12, {
-      HOTSPOT_TETHER_GUARD_ENABLED: "true",
-      HOTSPOT_TETHER_GUARD_TTL_VALUES: "63,127",
-    }),
-    null,
-  );
+test("tether guard defaults to common TTL values for every valid router during plan sync", () => {
+  assert.deepEqual(hotspotTetherGuardConfigForRouter(12, {}), {
+    mode: "enforce",
+    ttlValues: [63, 127],
+  });
+  assert.deepEqual(hotspotTetherGuardConfigForRouter(99, {}), {
+    mode: "enforce",
+    ttlValues: [63, 127],
+  });
+  assert.equal(hotspotTetherGuardConfigForRouter(0, {}), null);
 });
 
-test("allowlisted router remains cleanup-only without explicit enablement and TTL values", () => {
+test("an explicit global disable enters cleanup mode on plan sync", () => {
   assert.deepEqual(
-    hotspotTetherGuardConfigForRouter(12, {
-      HOTSPOT_TETHER_GUARD_TEST_ROUTER_IDS: "12",
-      HOTSPOT_TETHER_GUARD_ENABLED: "true",
-      HOTSPOT_TETHER_GUARD_TTL_VALUES: "",
-    }),
+    hotspotTetherGuardConfigForRouter(12, { HOTSPOT_TETHER_GUARD_ENABLED: "false" }),
     { mode: "cleanup", ttlValues: [] },
   );
 });
 
-test("guard requires a validated TTL list and applies only to the test router", () => {
+test("configured TTL values override defaults and malformed values fail closed to cleanup", () => {
   assert.deepEqual(
-    hotspotTetherGuardConfigForRouter(12, {
-      HOTSPOT_TETHER_GUARD_TEST_ROUTER_IDS: "12,13",
+    hotspotTetherGuardConfigForRouter(12, { HOTSPOT_TETHER_GUARD_TTL_VALUES: "61,125,61,0,300" }),
+    { mode: "enforce", ttlValues: [61, 125] },
+  );
+  assert.deepEqual(
+    hotspotTetherGuardConfigForRouter(12, { HOTSPOT_TETHER_GUARD_TTL_VALUES: "0,300" }),
+    { mode: "cleanup", ttlValues: [] },
+  );
+  assert.deepEqual(
+    hotspotTetherGuardConfigForRouter(13, {
       HOTSPOT_TETHER_GUARD_ENABLED: "true",
       HOTSPOT_TETHER_GUARD_TTL_VALUES: "63,127,0,300,63",
     }),
     { mode: "enforce", ttlValues: [63, 127] },
-  );
-  assert.deepEqual(
-    hotspotTetherGuardConfigForRouter(14, {
-      HOTSPOT_TETHER_GUARD_TEST_ROUTER_IDS: "12,13",
-      HOTSPOT_TETHER_GUARD_ENABLED: "true",
-      HOTSPOT_TETHER_GUARD_TTL_VALUES: "63,127",
-    }),
-    null,
   );
 });
 

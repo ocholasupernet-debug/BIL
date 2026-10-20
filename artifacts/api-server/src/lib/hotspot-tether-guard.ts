@@ -5,14 +5,7 @@ export interface HotspotTetherGuardConfig {
 
 export type HotspotTetherGuardEnvironment = Record<string, string | undefined>;
 
-function parsePositiveIds(value: string | undefined): Set<number> {
-  return new Set(
-    String(value ?? "")
-      .split(",")
-      .map(part => Number(part.trim()))
-      .filter(value => Number.isSafeInteger(value) && value > 0),
-  );
-}
+export const DEFAULT_HOTSPOT_TETHER_TTL_VALUES = [63, 127] as const;
 
 export function parseHotspotTetherTtlValues(value: string | undefined): number[] {
   return [...new Set(
@@ -23,19 +16,17 @@ export function parseHotspotTetherTtlValues(value: string | undefined): number[]
   )].sort((a, b) => a - b);
 }
 
-/**
- * The guard is inert for every router unless its ID is explicitly allowlisted.
- * On an allowlisted test router, disabling enforcement enters cleanup mode so
- * a plan sync can remove only rules owned by this feature.
- */
 export function hotspotTetherGuardConfigForRouter(
   routerId: number,
   env: HotspotTetherGuardEnvironment = process.env,
 ): HotspotTetherGuardConfig | null {
-  if (!parsePositiveIds(env.HOTSPOT_TETHER_GUARD_TEST_ROUTER_IDS).has(routerId)) return null;
+  if (!Number.isSafeInteger(routerId) || routerId < 1) return null;
 
-  const ttlValues = parseHotspotTetherTtlValues(env.HOTSPOT_TETHER_GUARD_TTL_VALUES);
-  const enabled = String(env.HOTSPOT_TETHER_GUARD_ENABLED ?? "").trim().toLowerCase() === "true";
+  const enabled = String(env.HOTSPOT_TETHER_GUARD_ENABLED ?? "true").trim().toLowerCase() !== "false";
+  const ttlSetting = env.HOTSPOT_TETHER_GUARD_TTL_VALUES;
+  const ttlValues = ttlSetting === undefined
+    ? [...DEFAULT_HOTSPOT_TETHER_TTL_VALUES]
+    : parseHotspotTetherTtlValues(ttlSetting);
   return enabled && ttlValues.length > 0
     ? { mode: "enforce", ttlValues }
     : { mode: "cleanup", ttlValues: [] };

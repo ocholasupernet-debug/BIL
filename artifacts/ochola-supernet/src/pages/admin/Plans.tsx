@@ -584,7 +584,7 @@ function AddServicePlanForm({
                 Allow tethering on this package
               </label>
               <p style={HINT}>
-                Best-effort IPv4 only. Blocking runs only on a router explicitly allowlisted for testing; it may block normal traffic and cannot give tethered devices their own sign-in page.
+                Plan sync applies a best-effort IPv4 block using common TTL values (63/127). It may block normal traffic; tethered devices will not get their own sign-in page.
               </p>
             </div>
           </div>
