@@ -24,6 +24,7 @@ import {
 } from "../lib/mikrotik.js";
 import { sbSelect } from "../lib/supabase-client.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
+import { routerManagementApiAccountOrder } from "../lib/router-health-api-account-order.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
@@ -91,6 +92,7 @@ async function storedRouterCredentials(
   const vpnIp = stored.vpn_ip?.trim() || vpnIpFor(stored.name, readVpnClients()) || undefined;
   const host = vpnIp || stored.host?.trim() || stored.bridge_ip?.trim() || "";
   if (!host) throw new Error("This router has no reachable VPN or host address yet");
+  const apiAccount = routerManagementApiAccountOrder(stored.router_username, vpnIp);
 
   const setupPending = ["setup", "awaiting_connection", "awaiting_ports", "awaiting_sync"]
     .includes(stored.status);
@@ -103,7 +105,7 @@ async function storedRouterCredentials(
     creds: {
       host,
       port: 8728,
-      username: stored.router_username || "admin",
+      ...apiAccount,
       password: stored.router_secret || "",
       bridgeIp: vpnIp || stored.bridge_ip?.trim() || undefined,
       connectTimeoutMs: 10_000,
