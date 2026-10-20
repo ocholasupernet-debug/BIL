@@ -75,7 +75,7 @@
 - [Installer result contract](installer-result-contract.md) — Derive aggregate status from verification gates and persist the final callback fields as one validated result.
 - [Router VPN firewall verification](router-vpn-firewall-verification.md) — Avoid pipefail false negatives on repeated iptables rules and handle UFW IPv6 errors on IPv4-only VPS hosts.
 - [Router management credential policy](router-management-credential-policy.md) — Dedicated management OpenVPN intentionally uses the router name for both username and password.
-- [Router management API account](router-management-api-account.md) — Self Install can leave a stable API account alongside the legacy stored username; try both on management VPN paths.
+- [Router management API account](router-management-api-account.md) — Keep fallback usernames; rotate to unique per-router secrets only after a management-VPN login verifies.
 - [RouterOS 6 file deployment](router-file-deployment-ros6.md) — RouterOS 6 accepts nested direct fetches but not reliable API file moves; verify final destinations after upload.
 - [Portal upload host](portal-upload-host.md) — One-time RouterOS portal uploads must fetch from the same API process that created the token.
 - [Portal package scope](portal-package-scope.md) — Carry router/port scope through package listing and checkout validation; listing isolation alone does not protect payment.

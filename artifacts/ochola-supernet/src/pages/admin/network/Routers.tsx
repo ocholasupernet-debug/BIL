@@ -795,6 +795,8 @@ export default function Routers() {
   const [editForm, setEditForm] = useState({ name: "", host: "", bridge_ip: "", vpn_ip: "", proxy_ip: "", bridge_interface: "", router_username: "", router_secret: "", coordinates: "", coverage: "" });
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  const [rotatingApiCredentials, setRotatingApiCredentials] = useState(false);
+  const [rotationMessage, setRotationMessage] = useState<string | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [detectResult, setDetectResult] = useState<{ bridgeInterfaces: string[]; detectedBridgeInterface: string | null } | null>(null);
 
@@ -813,6 +815,7 @@ export default function Routers() {
       coverage:         (r as any).coverage    ?? "",
     });
     setEditError(null);
+    setRotationMessage(null);
     setDetectResult(null);
   }
 
@@ -871,6 +874,34 @@ export default function Routers() {
       setEditError(e.message ?? "Save failed");
     } finally {
       setEditSaving(false);
+    }
+  }
+
+  async function rotateApiCredentials() {
+    if (!editRouter || rotatingApiCredentials) return;
+    const target = editRouter;
+    if (!window.confirm(
+      `Create and verify a new unique API account for ${target.name}? The existing RouterOS accounts will be left unchanged.`,
+    )) return;
+
+    setRotatingApiCredentials(true);
+    setRotationMessage(null);
+    try {
+      const response = await adminApiFetch(`/api/routers/${target.id}/rotate-api-credentials`, {
+        method: "POST",
+        body: JSON.stringify({ confirmRouterName: target.name }),
+      });
+      const result = await response.json() as { ok?: boolean; username?: string; error?: string };
+      if (!response.ok || !result.ok || !result.username) {
+        throw new Error(result.error || "Router API credentials could not be rotated.");
+      }
+      setEditForm(current => ({ ...current, router_username: result.username!, router_secret: "" }));
+      setRotationMessage("Rotation verified. The new password is saved server-side and is not shown here.");
+      qc.invalidateQueries({ queryKey: ["isp_routers"] });
+    } catch (error) {
+      setRotationMessage(error instanceof Error ? error.message : "Router API credentials could not be rotated.");
+    } finally {
+      setRotatingApiCredentials(false);
     }
   }
 
@@ -1852,10 +1883,27 @@ export default function Routers() {
                 {editError}
               </div>
             )}
+            <div style={{ padding: "0.6rem 0.75rem", borderRadius: 6, background: "rgba(56,189,248,0.06)", border: "1px solid rgba(56,189,248,0.2)", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
+              API password rotation creates a separate per-router account, restricts it to the management VPN, verifies a fresh login, and only then saves it here. Existing RouterOS accounts are not removed.
+            </div>
+            {rotationMessage && (
+              <div role="status" style={{ padding: "0.5rem 0.75rem", borderRadius: 6, background: "rgba(56,189,248,0.08)", border: "1px solid rgba(56,189,248,0.25)", color: "var(--isp-text)", fontSize: "0.78rem" }}>
+                {rotationMessage}
+              </div>
+            )}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "0.25rem" }}>
               <button
+                type="button"
+                onClick={rotateApiCredentials}
+                disabled={rotatingApiCredentials || editSaving}
+                style={{ marginRight: "auto", padding: "0.45rem 0.75rem", borderRadius: 6, background: "rgba(56,189,248,0.08)", border: "1px solid rgba(56,189,248,0.3)", color: "var(--isp-accent)", fontSize: "0.75rem", cursor: rotatingApiCredentials ? "wait" : "pointer", fontFamily: "inherit" }}
+              >
+                {rotatingApiCredentials ? "Rotating…" : "Rotate API password"}
+              </button>
+              <button
                 onClick={() => setEditRouter(null)}
-                style={{ padding: "0.45rem 1rem", borderRadius: 6, background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit" }}
+                disabled={rotatingApiCredentials}
+                style={{ padding: "0.45rem 1rem", borderRadius: 6, background: "rgba(255,255,255,0.06)", border: "1px solid var(--isp-border)", color: "var(--isp-text)", fontSize: "0.8rem", cursor: rotatingApiCredentials ? "not-allowed" : "pointer", fontFamily: "inherit" }}
               >
                 Cancel
               </button>

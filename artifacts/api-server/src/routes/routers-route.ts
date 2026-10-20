@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { sbSelect, sbSelectStrict, sbUpdate, sbDelete, sbInsert } from "../lib/supabase-client.js";
-import { pingRouter, detectBridgeInterfaces, fetchBridgePortLayout } from "../lib/mikrotik.js";
+import { randomBytes } from "node:crypto";
+import { sbSelect, sbSelectStrict, sbUpdate, sbUpdateStrict, sbDelete, sbInsert } from "../lib/supabase-client.js";
+import { pingRouter, detectBridgeInterfaces, fetchBridgePortLayout, rotateRouterApiCredential } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
 import { logActivity } from "../lib/activity-log.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
@@ -11,6 +12,7 @@ import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js"
 import { routerHealthApiAccountOrder } from "../lib/router-health-api-account-order.js";
 
 const router: IRouter = Router();
+const rotatingRouterIds = new Set<number>();
 
 type InstallMode = "direct" | "coexist" | "takeover";
 function normalizeInstallMode(value: unknown): InstallMode {
@@ -535,6 +537,126 @@ router.patch("/routers/:id", requireAdmin(), async (req, res): Promise<void> => 
   if (!r) { res.status(404).json({ error: "Router not found" }); return; }
   void logActivity({ adminId, type: "router", action: "updated", subject: String(updates.name ?? ownedRows[0].name), details: { fields: Object.keys(updates) } });
   res.json(r);
+});
+
+router.post("/routers/:id/rotate-api-credentials", requireAdmin(), async (req, res): Promise<void> => {
+  const account = await authenticatedAccount(req);
+  const adminId = await authenticatedTenantAdminId(req);
+  const id = Number(req.params.id);
+  if (!account || account.role === "reseller" || adminId < 1 || !Number.isSafeInteger(id) || id <= 0) {
+    res.status(403).json({ ok: false, error: "Only an authorized ISP administrator can rotate router credentials." });
+    return;
+  }
+  if (rotatingRouterIds.size > 0) {
+    res.status(409).json({
+      ok: false,
+      error: rotatingRouterIds.has(id)
+        ? "A credential rotation is already running for this router."
+        : "Another router credential rotation is running. Finish one router before starting another.",
+    });
+    return;
+  }
+  rotatingRouterIds.add(id);
+
+  try {
+    const rows = await sbSelectStrict<{
+      id: number;
+      admin_id: number;
+      name: string;
+      host: string | null;
+      bridge_ip: string | null;
+      vpn_ip: string | null;
+      router_username: string | null;
+      router_secret: string | null;
+    }>(
+      "isp_routers",
+      `id=eq.${id}&admin_id=eq.${adminId}&select=id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    );
+    const stored = rows[0];
+    if (!stored) {
+      res.status(404).json({ ok: false, error: "Router not found for this ISP account." });
+      return;
+    }
+    if (req.body?.confirmRouterName !== stored.name) {
+      res.status(400).json({ ok: false, error: "Confirm the exact router name before rotating its API credentials." });
+      return;
+    }
+    if (!stored.router_secret) {
+      res.status(409).json({
+        ok: false,
+        error: "This router has no saved API credential. Restore its login locally before rotating it.",
+      });
+      return;
+    }
+
+    const vpnIp = discoverVpnIp(
+      stored.name,
+      cleanRouterHost(stored.host),
+      stored.bridge_ip,
+      stored.vpn_ip,
+    );
+    if (!vpnIp || !isRouterManagementVpnIp(vpnIp)) {
+      res.status(409).json({
+        ok: false,
+        error: "The router is not reachable through its management VPN. No credentials were changed.",
+      });
+      return;
+    }
+
+    const username = `ochola-api-${id}-${randomBytes(4).toString("hex")}`;
+    const password = randomBytes(32).toString("hex");
+    const creds = {
+      host: vpnIp,
+      port: 8728,
+      username: ROUTER_MANAGEMENT_API_USERNAME,
+      ...(stored.router_username && stored.router_username !== ROUTER_MANAGEMENT_API_USERNAME
+        ? { alternateUsernames: [stored.router_username] }
+        : {}),
+      password: stored.router_secret,
+      bridgeIp: vpnIp,
+      connectTimeoutMs: 10_000,
+      requestTimeoutMs: 15_000,
+    };
+
+    const result = await rotateRouterApiCredential(
+      creds,
+      username,
+      password,
+      async () => {
+        const updated = await sbUpdateStrict<{ id: number }>(
+          "isp_routers",
+          `id=eq.${id}&admin_id=eq.${adminId}`,
+          {
+            router_username: username,
+            router_secret: password,
+            updated_at: new Date().toISOString(),
+          },
+        );
+        if (!updated[0]) throw new Error("The router credential record was not updated.");
+      },
+    );
+    void logActivity({
+      adminId,
+      type: "router",
+      action: "API credentials rotated",
+      subject: stored.name,
+      details: { routerId: id, username },
+    });
+    res.json({ ok: true, username, verifiedHost: result.verifiedHost });
+  } catch (error) {
+    logger.warn({ routerId: id }, "[router/credentials/rotate] rotation failed");
+    const message = error instanceof Error ? error.message : "";
+    const cleanupUnconfirmed = message.includes("cleanup could not be confirmed")
+      || message.includes("may need local cleanup");
+    res.status(502).json({
+      ok: false,
+      error: cleanupUnconfirmed
+        ? message
+        : "Rotation could not be verified. The saved credentials were not intentionally changed; check the router’s management VPN and current API login.",
+    });
+  } finally {
+    rotatingRouterIds.delete(id);
+  }
 });
 
 router.delete("/routers/:id", requireAdmin(), async (req, res): Promise<void> => {

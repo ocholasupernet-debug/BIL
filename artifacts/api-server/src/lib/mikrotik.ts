@@ -20,6 +20,7 @@ import {
 import { openVpsTcpForward, type VpsTcpForward } from "./vps-ssh.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "./payment-walled-garden.js";
 import { renderHotspotChatWalledGardenRules } from "./hotspot-chat-walled-garden.js";
+import { runVerifiedApiCredentialRotation } from "./router-api-credential-rotation.js";
 import {
   legacySharedHotspotResourceNames,
   SHARED_HOTSPOT_POOL_NAME,
@@ -1698,6 +1699,100 @@ export async function ensureRouterManagementAccess(
     },
   );
   return { ...result, verifiedLoginHost };
+}
+
+/**
+ * Add a VPN-restricted API account, verify a fresh login, then persist its
+ * credential. Existing RouterOS accounts are left untouched.
+ */
+export async function rotateRouterApiCredential(
+  creds: RouterCredentials,
+  username: string,
+  password: string,
+  persistCredential: () => Promise<void>,
+): Promise<{ connectedHost: string; verifiedHost: string }> {
+  if (!creds.password) throw new Error("The router has no saved API credential.");
+  if (!username || !password) throw new Error("A replacement API account is required.");
+
+  return withConn(creds, async (conn, connectedHost) => {
+    const timeoutMs = Math.max(creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS, 15_000);
+    const created = await withTimeout(
+      conn.write([
+        "/user/add",
+        `=name=${username}`,
+        `=password=${password}`,
+        "=group=full",
+        "=disabled=no",
+        "=address=10.8.5.0/24,10.8.6.0/24",
+        "=comment=OcholaSupernet managed API account",
+      ]),
+      timeoutMs,
+    );
+    let accountId: string | undefined;
+
+    const cleanupByName = async () => {
+      const users = await withTimeout(
+        conn.write(["/user/print", "=.proplist=.id,name"]),
+        timeoutMs,
+      ) as Record<string, string>[];
+      const user = users.find(row => row.name === username);
+      if (user?.[".id"]) {
+        await withTimeout(conn.write(["/user/remove", `=.id=${user[".id"]}`]), timeoutMs);
+      }
+    };
+
+    try {
+      const users = await withTimeout(
+        conn.write(["/user/print", "=.proplist=.id,name"]),
+        timeoutMs,
+      ) as Record<string, string>[];
+      accountId = users.find(row => row.name === username)?.[".id"];
+      if (!accountId) {
+        await cleanupByName();
+        throw new Error("New API account could not be identified.");
+      }
+
+      return await runVerifiedApiCredentialRotation({
+        async createTemporaryAccount() {
+          return accountId!;
+        },
+        async verifyNewLogin() {
+          const verificationCredentials: RouterCredentials = {
+            ...creds,
+            host: connectedHost,
+            bridgeIp: undefined,
+            username,
+            alternateUsernames: [],
+            password,
+          };
+          return withConn(verificationCredentials, async (verifyConn, verifiedHost) => {
+            await withTimeout(
+              verifyConn.write(["/system/identity/print", "=.proplist=name"]),
+              timeoutMs,
+            );
+            return verifiedHost;
+          });
+        },
+        async persistCredential() {
+          await persistCredential();
+        },
+        async removeTemporaryAccount(id) {
+          await withTimeout(conn.write(["/user/remove", `=.id=${id}`]), timeoutMs);
+        },
+      }).then(verifiedHost => ({ connectedHost, verifiedHost }));
+    } catch (error) {
+      if (!accountId) {
+        try {
+          await cleanupByName();
+        } catch {
+          throw new Error(
+            "The new API account may need local cleanup. Check the router before retrying.",
+          );
+        }
+      }
+      throw error;
+    }
+  });
 }
 
 /**
