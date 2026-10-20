@@ -807,8 +807,8 @@ export default function Routers() {
       vpn_ip:           r.vpn_ip             ?? "",
       proxy_ip:         r.proxy_ip           ?? "",
       bridge_interface: r.bridge_interface   ?? "",
-      router_username:  r.name               ?? "admin",
-      router_secret:    r.name               ?? "",
+      router_username:  r.router_username    ?? r.name ?? "admin",
+      router_secret:    "",
       coordinates:      (r as any).coordinates ?? "",
       coverage:         (r as any).coverage    ?? "",
     });
@@ -855,8 +855,8 @@ export default function Routers() {
           vpn_ip:           editForm.vpn_ip.trim()           || null,
           proxy_ip:         editForm.proxy_ip.trim()         || null,
           bridge_interface: editForm.bridge_interface.trim() || "hotspot-bridge",
-          router_username:  routerName,
-          router_secret:    routerName,
+          router_username:  editForm.router_username.trim() || editRouter.router_username || routerName,
+          ...(editForm.router_secret.length > 0 ? { router_secret: editForm.router_secret } : {}),
           coordinates:      editForm.coordinates.trim()      || null,
           coverage:         editForm.coverage.trim()         || null,
         }),
@@ -1700,7 +1700,7 @@ export default function Routers() {
                 proxy_ip:         "e.g. 10.9.0.2 — assigned by proxy OpenVPN",
                 bridge_interface: "Click Detect or type e.g. hotspot-bridge",
                 router_username:  "admin",
-                router_secret:    "••••••••",
+                router_secret:    "Leave blank to keep saved password",
                 coordinates:      "e.g. -1.2921, 36.8219 (Nairobi)",
                 coverage:         "e.g. 500",
               };
@@ -1839,6 +1839,11 @@ export default function Routers() {
                     placeholder={placeholders[field]}
                     style={inputStyle}
                   />
+                  {field === "router_secret" && (
+                    <p style={{ margin: "3px 0 0", fontSize: "0.65rem", color: "var(--isp-text-muted)" }}>
+                      Leave blank to keep the saved password. Updating this only changes the app’s saved API login; set the same credentials on the MikroTik separately.
+                    </p>
+                  )}
                 </div>
               );
             })}
