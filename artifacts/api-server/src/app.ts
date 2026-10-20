@@ -118,6 +118,12 @@ if (shouldServeStatic) {
       setHeaders(res, filePath) {
         if (path.basename(filePath) === "index.html" || path.basename(filePath) === "sw.js") {
           res.setHeader("Cache-Control", "no-store");
+          return;
+        }
+        const assetRoot = path.join(staticDir, "assets");
+        const relativeAssetPath = path.relative(assetRoot, filePath);
+        if (relativeAssetPath && !relativeAssetPath.startsWith("..") && !path.isAbsolute(relativeAssetPath)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
         }
       },
     }));

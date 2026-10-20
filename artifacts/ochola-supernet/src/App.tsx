@@ -1,5 +1,5 @@
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -11,79 +11,81 @@ import { DashboardPreferencesProvider } from "@/context/DashboardPreferencesCont
 import { getHostSubdomain } from "@/lib/subdomain";
 import { getAdminApiToken, getAdminRole, isImpersonating } from "@/lib/supabase";
 
-import LandingPage from "./pages/LandingPage";
-import AdminLogin from "./pages/admin/AdminLogin";
-import AdminDashboard from "./pages/admin/Dashboard";
-import AdminCustomers from "./pages/admin/Customers";
-import NetworkRouters from "./pages/admin/network/Routers";
-import NetworkQueues from "./pages/admin/network/Queues";
-import NetworkIPPool from "./pages/admin/network/IPPool";
-import NetworkReplaceRouter from "./pages/admin/network/ReplaceRouter";
-import NetworkSelfInstall from "./pages/admin/network/SelfInstall";
-import NetworkFiles from "./pages/admin/network/Files";
-import NetworkBridgePorts from "./pages/admin/network/BridgePorts";
-import NetworkWireless from "./pages/admin/network/Wireless";
-import NetworkPPP from "./pages/admin/network/PPP";
-import RouterAPIConfig from "./pages/admin/network/RouterAPIConfig";
-import Multiport from "./pages/admin/network/Multiport";
-import NetworkMigration from "./pages/admin/network/Migration";
-import Webhooks from "./pages/admin/Webhooks";
-import ActivityLogs from "./pages/admin/ActivityLogs";
-import AdminPlans from "./pages/admin/Plans";
-import AdminHotspotRoaming from "./pages/admin/HotspotRoaming";
-import LoyaltyPoints from "./pages/admin/LoyaltyPoints";
-import AdminTransactions from "./pages/admin/Transactions";
-import PaidHotspotRecovery from "./pages/admin/PaidHotspotRecovery";
-import TransactionGraphs from "./pages/admin/TransactionGraphs";
-import HotspotSettings from "./pages/admin/HotspotSettings";
-import PPPoESettings from "./pages/admin/PPPoESettings";
-import PPPoESetup from "./pages/admin/PPPoESetup";
-import AdminVouchers from "./pages/admin/Vouchers";
-import HotspotBinding from "./pages/admin/HotspotBinding";
-import PrepaidUsers from "./pages/admin/PrepaidUsers";
-
-import HotspotLogin, { HotspotTroubleshootPage } from "./pages/portal/HotspotLogin";
-import PPPoELogin  from "./pages/portal/PPPoELogin";
-import SuperAdminLogin from "./pages/super-admin/Login";
-import SuperAdminDashboard from "./pages/super-admin/Dashboard";
-import SuperAdminAdmins from "./pages/super-admin/Admins";
-import SuperAdminRoles from "./pages/super-admin/Roles";
-import SuperAdminSystemSettings from "./pages/super-admin/SystemSettings";
-import SuperAdminPaymentGateways from "./pages/super-admin/PaymentGateways";
-import SuperAdminPaymentsPackages from "./pages/super-admin/PaymentsPackages";
-import SuperAdminRouters from "./pages/super-admin/Routers";
-import SuperAdminBillingEngine from "./pages/super-admin/BillingEngine";
-import SuperAdminReports from "./pages/super-admin/Reports";
-import SuperAdminSecurityLogs from "./pages/super-admin/SecurityLogs";
-import SuperAdminNotifications from "./pages/super-admin/Notifications";
-import SuperAdminAutomation from "./pages/super-admin/Automation";
-import SuperAdminBackups from "./pages/super-admin/Backups";
-import SuperAdminApiIntegrations from "./pages/super-admin/ApiIntegrations";
-import SuperAdminWhatsApp from "./pages/super-admin/WhatsApp";
-import SuperAdminSMS from "./pages/super-admin/SMS";
-import SuperAdminSystemLimits from "./pages/super-admin/SystemLimits";
-import SuperAdminImpersonate from "./pages/super-admin/Impersonate";
-import SuperAdminAuthSecurity from "./pages/super-admin/AuthSecurity";
-import SuperAdminStorage from "./pages/super-admin/Storage";
-import VpnDashboard from "./pages/vpn/VpnDashboard";
-import VpnRemoteAccess from "./pages/vpn/RemoteAccess";
-import VpnList from "./pages/vpn/VpnList";
-import VpnCreate from "./pages/vpn/CreateVpn";
-import VpnTutorials from "./pages/vpn/VideoTutorials";
-import VpnSettings from "./pages/vpn/Settings";
-import VpnManagement from "./pages/vpn/VpnManagement";
-import AdminSettings from "./pages/admin/AdminSettings";
-import AdminInvoices from "./pages/admin/Invoices";
-import AdminCustomerBalance from "./pages/admin/CustomerBalance";
-import AdminMessageTemplates from "./pages/admin/MessageTemplates";
-import PlatformNotifications from "./pages/admin/PlatformNotifications";
-import AdminSetPassword from "./pages/admin/AdminSetPassword";
-import ResellerWorkspace from "./pages/admin/ResellerWorkspace";
-import CarrierControls from "./pages/admin/network/CarrierControls";
-import ResellerConnector from "./pages/admin/network/ResellerConnector";
-import NetworkLoadBalancing from "./pages/admin/network/LoadBalancing";
-import AdminRegister from "./pages/admin/AdminRegister";
-import VisualCheckHarness from "./visual/VisualCheckHarness";
+const LandingPage = lazy(() => import("./pages/LandingPage"));
+const AdminLogin = lazy(() => import("./pages/admin/AdminLogin"));
+const AdminDashboard = lazy(() => import("./pages/admin/Dashboard"));
+const AdminCustomers = lazy(() => import("./pages/admin/Customers"));
+const NetworkRouters = lazy(() => import("./pages/admin/network/Routers"));
+const NetworkQueues = lazy(() => import("./pages/admin/network/Queues"));
+const NetworkIPPool = lazy(() => import("./pages/admin/network/IPPool"));
+const NetworkReplaceRouter = lazy(() => import("./pages/admin/network/ReplaceRouter"));
+const NetworkSelfInstall = lazy(() => import("./pages/admin/network/SelfInstall"));
+const NetworkFiles = lazy(() => import("./pages/admin/network/Files"));
+const NetworkBridgePorts = lazy(() => import("./pages/admin/network/BridgePorts"));
+const NetworkWireless = lazy(() => import("./pages/admin/network/Wireless"));
+const NetworkPPP = lazy(() => import("./pages/admin/network/PPP"));
+const RouterAPIConfig = lazy(() => import("./pages/admin/network/RouterAPIConfig"));
+const Multiport = lazy(() => import("./pages/admin/network/Multiport"));
+const NetworkMigration = lazy(() => import("./pages/admin/network/Migration"));
+const Webhooks = lazy(() => import("./pages/admin/Webhooks"));
+const ActivityLogs = lazy(() => import("./pages/admin/ActivityLogs"));
+const AdminPlans = lazy(() => import("./pages/admin/Plans"));
+const AdminHotspotRoaming = lazy(() => import("./pages/admin/HotspotRoaming"));
+const LoyaltyPoints = lazy(() => import("./pages/admin/LoyaltyPoints"));
+const AdminTransactions = lazy(() => import("./pages/admin/Transactions"));
+const PaidHotspotRecovery = lazy(() => import("./pages/admin/PaidHotspotRecovery"));
+const TransactionGraphs = lazy(() => import("./pages/admin/TransactionGraphs"));
+const HotspotSettings = lazy(() => import("./pages/admin/HotspotSettings"));
+const PPPoESettings = lazy(() => import("./pages/admin/PPPoESettings"));
+const PPPoESetup = lazy(() => import("./pages/admin/PPPoESetup"));
+const AdminVouchers = lazy(() => import("./pages/admin/Vouchers"));
+const HotspotBinding = lazy(() => import("./pages/admin/HotspotBinding"));
+const PrepaidUsers = lazy(() => import("./pages/admin/PrepaidUsers"));
+const HotspotLogin = lazy(() => import("./pages/portal/HotspotLogin"));
+const HotspotTroubleshootPage = lazy(() =>
+  import("./pages/portal/HotspotLogin").then(module => ({ default: module.HotspotTroubleshootPage })),
+);
+const PPPoELogin = lazy(() => import("./pages/portal/PPPoELogin"));
+const SuperAdminLogin = lazy(() => import("./pages/super-admin/Login"));
+const SuperAdminDashboard = lazy(() => import("./pages/super-admin/Dashboard"));
+const SuperAdminAdmins = lazy(() => import("./pages/super-admin/Admins"));
+const SuperAdminRoles = lazy(() => import("./pages/super-admin/Roles"));
+const SuperAdminSystemSettings = lazy(() => import("./pages/super-admin/SystemSettings"));
+const SuperAdminPaymentGateways = lazy(() => import("./pages/super-admin/PaymentGateways"));
+const SuperAdminPaymentsPackages = lazy(() => import("./pages/super-admin/PaymentsPackages"));
+const SuperAdminRouters = lazy(() => import("./pages/super-admin/Routers"));
+const SuperAdminBillingEngine = lazy(() => import("./pages/super-admin/BillingEngine"));
+const SuperAdminReports = lazy(() => import("./pages/super-admin/Reports"));
+const SuperAdminSecurityLogs = lazy(() => import("./pages/super-admin/SecurityLogs"));
+const SuperAdminNotifications = lazy(() => import("./pages/super-admin/Notifications"));
+const SuperAdminAutomation = lazy(() => import("./pages/super-admin/Automation"));
+const SuperAdminBackups = lazy(() => import("./pages/super-admin/Backups"));
+const SuperAdminApiIntegrations = lazy(() => import("./pages/super-admin/ApiIntegrations"));
+const SuperAdminWhatsApp = lazy(() => import("./pages/super-admin/WhatsApp"));
+const SuperAdminSMS = lazy(() => import("./pages/super-admin/SMS"));
+const SuperAdminSystemLimits = lazy(() => import("./pages/super-admin/SystemLimits"));
+const SuperAdminImpersonate = lazy(() => import("./pages/super-admin/Impersonate"));
+const SuperAdminAuthSecurity = lazy(() => import("./pages/super-admin/AuthSecurity"));
+const SuperAdminStorage = lazy(() => import("./pages/super-admin/Storage"));
+const VpnDashboard = lazy(() => import("./pages/vpn/VpnDashboard"));
+const VpnRemoteAccess = lazy(() => import("./pages/vpn/RemoteAccess"));
+const VpnList = lazy(() => import("./pages/vpn/VpnList"));
+const VpnCreate = lazy(() => import("./pages/vpn/CreateVpn"));
+const VpnTutorials = lazy(() => import("./pages/vpn/VideoTutorials"));
+const VpnSettings = lazy(() => import("./pages/vpn/Settings"));
+const VpnManagement = lazy(() => import("./pages/vpn/VpnManagement"));
+const AdminSettings = lazy(() => import("./pages/admin/AdminSettings"));
+const AdminInvoices = lazy(() => import("./pages/admin/Invoices"));
+const AdminCustomerBalance = lazy(() => import("./pages/admin/CustomerBalance"));
+const AdminMessageTemplates = lazy(() => import("./pages/admin/MessageTemplates"));
+const PlatformNotifications = lazy(() => import("./pages/admin/PlatformNotifications"));
+const AdminSetPassword = lazy(() => import("./pages/admin/AdminSetPassword"));
+const ResellerWorkspace = lazy(() => import("./pages/admin/ResellerWorkspace"));
+const CarrierControls = lazy(() => import("./pages/admin/network/CarrierControls"));
+const ResellerConnector = lazy(() => import("./pages/admin/network/ResellerConnector"));
+const NetworkLoadBalancing = lazy(() => import("./pages/admin/network/LoadBalancing"));
+const AdminRegister = lazy(() => import("./pages/admin/AdminRegister"));
+const VisualCheckHarness = lazy(() => import("./visual/VisualCheckHarness"));
 
 function RoleAwareDashboard() {
   return getAdminRole() === "reseller" ? <ResellerWorkspace /> : <AdminDashboard />;
@@ -199,6 +201,7 @@ function TenantRenewalRouteGate({ children }: { children: React.ReactNode }) {
 function Router() {
   return (
     <TenantRenewalRouteGate>
+    <Suspense fallback={<div role="status" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Loading page…</div>}>
     <Switch>
       {import.meta.env.DEV && <Route path="/__visual/:page" component={VisualCheckHarness} />}
       <Route path="/" component={SubdomainGuard} />
@@ -297,6 +300,7 @@ function Router() {
       
       <Route component={NotFound} />
     </Switch>
+    </Suspense>
     </TenantRenewalRouteGate>
   );
 }
