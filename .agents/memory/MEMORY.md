@@ -25,6 +25,7 @@
 - [Hotspot purchase login handoff](hotspot-purchase-login-handoff.md) — Provision verified purchases server-side, then let the RouterOS portal sign in normal devices; TV purchases and explicit retries stay direct.
 - [Hotspot private portal DNS](hotspot-private-dns.md) — Advertise only the MikroTik gateway DNS when the portal hostname is internal; public fallback causes NXDOMAIN before login.
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
+- [Hotspot tethering policy](hotspot-tethering-policy.md) — Per-plan tether blocking is best-effort, IPv4-only at first, and must stay inactive until validated on a non-production MikroTik.
 - [Hotspot chat setting](hotspot-chat-setting.md) — Control Tawk visibility from saved Hotspot Settings and sync through the normal portal flow, not a Multiport bulk action.
 - [Hotspot roaming allowance](hotspot-roaming-allowance.md) — Share one package data allowance across explicitly permitted routers and retain revoked destinations for historical accounting.
 - [Supabase function and migration safety](supabase-migration-runner.md) — Reapply idempotent DB changes, verify live function bodies, and qualify columns that collide with PL/pgSQL output names.

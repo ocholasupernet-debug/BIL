@@ -198,6 +198,7 @@ export interface DbPlan {
   fup_speed_up: number | null;
   burst_limit: string | null;
   shared_users: number;
+  tethering_allowed: boolean;
   client_can_purchase: boolean;
   router_id: number | null;
   port_id: number | null;

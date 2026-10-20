@@ -753,6 +753,7 @@ router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
     ...planWritePayload({
        name, type: normalizedType, speed, speedDown, speedUp, speedDownUnit, speedUpUnit, price, durationDays, validity, validityUnit, validity_unit,
        description, sharedUsers, dataLimitMb, dataCapMode: req.body.dataCapMode,
+        tetheringAllowed: req.body.tetheringAllowed,
        fupSpeedDown: req.body.fupSpeedDown, fupSpeedUp: req.body.fupSpeedUp,
        isActive, clientCanPurchase,
      }, scope, pools),
@@ -787,9 +788,10 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
     speed_up: number | null;
     speed_down_unit: string | null;
     speed_up_unit: string | null;
+    tethering_allowed: boolean | null;
   }>(
     "isp_plans",
-    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}&select=id,name,type,router_id,port_id,expired_ip_pool,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit&limit=1`,
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}&select=id,name,type,router_id,port_id,expired_ip_pool,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit,tethering_allowed&limit=1`,
   );
   const source = sourceRows[0];
   if (!source) { res.status(404).json({ error: "Plan not found" }); return; }
@@ -823,6 +825,9 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
     dataCapMode: Object.prototype.hasOwnProperty.call(req.body, "dataCapMode") ? req.body.dataCapMode : (source.data_cap_mode ?? "disconnect"),
     fupSpeedDown: Object.prototype.hasOwnProperty.call(req.body, "fupSpeedDown") ? req.body.fupSpeedDown : source.fup_speed_down,
     fupSpeedUp: Object.prototype.hasOwnProperty.call(req.body, "fupSpeedUp") ? req.body.fupSpeedUp : source.fup_speed_up,
+    tetheringAllowed: Object.prototype.hasOwnProperty.call(req.body, "tetheringAllowed")
+      ? req.body.tetheringAllowed
+      : source.tethering_allowed === true,
     speedDown: req.body.speedDown ?? req.body.speed ?? source.speed_down,
     speedUp: req.body.speedUp ?? req.body.speed ?? source.speed_up,
     speedDownUnit: req.body.speedDownUnit ?? req.body.speed_down_unit ?? source.speed_down_unit ?? "Mbps",
@@ -942,6 +947,7 @@ router.post("/plans/:id/copy", requireAdmin(), async (req, res): Promise<void> =
     validity_unit: source.validity_unit ?? "days",
     validity_days: source.validity_days ?? source.validity ?? 30,
     shared_users: source.shared_users ?? 1,
+    tethering_allowed: source.tethering_allowed === true,
     router_id: scope.routerId,
     port_id: scope.portId,
     active_ip_pool: pools.activeIpPool,

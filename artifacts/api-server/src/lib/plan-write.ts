@@ -47,6 +47,8 @@ export function planWritePayload(
     validity_unit: validityUnit,
     validity_days: Number.isFinite(validity) ? validity : 30,
     shared_users: Number.isFinite(sharedUsers) && sharedUsers > 0 ? sharedUsers : 1,
+    tethering_allowed: ["hotspot", "trials", "trial"].includes(String(input.type ?? "").trim().toLowerCase())
+      && input.tetheringAllowed === true,
     router_id: scope.routerId,
     port_id: scope.portId,
     active_ip_pool: pools.activeIpPool,

@@ -140,6 +140,7 @@ create table if not exists isp_plans (
   fup_speed_down numeric(10,2),
   fup_speed_up   numeric(10,2),
   shared_users   integer not null default 1,
+  tethering_allowed boolean not null default false,
   description    text,
   is_active      boolean not null default true,
   client_can_purchase boolean not null default true,

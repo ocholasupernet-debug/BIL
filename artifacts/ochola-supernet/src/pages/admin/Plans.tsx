@@ -196,6 +196,7 @@ function AddServicePlanForm({
   const [maxSharedUsers, setMaxSharedUsers] = useState(
     initialData?.shared_users && initialData.shared_users > 1 ? initialData.shared_users.toString() : "5"
   );
+  const [tetheringAllowed, setTetheringAllowed] = useState(initialData?.tethering_allowed === true);
   const [validity,      setValidity]      = useState(initialData?.validity?.toString() ?? "");
   const [valUnit,       setValUnit]       = useState<PlanValidityUnit>(
     initialData ? normalizePlanValidityUnit(initialData.validity_unit) : "mins",
@@ -313,6 +314,7 @@ function AddServicePlanForm({
             validityUnit: valUnit,
             description: null,
             sharedUsers,
+            tetheringAllowed,
             routerId: parseInt(routerId),
             portId: portId ? parseInt(portId) : null,
             dataLimitMb,
@@ -356,6 +358,7 @@ function AddServicePlanForm({
              validityUnit: valUnit,
             description: null,
             sharedUsers,
+            tetheringAllowed,
             routerId: routerId ? parseInt(routerId) : null,
             portId: portId ? parseInt(portId) : null,
             dataLimitMb,
@@ -564,6 +567,25 @@ function AddServicePlanForm({
               {sharingAllowed === "no" && (
                 <p style={HINT}>Each voucher/session is limited to 1 device only.</p>
               )}
+            </div>
+          </div>
+        )}
+
+        {isHotspot && (
+          <div style={ROW}>
+            <span style={LBL}>Tethering</span>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "0.84rem", color: "var(--isp-text)" }}>
+                <input
+                  type="checkbox"
+                  checked={tetheringAllowed}
+                  onChange={event => setTetheringAllowed(event.target.checked)}
+                />
+                Allow tethering on this package
+              </label>
+              <p style={HINT}>
+                Saves the package policy only; no router blocking rule is active yet. Any later block will be best-effort, and tethered devices may not get a separate sign-in page.
+              </p>
             </div>
           </div>
         )}
