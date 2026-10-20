@@ -584,7 +584,7 @@ function AddServicePlanForm({
                 Allow tethering on this package
               </label>
               <p style={HINT}>
-                Saves the package policy only; no router blocking rule is active yet. Any later block will be best-effort, and tethered devices may not get a separate sign-in page.
+                Best-effort IPv4 only. Blocking runs only on a router explicitly allowlisted for testing; it may block normal traffic and cannot give tethered devices their own sign-in page.
               </p>
             </div>
           </div>

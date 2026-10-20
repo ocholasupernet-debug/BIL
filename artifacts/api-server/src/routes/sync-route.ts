@@ -53,6 +53,14 @@ import { compareBridgePortMembership } from "../lib/bridge-port-membership.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 import { summarizeHotspotVoucherStatus, type HotspotVoucherSession } from "../lib/hotspot-voucher-status.js";
 import { calculateHotspotVoucherRestoreLimits } from "../lib/hotspot-voucher-restore.js";
+import {
+  hotspotTetherAddressListName,
+  hotspotTetherGuardConfigForRouter,
+  hotspotTetherRuleArgs,
+  hotspotTetherRuleComment,
+  hotspotTetherRuleCommentPrefix,
+  type HotspotTetherGuardConfig,
+} from "../lib/hotspot-tether-guard.js";
 
 const router: IRouter = Router();
 
@@ -101,6 +109,54 @@ async function upsertByFilter(
   }
   await conn.write([`${path}/add`, ...Object.entries(props).map(([k, v]) => `=${k}=${v}`)]);
   return "created";
+}
+
+async function reconcileHotspotTetherRules(
+  conn: RouterOSAPI,
+  planId: number,
+  config: HotspotTetherGuardConfig,
+  shouldBlock: boolean,
+): Promise<void> {
+  const desiredComments = new Set(
+    config.mode === "enforce" && shouldBlock
+      ? config.ttlValues.map(ttl => hotspotTetherRuleComment(planId, ttl))
+      : [],
+  );
+  const rawRows = await withTimeout(
+    conn.write([
+      "/ip/firewall/filter/print",
+      "=.proplist=.id,comment,chain,action,src-address-list,ttl",
+    ]),
+    10_000,
+  );
+  if (!Array.isArray(rawRows)) {
+    throw new Error("MikroTik did not return firewall filter rules for tether policy reconciliation.");
+  }
+  const prefix = hotspotTetherRuleCommentPrefix(planId);
+  const rows = rawRows as Record<string, string>[];
+  const existing = rows.filter(row => String(row.comment ?? "").startsWith(prefix));
+  const matching = new Set<string>();
+  for (const row of existing) {
+    const comment = String(row.comment ?? "");
+    const expectedTtl = comment.startsWith(prefix) ? comment.slice(prefix.length) : "";
+    const valid = desiredComments.has(comment)
+      && row.chain === "forward"
+      && row.action === "drop"
+      && row["src-address-list"] === hotspotTetherAddressListName(planId)
+      && row.ttl === `equal:${expectedTtl.replace(/^TTL_/, "")}`;
+    const id = row[".id"];
+    if (valid) {
+      matching.add(comment);
+    } else if (id) {
+      await safeWrite(conn, ["/ip/firewall/filter/remove", `=.id=${id}`]);
+    }
+  }
+  for (const ttl of config.mode === "enforce" && shouldBlock ? config.ttlValues : []) {
+    const comment = hotspotTetherRuleComment(planId, ttl);
+    if (!matching.has(comment)) {
+      await safeWrite(conn, hotspotTetherRuleArgs(planId, ttl));
+    }
+  }
 }
 
 async function requireExistingRouterProfile(
@@ -644,6 +700,7 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
       speed_down_unit: string; speed_up_unit: string;
       validity: number; validity_unit: string;
       shared_users: number;
+      tethering_allowed?: boolean | null;
     }>;
   };
 
@@ -695,9 +752,10 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
          active_ip_pool: string | null; expired_ip_pool: string | null;
         speed_down: number; speed_up: number; speed_down_unit: string; speed_up_unit: string;
         validity: number; validity_unit: string; shared_users: number;
+         tethering_allowed: boolean | null;
       }>(
         "isp_plans",
-        `admin_id=eq.${tenantId}&router_id=eq.${requestedRouterId}&id=in.(${planIds.join(",")})&select=id,name,type,router_id,port_id,active_ip_pool,expired_ip_pool,speed_down,speed_up,speed_down_unit,speed_up_unit,validity,validity_unit,shared_users&limit=1000`,
+        `admin_id=eq.${tenantId}&router_id=eq.${requestedRouterId}&id=in.(${planIds.join(",")})&select=id,name,type,router_id,port_id,active_ip_pool,expired_ip_pool,speed_down,speed_up,speed_down_unit,speed_up_unit,validity,validity_unit,shared_users,tethering_allowed&limit=1000`,
       )
     : [];
   if (scopedPlans.length !== planIds.length) {
@@ -744,6 +802,7 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
 
   const logs: string[] = [];
   const log = (msg: string) => logs.push(msg);
+  const tetherGuardConfig = hotspotTetherGuardConfigForRouter(requestedRouterId);
 
   let conn!: RouterOSAPI;
   try {
@@ -751,6 +810,13 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
       managementAccountFirst: true,
     }));
     log(`  pushing ${scopedPlans.length} plan profile(s)\n`);
+    if (!tetherGuardConfig) {
+      log("Tethering guard inactive: this router is not explicitly allowlisted for test.");
+    } else if (tetherGuardConfig.mode === "cleanup") {
+      log("Tethering guard cleanup mode: only this allowlisted test router will have managed tether rules removed.");
+    } else {
+      log(`Tethering guard active on allowlisted test router ${requestedRouterId}; blocking TTL ${tetherGuardConfig.ttlValues.join(", ")} for plans that disallow tethering.`);
+    }
 
     let created = 0, updated = 0, skipped = 0;
     const routerPppProfiles = scopedPlans.some(plan => String(plan.type).toLowerCase() === "pppoe")
@@ -805,7 +871,19 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
         }
       } else if (plan.type === "hotspot" || plan.type === "trials" || plan.type === "trial") {
         /* ── Hotspot user profile ── */
-         log(`▶ Hotspot profile: ${profileName} | pool: ${activeIpPool || "none"} | rate-limit: ${rateLimit} | session: ${sessionTime} | shared: ${plan.shared_users}`);
+        const shouldBlockTethering = plan.tethering_allowed !== true;
+        const applyGuard = tetherGuardConfig !== null;
+        try {
+          if (tetherGuardConfig?.mode === "enforce" && shouldBlockTethering) {
+            await reconcileHotspotTetherRules(conn, plan.id, tetherGuardConfig, true);
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          log(`  ❌ Tether guard rules could not be prepared for ${profileName}: ${message}`);
+          skipped++;
+          continue;
+        }
+        log(`▶ Hotspot profile: ${profileName} | pool: ${activeIpPool || "none"} | rate-limit: ${rateLimit} | session: ${sessionTime} | shared: ${plan.shared_users} | tethering policy: ${plan.tethering_allowed === true ? "allowed" : "not allowed"}`);
         try {
           const action = await upsertByFilter(conn, "/ip/hotspot/user/profile", "name", profileName, {
             name:              profileName,
@@ -813,7 +891,15 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
             "session-timeout": sessionTime,
             "shared-users":    String(plan.shared_users || 1),
              ...(activeIpPool ? { "address-pool": activeIpPool } : {}),
+            ...(applyGuard
+              ? { "address-list": tetherGuardConfig?.mode === "enforce" && shouldBlockTethering
+                ? hotspotTetherAddressListName(plan.id)
+                : "" }
+              : {}),
           });
+          if (tetherGuardConfig && !(tetherGuardConfig.mode === "enforce" && shouldBlockTethering)) {
+            await reconcileHotspotTetherRules(conn, plan.id, tetherGuardConfig, false);
+          }
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
           if (syncExistingUsers === true) {
