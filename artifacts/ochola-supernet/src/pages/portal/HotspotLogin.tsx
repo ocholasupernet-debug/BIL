@@ -670,6 +670,7 @@ function HotspotLoginView({
   const [mpesaMessage, setMpesaMessage] = useState("");
   const [mpesaReconnectLoading, setMpesaReconnectLoading] = useState(false);
   const [mpesaReconnectError, setMpesaReconnectError] = useState("");
+  const mpesaReconnectInFlight = useRef(false);
 
   useEffect(() => {
     if (!troubleshootDialogOpen) return;
@@ -2016,10 +2017,11 @@ function HotspotLoginView({
     }
   };
 
-  const handleMpesaReconnect = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const message = mpesaMessage.trim();
+  const verifyMpesaReconnect = async (rawMessage: string) => {
+    if (mpesaReconnectInFlight.current) return;
+    const message = rawMessage.trim();
     if (!message) return;
+    mpesaReconnectInFlight.current = true;
     setMpesaReconnectError("");
     setMpesaReconnectLoading(true);
     try {
@@ -2051,8 +2053,13 @@ function HotspotLoginView({
     } catch (error) {
       setMpesaReconnectError(error instanceof Error ? error.message : "Could not reconnect this M-Pesa payment.");
     } finally {
+      mpesaReconnectInFlight.current = false;
       setMpesaReconnectLoading(false);
     }
+  };
+  const handleMpesaReconnect = (e: React.FormEvent) => {
+    e.preventDefault();
+    void verifyMpesaReconnect(mpesaMessage);
   };
 
   const mpesaReconnectCard = (
@@ -2063,21 +2070,31 @@ function HotspotLoginView({
         </div>
         <div>
           <div className="hp-glass-title">Reconnect with M-Pesa</div>
-          <div className="hp-glass-desc">We look up completed payments on your account and only reconnect the device registered to that purchase while its package is active.</div>
+          <div className="hp-glass-desc">Paste the confirmation or enter its M-Pesa receipt code. We verify the paid transaction and reconnect only its registered device.</div>
         </div>
       </div>
       <div className="hp-glass-body">
         <form onSubmit={handleMpesaReconnect}>
           <div className="hp-input-group">
-            <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation message</label>
+              <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation or receipt code</label>
             <textarea
               id="mpesa-reconnect-message"
               className="hp-input hp-textarea"
               rows={4}
               maxLength={1000}
-              placeholder="Paste the full confirmation message"
+              placeholder="Paste the full message or enter the receipt code"
               value={mpesaMessage}
               onChange={event => { setMpesaMessage(event.target.value); setMpesaReconnectError(""); }}
+              onPaste={event => {
+                const pasted = event.clipboardData.getData("text").trim();
+                const hasReceipt = /^[A-Z][A-Z0-9]{8,11}$/i.test(pasted)
+                  || /\b[A-Z][A-Z0-9]{8,11}\s+Confirmed\b/i.test(pasted)
+                  || /\b(?:transaction|receipt|code)\s*(?:number|id|no\.?)?\s*[:#-]?\s*[A-Z][A-Z0-9]{8,11}\b/i.test(pasted);
+                if (!hasReceipt) return;
+                setMpesaMessage(pasted);
+                setMpesaReconnectError("");
+                window.setTimeout(() => void verifyMpesaReconnect(pasted), 0);
+              }}
               required
             />
           </div>
