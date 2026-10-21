@@ -45,6 +45,7 @@ test("expired customer archive preserves every transaction field and can be rest
   const customers: FixtureRow[] = [
     { id: 801, admin_id: 7, status: "expired", expires_at: "2020-01-01T00:00:00Z", depletion_reason: null, archived_at: null },
     { id: 802, admin_id: 7, status: "active", expires_at: "2099-01-01T00:00:00Z", depletion_reason: null, archived_at: null },
+    { id: 803, admin_id: 7, status: "expired", expires_at: "2020-01-01T00:00:00Z", depletion_reason: null, archived_at: "2021-01-01T00:00:00Z" },
   ];
   const transactions: FixtureRow[] = [
     { id: 9001, admin_id: 7, customer_id: 801, amount: 100, status: "completed", notes: "paid receipt" },
@@ -65,6 +66,8 @@ test("expired customer archive preserves every transaction field and can be rest
       ? customers
       : table === "isp_transactions"
         ? transactions
+        : table === "isp_expired_customer_history"
+          ? [{ admin_id: 7, permanently_deleted_count: 4 }]
         : table === "isp_admins"
           ? [{ id: 7, is_active: true, role: "isp_admin", parent_id: null }]
           : [];
@@ -113,4 +116,12 @@ test("expired customer archive preserves every transaction field and can be rest
   assert.equal(customers.find(row => row.id === 801)?.archived_at, null);
   assert.deepEqual(transactions, beforeTransactions);
   assert.equal(requests.some(request => request.table === "isp_transactions" && request.method === "PATCH"), false);
+
+  const history = await originalFetch(`${origin}/api/customers/expired-history`, { headers });
+  assert.equal(history.status, 200, await history.clone().text());
+  assert.deepEqual(await history.json(), {
+    ok: true,
+    archivedExpiredCount: 1,
+    permanentlyDeletedExpiredCount: 4,
+  });
 });

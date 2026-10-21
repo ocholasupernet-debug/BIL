@@ -830,6 +830,39 @@ router.get("/customers/archive-preview", requireAdmin(), async (req, res): Promi
   }
 });
 
+router.get("/customers/expired-history", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req);
+  if (!adminId) {
+    res.status(400).json({ ok: false, error: "A signed-in account is required." });
+    return;
+  }
+  try {
+    const [archived, totals] = await Promise.all([
+      sbSelectStrict<{
+        status: string | null;
+        expires_at: string | null;
+        depletion_reason: string | null;
+      }>(
+        "isp_customers",
+        `admin_id=eq.${adminId}&archived_at=not.is.null&select=status,expires_at,depletion_reason`,
+      ),
+      sbSelectStrict<{ permanently_deleted_count: number | string }>(
+        "isp_expired_customer_history",
+        `admin_id=eq.${adminId}&select=permanently_deleted_count&limit=1`,
+      ),
+    ]);
+    res.json({
+      ok: true,
+      archivedExpiredCount: archived.filter(row =>
+        isPrepaidCustomerExpired(row.status, row.expires_at, row.depletion_reason),
+      ).length,
+      permanentlyDeletedExpiredCount: Math.max(0, Number(totals[0]?.permanently_deleted_count ?? 0)),
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Expired-account history is temporarily unavailable." });
+  }
+});
+
 router.post("/customers/archive-expired", requireAdmin(), async (req, res): Promise<void> => {
   const adminId = authenticatedAdminId(req);
   const submittedIds = req.body?.customerIds;

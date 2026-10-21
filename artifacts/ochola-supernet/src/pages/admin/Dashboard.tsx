@@ -191,8 +191,12 @@ type CustomerBasic = {
   ip_address: string | null;
   service_online: boolean | null;
 };
-type CustomerPlanScope = { id: number; router_id: number | null };
+type CustomerPlanScope = { id: number; router_id: number | null; port_id: number | null };
 type CustomerPortScope = { id: number; router_id: number };
+type ExpiredCustomerHistory = {
+  archivedExpiredCount: number;
+  permanentlyDeletedExpiredCount: number;
+};
 
 async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
   const response = await adminApiFetch(`/api/customers?adminId=${ADMIN_ID}`, { cache: "no-store" });
@@ -203,12 +207,21 @@ async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
   return result;
 }
 
+async function fetchExpiredCustomerHistory(): Promise<ExpiredCustomerHistory> {
+  const response = await adminApiFetch(`/api/customers/expired-history?adminId=${ADMIN_ID}`, { cache: "no-store" });
+  const result = await response.json() as ExpiredCustomerHistory | { error?: string };
+  if (!response.ok || !("archivedExpiredCount" in result)) {
+    throw new Error("Historical expired-account counts could not be loaded.");
+  }
+  return result;
+}
+
 async function fetchCustomerPlanScopes(): Promise<{ plans: CustomerPlanScope[]; ports: CustomerPortScope[] }> {
   const context = await fetchAdminRouterContext();
   return {
     plans: context.plans
       .filter(plan => !plan.owner_reseller_id)
-      .map(plan => ({ id: plan.id, router_id: plan.router_id ?? null })),
+      .map(plan => ({ id: plan.id, router_id: plan.router_id ?? null, port_id: plan.port_id ?? null })),
     ports: context.ports.map(port => ({ id: port.id, router_id: port.router_id })),
   };
 }
@@ -511,6 +524,11 @@ export default function Dashboard() {
     queryFn: fetchCustomersBasic,
     refetchInterval: 60_000,
   });
+  const expiredHistoryQuery = useQuery({
+    queryKey: ["isp_expired_customer_history", ADMIN_ID],
+    queryFn: fetchExpiredCustomerHistory,
+    refetchInterval: 60_000,
+  });
   const {
     data: customerPlanScopes = { plans: [], ports: [] },
     isLoading: customerPlanScopesLoading,
@@ -586,10 +604,14 @@ export default function Dashboard() {
   ).length;
   const activeUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "active").length;
   const expiredUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "expired").length;
-  const serviceCountsLoading = customersLoading || customerPlanScopesLoading;
+  const expiredAccountsEver = expiredUsers
+    + (expiredHistoryQuery.data?.archivedExpiredCount ?? 0)
+    + (expiredHistoryQuery.data?.permanentlyDeletedExpiredCount ?? 0);
+  const serviceCountsLoading = customersLoading || customerPlanScopesLoading || expiredHistoryQuery.isLoading;
   const serviceCountsUnavailable = (customersError && customers.length === 0)
-    || (customerPlanScopesError && customerPlanScopes.plans.length === 0 && customerPlanScopes.ports.length === 0);
-  const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredUsers}`;
+    || (customerPlanScopesError && customerPlanScopes.plans.length === 0 && customerPlanScopes.ports.length === 0)
+    || expiredHistoryQuery.isError;
+  const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredAccountsEver}`;
   const onlineCountValue = (count: number) => serviceCountsLoading
     ? "…"
     : serviceCountsUnavailable
@@ -769,7 +791,7 @@ export default function Dashboard() {
           <StatMiniCard label="Hotspot online" value={onlineHotspotValue} href="/admin/customers?type=hotspot" icon={<Signal size={16} />} tone="deep-teal" />
           <StatMiniCard label="VLAN users online" value={onlineVlanValue} href="/admin/customers?type=vlan" icon={<Wifi size={16} />} tone="indigo" />
           <StatMiniCard label="Static online" value={onlineStaticValue} href="/admin/customers?type=static" icon={<Server size={16} />} tone="green" />
-           <StatMiniCard label="Active / expired accounts" value={activeExpiredValue} href="/admin/customers" icon={<CircleCheck size={16} />} tone="amber" />
+           <StatMiniCard label="Active / expired incl. removed" value={activeExpiredValue} href="/admin/customers" icon={<CircleCheck size={16} />} tone="amber" />
            <StatMiniCard label="Active resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.activeResellers ?? 0)} href="/admin/network/resellers" icon={<Users size={16} />} tone="accent" />
            <StatMiniCard label="Online resellers" value={resellerSummaryLoading ? "…" : String(resellerSummary?.onlineResellers ?? 0)} href="/admin/network/resellers" icon={<Wifi size={16} />} tone="teal" />
         </section>

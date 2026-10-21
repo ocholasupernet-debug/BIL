@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { sweepAllRouters } from "./routes/routers-route";
 import { getRouterCreds } from "./routes/mikrotik-route.js";
 import { processDueRouterUserSnapshots } from "./services/router-user-snapshot-service.js";
+import { purgeExpiredPrepaidCustomers } from "./services/expired-customer-retention.js";
 import {
   enqueueWhatsAppExpiryNotifications,
   processWhatsAppOutboxBatch,
@@ -121,6 +122,25 @@ const server = app.listen(port, (err) => {
       setInterval(() => void runRouterUserSnapshotWorker(), 60_000);
     }, 20_000);
     logger.info({ intervalSeconds: 60 }, "[user-snapshots] scheduled refresh worker started");
+  }
+  if (process.env.NODE_ENV === "production" && process.env.EXPIRED_CUSTOMER_RETENTION_ENABLED !== "false") {
+    let retentionWorkerBusy = false;
+    const runRetentionSweep = async () => {
+      if (retentionWorkerBusy) return;
+      retentionWorkerBusy = true;
+      try {
+        await purgeExpiredPrepaidCustomers();
+      } catch (error) {
+        logger.warn({ err: error }, "[expired-customer-retention] scheduled sweep failed");
+      } finally {
+        retentionWorkerBusy = false;
+      }
+    };
+    setTimeout(() => {
+      void runRetentionSweep();
+      setInterval(() => void runRetentionSweep(), 24 * 60 * 60 * 1000);
+    }, 45_000);
+    logger.info({ intervalHours: 24, graceDays: 180 }, "[expired-customer-retention] scheduled worker started");
   }
 });
 
