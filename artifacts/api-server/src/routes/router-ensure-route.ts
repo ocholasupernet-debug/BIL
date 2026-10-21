@@ -8,7 +8,7 @@
  * existing row.
  *
  * Body: { adminId: number, bridgeIp?: string, bridgeInterface?: string }
- * Response: { ok: true, router: { id, name, router_secret, ... } }
+ * Response: { ok: true, router: { id, name, ... } }
  *            { ok: false, error: string, detail?: string }
  */
 
@@ -20,6 +20,7 @@ import { provisionRouterManagementOpenVpnPair } from "../lib/router-vpn-provisio
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 import { getTenantSubdomain } from "../lib/tenant-host.js";
 import { isSafeRouterName, nextOrdinalRouterName, routerNameBase } from "../lib/router-name-policy.js";
+import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 
 const router: IRouter = Router();
 
@@ -262,7 +263,7 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
     admin_id:         adminId,
     name,
     host:             "",
-    router_username:  name,
+    router_username:  ROUTER_MANAGEMENT_API_USERNAME,
     router_secret:    apiPassword, /* Dedicated RouterOS API password; never used as the installer token. */
     token:            installerToken,
     bridge_interface: bridgeInterface || "bridge",

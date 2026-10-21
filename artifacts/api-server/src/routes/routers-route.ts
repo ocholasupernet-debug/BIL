@@ -10,6 +10,7 @@ import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { isRouterManagementVpnIp } from "../lib/router-vpn-ip.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { routerHealthApiAccountOrder } from "../lib/router-health-api-account-order.js";
+import { resolveRouterApiCredentialsForCreate } from "../lib/router-api-bootstrap-credentials.js";
 
 const router: IRouter = Router();
 const rotatingRouterIds = new Set<number>();
@@ -453,9 +454,15 @@ router.post("/routers", requireAdmin(), async (req, res): Promise<void> => {
     return;
   }
   const routerName = String(name).trim();
-  const requestedRouterSecret = typeof router_secret === "string"
+  const requestedRouterPassword = typeof router_secret === "string"
     ? router_secret
-    : typeof apiPassword === "string" ? apiPassword : routerName;
+    : typeof apiPassword === "string" ? apiPassword : undefined;
+  const apiCredentials = resolveRouterApiCredentialsForCreate({
+    routerName,
+    username: router_username ?? apiUsername,
+    password: requestedRouterPassword,
+  });
+  const requestedRouterSecret = apiCredentials.password;
   if (requestedRouterSecret.length < 6) {
     res.status(400).json({ error: "A router password must have at least 6 characters." });
     return;
@@ -466,10 +473,10 @@ router.post("/routers", requireAdmin(), async (req, res): Promise<void> => {
     host:             host || ipAddress || "",
     model:            model ?? null,
     ros_version:      rosVersion ?? null,
-    router_username:  router_username ?? apiUsername ?? routerName,
+    router_username:  apiCredentials.username,
     router_secret:    requestedRouterSecret,
     bridge_ip:        bridge_ip ?? null,
-    status:           status ?? "offline",
+    status:           status ?? (apiCredentials.generated ? "setup" : "offline"),
   });
   if (!r) { res.status(500).json({ error: "Failed to create router" }); return; }
   if (!isPendingSetup(String(r.status ?? status ?? "offline"))) {
@@ -480,7 +487,8 @@ router.post("/routers", requireAdmin(), async (req, res): Promise<void> => {
     }
   }
   void logActivity({ adminId: Number(effectiveAdminId), type: "router", action: "added", subject: name, details: { host: host || ipAddress } });
-  res.status(201).json(r);
+  const { router_secret: _storedSecret, ...safeRouter } = r;
+  res.status(201).json(safeRouter);
 });
 
 router.patch("/routers/:id", requireAdmin(), async (req, res): Promise<void> => {
