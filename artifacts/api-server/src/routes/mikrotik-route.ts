@@ -3595,8 +3595,14 @@ router.get("/admin/dashboard/telemetry", requireAdmin(), async (req, res): Promi
           `reseller_${port.reseller_id ?? port.assigned_reseller_id ?? ""}`.toLowerCase(),
           `reseller_${port.reseller_id ?? port.assigned_reseller_id ?? ""}_${port.interface_name}`.toLowerCase(),
         ]);
-        const hotspot = result?.live?.hotspotUsers.filter((user) => aliases.has(user.server.toLowerCase())).length ?? 0;
-        const pppoe = result?.live?.pppoeUsers.filter((user) => aliases.has(user.service.toLowerCase())).length ?? 0;
+        const hotspotAvailable = Boolean(result?.live && result.live.hotspotUsersAvailable !== false);
+        const pppoeAvailable = Boolean(result?.live && result.live.pppoeUsersAvailable !== false);
+        const hotspot = hotspotAvailable
+          ? result!.live!.hotspotUsers.filter((user) => aliases.has(user.server.toLowerCase())).length
+          : null;
+        const pppoe = pppoeAvailable
+          ? result!.live!.pppoeUsers.filter((user) => aliases.has(user.service.toLowerCase())).length
+          : null;
         return {
           portId: port.id,
           routerId: port.router_id,
@@ -3604,29 +3610,41 @@ router.get("/admin/dashboard/telemetry", requireAdmin(), async (req, res): Promi
           resellerId: port.assigned_reseller_id ?? port.reseller_id,
           hotspotActive: hotspot,
           pppoeActive: pppoe,
-          onlineUsers: hotspot + pppoe,
-          routerAvailable: Boolean(result?.live),
-          routerError: result?.error ?? null,
+          onlineUsers: hotspot === null || pppoe === null ? null : hotspot + pppoe,
+          routerAvailable: hotspotAvailable && pppoeAvailable,
+          routerError: result?.error
+            ?? (!hotspotAvailable || !pppoeAvailable ? "One or more RouterOS active-session lists could not be read." : null),
         };
       });
 
-    const filteredTotals = rows.reduce((total, row) => ({
-      hotspot: total.hotspot + row.hotspotActive,
-      pppoe: total.pppoe + row.pppoeActive,
-    }), { hotspot: 0, pppoe: 0 });
-    const globalTotals = liveResults.reduce((total, entry) => ({
-      hotspot: total.hotspot + (entry.live?.hotspotUsers.length ?? 0),
-      pppoe: total.pppoe + (entry.live?.pppoeUsers.length ?? 0),
-    }), { hotspot: 0, pppoe: 0 });
+    const sumAvailableCounts = (counts: Array<number | null>): number | null =>
+      counts.some((count) => count === null)
+        ? null
+        : counts.reduce<number>((sum, count) => sum + (count ?? 0), 0);
+    const filteredTotals = {
+      hotspot: sumAvailableCounts(rows.map((row) => row.hotspotActive)),
+      pppoe: sumAvailableCounts(rows.map((row) => row.pppoeActive)),
+    };
+    const globalTotals = {
+      hotspot: sumAvailableCounts(liveResults.map((entry) =>
+        entry.live && entry.live.hotspotUsersAvailable !== false ? entry.live.hotspotUsers.length : null)),
+      pppoe: sumAvailableCounts(liveResults.map((entry) =>
+        entry.live && entry.live.pppoeUsersAvailable !== false ? entry.live.pppoeUsers.length : null)),
+    };
     const totals = account.role === "reseller" || portId !== null || resellerId !== null ? filteredTotals : globalTotals;
+    const onlineUsers = totals.hotspot === null || totals.pppoe === null
+      ? null
+      : totals.hotspot + totals.pppoe;
 
     res.json({
       ok: true,
       fetchedAt: new Date().toISOString(),
+      hasUnavailableLiveData: liveResults.some((entry) =>
+        !entry.live || entry.live.hotspotUsersAvailable === false || entry.live.pppoeUsersAvailable === false),
       totals: {
         hotspotActive: totals.hotspot,
         pppoeActive: totals.pppoe,
-        onlineUsers: totals.hotspot + totals.pppoe,
+        onlineUsers,
       },
       rows,
       filters: {

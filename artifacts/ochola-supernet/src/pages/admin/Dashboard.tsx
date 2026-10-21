@@ -105,15 +105,16 @@ type TelemetryRow = {
   routerId: number;
   interfaceName: string;
   resellerId: number | null;
-  hotspotActive: number;
-  pppoeActive: number;
-  onlineUsers: number;
+  hotspotActive: number | null;
+  pppoeActive: number | null;
+  onlineUsers: number | null;
   routerAvailable: boolean;
   routerError: string | null;
 };
 
 type TelemetryResponse = {
-  totals: { hotspotActive: number; pppoeActive: number; onlineUsers: number };
+  totals: { hotspotActive: number | null; pppoeActive: number | null; onlineUsers: number | null };
+  hasUnavailableLiveData: boolean;
   rows: TelemetryRow[];
   filters: {
     routers: { id: number; name: string; status: string }[];
@@ -888,6 +889,11 @@ export default function Dashboard() {
           ) : telemetry ? (
             <>
               <div className="dashboard-telemetry-totals">
+                {telemetry.hasUnavailableLiveData && (
+                  <div className="dashboard-empty" role="status">
+                    Some RouterOS session lists are unavailable. A dash means unknown, not zero.
+                  </div>
+                )}
                 {[
                   { label: selectedRouterObj ? `${selectedRouterObj.name} online users` : "System-wide online users", value: telemetry.totals.onlineUsers, tone: "green" },
                   { label: "Active PPPoE sessions", value: telemetry.totals.pppoeActive, tone: "accent" },
@@ -895,7 +901,7 @@ export default function Dashboard() {
                 ].map(({ label, value, tone }) => (
                   <div key={label} className={`dashboard-telemetry-total dashboard-telemetry-total--${tone}`}>
                     <span>{label}</span>
-                    <strong>{String(value)}</strong>
+                    <strong>{value == null ? "—" : String(value)}</strong>
                   </div>
                 ))}
               </div>
@@ -908,9 +914,9 @@ export default function Dashboard() {
                     ) : telemetry.rows.map((row) => (
                       <tr key={row.portId}>
                         <td className="table-mono">{row.interfaceName}</td>
-                        <td>{row.onlineUsers}</td>
-                        <td>{row.pppoeActive}</td>
-                        <td>{row.hotspotActive}</td>
+                        <td>{row.onlineUsers == null ? "—" : row.onlineUsers}</td>
+                        <td>{row.pppoeActive == null ? "—" : row.pppoeActive}</td>
+                        <td>{row.hotspotActive == null ? "—" : row.hotspotActive}</td>
                         <td>
                           <span
                             className={`isp-badge ${row.routerAvailable ? "isp-badge-green" : "isp-badge-amber"}`}
