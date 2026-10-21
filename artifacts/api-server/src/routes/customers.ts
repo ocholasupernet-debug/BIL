@@ -4329,6 +4329,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
         user: username,
         password,
         macAddress: requestedMac,
+        clientIpHint: String(req.body?.client_ip ?? ""),
         verifyOnly: true,
         ...(desiredHotspotServer ? { expectedServer: desiredHotspotServer } : {}),
         ...(portalScope && customer.type === "vlan"
@@ -4538,6 +4539,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
           user: username,
           password,
           macAddress: requestedMac,
+          clientIpHint: String(req.body?.client_ip ?? ""),
           ...(portalScope && customer.type === "vlan"
             ? { expectedIp: String(customer.ip_address) }
             : {}),

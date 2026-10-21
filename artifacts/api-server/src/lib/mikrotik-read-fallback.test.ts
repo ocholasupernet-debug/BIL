@@ -272,6 +272,117 @@ test("paid Hotspot reconnect limits a pending login to two confirmation reads", 
   });
 });
 
+test("paid Hotspot reconnect uses a router-verified client IP hint only for the matching MAC", async () => {
+  let loginSeen = false;
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/login") {
+      loginSeen = true;
+      return [];
+    }
+    if (command[0] === "/ip/hotspot/active/print") {
+      const userScoped = command.some(value => String(value).startsWith("?user="));
+      return loginSeen && userScoped
+        ? [{ user: "tv-package", address: "10.0.0.88", "mac-address": targetMac }]
+        : [];
+    }
+    if (command[0] === "/ip/dhcp-server/lease/print") {
+      if (command.includes("?address=10.0.0.88")) {
+        return [{ status: "bound", address: "10.0.0.88", "mac-address": targetMac }];
+      }
+      return [];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    const result = await reconnectHotspotUserByMac(routerCredentials(port), {
+      user: "tv-package",
+      password: "test-password",
+      macAddress: targetMac,
+      clientIpHint: "10.0.0.88",
+    });
+
+    assert.equal(result.kind, "connected");
+    assert.ok(commands.some(({ command }) => command.includes("?address=10.0.0.88")));
+    const loginCommand = commands.find(({ command }) => command[0] === "/ip/hotspot/active/login")?.command;
+    assert.equal(loginCommand?.find(value => String(value).startsWith("=ip=")), "=ip=10.0.0.88");
+    assert.equal(loginCommand?.find(value => String(value).startsWith("=mac-address=")), `=mac-address=${targetMac}`);
+  });
+});
+
+test("Hotspot reconnect ignores a client IP hint owned by a different MAC", async () => {
+  let loginSeen = false;
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/login") {
+      loginSeen = true;
+      return [];
+    }
+    if (command[0] === "/ip/hotspot/active/print") {
+      const userScoped = command.some(value => String(value).startsWith("?user="));
+      return loginSeen && userScoped
+        ? [{ user: "tv-package", address: "10.0.0.89", "mac-address": targetMac }]
+        : [];
+    }
+    if (command[0] === "/ip/dhcp-server/lease/print") {
+      if (command.includes("?address=10.0.0.88")) {
+        return [{ status: "bound", address: "10.0.0.88", "mac-address": "11:22:33:44:55:66" }];
+      }
+      if (command.includes("?status=bound")) {
+        return [{ status: "bound", address: "10.0.0.89", "mac-address": targetMac }];
+      }
+      return [];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    const result = await reconnectHotspotUserByMac(routerCredentials(port), {
+      user: "tv-package",
+      password: "test-password",
+      macAddress: targetMac,
+      clientIpHint: "10.0.0.88",
+    });
+
+    assert.equal(result.kind, "connected");
+    const loginCommand = commands.find(({ command }) => command[0] === "/ip/hotspot/active/login")?.command;
+    assert.equal(loginCommand?.find(value => String(value).startsWith("=ip=")), "=ip=10.0.0.89");
+    assert.equal(loginCommand?.find(value => String(value).startsWith("=mac-address=")), `=mac-address=${targetMac}`);
+  });
+});
+
+test("Hotspot reconnect retries when the router verifies the same MAC at a changed IP", async () => {
+  let loginSeen = false;
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/login") {
+      loginSeen = true;
+      return [];
+    }
+    if (command[0] === "/ip/hotspot/active/print") {
+      const userScoped = command.some(value => String(value).startsWith("?user="));
+      if (loginSeen && userScoped) {
+        return [{ user: "tv-package", address: "10.0.0.88", "mac-address": targetMac }];
+      }
+      return [{ user: "tv-package", address: "10.0.0.87", "mac-address": targetMac }];
+    }
+    if (command[0] === "/ip/dhcp-server/lease/print" && command.includes("?address=10.0.0.88")) {
+      return [{ status: "bound", address: "10.0.0.88", "mac-address": targetMac }];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    const result = await reconnectHotspotUserByMac(routerCredentials(port), {
+      user: "tv-package",
+      password: "test-password",
+      macAddress: targetMac,
+      clientIpHint: "10.0.0.88",
+    });
+
+    assert.equal(result.kind, "connected");
+    assert.ok(commands.some(({ command }) => command.includes("?address=10.0.0.88")));
+    const loginCommand = commands.find(({ command }) => command[0] === "/ip/hotspot/active/login")?.command;
+    assert.equal(loginCommand?.find(value => String(value).startsWith("=ip=")), "=ip=10.0.0.88");
+    assert.equal(loginCommand?.find(value => String(value).startsWith("=mac-address=")), `=mac-address=${targetMac}`);
+  });
+});
+
 test("paid Hotspot reconnect checks Host and ARP fallbacks concurrently after a DHCP miss", async () => {
   let loginSeen = false;
   let activeFallbackReads = 0;

@@ -3949,11 +3949,21 @@ export function hotspotActiveSessionMatchesDevice(
   );
 }
 
+function validRouterIpv4Hint(value: unknown): string {
+  const ip = String(value ?? "").trim();
+  const octets = ip.split(".");
+  return octets.length === 4
+    && octets.every(octet => /^\d{1,3}$/.test(octet) && Number(octet) >= 0 && Number(octet) <= 255)
+    ? ip
+    : "";
+}
+
 async function resolveHotspotClientIpByMacOnConnection(
   conn: RouterOSAPI,
   creds: RouterCredentials,
   macAddress: string,
   initialActiveRows: Record<string, string>[],
+  clientIpHint?: string,
 ): Promise<string | null> {
   const targetMac = validRouterMac(macAddress);
   if (!targetMac) return null;
@@ -3974,6 +3984,33 @@ async function resolveHotspotClientIpByMacOnConnection(
       return [];
     }
   };
+  const validIpHint = validRouterIpv4Hint(clientIpHint);
+  if (validIpHint) {
+    const matchesHint = (rows: Record<string, string>[]) => rows.some(row =>
+      validRouterMac(row["mac-address"]) === targetMac
+      && String(row.address ?? "").trim().split("/")[0] === validIpHint,
+    );
+    const hintedLeaseRows = await readOptionalRows([
+      "/ip/dhcp-server/lease/print",
+      "?status=bound",
+      `?address=${validIpHint}`,
+      "=.proplist=address,mac-address,status",
+    ]);
+    if (matchesHint(hintedLeaseRows)) return validIpHint;
+    const hintedHostRows = await readOptionalRows([
+      "/ip/hotspot/host/print",
+      `?address=${validIpHint}`,
+      "=.proplist=address,mac-address",
+    ]);
+    if (matchesHint(hintedHostRows)) return validIpHint;
+    const hintedArpRows = await readOptionalRows([
+      "/ip/arp/print",
+      `?address=${validIpHint}`,
+      "?complete=true",
+      "=.proplist=address,mac-address,complete",
+    ]);
+    if (matchesHint(hintedArpRows)) return validIpHint;
+  }
   const dhcpRows = await readOptionalRows([
     "/ip/dhcp-server/lease/print",
     "?status=bound",
@@ -4019,6 +4056,7 @@ export async function reconnectHotspotUserByMac(
     expectedIp?: string;
     expectedServer?: string;
     loginIp?: string;
+    clientIpHint?: string;
     verifyOnly?: boolean;
   },
 ): Promise<HotspotMacReconnectResult> {
@@ -4053,10 +4091,29 @@ export async function reconnectHotspotUserByMac(
         && (!opts.expectedServer || opts.expectedServer === "all" || session.server === opts.expectedServer),
       );
 
-    if (sessionMatchesTarget(activeRows, opts.expectedIp)) return result("connected");
+    const matchingActiveSession = activeRows.find(session =>
+      sessionMatchesTarget([session], opts.expectedIp),
+    );
+    let verifiedClientIp: string | null = null;
+    if (matchingActiveSession) {
+      const hintedIp = validRouterIpv4Hint(opts.clientIpHint);
+      const activeIp = String(matchingActiveSession.address ?? "").trim().split("/")[0];
+      if (hintedIp && activeIp && hintedIp !== activeIp) {
+        const liveIp = await measure("router_ip_hint_verification", () =>
+          resolveHotspotClientIpByMacOnConnection(conn, creds, targetMac, [], hintedIp),
+        );
+        if (liveIp === hintedIp) {
+          verifiedClientIp = liveIp;
+        } else {
+          return result("connected");
+        }
+      } else {
+        return result("connected");
+      }
+    }
 
-    const discoveredIp = await measure("router_ip_discovery", () =>
-      resolveHotspotClientIpByMacOnConnection(conn, creds, targetMac, activeRows),
+    const discoveredIp = verifiedClientIp ?? await measure("router_ip_discovery", () =>
+      resolveHotspotClientIpByMacOnConnection(conn, creds, targetMac, activeRows, opts.clientIpHint),
     );
     if (!discoveredIp) return result("device-not-found");
     if (opts.expectedIp && discoveredIp !== opts.expectedIp) return result("ip-mismatch");
