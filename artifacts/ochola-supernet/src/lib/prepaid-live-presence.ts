@@ -1,5 +1,7 @@
 import { getCustomerServiceStatus } from "./customer-service-status";
 
+export const PREPAID_LIVE_SNAPSHOT_MAX_AGE_MS = 60_000;
+
 export interface PrepaidLiveRouter {
   id: number;
   name: string;
@@ -46,6 +48,7 @@ export interface PrepaidOnlinePlan {
 export function buildLivePresenceByRouter(
   routers: readonly { id: number }[],
   liveQueries: readonly { data?: PrepaidLiveData; isError?: boolean }[],
+  now = Date.now(),
 ): Map<number, LiveRouterPresence> {
   const presence = new Map<number, LiveRouterPresence>();
   routers.forEach((router, index) => {
@@ -60,8 +63,15 @@ export function buildLivePresenceByRouter(
       const username = normalizeLiveIdentity(user.name);
       if (username) onlineUsers.add(username);
     });
+    const fetchedAt = live?.fetchedAt ? Date.parse(live.fetchedAt) : NaN;
+    // A transient refresh error can leave React Query holding the last good
+    // snapshot. Keep matching sessions from that snapshot briefly instead of
+    // replacing a known online result with a stale saved service_online flag.
+    const recentSnapshot = Number.isFinite(fetchedAt)
+      && fetchedAt <= now
+      && now - fetchedAt <= PREPAID_LIVE_SNAPSHOT_MAX_AGE_MS;
     presence.set(router.id, {
-      authoritative: Boolean(live?.fetchedAt && !query?.isError),
+      authoritative: recentSnapshot,
       hotspotUsersAvailable: live?.hotspotUsersAvailable !== false,
       pppoeUsersAvailable: live?.pppoeUsersAvailable !== false,
       onlineUsers,

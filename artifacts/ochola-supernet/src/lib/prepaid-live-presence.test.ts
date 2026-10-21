@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildLivePresenceByRouter,
   customerIsOnline,
+  PREPAID_LIVE_SNAPSHOT_MAX_AGE_MS,
   type PrepaidOnlineCustomer,
 } from "./prepaid-live-presence";
 
@@ -19,6 +20,7 @@ test("online prepaid counts use the normalized live session from the shared rout
         pppoeUsers: [{ name: "HomeUser" }],
       },
     }],
+    NOW,
   );
   const hotspot: PrepaidOnlineCustomer = {
     id: 1,
@@ -45,6 +47,7 @@ test("expired access and suspended prepaid records never count as online", () =>
   const presence = buildLivePresenceByRouter(
     [{ id: 7 }],
     [{ data: { fetchedAt: "2026-10-07T11:59:55.000Z", hotspotUsers: [{ user: "paid-user" }] } }],
+    NOW,
   );
   const base: PrepaidOnlineCustomer = {
     id: 1,
@@ -77,4 +80,54 @@ test("a failed router query falls back to the saved prepaid online state", () =>
 
   assert.equal(customerIsOnline(user, presence, {}, NOW), true);
   assert.equal(customerIsOnline({ ...user, service_online: false }, presence, {}, NOW), false);
+});
+
+test("a transient refresh error keeps a recent successful live session visible", () => {
+  const presence = buildLivePresenceByRouter(
+    [{ id: 7 }],
+    [{
+      isError: true,
+      data: {
+        fetchedAt: new Date(NOW - 30_000).toISOString(),
+        hotspotUsers: [{ user: "paid-user" }],
+      },
+    }],
+    NOW,
+  );
+  const user: PrepaidOnlineCustomer = {
+    id: 1,
+    type: "hotspot",
+    username: "paid-user",
+    router_id: 7,
+    status: "active",
+    expires_at: "2026-10-08T00:00:00.000Z",
+    service_online: false,
+  };
+
+  assert.equal(customerIsOnline(user, presence, {}, NOW), true);
+});
+
+test("a cached live session stops being authoritative after its freshness window", () => {
+  const presence = buildLivePresenceByRouter(
+    [{ id: 7 }],
+    [{
+      isError: true,
+      data: {
+        fetchedAt: new Date(NOW - PREPAID_LIVE_SNAPSHOT_MAX_AGE_MS - 1).toISOString(),
+        hotspotUsers: [{ user: "paid-user" }],
+      },
+    }],
+    NOW,
+  );
+  const user: PrepaidOnlineCustomer = {
+    id: 1,
+    type: "hotspot",
+    username: "paid-user",
+    router_id: 7,
+    status: "active",
+    expires_at: "2026-10-08T00:00:00.000Z",
+    service_online: false,
+  };
+
+  assert.equal(customerIsOnline(user, presence, {}, NOW), false);
 });

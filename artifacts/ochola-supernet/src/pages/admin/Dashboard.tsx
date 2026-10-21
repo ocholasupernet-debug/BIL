@@ -696,7 +696,13 @@ export default function Dashboard() {
             <button
               type="button"
               className="dashboard-error-retry"
-               onClick={() => { void refetchRouters(); void refetchCustomers(); void refetchCustomerPlanScopes(); void refetchTransactions(); void refetchRevenue(); }}
+               onClick={() => {
+                 void refetchCustomers();
+                 void refetchCustomerPlanScopes();
+                 void refetchTransactions();
+                 void refetchRevenue();
+                 void refreshOnlineUsers();
+               }}
             >
               Retry
             </button>
