@@ -379,15 +379,18 @@ function GenerateModal({
   const [expiryDate, setExpiryDate] = useState("");
 
   const plan = plans.find(p => p.id === selectedPlanId) ?? plans[0];
-  const router = selectedRouterId === "all" ? null : (routers.find(r => r.id === selectedRouterId) ?? null);
+  const assignedRouterId = plan?.router_id ?? null;
+  const routerUnavailable = assignedRouterId !== null && !routers.some(r => r.id === assignedRouterId);
+  const voucherRouterId = assignedRouterId ?? (selectedRouterId === "all" ? null : selectedRouterId);
+  const router = voucherRouterId === null ? null : (routers.find(r => r.id === voucherRouterId) ?? null);
 
   const handleGenerate = () => {
-    if (!plan) return;
+    if (!plan || routerUnavailable) return;
     onGenerate({
       quantity: fixedCode ? 1 : qty,
       maxRedemptions,
       planId: plan.id,
-      routerId: router?.id ?? null,
+      routerId: voucherRouterId,
       prefix,
       fixedCode: fixedCode.trim().toUpperCase(),
       expiryDate: expiryDate || null,
@@ -419,15 +422,31 @@ function GenerateModal({
               Router (Hotspot)
             </span>
             <select
-              value={selectedRouterId}
+              value={assignedRouterId ?? selectedRouterId}
+              disabled={generating || assignedRouterId !== null}
               onChange={e => setSelectedRouterId(e.target.value === "all" ? "all" : Number(e.target.value))}
               style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%" }}>
-              <option value="all">Any Router (universal)</option>
-              {routers.map(r => (
-                <option key={r.id} value={r.id}>{r.name} — {r.host} {r.status === "online" ? "🟢" : "🔴"}</option>
-              ))}
+              {assignedRouterId !== null ? (
+                <option value={assignedRouterId}>
+                  {router ? `${router.name} — ${router.host}` : `Assigned router ${assignedRouterId} unavailable`}
+                </option>
+              ) : (
+                <>
+                  <option value="all">Any Router (universal)</option>
+                  {routers.map(r => (
+                    <option key={r.id} value={r.id}>{r.name} — {r.host} {r.status === "online" ? "🟢" : "🔴"}</option>
+                  ))}
+                </>
+              )}
             </select>
           </label>
+          {assignedRouterId !== null && (
+            <div style={{ marginTop: "-0.55rem", fontSize: "0.72rem", color: routerUnavailable ? "#f87171" : "var(--isp-text-muted)" }}>
+              {routerUnavailable
+                ? "This plan’s assigned router is unavailable. Choose another plan or restore that router before generating vouchers."
+                : `This plan is assigned to ${router?.name ?? "one router"}; its vouchers will only redeem there.`}
+            </div>
+          )}
 
           {/* Plan */}
           <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
@@ -436,7 +455,12 @@ function GenerateModal({
             </span>
             <select
               value={selectedPlanId}
-              onChange={e => setSelectedPlanId(Number(e.target.value))}
+              onChange={e => {
+                const nextPlanId = Number(e.target.value);
+                const nextPlan = plans.find(p => p.id === nextPlanId);
+                setSelectedPlanId(nextPlanId);
+                setSelectedRouterId(nextPlan?.router_id ?? "all");
+              }}
               style={{ background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.6rem 0.875rem", color: "var(--isp-text)", fontSize: "0.875rem", fontFamily: "inherit", width: "100%" }}>
               {plans.map(p => (
                 <option key={p.id} value={p.id}>{p.name} — {getCurrencySymbol()} {p.price} · {fmtPlanValidity(p)} · {fmtDataLimit(p.data_limit_mb)}</option>
@@ -542,8 +566,8 @@ function GenerateModal({
             </button>
             <button
               onClick={handleGenerate}
-              disabled={generating || !plan || (fixedCode.length > 0 && fixedCode.length < 3)}
-              style={{ flex: 2, padding: "0.7rem", borderRadius: 10, background: generating ? "var(--isp-accent-border)" : "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: generating ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+              disabled={generating || !plan || routerUnavailable || (fixedCode.length > 0 && fixedCode.length < 3)}
+              style={{ flex: 2, padding: "0.7rem", borderRadius: 10, background: generating ? "var(--isp-accent-border)" : "var(--isp-accent)", border: "none", color: "white", fontWeight: 700, fontSize: "0.875rem", cursor: generating || routerUnavailable ? "not-allowed" : "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
               {generating ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Ticket size={15} />}
               {generating ? "Generating…" : fixedCode ? "Create Fixed Voucher" : `Generate ${qty} Voucher${qty !== 1 ? "s" : ""}`}
             </button>

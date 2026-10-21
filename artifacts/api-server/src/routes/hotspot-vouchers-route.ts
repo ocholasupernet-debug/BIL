@@ -26,6 +26,7 @@ import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js"
 import {
   normalizeFixedHotspotVoucherCode,
   normalizeKenyanVoucherPhone,
+  resolveHotspotVoucherRouterAssignment,
 } from "../lib/hotspot-voucher-utils.js";
 import {
   formatVoucherExpiryInEastAfrica,
@@ -1109,21 +1110,29 @@ router.post("/vouchers/hotspot/generate", requireAdmin(), async (req, res): Prom
   }
 
   try {
-    const [plans, selectedRouters] = await Promise.all([
-      sbSelectStrict<HotspotPlan>(
-        "isp_plans",
-        `id=eq.${planId}&admin_id=eq.${adminId}&type=eq.hotspot&port_id=is.null&select=id,name,type,price,validity,validity_unit,speed_down,speed_up,data_limit_mb,data_cap_mode,router_id&limit=1`,
-      ),
-      routerId === null
-        ? Promise.resolve([] as HotspotRouter[])
-        : sbSelectStrict<HotspotRouter>(
-            "isp_routers",
-            `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,status&limit=1`,
-          ),
-    ]);
+    const plans = await sbSelectStrict<HotspotPlan>(
+      "isp_plans",
+      `id=eq.${planId}&admin_id=eq.${adminId}&type=eq.hotspot&port_id=is.null&select=id,name,type,price,validity,validity_unit,speed_down,speed_up,data_limit_mb,data_cap_mode,router_id&limit=1`,
+    );
     const plan = plans[0];
+    if (!plan) {
+      res.status(404).json({ error: "The selected plan or router is not available to this account." });
+      return;
+    }
+    const assignment = resolveHotspotVoucherRouterAssignment(plan.router_id, routerId);
+    if (!assignment.ok) {
+      res.status(400).json({ error: "The selected router must match the router assigned to this Hotspot plan." });
+      return;
+    }
+    const voucherRouterId = assignment.routerId;
+    const selectedRouters = voucherRouterId === null
+      ? []
+      : await sbSelectStrict<HotspotRouter>(
+          "isp_routers",
+          `id=eq.${voucherRouterId}&admin_id=eq.${adminId}&select=id,name,host,status&limit=1`,
+        );
     const selectedRouter = selectedRouters[0] ?? null;
-    if (!plan || (routerId !== null && !selectedRouter)) {
+    if (voucherRouterId !== null && !selectedRouter) {
       res.status(404).json({ error: "The selected plan or router is not available to this account." });
       return;
     }

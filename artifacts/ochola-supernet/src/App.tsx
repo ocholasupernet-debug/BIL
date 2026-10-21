@@ -141,6 +141,21 @@ function NotFound() {
 
 const queryClient = new QueryClient();
 
+function AppLoadingState() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading"
+      className="grid min-h-screen place-items-center bg-[#080c10]"
+    >
+      <span
+        aria-hidden="true"
+        className="h-8 w-8 animate-spin rounded-full border-2 border-white/15 border-t-sky-400"
+      />
+    </div>
+  );
+}
+
 function TenantRenewalRouteGate({ children }: { children: React.ReactNode }) {
   const [location, setLocation] = useLocation();
   const role = getAdminRole();
@@ -192,7 +207,7 @@ function TenantRenewalRouteGate({ children }: { children: React.ReactNode }) {
   }, [routeRestricted, setLocation]);
 
   if (isAdminRoute && !isDashboard && !isExempt && !currentState?.checked) {
-    return <div role="status" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Checking account renewal…</div>;
+    return <AppLoadingState />;
   }
   if (routeRestricted) return null;
   return <>{children}</>;
@@ -201,7 +216,7 @@ function TenantRenewalRouteGate({ children }: { children: React.ReactNode }) {
 function Router() {
   return (
     <TenantRenewalRouteGate>
-    <Suspense fallback={<div role="status" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Loading page…</div>}>
+    <Suspense fallback={<AppLoadingState />}>
     <Switch>
       {import.meta.env.DEV && <Route path="/__visual/:page" component={VisualCheckHarness} />}
       <Route path="/" component={SubdomainGuard} />

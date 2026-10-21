@@ -6,6 +6,7 @@ import {
   normalizeHotspotMac,
   normalizeKenyanVoucherPhone,
   normalizeRedeemableHotspotVoucherCode,
+  resolveHotspotVoucherRouterAssignment,
 } from "./hotspot-voucher-utils.js";
 
 test("fixed voucher codes are uppercase alphanumeric and at least three characters", () => {
@@ -42,4 +43,15 @@ test("voucher validity formats in the largest whole time unit", () => {
   assert.equal(formatVoucherDuration(1), "1 minute");
   assert.equal(formatVoucherDuration(180), "3 hours");
   assert.equal(formatVoucherDuration(1440), "1 day");
+});
+
+test("router-bound plans force vouchers onto their assigned router", () => {
+  assert.deepEqual(resolveHotspotVoucherRouterAssignment(12, null), { ok: true, routerId: 12 });
+  assert.deepEqual(resolveHotspotVoucherRouterAssignment(12, 12), { ok: true, routerId: 12 });
+  assert.deepEqual(resolveHotspotVoucherRouterAssignment(12, 14), { ok: false, routerId: 12 });
+});
+
+test("router-unbound plans preserve the selected router or universal choice", () => {
+  assert.deepEqual(resolveHotspotVoucherRouterAssignment(null, 14), { ok: true, routerId: 14 });
+  assert.deepEqual(resolveHotspotVoucherRouterAssignment(null, null), { ok: true, routerId: null });
 });

@@ -35,3 +35,13 @@ export function formatVoucherDuration(minutes: number): string {
   if (minutes % 60 === 0) return `${minutes / 60} hour${minutes === 60 ? "" : "s"}`;
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
+
+export function resolveHotspotVoucherRouterAssignment(
+  planRouterId: number | null,
+  requestedRouterId: number | null,
+): { ok: true; routerId: number | null } | { ok: false; routerId: number } {
+  if (planRouterId !== null && requestedRouterId !== null && planRouterId !== requestedRouterId) {
+    return { ok: false, routerId: planRouterId };
+  }
+  return { ok: true, routerId: planRouterId ?? requestedRouterId };
+}
