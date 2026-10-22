@@ -71,6 +71,7 @@ import {
 } from "../lib/prepaid-identifiers.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
+import { planValiditySeconds } from "../lib/plan-validity.js";
 import {
   authenticatedAccount,
   authenticatedAdminId,
@@ -183,6 +184,9 @@ type PlanRow = {
   fup_speed_down: number | null;
   fup_speed_up: number | null;
   shared_users: number | null;
+  validity: number | null;
+  validity_unit: string | null;
+  validity_days: number | null;
   owner_reseller_id?: number | null;
 };
 
@@ -1681,7 +1685,7 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
   let plan: PlanRow | undefined;
   if (Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0) {
     const planFilter =
-      `id=eq.${requestedPlanId}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(null)}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,is_active,owner_reseller_id&limit=1`;
+      `id=eq.${requestedPlanId}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(null)}&select=id,name,type,router_id,port_id,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,shared_users,validity,validity_unit,validity_days,is_active,owner_reseller_id&limit=1`;
     const planRows = needsVlanPlanCheck || String(type ?? "").trim().toLowerCase() === "pppoe"
       ? await sbSelectStrict<PlanRow>("isp_plans", planFilter)
       : await sbSelect<PlanRow>("isp_plans", planFilter);
@@ -1883,13 +1887,20 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
       res.status(400).json({ error: "The selected router does not match the router assigned to this PPPoE plan." });
       return;
     }
-    let expiresAt: string | null;
-    try {
-      expiresAt = asOptionalIso(expiryDate) ?? null;
-    } catch (error) {
-      res.status(400).json({ error: error instanceof Error ? error.message : "Invalid PPPoE expiry date." });
+    const validitySeconds = planValiditySeconds(
+      plan.validity ?? plan.validity_days,
+      plan.validity_unit,
+    );
+    if (!Number.isFinite(validitySeconds) || validitySeconds <= 0) {
+      res.status(400).json({ error: "The selected PPPoE package must have a valid duration before an account can be created." });
       return;
     }
+    const expiresAtDate = new Date(Date.now() + validitySeconds * 1000);
+    if (!Number.isFinite(expiresAtDate.getTime())) {
+      res.status(400).json({ error: "The selected PPPoE package duration is too large to calculate an expiry." });
+      return;
+    }
+    const expiresAt = expiresAtDate.toISOString();
     const enabled = String(status ?? "active").trim().toLowerCase() === "active"
       && (!expiresAt || Date.parse(expiresAt) > Date.now());
     let routerMutationAttempted = false;
@@ -4684,6 +4695,34 @@ router.delete("/customers/:id", requireAdmin(), async (req, res): Promise<void> 
     } catch (error) {
       res.status(503).json({
         error: `The VLAN customer queue could not be removed, so the account was not deleted: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+      return;
+    }
+  }
+
+  if (row.type === "pppoe") {
+    const username = String(row.pppoe_username || row.username || "").trim();
+    if (!username || !row.router_id) {
+      res.status(409).json({ error: "The PPPoE customer is missing its router or username, so its MikroTik account cannot be safely removed." });
+      return;
+    }
+    const routers = await sbSelectStrict<RouterRow>(
+      "isp_routers",
+      `id=eq.${row.router_id}&admin_id=eq.${row.admin_id}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    );
+    if (!routers[0]) {
+      res.status(409).json({ error: "The PPPoE router is no longer available; the customer was not deleted." });
+      return;
+    }
+    try {
+      const creds = routerCredentials(routers[0]);
+      await disconnectPPPActiveByName(creds, username);
+      await removePPPSecretByName(creds, username);
+    } catch (error) {
+      res.status(503).json({
+        error: `The PPPoE account could not be removed from MikroTik, so the website record was kept: ${
           error instanceof Error ? error.message : String(error)
         }`,
       });

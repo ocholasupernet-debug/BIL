@@ -23,6 +23,9 @@ interface PlanLite {
   price: number;
   speed_down: number;
   speed_up: number;
+  validity: number;
+  validity_unit: string;
+  validity_days?: number;
   router_id?: number | null;
   port_id?: number | null;
 }
@@ -43,9 +46,8 @@ interface NewCustomerForm {
   mac_address: string;
   // pppoe extras
   pppoe_username: string;
-  ip_assign: "dynamic" | "pool" | "static";
+  ip_assign: "dynamic" | "static";
   ip_address: string;
-  pppoe_service: string;
   sendPppoePrompt: boolean;
   includeRouterFee: boolean;
   routerFee: string;
@@ -77,6 +79,16 @@ function fmtDate(d?: string | null) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" });
 }
+function fmtPlanDuration(plan: Pick<PlanLite, "validity" | "validity_unit" | "validity_days">): string {
+  const value = Number(plan.validity || plan.validity_days || 0);
+  const rawUnit = String(plan.validity_unit || "days").toLowerCase();
+  const unit = rawUnit.startsWith("min") ? "minute"
+    : rawUnit.startsWith("hour") || rawUnit.startsWith("hr") ? "hour"
+    : rawUnit.startsWith("week") ? "week"
+    : rawUnit.startsWith("month") ? "month"
+    : "day";
+  return `${value} ${unit}${value === 1 ? "" : "s"}`;
+}
 function genPassword(len = 10): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789@#!";
   return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
@@ -92,7 +104,7 @@ function emptyForm(type: CustomerType = "hotspot"): NewCustomerForm {
   return {
     type, name: "", username: "", password: genPassword(), email: "", phone: "",
     plan_id: "", router_id: "", mac_address: "", pppoe_username: "", ip_assign: "dynamic",
-    ip_address: "", pppoe_service: "internet", sendPppoePrompt: false, includeRouterFee: false, routerFee: "",
+    ip_address: "", sendPppoePrompt: false, includeRouterFee: false, routerFee: "",
     includeLabourFee: false, labourFee: "", subnet_mask: "255.255.255.0", gateway_ip: "", expires_at: "",
     custom_fields: [],
   };
@@ -153,6 +165,9 @@ async function fetchPlans(): Promise<PlanLite[]> {
       price: Number(plan.price ?? 0),
       speed_down: Number(plan.speed_down ?? 0),
       speed_up: Number(plan.speed_up ?? 0),
+      validity: Number(plan.validity ?? plan.validity_days ?? 0),
+      validity_unit: String(plan.validity_unit ?? "days"),
+      validity_days: Number(plan.validity_days ?? 0),
       router_id: plan.router_id,
       port_id: plan.port_id,
     }));
@@ -228,7 +243,6 @@ async function createCustomer(form: NewCustomerForm, plans: PlanLite[]): Promise
         password: form.password,
         ipAddress: form.ip_assign === "static" ? form.ip_address.trim() || null : null,
         status: form.sendPppoePrompt ? "expired" : "active",
-        expiryDate: form.expires_at ? new Date(form.expires_at).toISOString() : null,
       }),
     });
     const result = await response.json().catch(() => ({})) as { error?: string; id?: number };
@@ -294,9 +308,9 @@ async function deleteCustomer(c: DbCustomer): Promise<void> {
 }
 
 /* ══════════════════════════ Form Field ══════════════════════════ */
-function Field({ label, required, children, hint }: { label: string; required?: boolean; children: React.ReactNode; hint?: string }) {
+function Field({ label, required, children, hint, order }: { label: string; required?: boolean; children: React.ReactNode; hint?: string; order?: number }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: "0.375rem" }}>
+    <label style={{ display: "flex", flexDirection: "column", gap: "0.375rem", ...(order !== undefined ? { order } : {}) }}>
       <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "var(--isp-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
         {label}{required && <span style={{ color: "#f87171", marginLeft: 2 }}>*</span>}
       </span>
@@ -473,7 +487,7 @@ function CustomerModal({
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem" }}>
-      <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 16, width: "100%", maxWidth: 580, maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 32px 80px rgba(0,0,0,0.6)", overflow: "hidden" }}>
+      <div style={{ background: "var(--isp-section)", border: "1px solid var(--isp-border)", borderRadius: 16, width: "100%", maxWidth: form.type === "pppoe" ? 760 : 580, maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 32px 80px rgba(0,0,0,0.6)", overflow: "hidden" }}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "1.25rem 1.5rem", borderBottom: "1px solid var(--isp-border-subtle)", flexShrink: 0 }}>
@@ -519,36 +533,36 @@ function CustomerModal({
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
 
             {/* ─── IDENTITY ─── */}
-            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem" }}>
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", ...(form.type === "pppoe" ? { order: 1 } : {}) }}>
               Identity
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
-              <Field label="Full Name" required>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem", ...(form.type === "pppoe" ? { order: 2 } : {}) }}>
+                  <Field label="Full Name" required order={form.type === "pppoe" ? 1 : undefined}>
                 <input style={inp} value={form.name} placeholder="e.g. John Kamau"
                   onChange={e => set("name", e.target.value)}
                   onBlur={handleNameBlur} />
               </Field>
-              <Field label="Phone Number" required={form.type === "vlan"}>
+              <Field label="Phone Number" required={form.type === "vlan"} order={form.type === "pppoe" ? 2 : undefined}>
                 <input style={inp} value={form.phone} placeholder="+254 7XX XXX XXX"
                   onChange={e => set("phone", e.target.value)} onBlur={handlePhoneBlur} required={form.type === "vlan"} />
               </Field>
             </div>
 
-            <Field label="Email Address">
+            <Field label="Email Address" order={form.type === "pppoe" ? 3 : undefined}>
               <input style={inp} type="email" value={form.email} placeholder="customer@email.com"
                 onChange={e => set("email", e.target.value)} />
             </Field>
 
             {/* ─── CONNECTION ─── */}
-            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem", ...(form.type === "pppoe" ? { order: 4 } : {}) }}>
               {form.type === "hotspot" ? "Hotspot Credentials" : form.type === "pppoe" ? "PPPoE Credentials" : form.type === "vlan" ? "VLAN IP Assignment" : "Static IP Credentials"}
             </div>
 
             {/* Hotspot fields */}
             {form.type === "hotspot" && (
               <>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem", ...(form.type === "pppoe" ? { order: 5 } : {}) }}>
                   <Field label="Username" required hint="Used to log in to the hotspot portal">
                     <input style={inp} value={form.username} placeholder="e.g. john1234"
                       onChange={e => set("username", e.target.value)} />
@@ -590,26 +604,19 @@ function CustomerModal({
                     </div>
                   </Field>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
-                  <Field label="Service Name" hint="MikroTik ppp service-name">
-                    <input style={inp} value={form.pppoe_service} placeholder="internet"
-                      onChange={e => set("pppoe_service", e.target.value)} />
-                  </Field>
-                  <Field label="IP Assignment">
-                    <select style={sel} value={form.ip_assign} onChange={e => set("ip_assign", e.target.value as "dynamic" | "pool" | "static")}>
-                      <option value="dynamic">Dynamic (auto)</option>
-                      <option value="pool">IP Pool</option>
-                      <option value="static">Fixed IP</option>
-                    </select>
-                  </Field>
-                </div>
+                <Field label="IP Assignment" order={6}>
+                  <select style={sel} value={form.ip_assign} onChange={e => set("ip_assign", e.target.value as "dynamic" | "static")}>
+                    <option value="dynamic">Dynamic (auto)</option>
+                    <option value="static">Fixed IP</option>
+                  </select>
+                </Field>
                 {form.ip_assign === "static" && (
-                  <Field label="Fixed Remote IP Address" required hint="IP to assign to the client WAN interface">
+                  <Field label="Fixed Remote IP Address" required hint="IP to assign to the client WAN interface" order={7}>
                     <input style={inp} value={form.ip_address} placeholder="e.g. 10.10.1.50"
                       onChange={e => set("ip_address", e.target.value)} />
                   </Field>
                 )}
-                <div style={{ padding: "0.875rem", border: "1px solid var(--isp-border)", borderRadius: 10, background: "rgba(255,255,255,0.025)" }}>
+                <div style={{ padding: "0.875rem", border: "1px solid var(--isp-border)", borderRadius: 10, background: "rgba(255,255,255,0.025)", order: 8 }}>
                   <label style={{ display: "flex", gap: 9, alignItems: "center", color: "var(--isp-text)", fontWeight: 700, fontSize: "0.82rem" }}>
                     <input type="checkbox" checked={form.sendPppoePrompt} onChange={e => setForm(f => ({ ...f, sendPppoePrompt: e.target.checked }))} />
                     Send M‑Pesa subscription prompt
@@ -690,12 +697,12 @@ function CustomerModal({
             )}
 
             {/* ─── PLAN & ROUTER ─── */}
-            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem", ...(form.type === "pppoe" ? { order: 9 } : {}) }}>
               Plan & Router
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem" }}>
-              <Field label={`${form.type === "pppoe" ? "PPPoE" : form.type === "hotspot" ? "Hotspot" : form.type === "vlan" ? "VLAN" : ""} Plan`} required>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem", ...(form.type === "pppoe" ? { order: 10 } : {}) }}>
+              <Field label={`${form.type === "pppoe" ? "PPPoE" : form.type === "hotspot" ? "Hotspot" : form.type === "vlan" ? "VLAN" : ""} Plan`} required order={form.type === "pppoe" ? 6 : undefined}>
                 <select
                   style={sel}
                   value={form.plan_id}
@@ -724,11 +731,11 @@ function CustomerModal({
                   </div>
                 </Field>
               ) : (
-                <Field label="Router" required>
+                <Field label="Router" required order={form.type === "pppoe" ? 7 : undefined}>
                   <select style={sel} value={form.router_id} onChange={e => set("router_id", e.target.value ? Number(e.target.value) : "")}>
                     <option value="">— Select router —</option>
                     {routers.map(r => (
-                      <option key={r.id} value={r.id}>{r.name} ({r.status === "online" ? "🟢" : "🔴"} {r.host})</option>
+                    <option key={r.id} value={r.id}>{r.name} · {r.status === "online" ? "Online" : "Offline"} · {r.host}</option>
                     ))}
                   </select>
                 </Field>
@@ -737,11 +744,12 @@ function CustomerModal({
 
             {/* Plan preview */}
             {selectedPlan && (
-              <div style={{ background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.18)", borderRadius: 8, padding: "0.75rem 1rem", display: "flex", gap: "1.5rem", flexWrap: "wrap" }}>
+              <div style={{ background: "rgba(37,99,235,0.06)", border: "1px solid rgba(37,99,235,0.18)", borderRadius: 8, padding: "0.75rem 1rem", display: "flex", gap: "1.5rem", flexWrap: "wrap", ...(form.type === "pppoe" ? { order: 12 } : {}) }}>
                 {[
                   ["Plan",     selectedPlan.name],
                   ["Price",    `${getCurrencySymbol()} ${selectedPlan.price}`],
                   ...(selectedPlan.speed_down ? [["Speed", `${selectedPlan.speed_down}↓ / ${selectedPlan.speed_up}↑ Mbps`]] : []),
+                  ...(form.type === "pppoe" ? [["Duration", fmtPlanDuration(selectedPlan)]] : []),
                 ].map(([k, v]) => (
                   <div key={k}>
                     <div style={{ fontSize: "0.62rem", color: "var(--isp-accent)", fontWeight: 700, textTransform: "uppercase" }}>{k}</div>
@@ -752,28 +760,46 @@ function CustomerModal({
             )}
 
             {/* ─── OPTIONAL ─── */}
-            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem" }}>
+            <div style={{ fontSize: "0.7rem", fontWeight: 700, color: "var(--isp-accent)", textTransform: "uppercase", letterSpacing: "0.08em", borderBottom: "1px solid var(--isp-border-subtle)", paddingBottom: "0.375rem", marginTop: "0.25rem", ...(form.type === "pppoe" ? { order: 13 } : {}) }}>
               Optional
             </div>
 
-            <Field label="Account Expiry Date" hint="Leave blank for no expiry">
-              <input style={inp} type="date" value={form.expires_at}
-                onChange={e => set("expires_at", e.target.value)} />
-            </Field>
+            {form.type === "pppoe" ? (
+              <div role="note" style={{ background: "linear-gradient(135deg, rgba(37,99,235,0.12), rgba(14,165,233,0.06))", border: "1px solid rgba(59,130,246,0.24)", borderRadius: 12, padding: "0.9rem 1rem", display: "flex", alignItems: "center", gap: "0.75rem", order: 14 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: "rgba(59,130,246,0.16)", color: "var(--isp-accent)", display: "grid", placeItems: "center", flexShrink: 0 }}>
+                  <Network size={17} />
+                </div>
+                <div>
+                  <div style={{ fontSize: "0.82rem", fontWeight: 750, color: "var(--isp-text)" }}>
+                    {selectedPlan ? `Access lasts ${fmtPlanDuration(selectedPlan)}` : "Access duration follows the selected package"}
+                  </div>
+                  <div style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)", marginTop: 3 }}>
+                    The package duration starts when this PPPoE account is created.
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <Field label="Account Expiry Date" hint="Leave blank for no expiry">
+                <input style={inp} type="date" value={form.expires_at}
+                  onChange={e => set("expires_at", e.target.value)} />
+              </Field>
+            )}
 
             {/* Password regenerate */}
             {form.type !== "vlan" && <button type="button"
               onClick={() => set("password", genPassword())}
-              style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.875rem", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", alignSelf: "flex-start" }}>
+              style={{ display: "flex", alignItems: "center", gap: "0.375rem", background: "rgba(255,255,255,0.04)", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.5rem 0.875rem", color: "var(--isp-text-muted)", fontWeight: 600, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit", alignSelf: "flex-start", ...(form.type === "pppoe" ? { order: 15 } : {}) }}>
               <RotateCcw size={12} /> Regenerate Password
             </button>}
 
             {/* ─── CUSTOM FIELDS ─── */}
             {form.type !== "vlan" && (
-              <CustomFieldsSection
-                fields={form.custom_fields}
-                setFields={(fn) => setForm(f => ({ ...f, custom_fields: fn(f.custom_fields) }))}
-              />
+              <div style={form.type === "pppoe" ? { order: 16 } : undefined}>
+                <CustomFieldsSection
+                  fields={form.custom_fields}
+                  setFields={(fn) => setForm(f => ({ ...f, custom_fields: fn(f.custom_fields) }))}
+                />
+              </div>
             )}
 
           </div>
@@ -811,7 +837,9 @@ function DeleteModal({ customer, onClose, onConfirm, loading }: { customer: DbCu
         </div>
         <p style={{ fontSize: "0.875rem", color: "var(--isp-text-muted)", marginBottom: "1.25rem", lineHeight: 1.5 }}>
           Remove <strong style={{ color: "var(--isp-text)" }}>{customer.name ?? customer.username}</strong> from the system?
-          This will delete their account and all associated RADIUS data.
+          {customer.type === "pppoe"
+            ? " Their active MikroTik session and PPP secret will also be removed, along with their RADIUS data."
+            : " This will delete their account and associated RADIUS data."}
         </p>
         <div style={{ display: "flex", gap: "0.75rem" }}>
           <button onClick={onClose} style={{ flex: 1, padding: "0.65rem", borderRadius: 8, background: "var(--isp-inner-card)", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>Cancel</button>
