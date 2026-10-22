@@ -221,6 +221,7 @@ export async function reactivatePppoeAccess(opts: {
     requestTimeoutMs: 12_000,
   };
   const comment = `M-Pesa verified PPPoE renewal — ${opts.reference}`;
+  const profileName = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
 
   let routerRollback: (() => Promise<void>) | undefined;
   try {
@@ -255,14 +256,14 @@ export async function reactivatePppoeAccess(opts: {
     if (existing?.id) {
       await updatePPPSecret(credentials, existing.id, {
         disabled: false,
-        profile: plan.name,
+        profile: profileName,
         comment,
       });
     } else {
       await addPPPSecret(credentials, {
         name: username,
         password: customer.password || "changeme",
-        profile: plan.name,
+        profile: profileName,
         service: "pppoe",
         comment,
       });

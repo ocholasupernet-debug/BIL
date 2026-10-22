@@ -260,6 +260,7 @@ export async function addRadiusCustomer(opts: RadiusCustomerOpts): Promise<boole
   await deleteRadCheck(opts.username, "Max-All-Session");
   await deleteRadCheck(opts.username, "Max-Data");
   await deleteRadCheck(opts.username, "Mikrotik-Rate-Limit");
+  await deleteRadReply(opts.username, "Mikrotik-Rate-Limit");
   await deleteRadCheck(opts.username, "WISPr-Session-Terminate-Time");
   await deleteRadCheck(opts.username, "Expiration");
   await deleteRadCheck(opts.username, "access-period");
@@ -272,7 +273,7 @@ export async function addRadiusCustomer(opts: RadiusCustomerOpts): Promise<boole
     if (opts.burst && opts.burst.trim()) {
       rl = `${rl} ${opts.burst.trim()}`;
     }
-    await upsertRadCheck(opts.username, "Mikrotik-Rate-Limit", rl);
+    await upsertRadReply(opts.username, "Mikrotik-Rate-Limit", rl, ":=");
   }
 
   if (opts.planType === "hotspot" && opts.limitType) {
@@ -362,6 +363,7 @@ export async function syncRadiusCustomer(opts: RadiusCustomerSyncOpts): Promise<
   await setUserGroup(opts.username, `plan_${opts.planId}`);
 
   await deleteRadCheck(opts.username, "Mikrotik-Rate-Limit");
+  await deleteRadReply(opts.username, "Mikrotik-Rate-Limit");
   await deleteRadCheck(opts.username, "Max-Data");
   await deleteRadCheck(opts.username, "Max-All-Session");
   await deleteRadCheck(opts.username, "WISPr-Session-Terminate-Time");
@@ -374,7 +376,7 @@ export async function syncRadiusCustomer(opts: RadiusCustomerSyncOpts): Promise<
     const unitDown = rateUnitToSuffix(opts.rateDownUnit ?? "Mbps");
     let rate = `${up}${unitUp}/${down}${unitDown}`;
     if (opts.burst?.trim()) rate = `${rate} ${opts.burst.trim()}`;
-    await upsertRadCheck(opts.username, "Mikrotik-Rate-Limit", rate);
+    await upsertRadReply(opts.username, "Mikrotik-Rate-Limit", rate, ":=");
   }
 
   const dataLimitMb = Number(opts.dataLimitMb);
@@ -455,6 +457,37 @@ async function strictDeleteRadCheck(username: string, attribute: string): Promis
   await sbDeleteStrict("radcheck", `username=eq.${enc(username)}&attribute=eq.${enc(attribute)}`);
 }
 
+async function strictUpsertRadReply(
+  username: string,
+  attribute: string,
+  value: string,
+  op = ":=",
+): Promise<void> {
+  const existing = await sbSelectStrict<RadReplyRow>(
+    "radreply",
+    `username=eq.${enc(username)}&attribute=eq.${enc(attribute)}&select=id`,
+  );
+  if (existing[0]?.id) {
+    const updated = await sbUpdateStrict<RadReplyRow>(
+      "radreply",
+      `id=eq.${existing[0].id}`,
+      { value, op },
+    );
+    if (updated.length === 0) {
+      throw new Error(`RADIUS radreply ${attribute} update matched no rows.`);
+    }
+    return;
+  }
+  const inserted = await sbInsertStrict<RadReplyRow>("radreply", { username, attribute, op, value });
+  if (inserted.length === 0) {
+    throw new Error(`RADIUS radreply ${attribute} insert returned no rows.`);
+  }
+}
+
+async function strictDeleteRadReply(username: string, attribute: string): Promise<void> {
+  await sbDeleteStrict("radreply", `username=eq.${enc(username)}&attribute=eq.${enc(attribute)}`);
+}
+
 async function strictSetUserGroup(username: string, groupname: string, priority = 1): Promise<void> {
   const existing = await sbSelectStrict<RadUserGroupRow>(
     "radusergroup",
@@ -500,6 +533,7 @@ export async function syncRadiusCustomerStrict(opts: RadiusCustomerSyncOpts): Pr
   await strictSetUserGroup(opts.username, `plan_${opts.planId}`);
 
   await strictDeleteRadCheck(opts.username, "Mikrotik-Rate-Limit");
+  await strictDeleteRadReply(opts.username, "Mikrotik-Rate-Limit");
   await strictDeleteRadCheck(opts.username, "Max-Data");
   await strictDeleteRadCheck(opts.username, "Max-All-Session");
   await strictDeleteRadCheck(opts.username, "WISPr-Session-Terminate-Time");
@@ -512,7 +546,7 @@ export async function syncRadiusCustomerStrict(opts: RadiusCustomerSyncOpts): Pr
     const unitDown = rateUnitToSuffix(opts.rateDownUnit ?? "Mbps");
     let rate = `${up}${unitUp}/${down}${unitDown}`;
     if (opts.burst?.trim()) rate = `${rate} ${opts.burst.trim()}`;
-    await strictUpsertRadCheck(opts.username, "Mikrotik-Rate-Limit", rate);
+    await strictUpsertRadReply(opts.username, "Mikrotik-Rate-Limit", rate, ":=");
   }
 
   const dataLimitMb = Number(opts.dataLimitMb);

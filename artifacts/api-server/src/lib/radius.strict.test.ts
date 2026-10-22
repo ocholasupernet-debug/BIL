@@ -22,6 +22,7 @@ test("strict RADIUS identity operations preflight, reconcile, remove, and roll b
       { id: 1, username: "old-login", attribute: "Cleartext-Password", op: ":=", value: "pw" },
       { id: 6, username: "old-login", attribute: "Simultaneous-Use", op: ":=", value: "1" },
       { id: 7, username: "old-login", attribute: "Port-Limit", op: ":=", value: "1" },
+      { id: 8, username: "old-login", attribute: "Mikrotik-Rate-Limit", op: ":=", value: "100M/100M" },
     ],
     radusergroup: [{ id: 2, username: "old-login", groupname: "plan_7", priority: 1 }],
     radreply: [{ id: 3, username: "old-login", attribute: "Framed-Pool", op: ":=", value: "pool-a" }],
@@ -51,6 +52,11 @@ test("strict RADIUS identity operations preflight, reconcile, remove, and roll b
       const patch = JSON.parse(String(init?.body)) as Record<string, unknown>;
       result = rows.filter(matches);
       for (const row of result) Object.assign(row, patch);
+    } else if (method === "POST") {
+      const inserted = JSON.parse(String(init?.body)) as Omit<Row, "id">;
+      const row = { ...inserted, id: Math.max(0, ...rows.map(item => item.id)) + 1 };
+      rows.push(row);
+      result = [row];
     } else if (method === "DELETE") {
       result = rows.filter(matches);
       tables[table] = rows.filter(row => !matches(row));
@@ -100,8 +106,12 @@ test("strict RADIUS identity operations preflight, reconcile, remove, and roll b
       username: "old-login",
       password: null,
       planId: 7,
-      planType: "hotspot",
+      planType: "pppoe",
       enabled: true,
+      rateDown: 10,
+      rateDownUnit: "Mbps",
+      rateUp: 5,
+      rateUpUnit: "Mbps",
     });
     await syncRadiusHotspotSharingStrict("old-login", 4);
     assert.equal(
@@ -115,6 +125,14 @@ test("strict RADIUS identity operations preflight, reconcile, remove, and roll b
     assert.equal(
       tables.radcheck.some(row => row.username === "old-login" && row.attribute === "Cleartext-Password"),
       false,
+    );
+    assert.equal(
+      tables.radcheck.some(row => row.username === "old-login" && row.attribute === "Mikrotik-Rate-Limit"),
+      false,
+    );
+    assert.equal(
+      tables.radreply.find(row => row.username === "old-login" && row.attribute === "Mikrotik-Rate-Limit")?.value,
+      "5M/10M",
     );
 
     await removeRadiusCustomerStrict("old-login");

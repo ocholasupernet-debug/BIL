@@ -31,6 +31,7 @@ async function bundleRenewalHelper() {
             "./supabase-client": "supabase-client",
             "./mikrotik": "mikrotik",
             "./logger": "logger",
+            "./radius.js": "radius",
             "./router-vpn-ip.js": "router-vpn-ip",
           };
           return replacements[args.path]
@@ -83,6 +84,11 @@ async function bundleRenewalHelper() {
               }
             `,
             "logger": `export const logger = { info() {}, warn() {}, error() {} };`,
+            "radius": `
+              export async function syncRadiusCustomerStrict(options) {
+                globalThis.__pppoeStaging.radiusCalls.push(options);
+              }
+            `,
             "router-vpn-ip": `export function isRouterManagementVpnIp(value) { return /^10\\.8\\.(5|6)\\./.test(value || ""); }`,
           };
           return { contents: modules[args.path], loader: "js" };
@@ -99,10 +105,13 @@ function fixture(overrides = {}) {
     plans: [{
       id: 9, admin_id: 4, name: "PPPoE 20Mbps", type: "pppoe",
       router_id: 3, port_id: null, is_active: true,
+      speed_down: 20, speed_up: 5, speed_down_unit: "Mbps", speed_up_unit: "Mbps",
+      shared_users: 1,
     }],
     customers: [{
       id: 22, admin_id: 4, type: "pppoe", username: "renew-me",
-      pppoe_username: "renew-me", password: "secret", router_id: 3, port_id: null,
+      pppoe_username: "renew-me", password: "secret", name: "Renewal test",
+      router_id: 3, port_id: null,
     }],
     routers: [{
       id: 3, admin_id: 4, name: "come1", host: "203.0.113.20",
@@ -114,6 +123,7 @@ function fixture(overrides = {}) {
       disabled: true, comment: "expired",
     }],
     calls: [],
+    radiusCalls: [],
     failRouter: false,
     ...overrides,
   };
@@ -228,8 +238,21 @@ test("successful renewal enables the existing PPP secret on the management path"
   assert.equal(result.ok, true);
   assert.equal(result.username, "renew-me");
   assert.equal(state.secrets[0].disabled, false);
-  assert.equal(state.secrets[0].profile, "PPPoE 20Mbps");
+  assert.equal(state.secrets[0].profile, "pppoe-20mbps-r3");
   assert.equal(state.calls[0].op, "update");
+  assert.deepEqual(state.radiusCalls, [{
+    username: "renew-me",
+    password: "secret",
+    planId: 9,
+    planType: "pppoe",
+    enabled: true,
+    sharedUsers: 1,
+    fullname: "Renewal test",
+    rateDown: 20,
+    rateDownUnit: "Mbps",
+    rateUp: 5,
+    rateUpUnit: "Mbps",
+  }]);
 });
 
 test("a router failure keeps the renewal unsuccessful and performs no database activation", async () => {
