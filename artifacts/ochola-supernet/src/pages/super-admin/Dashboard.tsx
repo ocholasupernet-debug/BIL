@@ -2,7 +2,6 @@ import React, { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
-import { supabase } from "@/lib/supabase";
 import {
   Activity, AlertTriangle, ArrowUpRight, BarChart3, CheckCircle2,
   Database, Gauge, Globe, HardDrive, ReceiptText, RefreshCw, Router, ShieldAlert,
@@ -135,51 +134,38 @@ export default function SuperAdminDashboard() {
   const [lastRefresh, setLastRefresh] = React.useState(() => new Date());
   const [transactionSearch, setTransactionSearch] = React.useState("");
 
-  const adminsQuery = useQuery<AdminRecord[]>({
-    queryKey: ["sa_all_admins"],
+  const adminsQuery = useQuery<AdminRecord[  const platformDataQuery = useQuery<{
+    admins: AdminRecord[];
+    routers: RouterRecord[];
+    customers: CustomerRecord[];
+    plans: PlanRecord[];
+  }>({
+    queryKey: ["sa_platform_data"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_admins")
-        .select("id,name,username,email,is_active,subdomain,role,created_at")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
+      const token = localStorage.getItem("ochola_superadmin_token") || "";
+      const response = await fetch("/api/super-admin/platform-data", {
+        headers: { "x-sa-token": token },
+      });
+      const result = await response.json() as {
+        ok?: boolean;
+        error?: string;
+        admins?: AdminRecord[];
+        routers?: RouterRecord[];
+        customers?: CustomerRecord[];
+        plans?: PlanRecord[];
+      };
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || "Platform reporting data could not be loaded.");
+      }
+      return {
+        admins: result.admins ?? [],
+        routers: result.routers ?? [],
+        customers: result.customers ?? [],
+        plans: result.plans ?? [],
+      };
     },
   });
-  const routersQuery = useQuery<RouterRecord[]>({
-    queryKey: ["sa_all_routers"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_routers")
-        .select("id,name,host,status,admin_id")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
-    },
-  });
-  const customersQuery = useQuery<CustomerRecord[]>({
-    queryKey: ["sa_all_customers"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_customers")
-        .select("id,admin_id,is_active")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
-    },
-  });
-  const plansQuery = useQuery<PlanRecord[]>({
-    queryKey: ["sa_all_plans"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_plans")
-        .select("id,admin_id,type")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
-    },
-  });
-  const incomeQuery = useQuery<PlatformIncomeSummary>({
+meSummary>({
     queryKey: ["sa_platform_income"],
     queryFn: async () => {
       const token = localStorage.getItem("ochola_superadmin_token") || "";
@@ -224,17 +210,17 @@ export default function SuperAdminDashboard() {
     staleTime: 60_000,
   });
 
-  const admins = adminsQuery.data ?? [];
-  const routers = routersQuery.data ?? [];
-  const customers = customersQuery.data ?? [];
-  const plans = plansQuery.data ?? [];
+  const admins = platformDataQuery.data?.admins ?? [];
+  const routers = platformDataQuery.data?.routers ?? [];
+  const customers = platformDataQuery.data?.customers ?? [];
+  const plans = platformDataQuery.data?.plans ?? [];
   const platformTransactions = platformTransactionsQuery.data ?? [];
   const filteredPlatformTransactions = useMemo(() => {
     const needle = transactionSearch.trim();
     if (!needle) return platformTransactions;
     return platformTransactions.filter(transaction => String(transaction.transactionId).includes(needle));
   }, [platformTransactions, transactionSearch]);
-  const hasError = adminsQuery.isError || routersQuery.isError || customersQuery.isError || plansQuery.isError || incomeQuery.isError || platformTransactionsQuery.isError || storageSummaryQuery.isError;
+  const hasError = platformDataQuery.isError || incomeQuery.isError || platformTransactionsQuery.isError || storageSummaryQuery.isError;
   const vpsDisk = storageSummaryQuery.data?.physicalSources.find(source => source.source === "vps_filesystem");
 
   const activeAdmins = admins.filter((admin) => admin.is_active !== false).length;
@@ -271,10 +257,7 @@ export default function SuperAdminDashboard() {
 
   const retryAll = () => {
     void Promise.all([
-      adminsQuery.refetch(),
-      routersQuery.refetch(),
-      customersQuery.refetch(),
-      plansQuery.refetch(),
+      platformDataQuery.refetch(),
       incomeQuery.refetch(),
       platformTransactionsQuery.refetch(),
       storageSummaryQuery.refetch(),
@@ -310,35 +293,35 @@ export default function SuperAdminDashboard() {
         <div className="sa-command-grid">
           <MetricCard
             label="ISP admins"
-            value={adminsQuery.isError ? "—" : admins.length}
-            detail={adminsQuery.isError ? "Data unavailable" : <><strong>{activeAdmins}</strong> active · {inactiveAdmins.length} inactive</>}
+            value={platformDataQuery.isError ? "—" : admins.length}
+            detail={platformDataQuery.isError ? "Data unavailable" : <><strong>{activeAdmins}</strong> active · {inactiveAdmins.length} inactive</>}
             tone="accent"
             icon={Users}
-            loading={adminsQuery.isLoading}
+            loading={platformDataQuery.isLoading}
           />
           <MetricCard
             label="Routers"
-            value={routersQuery.isError ? "—" : routers.length}
-            detail={routersQuery.isError ? "Data unavailable" : <><strong>{onlineRouters}</strong> online · {offlineRouters.length} not online</>}
+            value={platformDataQuery.isError ? "—" : routers.length}
+            detail={platformDataQuery.isError ? "Data unavailable" : <><strong>{onlineRouters}</strong> online · {offlineRouters.length} not online</>}
             tone="green"
             icon={Router}
-            loading={routersQuery.isLoading}
+            loading={platformDataQuery.isLoading}
           />
           <MetricCard
             label="Customers"
-            value={customersQuery.isError ? "—" : customers.length}
-            detail={customersQuery.isError ? "Data unavailable" : <><strong>{activeCustomers}</strong> active records</>}
+            value={platformDataQuery.isError ? "—" : customers.length}
+            detail={platformDataQuery.isError ? "Data unavailable" : <><strong>{activeCustomers}</strong> active records</>}
             tone="teal"
             icon={Globe}
-            loading={customersQuery.isLoading}
+            loading={platformDataQuery.isLoading}
           />
           <MetricCard
             label="Plans"
-            value={plansQuery.isError ? "—" : plans.length}
-            detail={plansQuery.isError ? "Data unavailable" : <><strong>{planOwners}</strong> ISP admins with plans</>}
+            value={platformDataQuery.isError ? "—" : plans.length}
+            detail={platformDataQuery.isError ? "Data unavailable" : <><strong>{planOwners}</strong> ISP admins with plans</>}
             tone="amber"
             icon={BarChart3}
-            loading={plansQuery.isLoading}
+            loading={platformDataQuery.isLoading}
           />
         </div>
 
@@ -455,7 +438,7 @@ export default function SuperAdminDashboard() {
             </div>
             <div className="sa-attention-copy">
               <p className="sa-attention-label">Admin attention</p>
-              <p className="sa-attention-value">{adminsQuery.isError ? "Admin data unavailable" : inactiveAdmins.length ? `${inactiveAdmins.length} inactive admin${inactiveAdmins.length === 1 ? "" : "s"}` : "No inactive admins recorded"}</p>
+              <p className="sa-attention-value">{platformDataQuery.isError ? "Admin data unavailable" : inactiveAdmins.length ? `${inactiveAdmins.length} inactive admin${inactiveAdmins.length === 1 ? "" : "s"}` : "No inactive admins recorded"}</p>
             </div>
           </div>
           <div className={`sa-attention-item${offlineRouters.length ? " is-alert" : ""}`}>
@@ -464,7 +447,7 @@ export default function SuperAdminDashboard() {
             </div>
             <div className="sa-attention-copy">
               <p className="sa-attention-label">Router attention</p>
-              <p className="sa-attention-value">{routersQuery.isError ? "Router data unavailable" : offlineRouters.length ? `${offlineRouters.length} router${offlineRouters.length === 1 ? "" : "s"} not online` : "All recorded routers are online"}</p>
+              <p className="sa-attention-value">{platformDataQuery.isError ? "Router data unavailable" : offlineRouters.length ? `${offlineRouters.length} router${offlineRouters.length === 1 ? "" : "s"} not online` : "All recorded routers are online"}</p>
             </div>
           </div>
         </div>
@@ -472,7 +455,7 @@ export default function SuperAdminDashboard() {
         <div className="sa-columns">
           <section className="sa-card">
             <CardHeading icon={Users} title="ISP admin register" description="Tenant owners and observed resource counts" count={admins.length} />
-            {adminsQuery.isLoading ? (
+            {platformDataQuery.isLoading ? (
               <div aria-label="Loading admins">
                 {[1, 2, 3, 4].map((item) => <div className="sa-skeleton" key={item} />)}
               </div>
@@ -522,7 +505,7 @@ export default function SuperAdminDashboard() {
           <div className="sa-side-stack">
             <section className="sa-card">
               <CardHeading icon={Router} title="Router watch" description="Status values reported by router records" count={routers.length} />
-              {routersQuery.isLoading ? (
+              {platformDataQuery.isLoading ? (
                 <div aria-label="Loading routers">{[1, 2, 3].map((item) => <div className="sa-skeleton" key={item} />)}</div>
               ) : routers.length === 0 ? (
                 <div className="sa-empty">No router records are available.</div>
@@ -588,15 +571,15 @@ export default function SuperAdminDashboard() {
               <div className="sa-list">
                 <div className="sa-list-row">
                   <div className="sa-list-main"><Gauge size={14} color="var(--isp-accent)" /><p className="sa-list-name">Router availability</p></div>
-                  <span className="sa-list-state">{routersQuery.isError ? "unavailable" : routerAvailability}</span>
+                  <span className="sa-list-state">{platformDataQuery.isError ? "unavailable" : routerAvailability}</span>
                 </div>
                 <div className="sa-list-row">
                   <div className="sa-list-main"><Users size={14} color="var(--isp-accent)" /><p className="sa-list-name">Active admin share</p></div>
-                  <span className="sa-list-state">{adminsQuery.isError ? "unavailable" : admins.length ? `${Math.round((activeAdmins / admins.length) * 100)}%` : "—"}</span>
+                  <span className="sa-list-state">{platformDataQuery.isError ? "unavailable" : admins.length ? `${Math.round((activeAdmins / admins.length) * 100)}%` : "—"}</span>
                 </div>
                 <div className="sa-list-row">
                   <div className="sa-list-main"><Globe size={14} color="var(--isp-accent)" /><p className="sa-list-name">Active customer share</p></div>
-                  <span className="sa-list-state">{customersQuery.isError ? "unavailable" : customers.length ? `${Math.round((activeCustomers / customers.length) * 100)}%` : "—"}</span>
+                  <span className="sa-list-state">{platformDataQuery.isError ? "unavailable" : customers.length ? `${Math.round((activeCustomers / customers.length) * 100)}%` : "—"}</span>
                 </div>
               </div>
               <div className="sa-health-note">

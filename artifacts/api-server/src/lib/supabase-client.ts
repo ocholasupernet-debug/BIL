@@ -24,7 +24,9 @@ const SERVICE_KEY = [
   process.env.SUPABASE_SERVICE_KEY,
 ].find(value => !!value?.trim())?.trim() ?? "";
 const ANON_KEY    = process.env.VITE_SUPABASE_KEY ?? "";
-const BEST_KEY    = SERVICE_KEY || ANON_KEY;
+const REQUIRE_SERVICE_KEY = process.env.NODE_ENV === "production"
+  || process.env.SUPABASE_REQUIRE_SERVICE_ROLE === "true";
+const BEST_KEY = SERVICE_KEY || (REQUIRE_SERVICE_KEY ? "" : ANON_KEY);
 
 export const supabaseConfigured = !!(SUPABASE_URL && BEST_KEY);
 export const supabaseServiceRoleConfigured = !!(SUPABASE_URL && SERVICE_KEY);
