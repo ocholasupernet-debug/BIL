@@ -2570,6 +2570,157 @@ export async function fetchHotspotUsers(
 }
 
 /**
+ * Starts a short, account-scoped tethering heuristic test. The address-list
+ * membership expires automatically; the two narrow firewall rules remain
+ * inert while that list is empty and are reused on later tests for this user.
+ */
+export async function startHotspotTetherTest(
+  creds: RouterCredentials,
+  customerId: number,
+  clientIp: string,
+): Promise<void> {
+  if (!Number.isSafeInteger(customerId) || customerId < 1) {
+    throw new Error("A valid Hotspot customer ID is required.");
+  }
+  const octets = clientIp.split(".").map(Number);
+  if (
+    octets.length !== 4
+    || octets.some(part => !Number.isInteger(part) || part < 0 || part > 255)
+  ) {
+    throw new Error("The active Hotspot session does not have a valid IPv4 address.");
+  }
+
+  const listName = `OSN-TETHER-TEST-${customerId}`;
+  const tag = `OSN-TETHER-TEST:${customerId}`;
+  const addressComment = `${tag}:${clientIp}`;
+  return withConn(creds, async conn => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const write = async (command: string[]) =>
+      await withTimeout(conn.write(command), ms) as Record<string, string>[];
+    const addedRules: string[] = [];
+    let addedAddress = false;
+    try {
+      const oldAddresses = await write([
+        "/ip/firewall/address-list/print",
+        `?list=${listName}`,
+        `?address=${clientIp}`,
+      ]);
+      if (oldAddresses.some(row => row.comment !== addressComment)) {
+        throw new Error("A conflicting RouterOS address-list entry exists; no changes were made.");
+      }
+      for (const row of oldAddresses) {
+        if (row[".id"]) {
+          await write(["/ip/firewall/address-list/remove", `=.id=${row[".id"]}`]);
+        }
+      }
+      await write([
+        "/ip/firewall/address-list/add",
+        `=list=${listName}`,
+        `=address=${clientIp}`,
+        "=timeout=5m",
+        `=comment=${addressComment}`,
+      ]);
+      addedAddress = true;
+
+      for (const ttl of [63, 127]) {
+        const comment = `${tag}:ttl${ttl}`;
+        const existing = await write(["/ip/firewall/filter/print", `?comment=${comment}`]);
+        if (existing.length) {
+          const rule = existing[0];
+          const safeMatch = existing.length === 1
+            && rule.chain === "forward"
+            && rule.action === "drop"
+            && rule["src-address-list"] === listName
+            && rule.ttl === `equal:${ttl}`;
+          if (!safeMatch) {
+            throw new Error("A conflicting RouterOS rule exists; no further changes were made.");
+          }
+          continue;
+        }
+        await write([
+          "/ip/firewall/filter/add",
+          "=chain=forward",
+          "=action=drop",
+          `=src-address-list=${listName}`,
+          `=ttl=equal:${ttl}`,
+          `=comment=${comment}`,
+          "=place-before=0",
+        ]);
+        addedRules.push(comment);
+      }
+    } catch (error) {
+      if (addedAddress) {
+        const rows = await write([
+          "/ip/firewall/address-list/print",
+          `?list=${listName}`,
+          `?address=${clientIp}`,
+          `?comment=${addressComment}`,
+        ]).catch(() => []);
+        for (const row of rows) {
+          if (row[".id"]) {
+            await write(["/ip/firewall/address-list/remove", `=.id=${row[".id"]}`]).catch(() => []);
+          }
+        }
+      }
+      for (const comment of addedRules) {
+        const rows = await write(["/ip/firewall/filter/print", `?comment=${comment}`]).catch(() => []);
+        for (const row of rows) {
+          if (row[".id"]) {
+            await write(["/ip/firewall/filter/remove", `=.id=${row[".id"]}`]).catch(() => []);
+          }
+        }
+      }
+      throw error;
+    }
+  });
+}
+
+export async function stopHotspotTetherTest(
+  creds: RouterCredentials,
+  customerId: number,
+): Promise<void> {
+  if (!Number.isSafeInteger(customerId) || customerId < 1) {
+    throw new Error("A valid Hotspot customer ID is required.");
+  }
+  const listName = `OSN-TETHER-TEST-${customerId}`;
+  const tag = `OSN-TETHER-TEST:${customerId}:`;
+  return withConn(creds, async conn => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = await withTimeout(conn.write([
+      "/ip/firewall/address-list/print",
+      `?list=${listName}`,
+    ]), ms) as Record<string, string>[];
+    for (const row of rows) {
+      if (row.comment?.startsWith(tag) && row[".id"]) {
+        await withTimeout(conn.write([
+          "/ip/firewall/address-list/remove",
+          `=.id=${row[".id"]}`,
+        ]), ms);
+      }
+    }
+    for (const ttl of [63, 127]) {
+      const comment = `OSN-TETHER-TEST:${customerId}:ttl${ttl}`;
+      const rules = await withTimeout(conn.write([
+        "/ip/firewall/filter/print",
+        `?comment=${comment}`,
+      ]), ms) as Record<string, string>[];
+      for (const rule of rules) {
+        const isOwnedRule = rule.chain === "forward"
+          && rule.action === "drop"
+          && rule["src-address-list"] === listName
+          && rule.ttl === `equal:${ttl}`;
+        if (isOwnedRule && rule[".id"]) {
+          await withTimeout(conn.write([
+            "/ip/firewall/filter/remove",
+            `=.id=${rule[".id"]}`,
+          ]), ms);
+        }
+      }
+    }
+  });
+}
+
+/**
  * Resolve a captive-portal client from the address RouterOS assigned it.
  * Browsers cannot read a Wi-Fi adapter MAC, but the router can identify the
  * same client from its hotspot host table or DHCP lease table.

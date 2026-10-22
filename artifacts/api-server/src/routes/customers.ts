@@ -46,6 +46,8 @@ import {
   disconnectPPPActiveByName,
   removePppUserExpiry,
   removeHotspotUser,
+  startHotspotTetherTest,
+  stopHotspotTetherTest,
   removePPPSecretByName,
   removePPPSecret,
   fetchPPPSecrets,
@@ -1201,6 +1203,108 @@ router.post("/customers/:id/hotspot-reconnect", requireAdmin(), async (req, res)
     res.status(503).json({
       error: "Could not safely reconnect this device. Check the account and router connection, then retry.",
       status: "router_unavailable",
+    });
+  }
+});
+
+router.post("/customers/:id/hotspot-tether-test", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req);
+  const customerId = positivePortalId(req.params.id);
+  const account = await authenticatedAccount(req);
+  if (!adminId || !customerId || !account) {
+    res.status(400).json({ ok: false, error: "A signed-in admin and valid Hotspot account are required." });
+    return;
+  }
+  const action = req.body?.action === "stop" ? "stop" : "start";
+  if (action === "start" && req.body?.confirm !== true) {
+    res.status(400).json({ ok: false, error: "Explicit confirmation is required before starting this test." });
+    return;
+  }
+
+  try {
+    const customerFilter = `id=eq.${customerId}&admin_id=eq.${adminId}&select=id,admin_id,username,mac_address,type,plan_id,router_id,port_id,status,expires_at,depletion_reason&limit=1`;
+    const customer = (await sbSelectStrict<CustomerRow>("isp_customers", customerFilter))[0];
+    if (
+      !customer
+      || normalizePlanServiceType(customer.type) !== "hotspot"
+      || customer.status !== "active"
+      || !customer.expires_at
+      || Date.parse(customer.expires_at) <= Date.now()
+      || customer.depletion_reason
+      || customer.port_id
+      || account.role === "reseller"
+    ) {
+      res.status(409).json({ ok: false, error: "This test is limited to an active, unexpired main-router Hotspot account." });
+      return;
+    }
+    const username = String(customer.username ?? "").trim();
+    const expectedMac = normalisePortalMac(customer.mac_address);
+    const planId = positivePortalId(customer.plan_id);
+    const routerId = positivePortalId(customer.router_id);
+    if (!username || !expectedMac || !planId || !routerId) {
+      res.status(409).json({ ok: false, error: "The account is missing a verified login, MAC address, plan, or router." });
+      return;
+    }
+    const plan = await loadScopedCustomerPlan(
+      account,
+      planId,
+      "hotspot",
+      routerId,
+      null,
+      true,
+    );
+    if (!plan || plan.router_id !== routerId || plan.port_id !== null) {
+      res.status(409).json({ ok: false, error: "The account's main-router Hotspot plan could not be verified." });
+      return;
+    }
+    const tenantId = account.parent_id ?? account.id;
+    const routerRow = (await sbSelectStrict<RouterRow>(
+      "isp_routers",
+      `id=eq.${routerId}&admin_id=eq.${tenantId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    ))[0];
+    if (!routerRow) {
+      res.status(404).json({ ok: false, error: "The account's assigned router could not be found." });
+      return;
+    }
+
+    const creds = routerCredentials(routerRow);
+    if (action === "stop") {
+      await stopHotspotTetherTest(creds, customerId);
+      res.json({ ok: true, message: "The temporary tethering test was stopped for this account." });
+      return;
+    }
+    const sessions = await fetchHotspotUsers(creds);
+    const userSessions = sessions.filter(session => session.user === username);
+    if (
+      userSessions.length !== 1
+      || normalisePortalMac(userSessions[0]?.macAddress) !== expectedMac
+      || !isValidIpv4(userSessions[0]?.address)
+    ) {
+      res.status(409).json({
+        ok: false,
+        error: "No unique active session matching this account's saved MAC was found. No router rules were changed.",
+      });
+      return;
+    }
+
+    await startHotspotTetherTest(creds, customerId, userSessions[0].address);
+    void logActivity({
+      adminId,
+      type: "customer",
+      action: "hotspot_tether_test_started",
+      subject: username,
+      details: { customerId, routerId, durationMinutes: 5, scope: "verified-active-session" },
+    });
+    res.json({
+      ok: true,
+      durationMinutes: 5,
+      message: "A five-minute, account-scoped tethering heuristic test is active. It may also interrupt matching traffic from this phone.",
+    });
+  } catch (error) {
+    logger.warn({ err: error, adminId, customerId }, "[customers/hotspot-tether-test] failed");
+    res.status(502).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Could not apply the temporary tethering test.",
     });
   }
 });

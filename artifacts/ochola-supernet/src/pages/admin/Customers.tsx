@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { ADMIN_ID, type DbCustomer } from "@/lib/supabase";
 import {
   Search, Plus, Edit, Trash, Download, Loader2, Users,
-  Wifi, Network, Globe, Eye, EyeOff, RefreshCw, X,
+  Wifi, WifiOff, Network, Globe, Eye, EyeOff, RefreshCw, X,
   CheckCircle2, AlertTriangle, Copy, ShieldCheck, RotateCcw, UploadCloud, Router,
 } from "lucide-react";
 import { RouterSyncBar } from "@/components/ui/RouterSyncBar";
@@ -961,6 +961,7 @@ export default function Customers() {
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterType,   setFilterType]   = useState("all");
   const [toast,        setToast]        = useState<{ msg: string; ok: boolean } | null>(null);
+  const [activeTetherTestIds, setActiveTetherTestIds] = useState<Set<number>>(() => new Set());
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -1001,6 +1002,53 @@ export default function Customers() {
       showToast("Customer deleted");
     },
     onError: (e: Error) => showToast(`Error: ${e.message}`, false),
+  });
+
+  const tetherTestMutation = useMutation({
+    mutationFn: async (customerId: number) => {
+      const response = await adminApiFetch(`/api/customers/${customerId}/hotspot-tether-test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      const result = await response.json() as { ok?: boolean; error?: string; message?: string };
+      if (!response.ok || !result.ok) throw new Error(result.error ?? "Could not start the tethering test.");
+      return result.message ?? "Five-minute tethering test started.";
+    },
+    onSuccess: (message, customerId) => {
+      setActiveTetherTestIds(current => new Set(current).add(customerId));
+      window.setTimeout(() => {
+        setActiveTetherTestIds(current => {
+          const next = new Set(current);
+          next.delete(customerId);
+          return next;
+        });
+      }, 5 * 60_000);
+      showToast(message);
+    },
+    onError: (error: Error) => showToast(error.message, false),
+  });
+
+  const stopTetherTestMutation = useMutation({
+    mutationFn: async (customerId: number) => {
+      const response = await adminApiFetch(`/api/customers/${customerId}/hotspot-tether-test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "stop" }),
+      });
+      const result = await response.json() as { ok?: boolean; error?: string; message?: string };
+      if (!response.ok || !result.ok) throw new Error(result.error ?? "Could not stop the tethering test.");
+      return { customerId, message: result.message ?? "Tethering test stopped." };
+    },
+    onSuccess: ({ customerId, message }) => {
+      setActiveTetherTestIds(current => {
+        const next = new Set(current);
+        next.delete(customerId);
+        return next;
+      });
+      showToast(message);
+    },
+    onError: (error: Error) => showToast(error.message, false),
   });
 
   /* ─── Stats ─── */
@@ -1283,6 +1331,29 @@ export default function Customers() {
                             <button title="Generate PPPoE client dialer" aria-label={`Generate PPPoE dialer for ${name}`} onClick={() => setDialerFor(c)}
                               style={{ padding: "0.35rem", borderRadius: 6, background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", color: "var(--isp-accent)", cursor: "pointer" }}>
                               <Router size={13} />
+                            </button>
+                          )}
+                          {c.type === "hotspot" && statusVal === "active" && (
+                            <button
+                              type="button"
+                              title={activeTetherTestIds.has(c.id) ? "Stop tethering test now" : "Start a five-minute tethering test for this active account"}
+                              aria-label={activeTetherTestIds.has(c.id) ? `Stop tethering test for ${name}` : `Start five-minute tethering test for ${name}`}
+                              disabled={tetherTestMutation.isPending || stopTetherTestMutation.isPending}
+                              onClick={() => {
+                                if (activeTetherTestIds.has(c.id)) {
+                                  stopTetherTestMutation.mutate(c.id);
+                                  return;
+                                }
+                                const confirmed = window.confirm(
+                                  `Start a five-minute best-effort tethering block for ${name} only? It requires the saved device to be actively connected. TTL detection is imperfect and may interrupt matching traffic from this phone. The temporary IP scope expires automatically; you can stop it early here.`,
+                                );
+                                if (confirmed) tetherTestMutation.mutate(c.id);
+                              }}
+                              style={{ padding: "0.35rem", borderRadius: 6, background: activeTetherTestIds.has(c.id) ? "rgba(239,68,68,0.1)" : "rgba(245,158,11,0.08)", border: activeTetherTestIds.has(c.id) ? "1px solid rgba(239,68,68,0.25)" : "1px solid rgba(245,158,11,0.22)", color: activeTetherTestIds.has(c.id) ? "#ef4444" : "#f59e0b", cursor: tetherTestMutation.isPending || stopTetherTestMutation.isPending ? "not-allowed" : "pointer", opacity: tetherTestMutation.isPending || stopTetherTestMutation.isPending ? 0.55 : 1 }}
+                            >
+                              {tetherTestMutation.isPending || stopTetherTestMutation.isPending
+                                ? <Loader2 size={13} className="animate-spin" />
+                                : activeTetherTestIds.has(c.id) ? <X size={13} /> : <WifiOff size={13} />}
                             </button>
                           )}
                           <button title="Edit" onClick={() => setEditing(c)}
