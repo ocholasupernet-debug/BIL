@@ -134,7 +134,7 @@ export default function SuperAdminDashboard() {
   const [lastRefresh, setLastRefresh] = React.useState(() => new Date());
   const [transactionSearch, setTransactionSearch] = React.useState("");
 
-  const adminsQuery = useQuery<AdminRecord[  const platformDataQuery = useQuery<{
+  const platformDataQuery = useQuery<{
     admins: AdminRecord[];
     routers: RouterRecord[];
     customers: CustomerRecord[];
@@ -165,7 +165,7 @@ export default function SuperAdminDashboard() {
       };
     },
   });
-meSummary>({
+  const incomeQuery = useQuery<PlatformIncomeSummary>({
     queryKey: ["sa_platform_income"],
     queryFn: async () => {
       const token = localStorage.getItem("ochola_superadmin_token") || "";
