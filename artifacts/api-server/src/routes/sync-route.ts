@@ -863,6 +863,13 @@ router.post("/admin/sync/plans", requireAdmin(), async (req, res): Promise<void>
             "local-address": assignment.localAddress,
             "remote-address": assignment.remoteAddress,
           });
+          const verifiedProfiles = await readRouterRows(conn, "/ppp/profile", `?name=${profileName}`);
+          const verifiedProfile = verifiedProfiles.find(row => row.name === profileName);
+          if (String(verifiedProfile?.["rate-limit"] ?? "").trim() !== rateLimit) {
+            throw new Error(
+              `RouterOS did not confirm the expected PPPoE speed limit ${rateLimit}; received ${String(verifiedProfile?.["rate-limit"] ?? "").trim() || "no limit"}.`,
+            );
+          }
           log(`  ✓ ${action}`);
           action === "created" ? created++ : updated++;
         } catch (e) {

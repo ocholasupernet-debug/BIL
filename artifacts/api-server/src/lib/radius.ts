@@ -169,7 +169,10 @@ export async function removeUserGroup(username: string): Promise<void> {
 }
 
 function rateUnitToSuffix(unit: string): string {
-  return unit === "Kbps" ? "K" : "M";
+  const normalized = String(unit ?? "Mbps").trim().toLowerCase();
+  if (normalized.startsWith("kb")) return "K";
+  if (normalized.startsWith("gb")) return "G";
+  return "M";
 }
 
 function stringToInteger(str: string): string {

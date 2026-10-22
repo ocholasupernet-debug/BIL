@@ -1938,6 +1938,19 @@ router.post("/customers", requireAdmin(), async (req, res): Promise<void> => {
         });
         return;
       }
+      const expectedRateLimit = routerRateLimit(
+        plan.speed_down,
+        plan.speed_up,
+        plan.speed_down_unit ?? "Mbps",
+        plan.speed_up_unit ?? plan.speed_down_unit ?? "Mbps",
+      );
+      const actualRateLimit = String(selectedPppProfile.rateLimit ?? "").trim();
+      if (expectedRateLimit && actualRateLimit !== expectedRateLimit) {
+        res.status(409).json({
+          error: `The PPPoE profile "${pppProfileName}" has a stale speed limit (router: ${actualRateLimit || "unlimited"}; plan: ${expectedRateLimit}). Sync this plan to the router before creating the account.`,
+        });
+        return;
+      }
       if (!String(ipAddress ?? "").trim() && !selectedPppProfile.remoteAddress.trim()) {
         res.status(409).json({
           error: `The PPPoE plan profile "${pppProfileName}" has no remote IP pool on ${router.name}. Configure and sync the plan's IP pool before creating the account.`,

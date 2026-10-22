@@ -41,14 +41,18 @@ function adminApiHeaders(): Record<string, string> {
 interface PlanSyncNotice {
   tone: "success" | "warning";
   message: string;
-  retry?: { planId: number; routerId: number; syncExistingUsers: boolean };
+  retry?: { planId: number; routerId: number; syncExistingUsers: boolean; serviceLabel: "Hotspot" | "PPPoE" };
 }
 
-function isHotspotPlanType(type: unknown): boolean {
-  return ["hotspot", "trial", "trials"].includes(String(type ?? "").trim().toLowerCase());
+function isRouterProfilePlanType(type: unknown): boolean {
+  return ["hotspot", "trial", "trials", "pppoe"].includes(String(type ?? "").trim().toLowerCase());
 }
 
-async function syncHotspotPlanProfile(
+function planProfileServiceLabel(type: unknown): "Hotspot" | "PPPoE" {
+  return String(type ?? "").trim().toLowerCase() === "pppoe" ? "PPPoE" : "Hotspot";
+}
+
+async function syncRouterPlanProfile(
   planId: number,
   routerId: number,
   syncExistingUsers: boolean,
@@ -382,22 +386,25 @@ function AddServicePlanForm({
       }
 
       let notice: PlanSyncNotice | undefined;
-      if (isHotspotPlanType(savedPlan?.type ?? planType)) {
+      const savedType = savedPlan?.type ?? planType;
+      if (isRouterProfilePlanType(savedType)) {
+        const serviceLabel = planProfileServiceLabel(savedType);
         const planId = Number(savedPlan?.id ?? initialData?.id);
         const savedRouterId = Number(savedPlan?.router_id ?? routerId);
-        const syncExistingUsers = Boolean(isEdit && initialData);
+        const syncExistingUsers = serviceLabel === "Hotspot" && Boolean(isEdit && initialData);
         if (Number.isSafeInteger(planId) && planId > 0 && Number.isSafeInteger(savedRouterId) && savedRouterId > 0) {
-          const retry = { planId, routerId: savedRouterId, syncExistingUsers };
-          const syncError = await syncHotspotPlanProfile(planId, savedRouterId, syncExistingUsers);
+          const retry = { planId, routerId: savedRouterId, syncExistingUsers, serviceLabel };
+          const syncError = await syncRouterPlanProfile(planId, savedRouterId, syncExistingUsers);
           notice = syncError
             ? {
                 tone: "warning",
-                message: `Plan saved, but its MikroTik Hotspot profile or existing sharing limits could not be fully synced. Retry before customers use this plan. ${syncError}`,
+                message: `Plan saved, but its MikroTik ${serviceLabel} profile could not be fully synced. Retry before customers use this plan. ${syncError}`,
                 retry,
               }
             : {
                 tone: "success",
-                message: "Plan saved and its MikroTik Hotspot profile and sharing limit are synced.",
+                message: `Plan saved and its MikroTik ${serviceLabel} profile is synced.`,
+                retry,
               };
         } else {
           notice = {
@@ -766,21 +773,24 @@ function CopyPlanModal({
        } | null;
       if (!response.ok) throw new Error(body?.error ?? `Copy failed (${response.status}).`);
        let notice: PlanSyncNotice | undefined;
-       if (isHotspotPlanType(body?.type ?? plan.type)) {
+       const copiedType = body?.type ?? plan.type;
+       if (isRouterProfilePlanType(copiedType)) {
+         const serviceLabel = planProfileServiceLabel(copiedType);
          const planId = Number(body?.id);
          const targetRouterId = Number(body?.router_id ?? routerId);
          if (Number.isSafeInteger(planId) && planId > 0 && Number.isSafeInteger(targetRouterId) && targetRouterId > 0) {
-           const retry = { planId, routerId: targetRouterId, syncExistingUsers: false };
-           const syncError = await syncHotspotPlanProfile(planId, targetRouterId, false);
+           const retry = { planId, routerId: targetRouterId, syncExistingUsers: false, serviceLabel };
+           const syncError = await syncRouterPlanProfile(planId, targetRouterId, false);
            notice = syncError
              ? {
                  tone: "warning",
-                 message: `Plan copied, but its MikroTik Hotspot profile could not be synced. Retry before customers use it. ${syncError}`,
+                 message: `Plan copied, but its MikroTik ${serviceLabel} profile could not be synced. Retry before customers use it. ${syncError}`,
                  retry,
                }
              : {
                  tone: "success",
-                 message: "Plan copied and its MikroTik Hotspot profile and sharing limit are synced.",
+                 message: `Plan copied and its MikroTik ${serviceLabel} profile is synced.`,
+                 retry,
                };
          } else {
            notice = {
@@ -1194,7 +1204,7 @@ export default function Plans() {
     if (!retry || retryingPlanSync) return;
     setRetryingPlanSync(true);
     try {
-      const syncError = await syncHotspotPlanProfile(
+      const syncError = await syncRouterPlanProfile(
         retry.planId,
         retry.routerId,
         retry.syncExistingUsers,
@@ -1205,7 +1215,8 @@ export default function Plans() {
           ? { ...current, message: `Sync did not finish. ${syncError}` }
           : {
               tone: "success",
-              message: "The MikroTik Hotspot profile and sharing limits are now synced.",
+              message: `The MikroTik ${retry.serviceLabel} profile is now synced.`,
+              retry,
             };
       });
     } finally {

@@ -5,6 +5,7 @@ import {
   isPrepaidHotspotUsername,
   prepaidHotspotUsername,
   prepaidHotspotUsernameForEdit,
+  routerRateLimit,
 } from "./prepaid-identifiers.js";
 
 test("uses a distinct XX:XX suffix when a phone is reused", () => {
@@ -53,4 +54,11 @@ test("scopes equal plan names to their router and physical service", () => {
     hotspotPlanProfileName("Night 10 Mbps", 12),
     hotspotPlanProfileName("Night 10 Mbps", 13),
   );
+});
+
+test("formats PPPoE speeds in RouterOS rx/tx order (upload/download)", () => {
+  assert.equal(routerRateLimit(10, 10, "Mbps", "Mbps"), "10M/10M");
+  assert.equal(routerRateLimit(10, 5, "Mbps", "Mbps"), "5M/10M");
+  assert.equal(routerRateLimit(10, 5, "Mbps", "Kbps"), "5k/10M");
+  assert.equal(routerRateLimit(10, 5, "Gbps", "Mbps"), "5M/10G");
 });
