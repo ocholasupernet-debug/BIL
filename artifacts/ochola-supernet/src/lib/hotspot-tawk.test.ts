@@ -63,9 +63,14 @@ test("package cards open checkout directly and recovery cards stay compact", () 
   assert.match(portal, /class="plan-card package-shape-[^"]+" data-plan-index=/);
   assert.match(portal, /querySelectorAll\("\.plan-card\[data-plan-index\]"\)/);
   assert.match(portal, /id="mpesaMsg" type="text"/);
-  assert.match(portal, /id="voucherSection" style="max-width:560px/);
+  assert.match(portal, /id="voucherSection" style="max-width:380px/);
+  assert.match(portal, /id="mpesaReconnectSection" hidden style="max-width:380px/);
+  assert.doesNotMatch(portal, /Voucher Redemption|Redeem a Voucher|M-Pesa Verification|Verify Your M-Pesa Payment/);
   assert.match(reactPortal, /hp-compact-voucher-form/);
   assert.match(reactPortal, /hp-compact-code-input/);
+  assert.match(reactPortal, /hp-voucher-section \{ max-width: 400px/);
+  assert.doesNotMatch(reactPortal, /Enter the receipt code to verify and reconnect this device|Phone number and voucher code/);
+  assert.match(reactPortal, /maxWidth: 380/);
 });
 
 test("checkout, TV, and reconnect modules use the compact portal theme", () => {

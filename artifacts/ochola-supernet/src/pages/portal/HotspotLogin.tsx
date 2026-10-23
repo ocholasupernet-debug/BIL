@@ -2088,26 +2088,25 @@ function HotspotLoginView({
   };
 
   const mpesaReconnectCard = (
-    <div className="hp-glass hp-compact-portal-card" style={{ margin: "8px auto 0", maxWidth: 520 }}>
+    <div className="hp-glass hp-compact-portal-card" style={{ margin: "8px auto 0", maxWidth: 380 }}>
       <div className="hp-glass-header">
         <div className="hp-glass-icon" style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
           <Shield size={16} color="var(--isp-accent)" />
         </div>
         <div>
           <div className="hp-glass-title">M-Pesa code</div>
-          <div className="hp-glass-desc">Enter the receipt code to verify and reconnect this device.</div>
         </div>
       </div>
       <div className="hp-glass-body hp-compact-portal-card-body">
         <form onSubmit={handleMpesaReconnect}>
           <div className="hp-input-group">
-              <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation or receipt code</label>
+              <label className="hp-label" htmlFor="mpesa-reconnect-message">Receipt code</label>
             <textarea
               id="mpesa-reconnect-message"
               className="hp-input hp-textarea hp-compact-code-input"
               rows={1}
               maxLength={1000}
-              placeholder="M-Pesa receipt code or confirmation SMS"
+              placeholder="Paste receipt code"
               value={mpesaMessage}
               onChange={event => { setMpesaMessage(event.target.value); setMpesaReconnectError(""); }}
               onPaste={event => {
@@ -2132,7 +2131,7 @@ function HotspotLoginView({
           <button type="submit" disabled={mpesaReconnectLoading} className="hp-btn hp-btn-ghost">
             {mpesaReconnectLoading
               ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Verifying payment...</>
-              : <><Shield size={16} /> Verify and reconnect</>}
+              : <><Shield size={16} /> Verify &amp; reconnect</>}
           </button>
         </form>
       </div>
@@ -3215,6 +3214,7 @@ function HotspotLoginView({
         color: #173c38 !important; background: #f7faf8 !important; border-color: #dce8e3 !important;
       }
       .hp-root .hp-compact-portal-card .hp-btn { background: var(--isp-accent) !important; color: #fff !important; }
+      .hp-root .hp-voucher-section { max-width: 400px; margin: 10px auto; }
       .hp-plan.expanded .hp-plan-pay .hp-btn-mpesa { background: var(--isp-accent) !important; }
       .hp-plan.expanded .hp-plan-pay .hp-error { color: #8c3932 !important; background: #fff5f3 !important; }
       @media (max-width: 560px) {
@@ -3972,22 +3972,21 @@ function HotspotLoginView({
           {loyaltyCardSettings.position === "after-packages" && loyaltyBalanceCard}
 
           {isDanstedLayout && portalCards.paymentRecovery && (
-            <div style={{ maxWidth: 840, margin: "0 auto 14px" }}>
+            <div style={{ maxWidth: 400, margin: "0 auto 14px" }}>
               {mpesaReconnectCard}
             </div>
           )}
 
           {/* ── VOUCHER ── */}
           {portalCards.voucher && (isDanstedLayout || activeTab === "voucher") && (
-            <div className="hp-section">
-              <div className="hp-glass">
+            <div className="hp-section hp-voucher-section">
+              <div className="hp-glass hp-compact-portal-card">
                 <div className="hp-glass-header">
                   <div className="hp-glass-icon" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.2)" }}>
                     <Ticket size={16} color="#fbbf24" />
                   </div>
                   <div>
-                    <div className="hp-glass-title">Redeem Voucher</div>
-                    <div className="hp-glass-desc">Phone number and voucher code</div>
+                    <div className="hp-glass-title">Voucher</div>
                   </div>
                 </div>
                 <div className="hp-glass-body hp-compact-portal-card-body">
@@ -4082,12 +4081,11 @@ function HotspotLoginView({
           )}
 
           {portalCards.connectionSupport && (
-            <div className="hp-troubleshoot-card" style={{ maxWidth: 640, margin: "10px auto" }}>
+            <div className="hp-troubleshoot-card" style={{ maxWidth: 380, margin: "10px auto" }}>
             <div className="hp-troubleshoot-card-copy">
               <div className="hp-troubleshoot-card-icon" aria-hidden="true"><Wifi size={20} /></div>
               <div>
-                <div className="hp-troubleshoot-eyebrow">{isDanstedLayout ? "Reconnect account" : "Connection support"}</div>
-                <h3>{isDanstedLayout ? "Reconnect your account" : "Having trouble connecting?"}</h3>
+                <h3>{isDanstedLayout ? "Reconnect account" : "Connection support"}</h3>
                 <p>{loginSession?.status === "active" && !loginSession.connected
                   ? "Your package is active, but the router has not confirmed sign-in. Tap below to retry."
                   : isDanstedLayout
@@ -4110,7 +4108,7 @@ function HotspotLoginView({
 
           {portalCards.paymentRecovery && (
             !isDanstedLayout && (
-              <div style={{ maxWidth: 520, margin: "0 auto 10px" }}>
+              <div style={{ maxWidth: 400, margin: "0 auto 10px" }}>
                 {mpesaReconnectCard}
               </div>
             )
