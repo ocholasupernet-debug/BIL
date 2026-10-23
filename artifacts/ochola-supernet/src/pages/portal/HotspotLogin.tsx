@@ -337,8 +337,8 @@ function formatMacInputElement(input: HTMLInputElement): string {
   return formatted;
 }
 
-function hotspotPaymentPhoneKey(host: string, adminId: number | null): string {
-  return ["ochola_hotspot_payment_phone_v1", host, adminId ? String(adminId) : "tenant"]
+function hotspotPaymentPhoneKey(host: string, adminId: number | null, routerId = 0, portId = 0): string {
+  return ["ochola_hotspot_payment_phone_v2", host, adminId ? String(adminId) : "tenant", String(routerId || 0), String(portId || 0)]
     .map(value => encodeURIComponent(value)).join(":");
 }
 
@@ -568,7 +568,10 @@ function HotspotLoginView({
   const paymentPhoneStorageKey = hotspotPaymentPhoneKey(
     typeof window !== "undefined" ? window.location.host : "portal",
     adminId,
+    portalScope.routerId,
+    portalScope.portId,
   );
+  const legacyPaymentPhoneStorageKey = `ochola_hotspot_payment_phone_v1:${typeof window !== "undefined" ? window.location.host : "portal"}:${adminId || "tenant"}:${portalScope.routerId || 0}:${portalScope.portId || 0}`;
 
   const [plans, setPlans] = useState<Plan[]>(HOTSPOT_RUNTIME_CONFIG.plans);
   const [plansLoading, setPlansLoading] = useState(
@@ -576,8 +579,8 @@ function HotspotLoginView({
   );
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
   const [paymentMode, setPaymentMode] = useState<"data" | "tv">("data");
-  const [phone, setPhone] = useState("");
-  const [lastPaymentPhone, setLastPaymentPhone] = useState(() => readHotspotPaymentPhone(paymentPhoneStorageKey));
+  const [phone, setPhone] = useState(() => readHotspotPaymentPhone(paymentPhoneStorageKey) || readHotspotPaymentPhone(legacyPaymentPhoneStorageKey));
+  const [lastPaymentPhone, setLastPaymentPhone] = useState(() => readHotspotPaymentPhone(paymentPhoneStorageKey) || readHotspotPaymentPhone(legacyPaymentPhoneStorageKey));
   const rememberPaymentPhone = (value: string) => {
     const phoneValue = value.trim();
     if (!phoneValue) return;
@@ -602,11 +605,12 @@ function HotspotLoginView({
   const [showTvSuccess, setShowTvSuccess] = useState(false);
   const [paidAccessExpiresAt, setPaidAccessExpiresAt] = useState<string | null>(null);
   const [tvPlanId, setTvPlanId] = useState("");
-  const [tvPhone, setTvPhone] = useState("");
+  const [tvPhone, setTvPhone] = useState(() => readHotspotPaymentPhone(paymentPhoneStorageKey) || readHotspotPaymentPhone(legacyPaymentPhoneStorageKey));
   const [tvDialogError, setTvDialogError] = useState("");
   const [payLoading, setPayLoading] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
   const [stkSent, setStkSent] = useState(false);
+  const [paymentElapsedSeconds, setPaymentElapsedSeconds] = useState(0);
   const [checkoutId, setCheckoutId] = useState<string | null>(null);
   const [paymentConfirmed, setPaymentConfirmed] = useState(false);
   const [accessReady, setAccessReady] = useState(false);
@@ -723,6 +727,23 @@ function HotspotLoginView({
   useEffect(() => {
     setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
   }, [savedTvDevicesStorageKey]);
+
+  useEffect(() => {
+    try {
+      const savedPhone = phone.trim() || tvPhone.trim();
+      if (savedPhone) window.localStorage.setItem(paymentPhoneStorageKey, savedPhone.slice(0, 24));
+    } catch {}
+  }, [phone, tvPhone, paymentPhoneStorageKey]);
+
+  useEffect(() => {
+    if (!stkSent || accessReady || paymentFailed) return;
+    setPaymentElapsedSeconds(0);
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      setPaymentElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [stkSent, accessReady, paymentFailed]);
 
   useEffect(() => {
     if (troubleshootingOnly) {
@@ -2568,15 +2589,15 @@ function HotspotLoginView({
          }
          .hp-tv-trigger:hover { transform: translateY(-1px); background: var(--isp-accent-border); }
          .hp-modal-backdrop {
-           position: fixed; inset: 0; z-index: 100; display: flex; align-items: center;
-           justify-content: center; padding: 18px; background: rgba(0,5,12,.78);
+            position: fixed; inset: 0; z-index: 200; display: flex; align-items: center;
+            justify-content: center; padding: 14px; background: rgba(0,5,12,.82);
            backdrop-filter: blur(12px);
          }
          .hp-tv-modal {
-           width: min(100%, 520px); max-height: min(760px, calc(100vh - 36px)); overflow: auto;
-           border: 1px solid rgba(255,255,255,.12); border-radius: 22px;
+            width: min(100%, 460px); max-height: min(680px, calc(100dvh - 28px)); overflow: auto;
+            border: 1px solid rgba(255,255,255,.14); border-radius: 24px;
            background: linear-gradient(145deg, #0b1a29, #07111d);
-           box-shadow: 0 30px 90px rgba(0,0,0,.5); color: #fff;
+            box-shadow: 0 30px 90px rgba(0,0,0,.56), 0 0 48px var(--isp-accent-glow); color: #fff;
          }
           @keyframes hp-troubleshoot-drift {
             0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
@@ -2663,7 +2684,7 @@ function HotspotLoginView({
           }
           .hp-troubleshoot-dialog {
             position: fixed; top: 50%; left: 50%; z-index: 201;
-            width: min(520px, calc(100vw - 32px)); max-height: min(780px, calc(100dvh - 32px));
+            width: min(460px, calc(100vw - 28px)); max-height: min(720px, calc(100dvh - 28px));
             overflow: hidden; outline: none; color: #fff;
             border: 1px solid rgba(255,255,255,.13);
             border-radius: 30px 17px 30px 17px;
@@ -2683,8 +2704,8 @@ function HotspotLoginView({
             animation: hp-troubleshoot-drift 8s ease-in-out infinite;
           }
           .hp-troubleshoot-dialog-inner {
-            position: relative; z-index: 1; max-height: min(780px, calc(100dvh - 32px));
-            overflow-y: auto; overscroll-behavior: contain; padding: 27px;
+            position: relative; z-index: 1; max-height: min(720px, calc(100dvh - 28px));
+            overflow-y: auto; overscroll-behavior: contain; padding: 22px;
           }
           .hp-troubleshoot-dialog-head {
             display: flex; align-items: flex-start; gap: 13px; padding-right: 36px; margin-bottom: 19px;
@@ -2775,11 +2796,11 @@ function HotspotLoginView({
             background: linear-gradient(135deg, var(--isp-accent), rgba(14,165,233,.76));
           }
           .hp-troubleshoot-modal-footnote { margin-top: 13px; color: rgba(255,255,255,.34); font-size: 9px; line-height: 1.55; text-align: center; }
-         .hp-tv-modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:22px 22px 16px; border-bottom:1px solid rgba(255,255,255,.07); }
+         .hp-tv-modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:18px 18px 13px; border-bottom:1px solid rgba(255,255,255,.07); }
          .hp-tv-modal-head h3 { font-size:18px; font-weight:850; margin-bottom:5px; }
          .hp-tv-modal-head p { color:rgba(255,255,255,.46); font-size:12px; line-height:1.5; }
          .hp-tv-modal-close { border:0; background:rgba(255,255,255,.06); color:rgba(255,255,255,.7); width:32px; height:32px; border-radius:9px; cursor:pointer; font-size:20px; line-height:1; }
-         .hp-tv-modal-body { padding:20px 22px 22px; }
+         .hp-tv-modal-body { padding:16px 18px 18px; }
          .hp-tv-field { margin-bottom:15px; }
          .hp-tv-label { display:block; margin-bottom:7px; color:rgba(255,255,255,.56); font-size:11px; font-weight:800; letter-spacing:.04em; }
          .hp-tv-select, .hp-tv-input { width:100%; border:1px solid rgba(255,255,255,.1); border-radius:11px; padding:12px 13px; color:#fff; background:rgba(255,255,255,.055); font:600 13px 'Plus Jakarta Sans', sans-serif; outline:none; }
@@ -2827,6 +2848,12 @@ function HotspotLoginView({
         .hp-plan-accent { height: 4px; }
         .hp-plan-top { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 0; cursor: pointer; }
         .hp-plan-body { padding: 6px 16px 16px; }
+         .hp-plan.expanded .hp-plan-body { width: min(100%, 740px); margin: 0 auto; padding: 8px 18px 18px; }
+         .hp-plan.expanded .hp-plan-pay {
+           max-width: 440px; margin: 12px auto 0; padding: 14px;
+           border: 1px solid rgba(255,255,255,.09); border-radius: 18px;
+           background: rgba(255,255,255,.035);
+         }
 
         .hp-plan-name {
           font-size: 10px; font-weight: 800; text-transform: uppercase;
@@ -2866,6 +2893,7 @@ function HotspotLoginView({
         .hp-plan-pay .hp-input {
           background: rgba(0,0,0,0.2);
           border-color: rgba(255,255,255,0.1);
+           min-height: 48px; border-radius: 14px;
         }
         .hp-plan-change {
           display: inline-flex; align-items: center; gap: 4px;
@@ -3390,28 +3418,31 @@ function HotspotLoginView({
                     {paymentConfirmed ? (
                       <>
                         <div className="hp-success-icon">
-                          <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
+                          {accessReady
+                            ? <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
+                            : <Loader2 size={30} color="#34d399" strokeWidth={2} style={{ animation: "spin 1.2s linear infinite" }} />}
                         </div>
                           <h3>{accessReady ? (isTvMode ? "TV is ready to stream!" : "Device connected!") : portalHandoffReady ? "Connecting your device…" : loyaltyPaidWithPoints ? "Points Redeemed" : "Payment Confirmed"}</h3>
                           <p>{loyaltyPaidWithPoints
                             ? <>Your full plan redemption used <strong style={{ color: "#fff" }}>{loyaltyQuote?.pointsRequired ?? "—"} points</strong>.</>
                             : <>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</>}</p>
-                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? (isTvMode ? "Your TV session was confirmed by the hotspot." : "Your device is authorized. The assigned username and password are shown below if you need them again.") : portalHandoffReady ? "Your package is ready. Finishing hotspot sign-in now." : loyaltyPaidWithPoints ? "Your points redemption is confirmed, but the hotspot still needs to be updated." : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
-                          {hotspotCredentials && (
-                            <div style={{ display: "grid", gap: 8, textAlign: "left", margin: "0 auto 16px", maxWidth: 320 }}>
-                              <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)" }}>
-                                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: ".08em" }}>Username</div>
-                                <strong style={{ color: "#fff", fontSize: 14 }}>{hotspotCredentials.username}</strong>
-                              </div>
-                              <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)" }}>
-                                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: ".08em" }}>Password</div>
-                                <strong style={{ color: "#fff", fontSize: 14 }}>{hotspotCredentials.password}</strong>
-                              </div>
+                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady
+                            ? isTvMode
+                              ? "Your TV is connected. Start streaming whenever you’re ready."
+                              : "You’re connected. Your hotspot access was set up automatically."
+                            : "Payment confirmed. Please wait while we securely finish setting up your access."}</p>
+                          {!accessReady && (
+                            <div role="status" aria-live="polite" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, margin: "14px auto 18px", padding: "12px 15px", maxWidth: 340, borderRadius: 14, border: "1px solid rgba(255,255,255,.09)", background: "rgba(255,255,255,.045)", color: "rgba(255,255,255,.72)", fontSize: 12, textAlign: "left" }}>
+                              <Loader2 size={16} color="var(--isp-accent)" style={{ flex: "0 0 auto", animation: "spin 1.2s linear infinite" }} />
+                              <span>Creating your access and signing you in automatically.</span>
+                              <strong style={{ flex: "0 0 auto", color: "white", fontVariantNumeric: "tabular-nums" }}>
+                                {String(Math.floor(paymentElapsedSeconds / 60)).padStart(2, "0")}:{String(paymentElapsedSeconds % 60).padStart(2, "0")}
+                              </strong>
                             </div>
                           )}
                         <div className="hp-connected-badge" style={{ marginTop: 16, marginBottom: 24 }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399" }} />
-                            {accessReady ? "Connected" : portalHandoffReady ? "Connecting" : loyaltyPaidWithPoints ? "Points redeemed" : "Payment received"}
+                            {accessReady ? (isTvMode ? "TV connected" : "Connected") : "Preparing your connection"}
                         </div>
                           {!accessReady && payError && (
                             <p style={{ fontSize: 12, color: "#fbbf24", marginBottom: 16 }}>{payError}</p>
@@ -3520,8 +3551,10 @@ function HotspotLoginView({
                         <div style={{ width: 72, height: 72, borderRadius: "50%", background: "var(--isp-accent-glow)", border: "2px solid var(--isp-accent-glow)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
                           <Loader2 size={28} color="var(--isp-accent)" style={{ animation: "spin 1.5s linear infinite" }} />
                         </div>
-                        <h3>{payError ? "Connecting your device" : "Waiting for Payment"}</h3>
-                        <p>An STK push has been sent to <strong style={{ color: "#fff" }}>{phone}</strong></p>
+                        <h3>{paymentConfirmed ? "Preparing your connection" : payError ? "Finishing secure setup" : "M-Pesa prompt sent"}</h3>
+                        <p>{paymentConfirmed
+                          ? "Payment is confirmed. We’re creating and connecting your hotspot access now."
+                          : <>Check your phone and approve the Safaricom prompt sent to <strong style={{ color: "#fff" }}>{phone}</strong>.</>}</p>
                         {payError && <p style={{ fontSize: 12, color: "#fbbf24", marginBottom: 8 }}>{payError}</p>}
                         <p style={{ fontSize: 13, marginBottom: 4 }}>
                           Enter your PIN on your phone to pay <strong style={{ color: "#34d399" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong>
@@ -3537,9 +3570,12 @@ function HotspotLoginView({
                             <p style={{ margin: "4px 0 0", fontSize: 11, color: "rgba(255,255,255,0.3)" }}>Try again or contact support if the amount was deducted.</p>
                           </div>
                         ) : (
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 24, fontSize: 12, color: "rgba(255,255,255,0.35)" }}>
-                            <Loader2 size={12} style={{ animation: "spin 2s linear infinite" }} />
-                            Checking payment status...
+                          <div role="status" aria-live="polite" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, margin: "14px auto 22px", padding: "12px 15px", maxWidth: 340, borderRadius: 14, border: "1px solid rgba(255,255,255,.09)", background: "rgba(255,255,255,.045)", color: "rgba(255,255,255,.72)", fontSize: 12, textAlign: "left" }}>
+                            <Loader2 size={17} color="var(--isp-accent)" style={{ flex: "0 0 auto", animation: "spin 1.2s linear infinite" }} />
+                            <span>{paymentConfirmed ? "Please wait while we finish creating your access." : "Waiting securely for Safaricom to confirm your payment."}</span>
+                            <strong style={{ flex: "0 0 auto", color: "white", fontVariantNumeric: "tabular-nums" }}>
+                              {String(Math.floor(paymentElapsedSeconds / 60)).padStart(2, "0")}:{String(paymentElapsedSeconds % 60).padStart(2, "0")}
+                            </strong>
                           </div>
                         )}
                         <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
@@ -3684,7 +3720,8 @@ function HotspotLoginView({
                                     <div className="hp-input-group">
                                       <div className="hp-input-wrap">
                                         <input className="hp-input hp-input-phone" type="tel"
-                                          inputMode="tel" placeholder={lastPaymentPhone || "07XX XXX XXX or 01XX XXX XXX (for M-Pesa)"} required={effectiveLoyaltyPayment !== "points"}
+                                          inputMode="tel" autoComplete="tel-national" aria-label="Safaricom mobile number"
+                                          placeholder="Safaricom number (07… or 01…)" required={effectiveLoyaltyPayment !== "points"}
                                           value={phone} onChange={e => setPhone(e.target.value)} onBlur={() => rememberPaymentPhone(phone)} />
                                       </div>
                                     </div>
@@ -3742,7 +3779,7 @@ function HotspotLoginView({
                                       ) : payLoading ? (
                                         <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending STK Push...</>
                                       ) : (
-                                        <><Phone size={16} /> Pay {getCurrencySymbol()} {plan.price}{isTvMode ? " for TV" : ""}</>
+                                        <><Phone size={16} /> Send M-Pesa prompt</>
                                       )}
                                     </button>
                                   </form>}
@@ -3994,9 +4031,9 @@ function HotspotLoginView({
                     <div className="hp-troubleshoot-dialog-icon" aria-hidden="true"><Wifi size={21} /></div>
                     <div>
                       <div className="hp-troubleshoot-dialog-kicker">Connection assistant</div>
-                      <h2 id="hp-troubleshoot-dialog-title" className="hp-troubleshoot-dialog-title">Troubleshoot connection</h2>
+                  <h2 id="hp-troubleshoot-dialog-title" className="hp-troubleshoot-dialog-title">{isDanstedLayout ? "Reconnect your account" : "Troubleshoot connection"}</h2>
                       <p id="hp-troubleshoot-dialog-description" className="hp-troubleshoot-dialog-description">
-                        We’ll check your package and attempt sign-in automatically. If the router does not confirm it, you can retry.
+                    {isDanstedLayout ? "We’ll securely check your purchase and reconnect this device." : "We’ll check your package and router, then guide you through the next step."}
                       </p>
                     </div>
                   </div>
@@ -4099,8 +4136,8 @@ function HotspotLoginView({
               <div className="hp-tv-modal" role="dialog" aria-modal="true" aria-labelledby="connect-tv-title">
                 <div className="hp-tv-modal-head">
                   <div>
-                    <h3 id="connect-tv-title">Connect to TV</h3>
-                    <p>Add a TV or streaming device, choose its package, and pay securely with M-Pesa.</p>
+                    <h3 id="connect-tv-title">Connect your TV</h3>
+                    <p>Add your TV, choose a package, then approve the M-Pesa prompt on your phone.</p>
                   </div>
                   <button type="button" className="hp-tv-modal-close" onClick={() => setTvDialogOpen(false)} aria-label="Close">×</button>
                 </div>
@@ -4297,7 +4334,8 @@ function HotspotLoginView({
                       value={tvPhone}
                       onChange={e => setTvPhone(e.target.value)}
                       onBlur={() => rememberPaymentPhone(tvPhone)}
-                      placeholder={lastPaymentPhone || "07XX XXX XXX or 01XX XXX XXX"}
+                      placeholder="Safaricom number (07… or 01…)"
+                      autoComplete="tel-national"
                       inputMode="tel"
                       required
                     />
@@ -4319,7 +4357,7 @@ function HotspotLoginView({
                       {payLoading ? (
                         <><Loader2 size={16} style={{ animation: "spin 1.5s linear infinite" }} /> Starting…</>
                       ) : (
-                        <><Tv size={16} /> Bind &amp; Pay</>
+                        <><Tv size={16} /> Connect TV</>
                       )}
                     </button>
                   </div>

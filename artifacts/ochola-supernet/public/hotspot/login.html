@@ -309,11 +309,11 @@
 
 <!-- Voucher Section -->
 <div id="troubleshootModule" role="dialog" aria-modal="true" aria-labelledby="troubleshootTitle" aria-hidden="true" onclick="closeTroubleshootModuleFromBackdrop(event)" style="display:none;position:fixed;inset:0;z-index:1000;align-items:center;justify-content:center;padding:1rem;background:rgba(4,7,18,.78);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)">
-  <div id="troubleshootDialog" tabindex="-1" style="position:relative;width:min(100%,560px);max-height:calc(100vh - 2rem);max-height:calc(100dvh - 2rem);overflow:auto;padding:1.5rem;border-radius:1.25rem;background:linear-gradient(145deg,#1a0f2e,#10091d);border:1px solid rgba(255,255,255,.14);box-shadow:0 32px 90px rgba(0,0,0,.65)">
+  <div id="troubleshootDialog" tabindex="-1" style="position:relative;width:min(100%,460px);max-height:calc(100vh - 2rem);max-height:calc(100dvh - 2rem);overflow:auto;padding:1.25rem;border-radius:1.25rem;background:linear-gradient(145deg,#1a0f2e,#10091d);border:1px solid rgba(255,255,255,.14);box-shadow:0 32px 90px rgba(0,0,0,.65)">
     <button type="button" id="troubleshootClose" onclick="closeTroubleshootModule()" aria-label="Close troubleshooting" style="position:absolute;top:.875rem;right:.875rem;width:36px;height:36px;border-radius:.65rem;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);color:rgba(255,255,255,.82);font:700 1.25rem/1 inherit;cursor:pointer">×</button>
-    <p style="font-size:.7rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:rgba(216,180,254,.7);margin:0 2.5rem .5rem 0">Connection assistant</p>
-    <h2 id="troubleshootTitle" style="font-size:1.4rem;font-weight:850;color:#fff;margin:0 2.5rem .5rem 0">Troubleshoot connection</h2>
-    <p style="font-size:.9rem;line-height:1.55;color:rgba(255,255,255,.55);margin:0 0 1.25rem">We’ll check your package and attempt sign-in automatically. If the router does not confirm it, you can retry.</p>
+    <p style="font-size:.65rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:rgba(216,180,254,.7);margin:0 2.5rem .4rem 0">Connection assistant</p>
+    <h2 id="troubleshootTitle" style="font-size:1.25rem;font-weight:850;color:#fff;margin:0 2.5rem .4rem 0">Troubleshoot connection</h2>
+    <p style="font-size:.82rem;line-height:1.55;color:rgba(255,255,255,.55);margin:0 0 1rem">We’ll check your package and router, then guide you through the next step.</p>
     <div style="padding:1.15rem;border-radius:1rem;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.12);box-shadow:0 18px 50px rgba(0,0,0,.25)">
       <div style="font-size:.65rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.42);margin-bottom:.4rem">This device</div>
       <div id="troubleshootDevice" style="font:700 .8rem monospace;color:rgba(255,255,255,.82);word-break:break-all"></div>
@@ -452,9 +452,9 @@
 
 <!-- STK Push Modal -->
 <div id="stkModal" style="display:none;position:fixed;inset:0;z-index:100;align-items:center;justify-content:center;padding:1rem;background:rgba(0,0,0,.85);backdrop-filter:blur(16px)">
-  <div style="width:100%;max-width:22rem;border-radius:1.375rem;overflow:hidden;box-shadow:0 40px 80px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.07);background:linear-gradient(160deg,#1a0533,#0e0222)">
+  <div style="width:100%;max-width:22rem;max-height:calc(100dvh - 2rem);overflow:auto;border-radius:1.375rem;box-shadow:0 40px 80px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.07);background:linear-gradient(160deg,#1a0533,#0e0222)">
     <div style="height:3px;background:linear-gradient(90deg,#a855f7,#6d28d9,#4f46e5)"></div>
-    <div style="padding:1.5rem 1.5rem 1.125rem;display:flex;align-items:flex-start;justify-content:space-between">
+    <div style="padding:1.15rem 1.25rem .9rem;display:flex;align-items:flex-start;justify-content:space-between">
       <div>
         <p style="font-size:.6875rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:rgba(192,38,211,.8);margin-bottom:.375rem">M-Pesa STK Push</p>
         <h3 id="modalPlanName" style="font-size:1.25rem;font-weight:800;letter-spacing:-.02em;color:white"></h3>
@@ -464,25 +464,25 @@
         <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
     </div>
-    <div style="padding:0 1.5rem 1.75rem" id="modalBody"></div>
+    <div style="padding:0 1.25rem 1.25rem" id="modalBody"></div>
   </div>
 </div>
 
 <!-- Connect to TV modal -->
 <div id="tvModal" style="display:none;position:fixed;inset:0;z-index:110;align-items:center;justify-content:center;padding:1rem;background:rgba(0,0,0,.86);backdrop-filter:blur(16px)">
-  <div style="width:100%;max-width:30rem;max-height:calc(100vh - 2rem);overflow:auto;border-radius:1.375rem;box-shadow:0 40px 80px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.07);background:linear-gradient(160deg,#1a0533,#0e0222)">
+  <div style="width:100%;max-width:26rem;max-height:calc(100dvh - 1.5rem);overflow:auto;border-radius:1.375rem;box-shadow:0 40px 80px rgba(0,0,0,.8),0 0 0 1px rgba(255,255,255,.07);background:linear-gradient(160deg,#1a0533,#0e0222)">
     <div style="height:3px;background:linear-gradient(90deg,#34d399,#0891b2,#7c3aed)"></div>
-    <div style="padding:1.5rem 1.5rem 1.125rem;display:flex;align-items:flex-start;justify-content:space-between">
+    <div style="padding:1.15rem 1.25rem .9rem;display:flex;align-items:flex-start;justify-content:space-between">
       <div>
         <p style="font-size:.6875rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#6ee7b7;margin-bottom:.375rem">TV CONNECT</p>
-        <h3 style="font-size:1.25rem;font-weight:800;letter-spacing:-.02em;color:white">Connect to TV</h3>
-        <p style="color:rgba(216,180,254,.55);font-size:.875rem;margin-top:.25rem">Bind a device, choose a package, and pay with M-Pesa.</p>
+        <h3 style="font-size:1.2rem;font-weight:800;letter-spacing:-.02em;color:white">Connect your TV</h3>
+        <p style="color:rgba(216,180,254,.62);font-size:.8rem;line-height:1.45;margin-top:.25rem">Choose your TV and package, then approve the M-Pesa prompt on your phone.</p>
       </div>
       <button onclick="closeTvModal()" style="width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.5);cursor:pointer;display:flex;align-items:center;justify-content:center">
         <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
       </button>
     </div>
-    <div id="tvModalBody" style="padding:0 1.5rem 1.75rem"></div>
+    <div id="tvModalBody" style="padding:0 1.25rem 1.25rem"></div>
   </div>
 </div>
 
@@ -501,10 +501,23 @@ var COLORS=[
   {from:"#fb923c",to:"#c2410c",badge:"#7c2d12",glow:"#fb923c"},
 ];
 
- var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=false;
+ var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=false, stkWaitTimer=null, stkStartedAt=0;
  var PAYMENT_STATUS_LOADED=false, PAYMENT_METHOD_READY=false, PAYMENT_STATUS_FAILED=false, PAYMENT_GATEWAY="";
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="", tvPurchaseRefreshTimer=0;
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
+ function paymentPhoneStorageKey(){return "ochola_hotspot_payment_phone_v2:"+window.location.host+":"+(PORTAL_ADMIN_ID||"tenant")+":"+(PORTAL_ROUTER_ID||0)+":"+(PORTAL_PORT_ID||0);}
+ function readLastPaymentPhone(){try{return (window.localStorage.getItem(paymentPhoneStorageKey())||"").slice(0,24);}catch(e){return "";}}
+ function rememberPaymentPhone(value){var phone=String(value||"").trim().slice(0,24);if(phone){try{window.localStorage.setItem(paymentPhoneStorageKey(),phone);}catch(e){}}}
+ function startStkWaitTimer(){
+   if(stkWaitTimer)return;
+   var update=function(){
+     var el=document.getElementById("stkWaitTimer");
+     if(!el){window.clearInterval(stkWaitTimer);stkWaitTimer=null;return;}
+     var elapsed=Math.max(0,Math.floor((Date.now()-stkStartedAt)/1000));
+     el.textContent=String(Math.floor(elapsed/60)).padStart(2,"0")+":"+String(elapsed%60).padStart(2,"0");
+   };
+   update();stkWaitTimer=window.setInterval(update,1000);
+ }
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
    var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalAutoReconnectStartedAt=0, portalPaidLoginHandoff=false;
    var portalMpesaVerifyBusy=false;
@@ -814,7 +827,7 @@ function redeemLoyaltyPoints(){
   if(!loyaltyRedeemable()&&!loyUncertain[attempt])return;
   if(!loyKeys[attempt])loyKeys[attempt]=newLoyaltyKey();
   if(!PORTAL_DEVICE_MAC||PORTAL_ADMIN_ID<1){stkError="This device could not be identified. Reconnect to the hotspot Wi-Fi and try again.";stkState="error";renderModal();return;}
-  loyRedeemBusy=true; loyRedeeming=true; stkError=""; stkState="loading"; renderModal();
+  loyRedeemBusy=true; loyRedeeming=true; stkError=""; stkState="loading"; stkStartedAt=Date.now(); renderModal(); startStkWaitTimer();
   var payload=loyaltyScopePayload(); payload.plan_id=planId; payload.idempotency_key=loyKeys[attempt];
   portalPaymentRequest("/api/hotspot/loyalty/redeem",payload,"Points redemption")
     .catch(function(error){return{ok:false,uncertain:true,data:{error:error&&error.message?error.message:"Points redemption failed before a response was received."}};})
@@ -952,17 +965,6 @@ function formatMacInputElement(input){
   var nextCursor=digitsBefore?digitsBefore+Math.floor((digitsBefore-1)/2):0;
   try{input.setSelectionRange(nextCursor,nextCursor);}catch(e){}
   return input.value;
-}
-function paymentPhoneStorageKey(){
-  return "ochola_hotspot_payment_phone_v1:"+window.location.host+":"+(PORTAL_ADMIN_ID||"tenant");
-}
-function readLastPaymentPhone(){
-  try{return (window.localStorage.getItem(paymentPhoneStorageKey())||"").slice(0,24);}catch(e){return "";}
-}
-function rememberPaymentPhone(value){
-  var phone=String(value||"").trim().slice(0,24);
-  if(!phone)return;
-  try{window.localStorage.setItem(paymentPhoneStorageKey(),phone);}catch(e){}
 }
 var DEVICE_MAC=normaliseMac(ROUTER_MAC)||normaliseMac(PORTAL_QUERY.get("mac")||PORTAL_QUERY.get("mac-address")||"");
 var PORTAL_DEVICE_MAC=DEVICE_MAC;
@@ -1641,7 +1643,7 @@ function renderModal(){
     }
     var phoneHtml=mode==="points"?'':
       '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
-      '<input id="stkPhoneInput" type="tel" placeholder="'+escapePortalText(readLastPaymentPhone()||"07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX")+'" onblur="rememberPaymentPhone(this.value)" class="inp" style="margin-bottom:1.25rem" value="'+escapePortalText(stkPhone)+'" />';
+      '<input id="stkPhoneInput" type="tel" inputmode="tel" autocomplete="tel-national" aria-label="Safaricom mobile number" placeholder="Safaricom number (07… or 01…)" onblur="rememberPaymentPhone(this.value)" class="inp" style="margin-bottom:1.25rem" value="'+escapePortalText(stkPhone||readLastPaymentPhone())+'" />';
     var noMethod=!mpesaOk&&mode!=="points"&&loyState!=="loading";
     b.innerHTML='<div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.22)">'+
        '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">'+(mode==="points"
@@ -1664,8 +1666,9 @@ function renderModal(){
       '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">'+
       '<div style="width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,#a855f7,#6d28d9);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(147,51,234,.5)">'+PHONE_SVG+'</div>'+
       '</div></div>'+
-      '<p style="font-size:1rem;font-weight:700;color:#d8b4fe;margin-bottom:.5rem">'+(loyRedeeming?"Redeeming points…":"Sending STK Push…")+'</p>'+
-      '<p style="color:rgba(255,255,255,.45);font-size:.875rem">'+(loyRedeeming?"Confirming your balance, please wait":"Contacting M-Pesa, please wait")+'</p></div>';
+       '<p style="font-size:1rem;font-weight:700;color:#d8b4fe;margin-bottom:.5rem">'+(loyRedeeming?"Redeeming points…":"Sending M-Pesa prompt…")+'</p>'+
+       '<p style="color:rgba(255,255,255,.58);font-size:.82rem;line-height:1.5">'+(loyRedeeming?"Confirming your balance securely.":"Please wait while Safaricom sends the prompt to your phone.")+'</p>'+
+       '<p style="color:rgba(255,255,255,.32);font-size:.72rem;margin-top:.65rem">Time elapsed <strong id="stkWaitTimer" style="color:#fff;font-variant-numeric:tabular-nums">00:00</strong></p></div>';
    }else if(stkState==="provisioning"){
      b.innerHTML='<div style="text-align:center;padding:2.5rem 0">'+
        '<div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">'+
@@ -1673,8 +1676,9 @@ function renderModal(){
        '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">'+
        '<div style="width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,#34d399,#059669);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(16,185,129,.4)">'+PHONE_SVG+'</div>'+
        '</div></div>'+
-       '<p style="font-size:1rem;font-weight:700;color:#6ee7b7;margin-bottom:.5rem">Assigning your hotspot credentials…</p>'+
-       '<p style="color:rgba(255,255,255,.45);font-size:.875rem">Payment is confirmed. Updating your sign-in account</p></div>';
+        '<p style="font-size:1rem;font-weight:700;color:#6ee7b7;margin-bottom:.5rem">Preparing your connection…</p>'+
+        '<p style="color:rgba(255,255,255,.58);font-size:.82rem;line-height:1.5">Payment is confirmed. We’re setting up your hotspot access and signing you in automatically.</p>'+
+        '<p style="color:rgba(255,255,255,.32);font-size:.72rem;margin-top:.65rem">Please wait <strong id="stkWaitTimer" style="color:#fff;font-variant-numeric:tabular-nums">00:00</strong></p></div>';
    }else if(stkState==="sent"){
     b.innerHTML='<div style="text-align:center;padding:2.5rem 0">'+
       '<div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">'+
@@ -1684,7 +1688,7 @@ function renderModal(){
       '</div></div>'+
       '<p style="font-size:1rem;font-weight:700;color:#fbbf24;margin-bottom:.5rem">STK Push Sent!</p>'+
       '<p style="color:rgba(255,255,255,.5);font-size:.8375rem;margin-bottom:.75rem">Check your phone and enter your M-Pesa PIN to complete payment</p>'+
-      '<p style="color:rgba(255,255,255,.3);font-size:.75rem" id="pollCounter">Verifying payment… (0/12)</p></div>';
+       '<p style="color:rgba(255,255,255,.45);font-size:.75rem" id="pollCounter">Please approve the prompt · <strong id="stkWaitTimer" style="color:#fff;font-variant-numeric:tabular-nums">00:00</strong></p></div>';
    }else if(stkState==="access_error"){
      b.innerHTML='<div style="text-align:center;padding:2.25rem 0">'+
        '<div style="width:72px;height:72px;border-radius:50%;background:rgba(245,158,11,.12);border:2px solid rgba(245,158,11,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">'+
@@ -1701,15 +1705,12 @@ function renderModal(){
        '<p style="color:rgba(255,255,255,.45);font-size:.875rem;margin-bottom:1.5rem">'+(stkError||"Something went wrong. Please try again.")+'</p>'+
       '<button onclick="stkState=\'idle\';renderModal()" class="btn btn-purple btn-full">Try Again</button></div>';
    }else if(stkState==="confirmed"){
-     var credentialBlock=hotspotCredentials?
-       '<div style="display:grid;gap:.5rem;text-align:left;margin:0 auto 1.25rem;max-width:300px">'+
-       '<div style="padding:.625rem .75rem;border-radius:.5rem;background:rgba(255,255,255,.05)"><div style="font-size:.625rem;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.08em">Username</div><strong style="color:white;font-size:.875rem">'+escapePortalText(hotspotCredentials.username)+'</strong></div>'+
-       '<div style="padding:.625rem .75rem;border-radius:.5rem;background:rgba(255,255,255,.05)"><div style="font-size:.625rem;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.08em">Password</div><strong style="color:white;font-size:.875rem">'+escapePortalText(hotspotCredentials.password)+'</strong></div></div>':'';
+      var credentialBlock="";
     b.innerHTML='<div style="text-align:center;padding:2.25rem 0">'+
       '<div style="width:72px;height:72px;border-radius:50%;background:rgba(74,222,128,.12);border:2px solid rgba(74,222,128,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">'+
       '<svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="#4ade80" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>'+
        '<p style="font-size:1.0625rem;font-weight:800;color:#4ade80;margin-bottom:.5rem">'+(loyPaidWithPoints?"Points Redeemed!":"Payment Received!")+'</p>'+
-       '<p style="color:rgba(255,255,255,.5);font-size:.875rem;margin-bottom:1rem">'+(loyPaidWithPoints?"Your plan is active using loyalty points. The assigned credentials are shown below and the sign-in is being submitted automatically.":'Your <span style="color:white;font-weight:600">'+(selectedPlan?selectedPlan.name:"")+'</span> plan is now active. These credentials have been entered on the sign-in form.')+'</p>'+
+        '<p style="color:rgba(255,255,255,.68);font-size:.875rem;line-height:1.6;margin-bottom:1rem">'+(loyPaidWithPoints?"Your plan is active. We’re connecting this device automatically.":"Your "+escapePortalText(selectedPlan?selectedPlan.name:"")+' plan is active. Your hotspot access is ready and being connected automatically.')+'</p>'+
        credentialBlock+
         (tvDeviceSaveNotice?'<p style="margin:0 auto 1rem;max-width:300px;color:'+(tvDeviceSaveNotice.indexOf("Payment succeeded")===0?"#fcd34d":"#6ee7b7")+';font-size:.75rem;line-height:1.45">'+escapePortalText(tvDeviceSaveNotice)+'</p>':'')+
        '<button onclick="closeModal()" class="btn btn-green btn-full">Continue online</button></div>';
@@ -1813,7 +1814,7 @@ function sendStk(){
   if(!phone.trim())return;
   rememberPaymentPhone(phone);
   if((!DEVICE_MAC&&!DEVICE_IP)||PORTAL_ADMIN_ID<1){stkError="The router could not identify this Wi-Fi session. Open the sign-in page from the connected Wi-Fi network and try again.";stkState="error";renderModal();return;}
-  stkPhone=phone; stkError=""; stkState="loading"; renderModal();
+  stkPhone=phone; stkError=""; stkState="loading"; stkStartedAt=Date.now(); renderModal(); startStkWaitTimer();
     var checkout={phone:phone,plan_id:selectedPlan?selectedPlan.id:0,adminId:PORTAL_ADMIN_ID,
       ...(PORTAL_ROUTER_ID>0?{router_id:PORTAL_ROUTER_ID}:{}),
       ...(PORTAL_PORT_ID>0?{port_id:PORTAL_PORT_ID}:{})};
@@ -2044,11 +2045,11 @@ function sendStk(){
      '<label class="lbl" style="color:#6ee7b7">Package to purchase</label>'+
      '<select id="tvPlanId" class="inp" style="margin-bottom:1rem">'+planOptions+'</select>'+
      '<label class="lbl" style="color:#6ee7b7">Phone number</label>'+
-     '<input id="tvPhone" type="tel" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone)+'" placeholder="'+escapePortalText(readLastPaymentPhone()||"07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX")+'" onblur="rememberPaymentPhone(this.value)" />'+
+     '<input id="tvPhone" type="tel" inputmode="tel" autocomplete="tel-national" class="inp" style="margin-bottom:1rem" value="'+tvEsc(tvPhone||readLastPaymentPhone())+'" placeholder="Safaricom number (07… or 01…)" onblur="rememberPaymentPhone(this.value)" />'+
      '<div id="tvError" style="display:'+(tvError?"block":"none")+';margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem">'+tvEsc(tvError)+'</div>'+
      '<div style="display:flex;gap:.625rem">'+
        '<button type="button" onclick="closeTvModal()" class="btn btn-full" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);box-shadow:none">Cancel</button>'+
-       '<button type="button" onclick="bindAndPayTv()" class="btn btn-green btn-full">Bind &amp; Pay</button>'+
+        '<button type="button" onclick="bindAndPayTv()" class="btn btn-green btn-full">Connect TV</button>'+
      '</div>';
    body.querySelectorAll("[data-tv-saved-use]").forEach(function(button){
      button.addEventListener("click",function(){useSavedTvDevice(button.getAttribute("data-tv-saved-use"));});
@@ -2111,7 +2112,7 @@ function sendStk(){
  }
  function openTvModal(){
    if(!canStartPaymentCheckout())return;
-   tvPurchase=true; tvError=""; tvDeviceChoice=""; tvMacAddress=""; tvDeviceName=""; tvPlanId=PLANS[0]?String(PLANS[0].id):""; tvPhone=""; tvDeviceRouterId=0; tvRememberDevice=false; tvSavedEditMac=""; tvSavedEditName=""; tvDeviceSaveNotice="";
+    tvPurchase=true; tvError=""; tvDeviceChoice=""; tvMacAddress=""; tvDeviceName=""; tvPlanId=PLANS[0]?String(PLANS[0].id):""; tvPhone=readLastPaymentPhone(); tvDeviceRouterId=0; tvRememberDevice=false; tvSavedEditMac=""; tvSavedEditName=""; tvDeviceSaveNotice="";
    document.getElementById("tvModal").style.display="flex";
    renderTvModal();
    tvDevicesLoading=true; renderTvModal();
@@ -2142,6 +2143,7 @@ function sendStk(){
    if(!tvDeviceName.trim()){tvError="Give the device a name so you can recognize it later.";renderTvModal();return;}
    if(!tvPlanId){tvError="Choose a package before continuing.";renderTvModal();return;}
    if(!tvPhone.trim()){tvError="Enter the phone number that will receive the M-Pesa prompt.";renderTvModal();return;}
+    rememberPaymentPhone(tvPhone);
    selectedPlan=PLANS.find(function(plan){return String(plan.id)===String(tvPlanId);})||null;
    if(!selectedPlan){tvError="The selected package is no longer available. Refresh and try again.";renderTvModal();return;}
    DEVICE_MAC=mac;
@@ -2638,6 +2640,53 @@ else{
     var deviceMac=typeof ROUTER_MAC==="string"?ROUTER_MAC:"";
     panel.hidden=true;
     credentials.hidden=true;
+    var chatLauncher=document.createElement("button");
+    var launcherKey="ochola_hotspot_chat_launcher_v1:"+window.location.host+":"+adminId;
+    var launcherPosition=null;
+    try{launcherPosition=JSON.parse(localStorage.getItem(launcherKey)||"null");}catch(_){}
+    chatLauncher.type="button";
+    chatLauncher.setAttribute("aria-label","Move chat button or open live chat");
+    chatLauncher.title="Drag to move · tap to chat";
+    chatLauncher.innerHTML='<svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5z"/></svg>';
+    chatLauncher.style.cssText="position:fixed;z-index:90;left:16px;bottom:88px;width:48px;height:48px;padding:0;display:grid;place-items:center;border:1px solid rgba(255,255,255,.28);border-radius:50%;background:linear-gradient(135deg,#0b74e5,#0758b2);color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.32);touch-action:none;cursor:grab;user-select:none";
+    document.body.appendChild(chatLauncher);
+    if(launcherPosition&&Number.isFinite(launcherPosition.x)&&Number.isFinite(launcherPosition.y)){
+      chatLauncher.style.left=Math.max(8,Math.min(window.innerWidth-72,launcherPosition.x))+"px";
+      chatLauncher.style.top=Math.max(8,Math.min(window.innerHeight-60,launcherPosition.y))+"px";
+      chatLauncher.style.bottom="auto";
+    }
+    var dragStart=null,dragMoved=false,suppressLauncherClick=false;
+    chatLauncher.addEventListener("pointerdown",function(event){
+      dragStart={x:event.clientX,y:event.clientY,left:chatLauncher.getBoundingClientRect().left,top:chatLauncher.getBoundingClientRect().top};
+      dragMoved=false;
+      chatLauncher.setPointerCapture(event.pointerId);
+      chatLauncher.style.cursor="grabbing";
+    });
+    chatLauncher.addEventListener("pointermove",function(event){
+      if(!dragStart)return;
+      var dx=event.clientX-dragStart.x,dy=event.clientY-dragStart.y;
+      if(Math.abs(dx)+Math.abs(dy)>6)dragMoved=true;
+      if(!dragMoved)return;
+      var x=Math.max(8,Math.min(window.innerWidth-chatLauncher.offsetWidth-8,dragStart.left+dx));
+      var y=Math.max(8,Math.min(window.innerHeight-chatLauncher.offsetHeight-8,dragStart.top+dy));
+      chatLauncher.style.left=x+"px";chatLauncher.style.top=y+"px";chatLauncher.style.bottom="auto";
+    });
+    chatLauncher.addEventListener("pointerup",function(){
+      if(dragMoved){
+        var rect=chatLauncher.getBoundingClientRect();
+        try{localStorage.setItem(launcherKey,JSON.stringify({x:rect.left,y:rect.top}));}catch(_){}
+        suppressLauncherClick=true;
+        window.setTimeout(function(){suppressLauncherClick=false;},250);
+      }
+      dragStart=null;chatLauncher.style.cursor="grab";
+    });
+    chatLauncher.addEventListener("click",function(event){
+      if(suppressLauncherClick){event.preventDefault();return;}
+      if(chatAuthenticated){
+        if(typeof window.Tawk_API.showWidget==="function")window.Tawk_API.showWidget();
+        if(typeof window.Tawk_API.maximize==="function")window.Tawk_API.maximize();
+      }else showChatPrompt();
+    });
     function showChatPrompt(){
       chatRequested=true;
       if(chatAuthenticated)return;
@@ -2663,7 +2712,10 @@ else{
         }
         chatAuthenticated=true;
         panel.hidden=true;
-        if(chatRequested)window.Tawk_API.maximize();
+         if(chatRequested){
+           if(typeof window.Tawk_API.showWidget==="function")window.Tawk_API.showWidget();
+           window.Tawk_API.maximize();
+         }
       });
     }
     function startWidget(identity){
@@ -2717,12 +2769,22 @@ else{
     window.Tawk_API=window.Tawk_API||{};
     window.Tawk_API.onLoad=function(){
       tawkLoaded=true;
+      if(typeof window.Tawk_API.hideWidget==="function")window.Tawk_API.hideWidget();
       loginTawkIdentity();
     };
     window.Tawk_API.onChatMaximized=function(){
+      chatLauncher.style.display="none";
       if(chatAuthenticated)return;
       if(typeof window.Tawk_API.minimize==="function")window.Tawk_API.minimize();
       showChatPrompt();
+    };
+    window.Tawk_API.onChatMinimized=function(){
+      if(typeof window.Tawk_API.hideWidget==="function")window.Tawk_API.hideWidget();
+      chatLauncher.style.display="grid";
+    };
+    window.Tawk_API.onChatHidden=function(){
+      if(typeof window.Tawk_API.hideWidget==="function")window.Tawk_API.hideWidget();
+      chatLauncher.style.display="grid";
     };
     window.Tawk_LoadStart=new Date();
     var tawkScript=document.createElement("script");
