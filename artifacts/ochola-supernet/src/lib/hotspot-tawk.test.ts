@@ -57,3 +57,13 @@ test("purchase checkout remembers the last tenant-scoped Safaricom number withou
   assert.match(reactPortal, /paymentPhoneStorageKey/);
   assert.match(reactPortal, /Send M-Pesa prompt/);
 });
+
+test("package cards open checkout directly and recovery cards stay compact", () => {
+  assert.doesNotMatch(portal, /Connect Now/);
+  assert.match(portal, /class="plan-card package-shape-[^"]+" data-plan-index=/);
+  assert.match(portal, /querySelectorAll\("\.plan-card\[data-plan-index\]"\)/);
+  assert.match(portal, /id="mpesaMsg" type="text"/);
+  assert.match(portal, /id="voucherSection" style="max-width:560px/);
+  assert.match(reactPortal, /hp-compact-voucher-form/);
+  assert.match(reactPortal, /hp-compact-code-input/);
+});

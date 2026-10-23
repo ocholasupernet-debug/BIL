@@ -2088,26 +2088,26 @@ function HotspotLoginView({
   };
 
   const mpesaReconnectCard = (
-    <div className="hp-glass" style={{ marginTop: 16 }}>
+    <div className="hp-glass hp-compact-portal-card" style={{ margin: "8px auto 0", maxWidth: 520 }}>
       <div className="hp-glass-header">
         <div className="hp-glass-icon" style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
           <Shield size={16} color="var(--isp-accent)" />
         </div>
         <div>
-          <div className="hp-glass-title">Reconnect with M-Pesa</div>
-          <div className="hp-glass-desc">Paste the confirmation or enter its M-Pesa receipt code. We verify the paid transaction and reconnect only its registered device.</div>
+          <div className="hp-glass-title">M-Pesa code</div>
+          <div className="hp-glass-desc">Enter the receipt code to verify and reconnect this device.</div>
         </div>
       </div>
-      <div className="hp-glass-body">
+      <div className="hp-glass-body hp-compact-portal-card-body">
         <form onSubmit={handleMpesaReconnect}>
           <div className="hp-input-group">
               <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation or receipt code</label>
             <textarea
               id="mpesa-reconnect-message"
-              className="hp-input hp-textarea"
-              rows={4}
+              className="hp-input hp-textarea hp-compact-code-input"
+              rows={1}
               maxLength={1000}
-              placeholder="Paste the full message or enter the receipt code"
+              placeholder="M-Pesa receipt code or confirmation SMS"
               value={mpesaMessage}
               onChange={event => { setMpesaMessage(event.target.value); setMpesaReconnectError(""); }}
               onPaste={event => {
@@ -2522,7 +2522,27 @@ function HotspotLoginView({
         }
         .hp-glass-title { font-size: 14px; font-weight: 700; color: #fff; }
         .hp-glass-desc { font-size: 11px; color: rgba(255,255,255,0.4); font-weight: 500; margin-top: 1px; }
-        .hp-glass-body { padding: 20px; }
+         .hp-glass-body { padding: 20px; }
+         .hp-compact-portal-card {
+           max-width: 520px; border-radius: 14px; box-shadow: 0 12px 34px rgba(0,0,0,0.12);
+         }
+         .hp-compact-portal-card .hp-glass-header { padding: 10px 14px; gap: 9px; }
+         .hp-compact-portal-card .hp-glass-icon { width: 30px; height: 30px; border-radius: 9px; }
+         .hp-compact-portal-card .hp-glass-body { padding: 12px 14px; }
+         .hp-compact-portal-card .hp-input-group { margin-bottom: 8px; }
+         .hp-compact-portal-card .hp-label { margin-bottom: 4px; }
+         .hp-compact-portal-card .hp-input { padding: 9px 11px; }
+         .hp-compact-portal-card .hp-btn { min-height: 36px; padding: 8px 12px; }
+         .hp-compact-code-input { height: 40px; min-height: 40px; resize: none; }
+         .hp-compact-voucher-form { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: start; }
+         .hp-compact-voucher-form .hp-input-group { margin: 0; }
+         .hp-compact-voucher-form > p, .hp-compact-voucher-form > .hp-error,
+         .hp-compact-voucher-form > button { grid-column: 1 / -1; }
+         @media (max-width: 560px) {
+           .hp-compact-voucher-form { grid-template-columns: 1fr; }
+           .hp-compact-voucher-form > p, .hp-compact-voucher-form > .hp-error,
+           .hp-compact-voucher-form > button { grid-column: auto; }
+         }
 
          .hp-purchase-hero {
            display: flex; align-items: center; justify-content: space-between; gap: 20px;
@@ -2933,6 +2953,9 @@ function HotspotLoginView({
         .hp-input-left { padding-left: 42px; }
         .hp-input-phone { padding-left: 14px; }
         .hp-textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
+        .hp-compact-portal-card textarea.hp-compact-code-input {
+          height: 40px; min-height: 40px; max-height: 40px; resize: none; line-height: 1.3;
+        }
 
         .hp-btn {
           width: 100%; padding: 14px; border: none; border-radius: 12px;
@@ -3294,7 +3317,7 @@ function HotspotLoginView({
                 <ArrowRight size={15} style={{ transform: "rotate(180deg)" }} /> Back to packages
               </button>
 
-              <div className="hp-glass">
+              <div className="hp-glass hp-compact-portal-card hp-compact-voucher-card">
                 <div className="hp-glass-header">
                   <div className="hp-troubleshoot-dialog-icon" aria-hidden="true"><Wifi size={21} /></div>
                   <div>
@@ -3863,10 +3886,10 @@ function HotspotLoginView({
                   </div>
                   <div>
                     <div className="hp-glass-title">Redeem Voucher</div>
-                    <div className="hp-glass-desc">Enter your phone number and voucher code</div>
+                    <div className="hp-glass-desc">Phone number and voucher code</div>
                   </div>
                 </div>
-                <div className="hp-glass-body">
+                <div className="hp-glass-body hp-compact-portal-card-body">
                   {voucherSuccess ? (
                     <div className="hp-success">
                       <div className="hp-success-icon">
@@ -3917,13 +3940,7 @@ function HotspotLoginView({
                       </button>
                     </div>
                   ) : (
-                    <form onSubmit={handleVoucher}>
-                      <div className="hp-voucher-hint">
-                        <Ticket size={20} color="#fbbf24" style={{ marginBottom: 6 }} />
-                        <p style={{ fontSize: 13, color: "rgba(255,255,255,0.4)", fontWeight: 500 }}>
-                          Enter the phone number for the account and the code from your voucher card
-                        </p>
-                      </div>
+                    <form className="hp-compact-voucher-form" onSubmit={handleVoucher}>
 
                       {voucherError && (
                         <div className="hp-error">
@@ -3964,7 +3981,7 @@ function HotspotLoginView({
           )}
 
           {portalCards.connectionSupport && (
-          <div className="hp-troubleshoot-card" style={{ maxWidth: 840, margin: "14px auto 12px" }}>
+            <div className="hp-troubleshoot-card" style={{ maxWidth: 640, margin: "10px auto" }}>
             <div className="hp-troubleshoot-card-copy">
               <div className="hp-troubleshoot-card-icon" aria-hidden="true"><Wifi size={20} /></div>
               <div>
@@ -3992,7 +4009,7 @@ function HotspotLoginView({
 
           {portalCards.paymentRecovery && (
             !isDanstedLayout && (
-              <div style={{ maxWidth: 840, margin: "0 auto 20px" }}>
+              <div style={{ maxWidth: 520, margin: "0 auto 10px" }}>
                 {mpesaReconnectCard}
               </div>
             )

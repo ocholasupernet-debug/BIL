@@ -59,8 +59,8 @@
     .lbl{display:block;font-size:.7rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.5rem}
 
     .sec-card{max-width:30rem;margin:0 auto;border-radius:1.25rem;overflow:hidden;box-shadow:0 32px 64px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.07)}
-    .sec-head{padding:1.5rem 2rem;border-bottom:1px solid rgba(255,255,255,.07);text-align:center}
-    .sec-body{padding:2rem}
+    .sec-head{padding:.85rem 1rem;border-bottom:1px solid rgba(255,255,255,.07);text-align:center}
+    .sec-body{padding:1rem}
 
     .plan-card{display:flex;flex-direction:column;border-radius:1.125rem;overflow:hidden;cursor:pointer;transition:transform .25s cubic-bezier(.34,1.56,.64,1),box-shadow .25s;box-shadow:0 8px 32px rgba(0,0,0,.4)}
     .plan-card.package-shape-soft-square{border-radius:.625rem!important}
@@ -72,6 +72,8 @@
     .plan-card.package-shape-octagon{clip-path:polygon(15% 0,85% 0,100% 15%,100% 85%,85% 100%,15% 100%,0 85%,0 15%)}
     .plan-card.package-shape-squircle{border-radius:28%!important}
     .plan-card:hover{transform:translateY(-8px) scale(1.025)}
+    .plan-card[aria-disabled="true"]{cursor:not-allowed!important;opacity:.55}
+    .plan-card:focus-visible{outline:3px solid var(--portal-accent);outline-offset:3px}
 
     .wa-btn{position:fixed;bottom:1.5rem;right:1.5rem;z-index:60;width:54px;height:54px;border-radius:50%;background:#25D366;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 24px rgba(37,211,102,.45);transition:transform .2s,box-shadow .2s}
     .wa-btn:hover{transform:scale(1.12);box-shadow:0 10px 32px rgba(37,211,102,.6)}
@@ -323,7 +325,7 @@
   </div>
 </div>
 
-<section id="voucherSection" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 4rem">
+<section id="voucherSection" style="max-width:560px;margin:0 auto;padding:.5rem .75rem 1rem">
   <div class="sec-card" style="background:rgba(255,255,255,.035)">
     <div class="sec-head" style="background:linear-gradient(135deg,rgba(180,83,9,.25),rgba(146,64,14,.25))">
       <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(253,186,116,.65);margin-bottom:.625rem">
@@ -331,11 +333,11 @@
         Voucher Redemption
       </div>
       <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Redeem a Voucher</h3>
-      <p style="color:rgba(253,186,116,.5);font-size:.875rem;margin-top:.375rem">Have a voucher code? Enter it below to get online</p>
+        <p style="color:rgba(253,186,116,.58);font-size:.75rem;margin-top:.25rem">Enter your phone number and voucher code</p>
     </div>
     <div class="sec-body" id="voucherFormWrap">
       <form id="voucherForm" onsubmit="return redeemVoucher(this)" novalidate>
-        <div style="display:flex;flex-direction:column;gap:1.125rem">
+        <div style="display:flex;flex-direction:column;gap:.65rem">
           <div>
             <label class="lbl" for="voucherPhone" style="color:rgba(251,191,36,.75)">Mobile phone number</label>
             <input id="voucherPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="07XXXXXXXX, 01XXXXXXXX, or 254XXXXXXXXX" class="inp inp-amber" aria-label="Mobile phone number for the voucher account" />
@@ -367,7 +369,7 @@
 </section>
 
 <!-- M-Pesa Message -->
-<section id="mpesaReconnectSection" hidden style="max-width:840px;margin:1rem auto 0;padding:0">
+<section id="mpesaReconnectSection" hidden style="max-width:560px;margin:.5rem auto 1rem;padding:0 .75rem">
   <div class="sec-card" style="background:rgba(255,255,255,.035)">
     <div class="sec-head" style="background:linear-gradient(135deg,rgba(6,95,70,.3),rgba(7,89,133,.3))">
       <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(110,231,183,.65);margin-bottom:.625rem">
@@ -375,13 +377,13 @@
         M-Pesa Verification
       </div>
       <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Verify Your M-Pesa Payment</h3>
-      <p style="color:rgba(110,231,183,.5);font-size:.875rem;margin-top:.375rem">Enter the transaction code from your M-Pesa message, or paste the full SMS. We connect only when the saved payment and the router both confirm this device's MAC; unfinished paid setup is completed automatically.</p>
+       <p style="color:rgba(110,231,183,.58);font-size:.75rem;margin-top:.25rem">Enter the M-Pesa code to verify and reconnect this device.</p>
     </div>
     <div class="sec-body" id="mpesaMsgWrap">
       <div style="display:flex;flex-direction:column;gap:1.125rem">
         <div>
           <label class="lbl" style="color:rgba(52,211,153,.8)">M-Pesa receipt / transaction ID</label>
-          <textarea id="mpesaMsg" rows="3" autocomplete="off" placeholder="Type the receipt code (for example ABC1234567) or paste the full confirmation SMS" class="inp inp-green"></textarea>
+          <input id="mpesaMsg" type="text" maxlength="1000" autocomplete="off" placeholder="M-Pesa receipt code or confirmation SMS" class="inp inp-green" />
           <div id="mpesaMsgError" style="display:none;margin-top:.625rem;padding:.7rem .85rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>
         </div>
         <button id="mpesaVerifyBtn" onclick="submitMpesa()" class="btn btn-green btn-full" style="margin-top:.25rem">
@@ -1572,10 +1574,7 @@ function renderPlans(preserveLoadingMarkup){
     var dataAllowance=formatPortalDataAllowance(p);
     var sharedDevices=formatPortalSharedDevices(p.shared_users);
     var checkoutAvailable=canOpenPurchaseModal();
-    var checkoutLabel=checkoutAvailable
-      ?!canStartPaymentCheckout()?"Pay with points":PAYMENT_METHOD_READY?"Connect Now":"Try checkout"
-      :PAYMENT_STATUS_LOADED?"Payment method not configured":"Checking payment…";
-     return '<div class="plan-card package-shape-'+PORTAL_PACKAGE_SHAPE+'" style="border:1px solid '+c.from+'22"'+
+      return '<div class="plan-card package-shape-'+PORTAL_PACKAGE_SHAPE+'" data-plan-index="'+i+'" role="button" aria-label="Select hotspot package" aria-disabled="'+(!checkoutAvailable)+'" tabindex="'+(checkoutAvailable?'0':'-1')+'" style="border:1px solid '+c.from+'22;cursor:'+(checkoutAvailable?'pointer':'not-allowed')+'"'+
       ' onmouseover="this.style.boxShadow=\'0 16px 48px '+c.glow+'30,0 0 0 1px '+c.from+'40\'"'+
       ' onmouseout="this.style.boxShadow=\'0 8px 32px rgba(0,0,0,.4)\'">'+
       '<div style="padding:1.5rem 1rem 1.25rem;text-align:center;flex:1;background:linear-gradient(160deg,'+c.from+'18,'+c.to+'2c);border-top:2px solid '+c.from+'44">'+
@@ -1585,9 +1584,7 @@ function renderPlans(preserveLoadingMarkup){
       '<p style="font-size:.75rem;color:rgba(255,255,255,.5);margin:.625rem 0 0;font-weight:400;line-height:1.4">'+p.validity+' '+p.unit+'</p>'+
       '<p style="font-size:.75rem;color:rgba(255,255,255,.72);margin:.375rem 0 0;font-weight:600;line-height:1.4">'+dataAllowance+'</p>'+
       '<p style="font-size:.75rem;color:rgba(255,255,255,.72);margin:.375rem 0 0;font-weight:600;line-height:1.4">'+sharedDevices+'</p>'+
-      '</div>'+
-        '<button type="button" class="plan-connect-button" data-plan-index="'+i+'" '+(checkoutAvailable?'':'disabled aria-disabled="true"')+' style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:'+(checkoutAvailable?'pointer':'not-allowed')+';opacity:'+(checkoutAvailable?'1':'.55')+';font-family:inherit;transition:opacity .15s" onmouseover="if(!this.disabled)this.style.opacity=\'.88\'" onmouseout="if(!this.disabled)this.style.opacity=\'1\'">'+
-       checkoutLabel+'</button></div>';
+       '</div></div>';
   }).join("");
    bindPlanButtons();
 }
@@ -2158,13 +2155,18 @@ function sendStk(){
 /* Captive-browser-safe plan activation. Some RouterOS/WebView clients
    ignore inline onclick handlers even when the page itself loads normally. */
 function bindPlanButtons(){
-  document.querySelectorAll(".plan-connect-button").forEach(function(button){
-    if(button.getAttribute("data-plan-bound")==="1")return;
-    button.setAttribute("data-plan-bound","1");
-    button.addEventListener("click",function(event){
+   document.querySelectorAll(".plan-card[data-plan-index]").forEach(function(card){
+     if(card.getAttribute("data-plan-bound")==="1")return;
+     card.setAttribute("data-plan-bound","1");
+     function choosePlan(event){
+       if(card.getAttribute("aria-disabled")==="true")return;
       event.preventDefault();
-      openModal(Number(button.getAttribute("data-plan-index")||"0"));
-    });
+       openModal(Number(card.getAttribute("data-plan-index")||"0"));
+     }
+     card.addEventListener("click",choosePlan);
+     card.addEventListener("keydown",function(event){
+       if(event.key==="Enter"||event.key===" "){choosePlan(event);}
+     });
   });
 }
 window.openModal=openModal;
