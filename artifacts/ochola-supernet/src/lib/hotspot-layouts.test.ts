@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   HOSTED_PORTAL_LAYOUT_CSS,
@@ -8,7 +9,7 @@ import {
   renderStaticPortalLayoutCss,
 } from "./hotspot-layouts.js";
 
-test("the portal layout list keeps every existing choice unchanged and appends Dansted WiFi", () => {
+test("the portal layout list keeps every existing choice unchanged and appends Metallic Diamond", () => {
   assert.equal(HOTSPOT_PORTAL_LAYOUTS.length, 8);
   assert.equal(HOTSPOT_PORTAL_LAYOUTS[0].value, "classic");
   assert.deepEqual(
@@ -77,8 +78,8 @@ test("the portal layout list keeps every existing choice unchanged and appends D
   );
   assert.deepEqual(HOTSPOT_PORTAL_LAYOUTS[7], {
     value: "dansted-wifi",
-    label: "Dansted WiFi",
-    description: "A compact metallic portal with centered branding and outlined package tiles.",
+    label: "Metallic Diamond",
+    description: "A compact metallic portal with a diamond texture, centered branding, and outlined package tiles.",
     background: "#151617",
     panel: "#363738",
     accent: "#41d85f",
@@ -120,7 +121,7 @@ test("Night Market normalizes as an optional layout and emits scoped hosted and 
   assert.match(hostedNightMarket, /@media \(max-width:760px\)/);
 });
 
-test("Dansted WiFi emits independently scoped hosted and responsive RouterOS styling", () => {
+test("Metallic Diamond emits independently scoped hosted and responsive RouterOS styling", () => {
   assert.equal(normalizeHotspotPortalLayout("dansted-wifi"), "dansted-wifi");
 
   const staticCss = renderStaticPortalLayoutCss("dansted-wifi");
@@ -131,6 +132,8 @@ test("Dansted WiFi emits independently scoped hosted and responsive RouterOS sty
   assert.match(staticCss, /html\[data-portal-layout="dansted-wifi"\] \.hdr \{ display:none !important; \}/);
   assert.match(staticCss, /#portalHero \{\s*padding:\.2rem/);
   assert.match(staticCss, /#portalTagline ol/);
+  assert.match(staticCss, /#portalHeroTitle \{\s*width:min\(100%,360px\)/);
+  assert.match(staticCss, /#portalTagline \{\s*display:block/);
   assert.match(staticCss, /@media \(max-width:640px\)/);
   assert.doesNotMatch(staticCss, /html\[data-portal-layout="night-market"\]/);
 
@@ -140,6 +143,8 @@ test("Dansted WiFi emits independently scoped hosted and responsive RouterOS sty
   assert.notEqual(hostedDansted, "");
   assert.match(hostedDansted, /repeating-linear-gradient/);
   assert.match(hostedDansted, /\.hp-plan/);
+  assert.match(hostedDansted, /\.hp-title \{\s*display:block/);
+  assert.match(hostedDansted, /\.hp-purchase-instructions \{\s*margin:0 auto/);
   assert.match(hostedDansted, /\[aria-labelledby="hp-loyalty-balance-title"\]/);
   assert.match(HOSTED_PORTAL_LAYOUT_CSS, /\.hp-root\[data-portal-layout="dansted-wifi"\] \.hp-purchase-instructions ol/);
   assert.match(hostedDansted, /@media \(max-width:760px\)/);
@@ -148,4 +153,12 @@ test("Dansted WiFi emits independently scoped hosted and responsive RouterOS sty
     HOSTED_PORTAL_LAYOUT_CSS,
     /\.hp-root\[data-portal-layout="dansted-wifi"\] \.hp-header,\s*\.hp-root\[data-portal-layout="dansted-wifi"\] \.hp-tabs \{ display:none !important; \}/,
   );
+});
+
+test("Metallic Diamond keeps the tenant name and textured background in the generated portal", () => {
+  const template = readFileSync(new URL("../../public/hotspot/login.html", import.meta.url), "utf8");
+  assert.match(template, /var isMetallicDiamond=document\.documentElement\.getAttribute\("data-portal-layout"\)==="dansted-wifi"/);
+  assert.match(template, /setPortalText\("portalHeroTitle",isMetallicDiamond\?name:"Connect with "\+name\)/);
+  assert.match(template, /if\(!isMetallicDiamond\)setPortalText\("portalTagline"/);
+  assert.match(template, /background-attachment","fixed","important"/);
 });

@@ -3931,11 +3931,13 @@ function HotspotLoginView({
             <div className="hp-troubleshoot-card-copy">
               <div className="hp-troubleshoot-card-icon" aria-hidden="true"><Wifi size={20} /></div>
               <div>
-                <div className="hp-troubleshoot-eyebrow">Connection support</div>
-                <h3>Having trouble connecting?</h3>
+                <div className="hp-troubleshoot-eyebrow">{isDanstedLayout ? "Reconnect account" : "Connection support"}</div>
+                <h3>{isDanstedLayout ? "Reconnect your account" : "Having trouble connecting?"}</h3>
                 <p>{loginSession?.status === "active" && !loginSession.connected
                   ? "Your package is active, but the router has not confirmed sign-in. Tap below to retry."
-                  : "We’ll check your package and attempt sign-in automatically. If the router does not confirm it, you can retry."}</p>
+                  : isDanstedLayout
+                    ? "Already paid? We’ll check your package and retry the router sign-in."
+                    : "We’ll check your package and attempt sign-in automatically. If the router does not confirm it, you can retry."}</p>
               </div>
             </div>
             <button
@@ -3946,7 +3948,7 @@ function HotspotLoginView({
               aria-expanded={troubleshootDialogOpen}
               onClick={() => setTroubleshootDialogOpen(true)}
             >
-              <Wifi size={15} /> {loginSession?.status === "active" && !loginSession.connected ? "Retry sign-in" : "Troubleshoot connection"} <ArrowRight size={15} />
+              <Wifi size={15} /> {loginSession?.status === "active" && !loginSession.connected ? "Retry sign-in" : isDanstedLayout ? "Reconnect" : "Troubleshoot connection"} <ArrowRight size={15} />
             </button>
           </div>
           )}

@@ -57,8 +57,8 @@ export const HOTSPOT_PORTAL_LAYOUTS = [
   },
   {
     value: "dansted-wifi",
-    label: "Dansted WiFi",
-    description: "A compact metallic portal with centered branding and outlined package tiles.",
+    label: "Metallic Diamond",
+    description: "A compact metallic portal with a diamond texture, centered branding, and outlined package tiles.",
     background: "#151617",
     panel: "#363738",
     accent: "#41d85f",
@@ -681,31 +681,46 @@ const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
     html[data-portal-layout="dansted-wifi"] #portalHero > div > div:nth-child(2) { display:none !important; }
     html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up {
       max-width:720px !important;
-      padding:8px 12px 10px !important;
-      border:1px solid rgba(255,255,255,.12);
-      border-radius:9px;
-      background:rgba(75,76,77,.62);
-      box-shadow:0 8px 24px rgba(0,0,0,.18);
+      padding:0 !important;
+      border:0;
+      border-radius:0;
+      background:transparent;
+      box-shadow:none;
     }
     html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up > div:first-child,
-    html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up > div:nth-child(3) { display:none !important; }
+    html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up > div:nth-child(3),
+    html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up > div:last-child { display:none !important; }
     html[data-portal-layout="dansted-wifi"] #portalHeroTitle {
-      margin:0 auto .45rem !important;
+      width:min(100%,360px);
+      margin:0 auto .55rem !important;
+      padding:4px 8px !important;
       color:#38d856 !important;
       -webkit-text-fill-color:#38d856 !important;
-      background:none !important;
-      font-size:clamp(1.3rem,4vw,1.8rem) !important;
+      border:1px solid rgba(255,255,255,.13);
+      border-radius:7px;
+      background:rgba(77,78,79,.78) !important;
+      box-shadow:0 5px 18px rgba(0,0,0,.16);
+      font-size:clamp(1rem,4vw,1.5rem) !important;
       font-weight:800 !important;
       letter-spacing:-.035em !important;
       text-transform:uppercase;
       line-height:1.2 !important;
+      overflow-wrap:anywhere;
     }
     html[data-portal-layout="dansted-wifi"] #portalTagline {
+      display:block;
+      width:100%;
       max-width:none !important;
       margin:0 auto !important;
+      padding:10px 12px !important;
       color:#f5f5f5 !important;
+      border:1px solid rgba(255,255,255,.16);
+      border-radius:9px;
+      background:rgba(77,78,79,.8);
+      box-shadow:0 8px 20px rgba(0,0,0,.2);
       font-size:.84rem !important;
       line-height:1.5 !important;
+      text-align:left !important;
     }
     html[data-portal-layout="dansted-wifi"] #portalTagline > strong {
       display:block;
@@ -735,6 +750,11 @@ const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
       max-width:900px !important;
       margin:0 auto !important;
       padding:.25rem 1rem 2rem !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #portalRecoveryCards {
+      max-width:720px !important;
+      margin:1.2rem auto 0 !important;
+      padding:0 1rem 1.25rem !important;
     }
     html[data-portal-layout="dansted-wifi"] #plansSection > div:first-child {
       margin-bottom:.7rem !important;
@@ -767,6 +787,7 @@ const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
     html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card {
       flex:0 1 126px !important;
       min-width:112px !important;
+      min-height:100px;
       color:#191919 !important;
       border:2px solid #3c8dff !important;
       border-radius:0 !important;
@@ -791,6 +812,28 @@ const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
       color:#208d42 !important;
       -webkit-text-fill-color:#208d42 !important;
       background:transparent !important;
+      padding:0 !important;
+      margin:0 0 .2rem !important;
+      border-radius:0 !important;
+      font-size:.72rem !important;
+      letter-spacing:0 !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child > div {
+      color:#c9343e !important;
+      -webkit-text-fill-color:#c9343e !important;
+      font-size:1rem !important;
+      line-height:1.1 !important;
+      letter-spacing:0 !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child > div span {
+      color:#c9343e !important;
+      -webkit-text-fill-color:#c9343e !important;
+      font-size:.65rem !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child p {
+      margin:.15rem 0 0 !important;
+      font-size:.56rem !important;
+      line-height:1.2 !important;
     }
     html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:last-child {
       padding:5px 7px 9px !important;
@@ -802,6 +845,10 @@ const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
       color:#fff !important;
       background:linear-gradient(100deg,#ed2f25,#baf03d) !important;
       border:0 !important;
+      padding:5px 2px !important;
+      font-size:.56rem !important;
+      line-height:1.15 !important;
+      white-space:nowrap;
     }
     html[data-portal-layout="dansted-wifi"] .sec-card {
       color:#f5f5f5 !important;
@@ -851,13 +898,14 @@ const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
       html[data-portal-layout="dansted-wifi"] body { padding:0 !important; }
       html[data-portal-layout="dansted-wifi"] .hdr-inner { padding:0 .8rem !important; }
       html[data-portal-layout="dansted-wifi"] #portalHero { padding:.75rem .65rem .45rem !important; }
-      html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up { padding:8px 9px !important; }
+      html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up { padding:0 !important; }
       html[data-portal-layout="dansted-wifi"] body > .hdr + section { margin:.4rem .65rem .7rem !important; }
-      html[data-portal-layout="dansted-wifi"] #plansSection { padding:.2rem .65rem 1.5rem !important; }
+      html[data-portal-layout="dansted-wifi"] #plansSection { margin-top:.9rem !important; padding:.2rem .65rem 1.5rem !important; }
       html[data-portal-layout="dansted-wifi"] #plansGrid { gap:8px !important; }
-      html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card { flex-basis:calc(25% - 8px) !important; min-width:78px !important; }
-      html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child { padding:8px 4px 4px !important; }
+      html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card { flex-basis:calc(25% - 8px) !important; min-width:78px !important; min-height:100px; }
+      html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child { padding:7px 4px 4px !important; }
       html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:last-child { padding:4px 4px 7px !important; }
+      html[data-portal-layout="dansted-wifi"] #portalRecoveryCards { margin-top:1.2rem !important; }
     }
   `,
 };
@@ -1392,13 +1440,13 @@ export const HOSTED_PORTAL_LAYOUT_CSS = `
   .hp-root[data-portal-layout="dansted-wifi"] .hp-main { max-width:900px; }
   .hp-root[data-portal-layout="dansted-wifi"] .hp-hero {
     max-width:720px;
-    margin:0 auto 10px;
-    padding:12px 14px;
-    border:1px solid rgba(255,255,255,.14);
-    border-radius:9px;
-    background:rgba(76,77,78,.72);
-    box-shadow:0 8px 24px rgba(0,0,0,.2);
-    backdrop-filter:blur(7px);
+    margin:0 auto 12px;
+    padding:0;
+    border:0;
+    border-radius:0;
+    background:transparent;
+    box-shadow:none;
+    backdrop-filter:none;
   }
   .hp-root[data-portal-layout="dansted-wifi"] .hp-wifi-wrap,
   .hp-root[data-portal-layout="dansted-wifi"] .hp-badges,
@@ -1406,10 +1454,18 @@ export const HOSTED_PORTAL_LAYOUT_CSS = `
   .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-icon,
   .hp-root[data-portal-layout="dansted-wifi"] .hp-trust-row { display:none; }
   .hp-root[data-portal-layout="dansted-wifi"] .hp-title {
+    display:block;
+    width:min(100%,360px);
+    margin:0 auto 9px;
+    padding:4px 8px;
     color:#38d856;
-    background:none;
+    border:1px solid rgba(255,255,255,.13);
+    border-radius:7px;
+    background:rgba(77,78,79,.78);
+    box-shadow:0 5px 18px rgba(0,0,0,.16);
     -webkit-text-fill-color:#38d856;
-    font-size:clamp(1.3rem,4vw,1.8rem);
+    font-size:clamp(1rem,4vw,1.5rem);
+    overflow-wrap:anywhere;
     font-weight:800;
     letter-spacing:-.035em;
     line-height:1.2;
@@ -1424,6 +1480,14 @@ export const HOSTED_PORTAL_LAYOUT_CSS = `
   }
   .hp-root[data-portal-layout="dansted-wifi"] .hp-main { padding:0 12px 24px; }
   .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-instructions { text-align:left; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-instructions {
+    margin:0 auto;
+    padding:10px 12px;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:9px;
+    background:rgba(77,78,79,.8);
+    box-shadow:0 8px 20px rgba(0,0,0,.2);
+  }
   .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-instructions > strong {
     display:block;
     margin-bottom:6px;
@@ -1578,7 +1642,7 @@ export const HOSTED_PORTAL_LAYOUT_CSS = `
     .hp-root[data-portal-layout="night-market"] .hp-plans-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .hp-root[data-portal-layout="night-market"] .hp-plan { min-height:118px; padding:10px 8px; }
     .hp-root[data-portal-layout="dansted-wifi"] .hp-main { padding-inline:0; }
-    .hp-root[data-portal-layout="dansted-wifi"] .hp-hero { margin:10px 12px 8px; padding:10px 9px; }
+    .hp-root[data-portal-layout="dansted-wifi"] .hp-hero { margin:8px 12px 12px; padding:0; }
     .hp-root[data-portal-layout="dansted-wifi"] .hp-plans-grid { gap:8px; }
     .hp-root[data-portal-layout="dansted-wifi"] .hp-plan {
       flex-basis:calc(25% - 8px);

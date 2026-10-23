@@ -1153,6 +1153,11 @@ function applyPortalBackground(value){
   };
   PORTAL_BACKGROUND=normalisePortalBackground(value);
   document.body.setAttribute("data-portal-background",PORTAL_BACKGROUND);
+  if(document.documentElement.getAttribute("data-portal-layout")==="dansted-wifi"){
+    document.body.style.setProperty("background","linear-gradient(63deg,transparent 0 34%,rgba(255,255,255,.15) 35%,rgba(255,255,255,.025) 40%,transparent 47%),linear-gradient(112deg,transparent 0 54%,rgba(255,255,255,.12) 55%,rgba(255,255,255,.02) 60%,transparent 67%),repeating-linear-gradient(45deg,#252627 0 3px,#101112 3px 7px),repeating-linear-gradient(-45deg,rgba(255,255,255,.13) 0 2px,transparent 2px 7px),#151617","important");
+    document.body.style.setProperty("background-attachment","fixed","important");
+    return;
+  }
   document.body.style.setProperty("background",backgrounds[PORTAL_BACKGROUND],"important");
 }
 function normalisePlanList(value){
@@ -1254,8 +1259,9 @@ function applyPortalConfig(data){
    var isPlatformName=configuredName.toLowerCase().replace(/[^a-z0-9]/g,"")==="ocholasupernet";
     var name=configuredName&&!isPlatformName?configuredName:"OcholaSupernet";
   setPortalText("portalNameHeader",name);setPortalText("portalNameFooter",name);
-  setPortalText("portalHeroTitle","Connect with "+name);
-  setPortalText("portalTagline",typeof data.tagline==="string"?data.tagline:"");
+   var isMetallicDiamond=document.documentElement.getAttribute("data-portal-layout")==="dansted-wifi";
+   setPortalText("portalHeroTitle",isMetallicDiamond?name:"Connect with "+name);
+   if(!isMetallicDiamond)setPortalText("portalTagline",typeof data.tagline==="string"?data.tagline:"");
   document.title=name+" — Hotspot Portal";
   var supportPhone=typeof data.supportPhone==="string"?data.supportPhone.trim():"";
   var phoneHref=supportPhone.replace(/[^\d+]/g,"");
