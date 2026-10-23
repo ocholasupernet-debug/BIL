@@ -47,6 +47,14 @@ export const HOTSPOT_PORTAL_LAYOUTS = [
     panel: "#102a1c",
     accent: "#4ade80",
   },
+  {
+    value: "night-market",
+    label: "Night Market",
+    description: "A textured dark portal with bright green branding and compact outlined packages.",
+    background: "#101112",
+    panel: "#292b2c",
+    accent: "#39e75f",
+  },
 ] as const;
 
 export type HotspotPortalLayout = (typeof HOTSPOT_PORTAL_LAYOUTS)[number]["value"];
@@ -520,6 +528,116 @@ const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
       background: linear-gradient(135deg,#16a34a,#0f766e) !important;
     }
   `,
+  "night-market": `
+    html[data-portal-layout="night-market"] body {
+      color: #f4f6f3 !important;
+      background-color: #111314 !important;
+      background-image:
+        radial-gradient(ellipse at 50% 5%,rgba(255,255,255,.13),transparent 44%),
+        repeating-linear-gradient(45deg,rgba(255,255,255,.045) 0 2px,transparent 2px 8px),
+        repeating-linear-gradient(-45deg,rgba(0,0,0,.18) 0 2px,transparent 2px 8px) !important;
+      background-attachment: fixed !important;
+      font-family: "DM Sans","Trebuchet MS",sans-serif !important;
+    }
+    html[data-portal-layout="night-market"] .hdr {
+      color: #f4f6f3 !important;
+      background: rgba(18,19,20,.9) !important;
+      border-bottom: 1px solid rgba(255,255,255,.12) !important;
+      backdrop-filter: blur(14px);
+    }
+    html[data-portal-layout="night-market"] #portalNameHeader,
+    html[data-portal-layout="night-market"] #portalNameFooter,
+    html[data-portal-layout="night-market"] #portalHeroTitle,
+    html[data-portal-layout="night-market"] #plansSection h2 {
+      color: #39e75f !important;
+      -webkit-text-fill-color: #39e75f !important;
+      background: none !important;
+      text-shadow: 0 2px 18px rgba(57,231,95,.15);
+    }
+    html[data-portal-layout="night-market"] #portalHeroTitle {
+      font-size: clamp(2rem,5vw,3.5rem) !important;
+      letter-spacing: -.045em !important;
+    }
+    html[data-portal-layout="night-market"] #portalTagline,
+    html[data-portal-layout="night-market"] #plansSection > div:first-child > p,
+    html[data-portal-layout="night-market"] #portalHero > div > div:first-child {
+      color: rgba(255,255,255,.76) !important;
+    }
+    html[data-portal-layout="night-market"] body > .hdr + section,
+    html[data-portal-layout="night-market"] .sec-card,
+    html[data-portal-layout="night-market"] #plansGrid .plan-card {
+      color: #f5f6f5 !important;
+      border: 1px solid rgba(255,255,255,.22) !important;
+      border-radius: 12px !important;
+      background: rgba(47,49,50,.78) !important;
+      box-shadow: 0 12px 30px rgba(0,0,0,.28) !important;
+      backdrop-filter: blur(10px);
+    }
+    html[data-portal-layout="night-market"] #portalHero {
+      padding: 1.25rem !important;
+    }
+    html[data-portal-layout="night-market"] #portalHero > div[style*="radial-gradient"],
+    html[data-portal-layout="night-market"] #portalHero .grid-bg { opacity: .18 !important; }
+    html[data-portal-layout="night-market"] .sec-head,
+    html[data-portal-layout="night-market"] #plansGrid .plan-card > div:first-child {
+      color: #fff !important;
+      background: rgba(255,255,255,.08) !important;
+      border-bottom-color: rgba(255,255,255,.16) !important;
+      border-top-color: #39e75f !important;
+    }
+    html[data-portal-layout="night-market"] .sec-head *,
+    html[data-portal-layout="night-market"] .sec-body,
+    html[data-portal-layout="night-market"] .sec-body *,
+    html[data-portal-layout="night-market"] #plansGrid .plan-card > div:first-child * {
+      color: #f5f6f5 !important;
+      -webkit-text-fill-color: #f5f6f5 !important;
+    }
+    html[data-portal-layout="night-market"] #plansGrid .plan-card {
+      border: 2px solid #39e75f !important;
+      border-radius: 3px !important;
+      background: rgba(27,29,30,.88) !important;
+    }
+    html[data-portal-layout="night-market"] #plansGrid {
+      grid-template-columns: repeat(auto-fit,minmax(118px,1fr)) !important;
+      gap: .7rem !important;
+    }
+    html[data-portal-layout="night-market"] #plansGrid .plan-card {
+      min-width: 0;
+    }
+    html[data-portal-layout="night-market"] #plansGrid .plan-card > div:first-child > span {
+      color: #39e75f !important;
+      -webkit-text-fill-color: #39e75f !important;
+      background: rgba(57,231,95,.12) !important;
+    }
+    html[data-portal-layout="night-market"] .inp {
+      color: #f5f6f5 !important;
+      background: rgba(18,19,20,.82) !important;
+      border-color: #39e75f !important;
+    }
+    html[data-portal-layout="night-market"] .inp::placeholder { color: rgba(255,255,255,.58) !important; }
+    html[data-portal-layout="night-market"] .plan-connect-button,
+    html[data-portal-layout="night-market"] .sec-body .btn,
+    html[data-portal-layout="night-market"] .sec-body button {
+      color: #111 !important;
+      background: linear-gradient(100deg,#f04432,#b8f64a) !important;
+      border-color: #39e75f !important;
+    }
+    html[data-portal-layout="night-market"] #portalFooter {
+      color: rgba(255,255,255,.7) !important;
+      background: rgba(25,26,27,.76) !important;
+      border-top-color: rgba(255,255,255,.14) !important;
+    }
+    html[data-portal-layout="night-market"] #portalFooter * { color: rgba(255,255,255,.7) !important; }
+    @media (max-width: 640px) {
+      html[data-portal-layout="night-market"] body { padding: 0 !important; }
+      html[data-portal-layout="night-market"] body > .hdr + section {
+        margin: .75rem !important;
+        padding: 1.5rem .9rem !important;
+      }
+      html[data-portal-layout="night-market"] #plansSection { padding-inline: .75rem !important; }
+      html[data-portal-layout="night-market"] #plansGrid { gap: .65rem !important; }
+    }
+  `,
 };
 
 export const STATIC_PORTAL_LAYOUT_CSS_TEXT = Object.values(STATIC_PORTAL_LAYOUT_CSS).join("\n");
@@ -884,6 +1002,131 @@ export const HOSTED_PORTAL_LAYOUT_CSS = `
     border-radius:22px;
     background:rgba(8,35,20,.94);
   }
+  .hp-root[data-portal-layout="night-market"] {
+    color:#f4f5f3;
+    background-color:#111314;
+    background-image:
+      radial-gradient(ellipse at 50% 4%,rgba(255,255,255,.16),transparent 42%),
+      repeating-linear-gradient(45deg,rgba(255,255,255,.045) 0 2px,transparent 2px 8px),
+      repeating-linear-gradient(-45deg,rgba(0,0,0,.18) 0 2px,transparent 2px 8px);
+    background-attachment:fixed;
+    font-family:"DM Sans","Trebuchet MS",sans-serif;
+    --isp-accent:#39e75f !important;
+    --isp-accent-glow:rgba(57,231,95,.15) !important;
+    --isp-accent-border:rgba(57,231,95,.55) !important;
+    --isp-accent-strong:#39e75f !important;
+  }
+  .hp-root[data-portal-layout="night-market"]::before {
+    opacity:.16;
+    background-image:radial-gradient(rgba(255,255,255,.55) .8px,transparent .8px);
+    background-size:15px 15px;
+    mask-image:linear-gradient(to bottom,black,transparent 88%);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-header {
+    color:#f4f5f3;
+    background:rgba(18,19,20,.88);
+    border-bottom:1px solid rgba(255,255,255,.13);
+    box-shadow:0 8px 26px rgba(0,0,0,.22);
+    backdrop-filter:blur(14px);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-brand-name,
+  .hp-root[data-portal-layout="night-market"] .hp-title { color:#39e75f; }
+  .hp-root[data-portal-layout="night-market"] .hp-title {
+    background:none;
+    -webkit-text-fill-color:#39e75f;
+    letter-spacing:-.045em;
+    font-size:clamp(2rem,5vw,3.4rem);
+    text-shadow:0 2px 20px rgba(57,231,95,.17);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-logo-sub,
+  .hp-root[data-portal-layout="night-market"] .hp-subtitle,
+  .hp-root[data-portal-layout="night-market"] .hp-badge { color:rgba(255,255,255,.76); }
+  .hp-root[data-portal-layout="night-market"] .hp-status {
+    color:#8df6a2;background:rgba(57,231,95,.1);border-color:rgba(57,231,95,.28);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-status-dot { background:#39e75f; }
+  .hp-root[data-portal-layout="night-market"] .hp-main { max-width:1080px; }
+  .hp-root[data-portal-layout="night-market"] .hp-hero {
+    margin:18px auto 14px;
+    padding:18px 16px;
+    border:1px solid rgba(255,255,255,.23);
+    border-radius:12px;
+    background:rgba(55,57,58,.72);
+    box-shadow:0 12px 30px rgba(0,0,0,.25);
+    backdrop-filter:blur(10px);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-glass,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-card {
+    color:#f5f6f5;
+    border:1px solid rgba(255,255,255,.23);
+    border-radius:10px;
+    background:rgba(45,47,48,.8);
+    box-shadow:0 12px 30px rgba(0,0,0,.27);
+    backdrop-filter:blur(10px);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-glass-header { border-bottom-color:rgba(255,255,255,.15); }
+  .hp-root[data-portal-layout="night-market"] .hp-glass-title,
+  .hp-root[data-portal-layout="night-market"] .hp-glass-desc,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-title,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-meta { color:#f4f5f3; }
+  .hp-root[data-portal-layout="night-market"] .hp-purchase-hero {
+    color:#f5f6f5;background:rgba(255,255,255,.09);border-color:rgba(255,255,255,.2);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-purchase-title,
+  .hp-root[data-portal-layout="night-market"] .hp-purchase-copy { color:#f4f5f3; }
+  .hp-root[data-portal-layout="night-market"] .hp-trust-item {
+    color:rgba(255,255,255,.84);background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-plan {
+    min-height:128px;
+    padding:12px 11px;
+    color:#f4f5f3;
+    border:2px solid #39e75f;
+    border-radius:3px;
+    background:rgba(27,29,30,.9);
+    box-shadow:0 8px 20px rgba(0,0,0,.24);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-plans-grid {
+    grid-template-columns:repeat(auto-fit,minmax(126px,1fr));
+    gap:10px;
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-plans-grid.has-expanded { grid-template-columns:1fr; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-top { padding:11px 10px 0; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-body { padding:6px 10px 11px; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan:hover { border-color:#b8f64a; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-name { color:#7cf394; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-price { color:#ff6b63; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-price span,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-meta-row,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-action { color:rgba(255,255,255,.8); }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-action,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-pay { border-top-color:rgba(255,255,255,.18); }
+  .hp-root[data-portal-layout="night-market"] .hp-input,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-input,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-select {
+    color:#f5f6f5;background:rgba(18,19,20,.82);border-color:#39e75f;
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-input::placeholder,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-input::placeholder { color:rgba(255,255,255,.58); }
+  .hp-root[data-portal-layout="night-market"] .hp-label,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-label { color:rgba(255,255,255,.8); }
+  .hp-root[data-portal-layout="night-market"] .hp-btn {
+    color:#151715;background:linear-gradient(100deg,#f04432,#b8f64a);border-color:#39e75f;
+    box-shadow:0 7px 18px rgba(0,0,0,.2);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-btn:hover:not(:disabled) { filter:brightness(1.08); }
+  .hp-root[data-portal-layout="night-market"] .hp-troubleshoot-dialog,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-modal,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-success-card {
+    color:#f4f5f3;background:#252728;border-color:rgba(255,255,255,.2);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-troubleshoot-dialog-title,
+  .hp-root[data-portal-layout="night-market"] .hp-troubleshoot-dialog-description,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-modal-head h3,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-modal-head p,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-device-row strong,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-save-device strong { color:#f4f5f3; }
+  .hp-root[data-portal-layout="night-market"] .hp-footer { color:rgba(255,255,255,.68); }
   @media (max-width:760px) {
     .hp-root[data-portal-layout="classic"] .hp-main.has-hero {
       display:flex;
@@ -904,5 +1147,11 @@ export const HOSTED_PORTAL_LAYOUT_CSS = `
       width:100%;
     }
     .hp-root[data-portal-layout="split-horizon"] .hp-main > :not(.hp-hero) { width:100%; }
+  }
+  @media (max-width:760px) {
+    .hp-root[data-portal-layout="night-market"] .hp-hero { margin:12px 12px 10px; padding:16px 13px; }
+    .hp-root[data-portal-layout="night-market"] .hp-main { padding-inline:12px; }
+    .hp-root[data-portal-layout="night-market"] .hp-plans-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .hp-root[data-portal-layout="night-market"] .hp-plan { min-height:118px; padding:10px 8px; }
   }
 `;
