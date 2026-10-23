@@ -8,8 +8,8 @@ import {
   renderStaticPortalLayoutCss,
 } from "./hotspot-layouts.js";
 
-test("the portal layout list keeps all existing choices and appends Night Market", () => {
-  assert.equal(HOTSPOT_PORTAL_LAYOUTS.length, 7);
+test("the portal layout list keeps every existing choice unchanged and appends Dansted WiFi", () => {
+  assert.equal(HOTSPOT_PORTAL_LAYOUTS.length, 8);
   assert.equal(HOTSPOT_PORTAL_LAYOUTS[0].value, "classic");
   assert.deepEqual(
     HOTSPOT_PORTAL_LAYOUTS.slice(0, 6),
@@ -75,6 +75,14 @@ test("the portal layout list keeps all existing choices and appends Night Market
       accent: "#39e75f",
     },
   );
+  assert.deepEqual(HOTSPOT_PORTAL_LAYOUTS[7], {
+    value: "dansted-wifi",
+    label: "Dansted WiFi",
+    description: "A compact metallic portal with centered branding and outlined package tiles.",
+    background: "#151617",
+    panel: "#363738",
+    accent: "#41d85f",
+  });
 });
 
 test("unknown or legacy layout values fall back to the existing Classic design", () => {
@@ -110,4 +118,34 @@ test("Night Market normalizes as an optional layout and emits scoped hosted and 
   assert.match(hostedNightMarket, /\.hp-plan/);
   assert.match(hostedNightMarket, /\.hp-btn/);
   assert.match(hostedNightMarket, /@media \(max-width:760px\)/);
+});
+
+test("Dansted WiFi emits independently scoped hosted and responsive RouterOS styling", () => {
+  assert.equal(normalizeHotspotPortalLayout("dansted-wifi"), "dansted-wifi");
+
+  const staticCss = renderStaticPortalLayoutCss("dansted-wifi");
+  assert.match(staticCss, /html\[data-portal-layout="dansted-wifi"\]/);
+  assert.match(staticCss, /repeating-linear-gradient/);
+  assert.match(staticCss, /#plansGrid/);
+  assert.match(staticCss, /#loyaltyPointsCard/);
+  assert.match(staticCss, /html\[data-portal-layout="dansted-wifi"\] \.hdr \{ display:none !important; \}/);
+  assert.match(staticCss, /#portalHero \{\s*padding:\.2rem/);
+  assert.match(staticCss, /#portalTagline ol/);
+  assert.match(staticCss, /@media \(max-width:640px\)/);
+  assert.doesNotMatch(staticCss, /html\[data-portal-layout="night-market"\]/);
+
+  const hostedDansted = HOSTED_PORTAL_LAYOUT_CSS.split(
+    '.hp-root[data-portal-layout="dansted-wifi"]',
+  ).slice(1).join("");
+  assert.notEqual(hostedDansted, "");
+  assert.match(hostedDansted, /repeating-linear-gradient/);
+  assert.match(hostedDansted, /\.hp-plan/);
+  assert.match(hostedDansted, /\[aria-labelledby="hp-loyalty-balance-title"\]/);
+  assert.match(HOSTED_PORTAL_LAYOUT_CSS, /\.hp-root\[data-portal-layout="dansted-wifi"\] \.hp-purchase-instructions ol/);
+  assert.match(hostedDansted, /@media \(max-width:760px\)/);
+  assert.match(HOSTED_PORTAL_LAYOUT_CSS, /\.hp-root\[data-portal-layout="dansted-wifi"\] \.hp-plan/);
+  assert.match(
+    HOSTED_PORTAL_LAYOUT_CSS,
+    /\.hp-root\[data-portal-layout="dansted-wifi"\] \.hp-header,\s*\.hp-root\[data-portal-layout="dansted-wifi"\] \.hp-tabs \{ display:none !important; \}/,
+  );
 });

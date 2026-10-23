@@ -631,7 +631,10 @@ export async function buildPortalHtml(
   };
   const config = makeExportConfig(exportSettings, adminId, appearance.apiBase, plans, appearance, scope.portId, scope.previewOnly === true);
   const layoutCss = renderStaticPortalLayoutCss(config.portalLayout);
-  const bootstrap = `${layoutCss ? `<style id="hotspot-portal-layout">${layoutCss}</style>` : ""}<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};document.documentElement.setAttribute("data-portal-layout",window.__HOTSPOT_CONFIG__.portalLayout);</script>`;
+  const danstedBrandPlacement = config.portalLayout === "dansted-wifi"
+    ? `window.addEventListener("DOMContentLoaded",()=>{const config=window.__HOTSPOT_CONFIG__;const title=document.getElementById("portalHeroTitle");if(title)title.textContent=config.ispName;const previous=document.getElementById("portalTagline");if(previous){const instructions=document.createElement("div");instructions.id=previous.id;instructions.className=previous.className;instructions.style.cssText=previous.style.cssText;const heading=document.createElement("strong");heading.textContent="How To Purchase:-";instructions.appendChild(heading);const steps=document.createElement("ol");["1. Tap on your preferred package.","2. Enter your phone number.","3. Click PAY NOW.","4. Enter your M-Pesa PIN, wait for 30sec for M-Pesa authentication."].forEach(text=>{const step=document.createElement("li");step.textContent=text;steps.appendChild(step);});instructions.appendChild(steps);if(config.supportPhone){const contact=document.createElement("p");contact.textContent="CUSTOMER CARE CONTACT "+config.supportPhone;instructions.appendChild(contact);}previous.replaceWith(instructions);}});`
+    : "";
+  const bootstrap = `${layoutCss ? `<style id="hotspot-portal-layout">${layoutCss}</style>` : ""}<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};document.documentElement.setAttribute("data-portal-layout",window.__HOTSPOT_CONFIG__.portalLayout);${danstedBrandPlacement}</script>`;
   const configuredTitle = escapeHtml(config.ispName);
   return template
     .replace("</head>", `${bootstrap}\n</head>`)
