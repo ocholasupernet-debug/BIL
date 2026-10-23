@@ -3152,71 +3152,83 @@ function HotspotLoginView({
             .hp-troubleshoot-modal-action:hover:not(:disabled) { transform: none; }
           }
       ${HOSTED_PORTAL_LAYOUT_CSS}
-      /* Keep checkout, TV setup, and reconnect screens in the portal's clean brand palette. */
+      /* Dark, high-contrast utility panels match the captive portal and keep labels readable. */
       .hp-modal-backdrop, .hp-troubleshoot-overlay {
-        background: rgba(23, 53, 47, .34) !important; backdrop-filter: blur(7px) !important;
+        background: rgba(4, 8, 14, .78) !important; backdrop-filter: blur(8px) !important;
       }
       .hp-tv-modal, .hp-troubleshoot-dialog {
-        color: #173c38 !important; background: #fff !important;
-        border: 1px solid #dce8e3 !important; border-radius: 20px !important;
-        box-shadow: 0 24px 70px rgba(25, 54, 47, .22) !important;
+        color: #f4f7f6 !important; background: linear-gradient(160deg, #1c1a25, #11151d) !important;
+        border: 1px solid rgba(255,255,255,.15) !important; border-radius: 18px !important;
+        box-shadow: 0 24px 70px rgba(0,0,0,.58) !important;
       }
       .hp-troubleshoot-dialog-ambient { display: none !important; }
-      .hp-troubleshoot-dialog-inner { padding: 20px !important; }
-      .hp-troubleshoot-dialog-head { margin-bottom: 14px !important; }
-      .hp-troubleshoot-dialog-icon { color: var(--isp-accent) !important; background: #f8f2ee !important; border-color: #f1ded5 !important; }
+      .hp-troubleshoot-dialog-inner { padding: 16px !important; }
+      .hp-troubleshoot-dialog-head { margin-bottom: 12px !important; }
+      .hp-troubleshoot-dialog-icon { color: var(--isp-accent) !important; background: rgba(255,255,255,.08) !important; border-color: rgba(255,255,255,.16) !important; }
       .hp-troubleshoot-dialog-kicker { color: var(--isp-accent) !important; }
-      .hp-troubleshoot-dialog-title, .hp-tv-modal-head h3 { color: #173c38 !important; }
-      .hp-troubleshoot-dialog-description, .hp-tv-modal-head p { color: #667b74 !important; }
+      .hp-troubleshoot-dialog-title, .hp-tv-modal-head h3 { color: #fff !important; }
+      .hp-troubleshoot-dialog-description, .hp-tv-modal-head p { color: #d0d9dc !important; }
       .hp-troubleshoot-close, .hp-tv-modal-close {
-        color: #536b63 !important; background: #f5f8f6 !important; border: 1px solid #e3ece7 !important;
+        color: #f1f5f5 !important; background: rgba(255,255,255,.08) !important; border: 1px solid rgba(255,255,255,.16) !important;
       }
       .hp-troubleshoot-device, .hp-troubleshoot-status, .hp-troubleshoot-session-meta > div,
       .hp-troubleshoot-note, .hp-troubleshoot-loading, .hp-tv-device-row, .hp-tv-save-device {
-        color: #435b53 !important; background: #f7faf8 !important; border-color: #e3ece7 !important;
+        color: #e8efee !important; background: #202832 !important; border-color: #3b4651 !important;
       }
-      .hp-troubleshoot-device-label, .hp-troubleshoot-session-meta span { color: #74867f !important; }
+      .hp-troubleshoot-device-label, .hp-troubleshoot-session-meta span { color: #bec9cb !important; }
       .hp-troubleshoot-device strong, .hp-troubleshoot-status-heading strong,
       .hp-troubleshoot-session-meta strong, .hp-tv-device-row strong,
-      .hp-tv-save-device strong { color: #173c38 !important; }
+      .hp-tv-save-device strong { color: #fff !important; }
       .hp-troubleshoot-status-copy, .hp-troubleshoot-note, .hp-troubleshoot-dialog-footnote,
-      .hp-tv-device-row span, .hp-tv-save-device span, .hp-tv-help { color: #667b74 !important; }
-      .hp-troubleshoot-status[data-tone="active"] { background: #f0f8f3 !important; border-color: #d7ebdd !important; }
-      .hp-troubleshoot-status[data-tone="warning"] { background: #fff9ed !important; border-color: #f2e3bf !important; }
-      .hp-troubleshoot-status[data-tone="help"] { background: #fff5f3 !important; border-color: #f0d8d4 !important; }
-      .hp-troubleshoot-error { color: #8c3932 !important; background: #fff5f3 !important; border-color: #f0d8d4 !important; }
+      .hp-tv-device-row span, .hp-tv-save-device span, .hp-tv-help { color: #d0d9dc !important; }
+      .hp-troubleshoot-status[data-tone="active"] { background: #17362f !important; border-color: #34735b !important; }
+      .hp-troubleshoot-status[data-tone="warning"] { background: #3a2d17 !important; border-color: #80602b !important; }
+      .hp-troubleshoot-status[data-tone="help"] { background: #3a2023 !important; border-color: #7e3e43 !important; }
+      .hp-troubleshoot-error { color: #ffd9d5 !important; background: #3a2023 !important; border-color: #7e3e43 !important; }
       .hp-troubleshoot-modal-action, .hp-troubleshoot-card-action {
-        color: #536b63 !important; background: #f5f8f6 !important; border: 1px solid #dce8e3 !important; box-shadow: none !important;
+        color: #f4f7f6 !important; background: #26313b !important; border: 1px solid #46515b !important; box-shadow: none !important;
       }
       .hp-troubleshoot-modal-action.primary, .hp-troubleshoot-card-action {
         color: #fff !important; background: var(--isp-accent) !important; border-color: var(--isp-accent) !important;
       }
-      .hp-tv-modal-head { padding: 16px 18px 12px !important; border-color: #e8efeb !important; }
-      .hp-tv-modal-body { padding: 14px 18px 18px !important; }
+      .hp-tv-modal-head { padding: 14px 16px 11px !important; border-color: rgba(255,255,255,.12) !important; }
+      .hp-tv-modal-body { padding: 12px 16px 16px !important; }
       .hp-tv-field { margin-bottom: 10px !important; }
-      .hp-tv-label { margin-bottom: 5px !important; color: #62766f !important; }
+      .hp-tv-label { margin-bottom: 5px !important; color: #e0e7e7 !important; }
       .hp-tv-input, .hp-tv-select {
-        color: #173c38 !important; background: #f7faf8 !important; border-color: #dce8e3 !important;
+        color: #fff !important; background: #111a23 !important; border-color: #4a5661 !important;
       }
-      .hp-tv-input::placeholder { color: #879891 !important; }
+      .hp-tv-input::placeholder { color: #b2bec2 !important; }
       .hp-tv-save-device input { accent-color: var(--isp-accent) !important; }
-      .hp-tv-device-action { color: #536b63 !important; background: #fff !important; border-color: #dce8e3 !important; }
-      .hp-tv-actions { margin-top: 12px !important; }
-      .hp-tv-cancel { color: #536b63 !important; background: #f5f8f6 !important; border-color: #dce8e3 !important; }
+      .hp-tv-device-action { color: #f1f5f5 !important; background: #27313b !important; border-color: #4a5661 !important; }
+      .hp-tv-actions { margin-top: 10px !important; }
+      .hp-tv-cancel { color: #f1f5f5 !important; background: #27313b !important; border-color: #4a5661 !important; }
       .hp-root .hp-compact-portal-card {
-        color: #173c38 !important; background: #fff !important; border-color: #dce8e3 !important;
-        box-shadow: 0 14px 34px rgba(25, 54, 47, .10) !important;
+        color: #f4f7f6 !important; background: #181f29 !important; border-color: #3d4853 !important;
+        box-shadow: 0 14px 34px rgba(0,0,0,.28) !important;
       }
-      .hp-root .hp-compact-portal-card .hp-glass-title { color: #173c38 !important; }
+      .hp-root .hp-compact-portal-card .hp-glass-title { color: #fff !important; }
       .hp-root .hp-compact-portal-card .hp-glass-desc,
-      .hp-root .hp-compact-portal-card .hp-label { color: #667b74 !important; }
+      .hp-root .hp-compact-portal-card .hp-label { color: #d3dddf !important; }
       .hp-root .hp-compact-portal-card .hp-input {
-        color: #173c38 !important; background: #f7faf8 !important; border-color: #dce8e3 !important;
+        color: #fff !important; background: #111a23 !important; border-color: #4a5661 !important;
       }
       .hp-root .hp-compact-portal-card .hp-btn { background: var(--isp-accent) !important; color: #fff !important; }
+      .hp-plan.expanded { background: #171e28 !important; color: #f4f7f6 !important; border-color: #3d4853 !important; }
+      .hp-plan.expanded .hp-plan-name, .hp-plan.expanded .hp-plan-price { color: #fff !important; }
+      .hp-plan.expanded .hp-plan-inline-meta .hp-plan-meta-row { color: #d0d9dc !important; }
+      .hp-plan.expanded .hp-plan-pay .hp-input { color: #fff !important; background: #111a23 !important; border-color: #4a5661 !important; }
+      .hp-plan.expanded .hp-plan-pay .hp-input::placeholder { color: #b2bec2 !important; }
+      .hp-plan.expanded .hp-plan-change { color: #d0d9dc !important; }
+      .hp-payment-wait-card { max-width: 400px; margin: 0 auto; background: #171e28 !important; border: 1px solid #3d4853; color: #f4f7f6; }
+      .hp-payment-wait-card .hp-success { padding: 18px 16px !important; color: #f4f7f6 !important; }
+      .hp-payment-wait-card .hp-success > div:first-child { width: 48px !important; height: 48px !important; margin: 0 auto 12px !important; }
+      .hp-payment-wait-card .hp-success h3 { margin: 0 0 8px !important; color: #fff !important; font-size: 18px !important; }
+      .hp-payment-wait-card .hp-success p { color: #d8e0e2 !important; }
+      .hp-payment-wait-card [role="status"] { color: #eef3f4 !important; background: #202832 !important; border-color: #46515b !important; }
       .hp-root .hp-voucher-section { max-width: 400px; margin: 10px auto; }
       .hp-plan.expanded .hp-plan-pay .hp-btn-mpesa { background: var(--isp-accent) !important; }
-      .hp-plan.expanded .hp-plan-pay .hp-error { color: #8c3932 !important; background: #fff5f3 !important; }
+      .hp-plan.expanded .hp-plan-pay .hp-error { color: #ffd9d5 !important; background: #3a2023 !important; border-color: #7e3e43 !important; }
       @media (max-width: 560px) {
         .hp-troubleshoot-dialog { width: min(420px, calc(100vw - 24px)) !important; }
         .hp-troubleshoot-modal-actions { flex-direction: column; }
@@ -3535,7 +3547,7 @@ function HotspotLoginView({
             {portalCards.packages && (isDanstedLayout || activeTab === "plans" || activeTab === "tv") && (
             <div className="hp-section">
               {stkSent ? (
-                <div className="hp-glass">
+                <div className="hp-glass hp-payment-wait-card">
                   <div className="hp-success">
                     {paymentConfirmed ? (
                       <>
@@ -3544,15 +3556,12 @@ function HotspotLoginView({
                             ? <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
                             : <Loader2 size={30} color="#34d399" strokeWidth={2} style={{ animation: "spin 1.2s linear infinite" }} />}
                         </div>
-                          <h3>{accessReady ? (isTvMode ? "TV is ready to stream!" : "Device connected!") : portalHandoffReady ? "Connecting your device…" : loyaltyPaidWithPoints ? "Points Redeemed" : "Payment Confirmed"}</h3>
-                          <p>{loyaltyPaidWithPoints
-                            ? <>Your full plan redemption used <strong style={{ color: "#fff" }}>{loyaltyQuote?.pointsRequired ?? "—"} points</strong>.</>
-                            : <>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</>}</p>
+                          <h3>{accessReady ? (isTvMode ? "TV is ready to stream!" : "Device connected!") : portalHandoffReady ? "Connecting your device…" : loyaltyPaidWithPoints ? "Points redeemed" : "Payment confirmed"}</h3>
                           <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady
                             ? isTvMode
                               ? "Your TV is connected. Start streaming whenever you’re ready."
                               : "You’re connected. Your hotspot access was set up automatically."
-                            : "Payment confirmed. Please wait while we securely finish setting up your access."}</p>
+                            : "Your access is being set up securely. Please wait."}</p>
                           {!accessReady && (
                             <div role="status" aria-live="polite" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, margin: "14px auto 18px", padding: "12px 15px", maxWidth: 340, borderRadius: 14, border: "1px solid rgba(255,255,255,.09)", background: "rgba(255,255,255,.045)", color: "rgba(255,255,255,.72)", fontSize: 12, textAlign: "left" }}>
                               <Loader2 size={16} color="var(--isp-accent)" style={{ flex: "0 0 auto", animation: "spin 1.2s linear infinite" }} />
@@ -3569,11 +3578,6 @@ function HotspotLoginView({
                           {!accessReady && payError && (
                             <p style={{ fontSize: 12, color: "#fbbf24", marginBottom: 16 }}>{payError}</p>
                           )}
-                        {mpesaStatus?.shortcode && (
-                          <p style={{ fontSize: 11, color: "rgba(255,255,255,0.25)", marginBottom: 16 }}>
-                            Daraja shortcode: {mpesaStatus.shortcode} {mpesaStatus.env === "sandbox" ? "(Sandbox)" : ""}
-                          </p>
-                        )}
                         {isTvMode && tvDiagnostic && (
                           <div
                             className="hp-troubleshoot-status"
@@ -3673,18 +3677,11 @@ function HotspotLoginView({
                         <div style={{ width: 72, height: 72, borderRadius: "50%", background: "var(--isp-accent-glow)", border: "2px solid var(--isp-accent-glow)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
                           <Loader2 size={28} color="var(--isp-accent)" style={{ animation: "spin 1.5s linear infinite" }} />
                         </div>
-                        <h3>{paymentConfirmed ? "Preparing your connection" : payError ? "Finishing secure setup" : "M-Pesa prompt sent"}</h3>
+                        <h3>{paymentConfirmed ? "Payment confirmed" : payError ? "Finishing setup" : "Approve payment"}</h3>
                         <p>{paymentConfirmed
-                          ? "Payment is confirmed. We’re creating and connecting your hotspot access now."
-                          : <>Check your phone and approve the Safaricom prompt sent to <strong style={{ color: "#fff" }}>{phone}</strong>.</>}</p>
+                          ? "Your connection is being prepared."
+                          : <>Approve the Safaricom prompt on <strong>{phone}</strong> using your PIN.</>}</p>
                         {payError && <p style={{ fontSize: 12, color: "#fbbf24", marginBottom: 8 }}>{payError}</p>}
-                        <p style={{ fontSize: 13, marginBottom: 4 }}>
-                          Enter your PIN on your phone to pay <strong style={{ color: "#34d399" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong>
-                        </p>
-                        <p style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", marginBottom: 20 }}>
-                          {mpesaStatus?.shortcode && <>Daraja shortcode: {mpesaStatus.shortcode} &middot; </>}
-                          {mpesaStatus?.env === "sandbox" ? "Sandbox Mode" : "Live Payment"}
-                        </p>
                         {pollTimedOut ? (
                           <div style={{ padding: 14, borderRadius: 10, background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.12)", marginBottom: 20, fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.5, textAlign: "center" }}>
                             <AlertCircle size={16} color="#f59e0b" style={{ marginBottom: 6 }} />
@@ -3702,7 +3699,7 @@ function HotspotLoginView({
                         )}
                         <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
                            onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setLoyaltyPaidWithPoints(false); setAccessReady(false); setPaymentFailed(false); setPollTimedOut(false); bindingInFlight.current = false; }}>
-                          {pollTimedOut ? "Try Again" : "Cancel & Start Over"}
+                          {pollTimedOut ? "Try again" : "Cancel"}
                         </button>
                       </>
                     )}

@@ -94,28 +94,33 @@
 
     .grid-bg{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,black,transparent)}
 
-    #stkModal,#tvModal,#troubleshootModule{background:rgba(23,53,47,.38)!important;backdrop-filter:blur(7px)!important}
-    #stkModal>div,#tvModal>div,#troubleshootDialog{background:#fff!important;color:#173c38!important;border:1px solid #dce8e3!important;border-radius:20px!important;box-shadow:0 24px 70px rgba(25,54,47,.24)!important}
+    #stkModal,#tvModal,#troubleshootModule{background:rgba(0,0,0,.78)!important;backdrop-filter:blur(8px)!important}
+    #stkModal>div,#tvModal>div,#troubleshootDialog{background:linear-gradient(160deg,#1c1a25,#11151d)!important;color:#f4f7f6!important;border:1px solid rgba(255,255,255,.16)!important;border-radius:18px!important;box-shadow:0 24px 70px rgba(0,0,0,.6)!important}
     #stkModal>div>div:first-child,#tvModal>div>div:first-child{display:none!important}
     #stkModal>div>div:nth-child(2),#tvModal>div>div:nth-child(2){padding:1rem 1.1rem .65rem!important}
-    #modalPlanName,#modalPlanDetails,#tvModal h3,#tvModal p,#troubleshootDialog h2,#troubleshootDialog p{color:#173c38!important}
+    #modalPlanName,#modalPlanDetails{display:none!important}
+    #tvModal h3,#troubleshootDialog h2{color:#fff!important}
+    #tvModal p,#troubleshootDialog p{color:#d0d9dc!important}
     #stkModal button,#tvModal button,#troubleshootDialog button{border-radius:.75rem!important}
     #stkModal button.btn,#tvModal button.btn,#troubleshootDialog button.btn{background:#df6b52!important;border-color:#df6b52!important;color:#fff!important;box-shadow:none!important}
-    #modalBody{color:#173c38!important;padding:0 1.1rem 1.1rem!important}
-    #modalBody p{color:#62766f!important}
-    #modalBody input,#tvModalBody input,#tvModalBody select{color:#173c38!important;background:#f7faf8!important;border-color:#dce8e3!important}
-    #modalBody input::placeholder,#tvModalBody input::placeholder{color:#879891!important}
+    #modalBody{color:#f4f7f6!important;padding:0 1rem .9rem!important}
+    #modalBody p{color:#d8e0e2!important}
+    #modalBody input,#tvModalBody input,#tvModalBody select{color:#fff!important;background:#111a23!important;border-color:#4a5661!important}
+    #modalBody input::placeholder,#tvModalBody input::placeholder{color:#b2bec2!important}
     #modalBody>div>div[style*="position:relative"]{display:none!important}
+    #modalBody>div{padding:1rem .25rem!important}
+    #modalBody .anim-ping{display:none!important}
     #modalBody button.btn{background:#df6b52!important;color:#fff!important;border:0!important;box-shadow:none!important}
-    #tvModalBody .lbl,#tvModalBody label{color:#62766f!important}
-    #tvModalBody p{color:#667b74!important}
-    #tvModalBody [style*="background:rgba(34,197,94"],#tvModalBody [style*="background:rgba(255,255,255,.035)"]{background:#f7faf8!important;border-color:#e3ece7!important}
-    #troubleshootDialog{padding:1rem!important}
+    #tvModalBody .lbl,#tvModalBody label{color:#e0e7e7!important}
+    #tvModalBody p{color:#d0d9dc!important}
+    #tvModalBody [style*="background:rgba(34,197,94"],#tvModalBody [style*="background:rgba(255,255,255,.035)"]{background:#202832!important;border-color:#46515b!important}
+    #troubleshootDialog{padding:1rem!important;color:#f4f7f6!important}
     #troubleshootDialog h2{font-size:1.15rem!important}
-    #troubleshootDialog p{font-size:.8rem!important}
-    #troubleshootDevice,#troubleshootResult{color:#435b53!important;background:#f7faf8!important;border-color:#e3ece7!important}
+    #troubleshootDialog p{font-size:.8rem!important;color:#d0d9dc!important}
+    #troubleshootDevice,#troubleshootResult{color:#f1f5f5!important;background:#202832!important;border-color:#46515b!important}
     #troubleshootBtn{background:#df6b52!important;border-color:#df6b52!important;box-shadow:none!important}
-    #troubleshootClose,#tvModal button[onclick="closeTvModal()"],#stkModal button[onclick="closeModal()"]{color:#536b63!important;background:#f5f8f6!important;border-color:#e3ece7!important}
+    #troubleshootClose,#tvModal button[onclick="closeTvModal()"],#stkModal button[onclick="closeModal()"]{color:#f1f5f5!important;background:#27313b!important;border-color:#4a5661!important}
+    #stkModal #modalBody .payment-note{margin:.4rem 0 .8rem;color:#d7e0e2!important;font-size:.8rem;line-height:1.45}
 
     .dot-live{width:7px;height:7px;border-radius:50%;background:#4ade80;box-shadow:0 0 0 3px rgba(74,222,128,.2)}
     .dot-live-anim{animation:pulse 2s ease-in-out infinite}
@@ -471,7 +476,7 @@
     <div style="height:3px;background:linear-gradient(90deg,#a855f7,#6d28d9,#4f46e5)"></div>
     <div style="padding:1.15rem 1.25rem .9rem;display:flex;align-items:flex-start;justify-content:space-between">
       <div>
-        <p style="font-size:.6875rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:rgba(192,38,211,.8);margin-bottom:.375rem">M-Pesa STK Push</p>
+        <p style="font-size:.6875rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:rgba(192,38,211,.8);margin-bottom:.375rem">Payment</p>
         <h3 id="modalPlanName" style="font-size:1.25rem;font-weight:800;letter-spacing:-.02em;color:white"></h3>
         <p id="modalPlanDetails" style="color:rgba(216,180,254,.55);font-size:.875rem;margin-top:.25rem"></p>
       </div>
@@ -1653,17 +1658,15 @@ function renderModal(){
     }
     var phoneHtml=mode==="points"?'':
       '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
-      '<input id="stkPhoneInput" type="tel" inputmode="tel" autocomplete="tel-national" aria-label="Safaricom mobile number" placeholder="Safaricom number (07… or 01…)" onblur="rememberPaymentPhone(this.value)" class="inp" style="margin-bottom:1.25rem" value="'+escapePortalText(stkPhone||readLastPaymentPhone())+'" />';
+      '<input id="stkPhoneInput" type="tel" inputmode="tel" autocomplete="tel-national" aria-label="Safaricom mobile number" placeholder="Safaricom number (07… or 01…)" onblur="rememberPaymentPhone(this.value)" class="inp" style="margin-bottom:.75rem" value="'+escapePortalText(stkPhone||readLastPaymentPhone())+'" />';
     var noMethod=!mpesaOk&&mode!=="points"&&loyState!=="loading";
-    b.innerHTML='<div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.22)">'+
-       '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">'+(mode==="points"
-          ?(loyaltyPendingCheckout()?'Your points were already redeemed for this package. Finish setting up your access; no more points will be used.':'Redeem your loyalty points to receive a Hotspot account automatically. No username or password is needed.')
-         :noMethod?'No M-Pesa payment method is available for this service, and this device cannot pay with points for this package.'
-         :'Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.')+'</p>'+
-       '</div>'+loyHtml+(noMethod?'':phoneHtml)+
+    var instructionHtml=noMethod
+      ?'<p class="payment-note" role="alert">Payment is unavailable for this hotspot.</p>'
+      :(PORTAL_PAYMENT_INSTRUCTIONS&&mode!=="points"?'<p id="paymentInstructionText" class="payment-note"></p>':"");
+    b.innerHTML=loyHtml+instructionHtml+(noMethod?"":phoneHtml)+
       '<div id="stkErrBox" style="display:none;margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>'+
       (noMethod?'':'<button onclick="'+(mode==="points"?'redeemLoyaltyPoints()':'sendStk()')+'" '+(identified?'':'disabled')+' class="btn btn-purple btn-full" style="font-size:.875rem;padding:.875rem;opacity:'+(identified?'1':'.5')+'">'+
-      (mode==="points"?(loyaltyPendingCheckout()?'Finish access setup':'Redeem '+formatPortalLoyaltyPoints(loyQuote.pointsRequired)+' points'):'Send STK Push &mdash; Ksh '+(selectedPlan?selectedPlan.price:""))+
+       (mode==="points"?(loyaltyPendingCheckout()?'Finish access setup':'Redeem '+formatPortalLoyaltyPoints(loyQuote.pointsRequired)+' points'):'Send payment prompt')+
       '</button>');
      if(PORTAL_PAYMENT_INSTRUCTIONS&&mode!=="points"&&!noMethod){
        var instruction=document.getElementById("paymentInstructionText");
@@ -1676,8 +1679,8 @@ function renderModal(){
       '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">'+
       '<div style="width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,#a855f7,#6d28d9);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(147,51,234,.5)">'+PHONE_SVG+'</div>'+
       '</div></div>'+
-       '<p style="font-size:1rem;font-weight:700;color:#d8b4fe;margin-bottom:.5rem">'+(loyRedeeming?"Redeeming points…":"Sending M-Pesa prompt…")+'</p>'+
-       '<p style="color:rgba(255,255,255,.58);font-size:.82rem;line-height:1.5">'+(loyRedeeming?"Confirming your balance securely.":"Please wait while Safaricom sends the prompt to your phone.")+'</p>'+
+       '<p style="font-size:1rem;font-weight:700;color:#d8b4fe;margin-bottom:.5rem">'+(loyRedeeming?"Redeeming points…":"Sending payment prompt…")+'</p>'+
+       '<p style="color:rgba(255,255,255,.58);font-size:.82rem;line-height:1.5">'+(loyRedeeming?"Confirming your balance securely.":"Approve the Safaricom request on your phone with your PIN.")+'</p>'+
        '<p style="color:rgba(255,255,255,.32);font-size:.72rem;margin-top:.65rem">Time elapsed <strong id="stkWaitTimer" style="color:#fff;font-variant-numeric:tabular-nums">00:00</strong></p></div>';
    }else if(stkState==="provisioning"){
      b.innerHTML='<div style="text-align:center;padding:2.5rem 0">'+
@@ -1696,9 +1699,9 @@ function renderModal(){
       '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">'+
       '<div style="width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#d97706);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(245,158,11,.4)">'+PHONE_SVG+'</div>'+
       '</div></div>'+
-      '<p style="font-size:1rem;font-weight:700;color:#fbbf24;margin-bottom:.5rem">STK Push Sent!</p>'+
-      '<p style="color:rgba(255,255,255,.5);font-size:.8375rem;margin-bottom:.75rem">Check your phone and enter your M-Pesa PIN to complete payment</p>'+
-       '<p style="color:rgba(255,255,255,.45);font-size:.75rem" id="pollCounter">Please approve the prompt · <strong id="stkWaitTimer" style="color:#fff;font-variant-numeric:tabular-nums">00:00</strong></p></div>';
+      '<p style="font-size:1rem;font-weight:700;color:#fbbf24;margin-bottom:.5rem">Approve payment</p>'+
+      '<p style="color:rgba(255,255,255,.5);font-size:.8375rem;margin-bottom:.75rem">Approve the request on your phone with your Safaricom PIN.</p>'+
+       '<p style="color:rgba(255,255,255,.45);font-size:.75rem" id="pollCounter">Waiting for confirmation · <strong id="stkWaitTimer" style="color:#fff;font-variant-numeric:tabular-nums">00:00</strong></p></div>';
    }else if(stkState==="access_error"){
      b.innerHTML='<div style="text-align:center;padding:2.25rem 0">'+
        '<div style="width:72px;height:72px;border-radius:50%;background:rgba(245,158,11,.12);border:2px solid rgba(245,158,11,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">'+
@@ -1720,7 +1723,7 @@ function renderModal(){
       '<div style="width:72px;height:72px;border-radius:50%;background:rgba(74,222,128,.12);border:2px solid rgba(74,222,128,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">'+
       '<svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="#4ade80" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div>'+
        '<p style="font-size:1.0625rem;font-weight:800;color:#4ade80;margin-bottom:.5rem">'+(loyPaidWithPoints?"Points Redeemed!":"Payment Received!")+'</p>'+
-        '<p style="color:rgba(255,255,255,.68);font-size:.875rem;line-height:1.6;margin-bottom:1rem">'+(loyPaidWithPoints?"Your plan is active. We’re connecting this device automatically.":"Your "+escapePortalText(selectedPlan?selectedPlan.name:"")+' plan is active. Your hotspot access is ready and being connected automatically.')+'</p>'+
+        '<p style="color:rgba(255,255,255,.82);font-size:.875rem;line-height:1.6;margin-bottom:1rem">'+(loyPaidWithPoints?"Your access is ready and this device is connecting automatically.":"Your hotspot access is ready and this device is connecting automatically.")+'</p>'+
        credentialBlock+
         (tvDeviceSaveNotice?'<p style="margin:0 auto 1rem;max-width:300px;color:'+(tvDeviceSaveNotice.indexOf("Payment succeeded")===0?"#fcd34d":"#6ee7b7")+';font-size:.75rem;line-height:1.45">'+escapePortalText(tvDeviceSaveNotice)+'</p>':'')+
        '<button onclick="closeModal()" class="btn btn-green btn-full">Continue online</button></div>';

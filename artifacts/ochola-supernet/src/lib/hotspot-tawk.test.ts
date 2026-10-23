@@ -73,10 +73,18 @@ test("package cards open checkout directly and recovery cards stay compact", () 
   assert.match(reactPortal, /maxWidth: 380/);
 });
 
-test("checkout, TV, and reconnect modules use the compact portal theme", () => {
+test("checkout, TV, and reconnect modules use compact dark, readable surfaces", () => {
   assert.match(reactPortal, /hp-plans-grid\.has-expanded[\s\S]*?position: fixed/);
-  assert.match(reactPortal, /\.hp-tv-modal, \.hp-troubleshoot-dialog[\s\S]*?background: #fff !important/);
+  assert.match(reactPortal, /\.hp-tv-modal, \.hp-troubleshoot-dialog[\s\S]*?background: linear-gradient\(160deg, #1c1a25, #11151d\) !important/);
+  assert.match(reactPortal, /\.hp-root \.hp-compact-portal-card[\s\S]*?background: #181f29 !important/);
+  assert.match(reactPortal, /\.hp-payment-wait-card/);
+  assert.doesNotMatch(reactPortal, /Enter your PIN on your phone to pay/);
+  assert.doesNotMatch(reactPortal, /Daraja shortcode: \{mpesaStatus\.shortcode\}/);
+  assert.doesNotMatch(reactPortal, /Your payment of <strong/);
   assert.match(reactPortal, /hp-troubleshoot-dialog-ambient \{ display: none !important/);
-  assert.match(portal, /#stkModal,#tvModal,#troubleshootModule\{background:rgba\(23,53,47/);
-  assert.match(portal, /#stkModal>div,#tvModal>div,#troubleshootDialog\{background:#fff!important/);
+  assert.match(portal, /#stkModal,#tvModal,#troubleshootModule\{background:rgba\(0,0,0/);
+  assert.match(portal, /#stkModal>div,#tvModal>div,#troubleshootDialog\{background:linear-gradient\(160deg,#1c1a25,#11151d\)!important/);
+  assert.match(portal, /#modalPlanName,#modalPlanDetails\{display:none!important\}/);
+  assert.match(portal, /Send payment prompt/);
+  assert.doesNotMatch(portal, /Send STK Push &mdash; Ksh/);
 });
