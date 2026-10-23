@@ -67,3 +67,11 @@ test("package cards open checkout directly and recovery cards stay compact", () 
   assert.match(reactPortal, /hp-compact-voucher-form/);
   assert.match(reactPortal, /hp-compact-code-input/);
 });
+
+test("checkout, TV, and reconnect modules use the compact portal theme", () => {
+  assert.match(reactPortal, /hp-plans-grid\.has-expanded[\s\S]*?position: fixed/);
+  assert.match(reactPortal, /\.hp-tv-modal, \.hp-troubleshoot-dialog[\s\S]*?background: #fff !important/);
+  assert.match(reactPortal, /hp-troubleshoot-dialog-ambient \{ display: none !important/);
+  assert.match(portal, /#stkModal,#tvModal,#troubleshootModule\{background:rgba\(23,53,47/);
+  assert.match(portal, /#stkModal>div,#tvModal>div,#troubleshootDialog\{background:#fff!important/);
+});

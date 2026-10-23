@@ -2848,7 +2848,9 @@ function HotspotLoginView({
           margin-bottom: 16px;
         }
         .hp-plans-grid.has-expanded {
-          grid-template-columns: 1fr;
+           position: fixed; inset: 0; z-index: 250; display: flex; align-items: center;
+           justify-content: center; gap: 0; margin: 0; padding: 16px;
+           background: rgba(22, 48, 43, .42); backdrop-filter: blur(8px);
         }
 
         .hp-plan {
@@ -2861,18 +2863,22 @@ function HotspotLoginView({
            box-shadow: 0 10px 28px rgba(0,0,0,0.1);
         }
         .hp-plan:hover { transform: translateY(-3px); border-color: rgba(255,255,255,0.12); }
-        .hp-plan.expanded { grid-column: 1 / -1; cursor: default; }
+         .hp-plan.expanded {
+           grid-column: auto; width: min(100%, 420px); max-height: calc(100dvh - 32px);
+           overflow-y: auto; cursor: default; background: #fff; color: #173c38;
+           border: 1px solid #dce8e3 !important; border-radius: 20px;
+           box-shadow: 0 24px 70px rgba(20, 50, 43, .24) !important;
+         }
         .hp-plan.expanded:hover { transform: none; }
         .hp-plan.collapsed { display: none; }
 
         .hp-plan-accent { height: 4px; }
         .hp-plan-top { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 0; cursor: pointer; }
         .hp-plan-body { padding: 6px 16px 16px; }
-         .hp-plan.expanded .hp-plan-body { width: min(100%, 740px); margin: 0 auto; padding: 8px 18px 18px; }
+         .hp-plan.expanded .hp-plan-body { width: 100%; margin: 0 auto; padding: 18px; }
          .hp-plan.expanded .hp-plan-pay {
-           max-width: 440px; margin: 12px auto 0; padding: 14px;
-           border: 1px solid rgba(255,255,255,.09); border-radius: 18px;
-           background: rgba(255,255,255,.035);
+           max-width: none; margin: 12px 0 0; padding: 0;
+           border: 0; border-radius: 0; background: transparent;
          }
 
         .hp-plan-name {
@@ -2890,6 +2896,29 @@ function HotspotLoginView({
           display: flex; align-items: center; gap: 5px;
           font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.55);
         }
+        .hp-plan.expanded .hp-plan-accent { display: none; }
+        .hp-plan.expanded .hp-plan-name,
+        .hp-plan.expanded .hp-plan-price { color: #173c38 !important; }
+        .hp-plan.expanded .hp-plan-price { margin-bottom: 6px; }
+        .hp-plan.expanded .hp-plan-inline-meta .hp-plan-meta-row:not(:first-child) { display: none; }
+        .hp-plan.expanded .hp-plan-inline-meta .hp-plan-meta-row { color: #647a74; }
+        .hp-plan.expanded .hp-plan-inline-meta svg { color: var(--isp-accent) !important; }
+        .hp-plan.expanded .hp-plan-check { background: #f7eee9 !important; color: var(--isp-accent); }
+        .hp-plan.expanded .hp-plan-check svg { color: var(--isp-accent) !important; }
+        .hp-plan.expanded .hp-plan-pay > div:first-child { display: none !important; }
+        .hp-plan.expanded .hp-plan-pay > div[role="status"] {
+          color: #49635c !important; background: #f5f8f6 !important; border-color: #e3ece7 !important;
+        }
+        .hp-plan.expanded .hp-plan-pay .hp-input {
+          color: #173c38; background: #f7faf8; border-color: #dce8e3; border-radius: 12px;
+        }
+        .hp-plan.expanded .hp-plan-pay .hp-input::placeholder { color: #879891; }
+        .hp-plan.expanded .hp-plan-pay .hp-btn-mpesa {
+          color: #fff; background: var(--isp-accent); box-shadow: none;
+        }
+        .hp-plan.expanded .hp-secured { display: none; }
+        .hp-plan.expanded .hp-plan-change { color: #61776f; }
+        .hp-plan.expanded .hp-plan-change:hover { color: var(--isp-accent); }
          .hp-plan-action {
            display: flex; align-items: center; justify-content: space-between;
            margin-top: 16px; padding-top: 12px;
@@ -3124,6 +3153,76 @@ function HotspotLoginView({
             .hp-troubleshoot-modal-action:hover:not(:disabled) { transform: none; }
           }
       ${HOSTED_PORTAL_LAYOUT_CSS}
+      /* Keep checkout, TV setup, and reconnect screens in the portal's clean brand palette. */
+      .hp-modal-backdrop, .hp-troubleshoot-overlay {
+        background: rgba(23, 53, 47, .34) !important; backdrop-filter: blur(7px) !important;
+      }
+      .hp-tv-modal, .hp-troubleshoot-dialog {
+        color: #173c38 !important; background: #fff !important;
+        border: 1px solid #dce8e3 !important; border-radius: 20px !important;
+        box-shadow: 0 24px 70px rgba(25, 54, 47, .22) !important;
+      }
+      .hp-troubleshoot-dialog-ambient { display: none !important; }
+      .hp-troubleshoot-dialog-inner { padding: 20px !important; }
+      .hp-troubleshoot-dialog-head { margin-bottom: 14px !important; }
+      .hp-troubleshoot-dialog-icon { color: var(--isp-accent) !important; background: #f8f2ee !important; border-color: #f1ded5 !important; }
+      .hp-troubleshoot-dialog-kicker { color: var(--isp-accent) !important; }
+      .hp-troubleshoot-dialog-title, .hp-tv-modal-head h3 { color: #173c38 !important; }
+      .hp-troubleshoot-dialog-description, .hp-tv-modal-head p { color: #667b74 !important; }
+      .hp-troubleshoot-close, .hp-tv-modal-close {
+        color: #536b63 !important; background: #f5f8f6 !important; border: 1px solid #e3ece7 !important;
+      }
+      .hp-troubleshoot-device, .hp-troubleshoot-status, .hp-troubleshoot-session-meta > div,
+      .hp-troubleshoot-note, .hp-troubleshoot-loading, .hp-tv-device-row, .hp-tv-save-device {
+        color: #435b53 !important; background: #f7faf8 !important; border-color: #e3ece7 !important;
+      }
+      .hp-troubleshoot-device-label, .hp-troubleshoot-session-meta span { color: #74867f !important; }
+      .hp-troubleshoot-device strong, .hp-troubleshoot-status-heading strong,
+      .hp-troubleshoot-session-meta strong, .hp-tv-device-row strong,
+      .hp-tv-save-device strong { color: #173c38 !important; }
+      .hp-troubleshoot-status-copy, .hp-troubleshoot-note, .hp-troubleshoot-dialog-footnote,
+      .hp-tv-device-row span, .hp-tv-save-device span, .hp-tv-help { color: #667b74 !important; }
+      .hp-troubleshoot-status[data-tone="active"] { background: #f0f8f3 !important; border-color: #d7ebdd !important; }
+      .hp-troubleshoot-status[data-tone="warning"] { background: #fff9ed !important; border-color: #f2e3bf !important; }
+      .hp-troubleshoot-status[data-tone="help"] { background: #fff5f3 !important; border-color: #f0d8d4 !important; }
+      .hp-troubleshoot-error { color: #8c3932 !important; background: #fff5f3 !important; border-color: #f0d8d4 !important; }
+      .hp-troubleshoot-modal-action, .hp-troubleshoot-card-action {
+        color: #536b63 !important; background: #f5f8f6 !important; border: 1px solid #dce8e3 !important; box-shadow: none !important;
+      }
+      .hp-troubleshoot-modal-action.primary, .hp-troubleshoot-card-action {
+        color: #fff !important; background: var(--isp-accent) !important; border-color: var(--isp-accent) !important;
+      }
+      .hp-tv-modal-head { padding: 16px 18px 12px !important; border-color: #e8efeb !important; }
+      .hp-tv-modal-body { padding: 14px 18px 18px !important; }
+      .hp-tv-field { margin-bottom: 10px !important; }
+      .hp-tv-label { margin-bottom: 5px !important; color: #62766f !important; }
+      .hp-tv-input, .hp-tv-select {
+        color: #173c38 !important; background: #f7faf8 !important; border-color: #dce8e3 !important;
+      }
+      .hp-tv-input::placeholder { color: #879891 !important; }
+      .hp-tv-save-device input { accent-color: var(--isp-accent) !important; }
+      .hp-tv-device-action { color: #536b63 !important; background: #fff !important; border-color: #dce8e3 !important; }
+      .hp-tv-actions { margin-top: 12px !important; }
+      .hp-tv-cancel { color: #536b63 !important; background: #f5f8f6 !important; border-color: #dce8e3 !important; }
+      .hp-root .hp-compact-portal-card {
+        color: #173c38 !important; background: #fff !important; border-color: #dce8e3 !important;
+        box-shadow: 0 14px 34px rgba(25, 54, 47, .10) !important;
+      }
+      .hp-root .hp-compact-portal-card .hp-glass-title { color: #173c38 !important; }
+      .hp-root .hp-compact-portal-card .hp-glass-desc,
+      .hp-root .hp-compact-portal-card .hp-label { color: #667b74 !important; }
+      .hp-root .hp-compact-portal-card .hp-input {
+        color: #173c38 !important; background: #f7faf8 !important; border-color: #dce8e3 !important;
+      }
+      .hp-root .hp-compact-portal-card .hp-btn { background: var(--isp-accent) !important; color: #fff !important; }
+      .hp-plan.expanded .hp-plan-pay .hp-btn-mpesa { background: var(--isp-accent) !important; }
+      .hp-plan.expanded .hp-plan-pay .hp-error { color: #8c3932 !important; background: #fff5f3 !important; }
+      @media (max-width: 560px) {
+        .hp-troubleshoot-dialog { width: min(420px, calc(100vw - 24px)) !important; }
+        .hp-troubleshoot-modal-actions { flex-direction: column; }
+        .hp-troubleshoot-modal-action { width: 100%; }
+        .hp-tv-modal { max-height: calc(100dvh - 24px) !important; }
+      }
       `}</style>
 
       <div className="hp-root" data-portal-layout={portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout}>
@@ -3611,7 +3710,8 @@ function HotspotLoginView({
                 </div>
                    ) : (
                 <>
-                   <div className="hp-purchase-hero">
+                    {!selectedPlan && <>
+                    <div className="hp-purchase-hero">
                      <div>
                        <div className="hp-kicker">{isTvMode ? "TV CONNECT" : "HOTSPOT ACCESS"}</div>
                        <h2 className="hp-purchase-title">{isTvMode ? "Bring streaming to life." : "Pick your perfect plan."}</h2>
@@ -3631,6 +3731,7 @@ function HotspotLoginView({
                      <div className="hp-trust-item"><Shield size={14} /> Secure payment</div>
                      <div className="hp-trust-item"><Zap size={14} /> No contracts</div>
                    </div>
+                    </>}
                   {plansLoading ? (
                     <div style={{ display: "flex", justifyContent: "center", padding: "48px 0" }}>
                       <Loader2 size={28} color="var(--isp-accent)" style={{ animation: "spin 1s linear infinite" }} />
