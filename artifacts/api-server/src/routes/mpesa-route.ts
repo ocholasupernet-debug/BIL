@@ -1863,6 +1863,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
   const planId = Number(req.body?.plan_id);
   const phone = typeof req.body?.phone === "string" ? normaliseKenyanPhone(req.body.phone) : "";
   const deviceName = readDeviceName(req.body?.device_name);
+  const targetDevice = req.body?.target_device === true;
   const deviceRouterId = Number(req.body?.device_router_id);
   const portalRouterId = positivePortalId(req.body?.router_id);
   const portalPortId = positivePortalId(req.body?.port_id);
@@ -1905,15 +1906,26 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
     router_id: number | null;
     port_id: number | null;
     owner_reseller_id: number | null;
+      is_tv_package: boolean;
   }>(
     "isp_plans",
-    `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price,type,router_id,port_id,owner_reseller_id&limit=1`,
+      `id=eq.${planId}&admin_id=eq.${adminId}&is_active=is.true&select=id,price,type,router_id,port_id,owner_reseller_id,is_tv_package&limit=1`,
   );
   timing("planLookup");
   const plan = plans[0];
   const serviceType = normalizePlanServiceType(plan?.type);
   if (plan && serviceType !== requestedService) {
     res.status(409).json({ ok: false, error: "The selected package is for a different service. Refresh and try again." });
+    return;
+  }
+  if (plan && Boolean(plan.is_tv_package) !== targetDevice) {
+    res.status(409).json({ ok: false, error: targetDevice
+      ? "Choose a TV package to connect this device."
+      : "This TV package can only be purchased through Connect TV." });
+    return;
+  }
+  if (targetDevice && (!mac.value || !deviceName)) {
+    res.status(400).json({ ok: false, error: "Enter the TV MAC address and device name before continuing." });
     return;
   }
   if (serviceType === "other") {
@@ -2041,6 +2053,7 @@ router.post("/mpesa/intent", async (req: Request, res: Response): Promise<void> 
         ...(portalRouterId ? { routerId: portalRouterId } : {}),
         ...(portalPortId ? { portId: portalPortId } : {}),
         ...(deviceName ? { deviceName } : {}),
+        targetDevice,
         ...(serviceType === "pppoe" || serviceType === "vlan" ? { customerId: requestedCustomerId } : {}),
         ...(resolvedMac ? { macAddress: resolvedMac } : {}),
         ...(amountBreakdown ? { amountBreakdown } : {}),
@@ -2326,8 +2339,8 @@ router.post("/mpesa/callback", async (req: Request, res: Response): Promise<void
  * ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => {
   const timing = startRequestTiming(res, "[mpesa/stk] request timing");
-  const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address, service_type, customer_id, device_name, billing_invoice_id, router_id, port_id } = req.body as {
-    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string; service_type?: string; customer_id?: number; device_name?: string; billing_invoice_id?: number; router_id?: number; port_id?: number;
+  const { phone, amount, plan_id, account_ref, adminId, paymentIntent, mac_address, service_type, customer_id, device_name, billing_invoice_id, router_id, port_id, target_device } = req.body as {
+    phone?: string; amount?: number; plan_id?: number; account_ref?: string; adminId?: number; paymentIntent?: string; mac_address?: string; service_type?: string; customer_id?: number; device_name?: string; billing_invoice_id?: number; router_id?: number; port_id?: number; target_device?: boolean;
   };
   const requestedMac = readMacAddress(mac_address);
   const requestedDeviceName = readDeviceName(device_name);
@@ -2353,6 +2366,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
   const normalised = normaliseKenyanPhone(String(phone));
   const requestedAmount = Math.ceil(Number(amount));
   const requestedPlanId = Number(plan_id);
+  const targetDevice = target_device === true;
   const requestedCustomerId = Number(customer_id);
   const portalRouterId = positivePortalId(router_id);
   const portalPortId = positivePortalId(port_id);
@@ -2378,6 +2392,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     (intent.customerId ?? null) === (Number.isSafeInteger(requestedCustomerId) ? requestedCustomerId : null) &&
     (intent.routerId ?? null) === portalRouterId &&
     (intent.portId ?? null) === portalPortId;
+  const hasMatchingTarget = (intent?.targetDevice ?? false) === targetDevice;
   const isPlatformBillingRenewal = billing_invoice_id !== undefined
     && !(Number.isSafeInteger(requestedPlanId) && requestedPlanId > 0);
   if (!isPlatformBillingRenewal && await platformBillingAccessRestricted(scopedAdminId)) {
@@ -2395,7 +2410,7 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
     res.status(400).json({ ok: false, error: "The TV name changed. Start the payment again." });
     return;
   }
-  if (!hasSuperAdminSession && !hasAdminSession && !hasMatchingIntent) {
+  if (!hasSuperAdminSession && !hasAdminSession && (!hasMatchingIntent || !hasMatchingTarget)) {
     res.status(401).json({ ok: false, error: "Create a payment checkout from an active plan or sign in as this ISP Admin." });
     return;
   }
@@ -2438,13 +2453,20 @@ router.post("/mpesa/stk", async (req: Request, res: Response): Promise<void> => 
       router_id: number | null;
       port_id: number | null;
       owner_reseller_id: number | null;
+      is_tv_package: boolean;
     }>(
       "isp_plans",
-      `id=eq.${requestedPlanId}&admin_id=eq.${scopedAdminId}&is_active=is.true&select=id,price,name,type,router_id,port_id,owner_reseller_id&limit=1`,
+      `id=eq.${requestedPlanId}&admin_id=eq.${scopedAdminId}&is_active=is.true&select=id,price,name,type,router_id,port_id,owner_reseller_id,is_tv_package&limit=1`,
     );
     const plan = plans[0];
     if (!plan) {
       res.status(404).json({ ok: false, error: "The selected package is not available for payment." });
+      return;
+    }
+    if (Boolean(plan.is_tv_package) !== targetDevice) {
+      res.status(409).json({ ok: false, error: targetDevice
+        ? "Choose a TV package to connect this device."
+        : "This TV package can only be purchased through Connect TV." });
       return;
     }
     const serviceType = normalizePlanServiceType(plan.type);

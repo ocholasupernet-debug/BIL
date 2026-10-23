@@ -52,6 +52,7 @@ interface Plan {
   fup_speed_down?: number | null;
   fup_speed_up?: number | null;
   shared_users?: number;
+  is_tv_package?: boolean;
   description: string | null; type?: string;
   router_id?: number | null; port_id?: number | null;
 }
@@ -196,6 +197,7 @@ function normalizeRuntimePlan(value: unknown): Plan | null {
     fup_speed_down: Number.isFinite(throttleDown) && throttleDown > 0 ? throttleDown : null,
     fup_speed_up: Number.isFinite(throttleUp) && throttleUp > 0 ? throttleUp : null,
     shared_users: Number.isFinite(rawSharedUsers) && rawSharedUsers >= 1 ? Math.floor(rawSharedUsers) : 1,
+    is_tv_package: row.is_tv_package === true,
     description: typeof row.description === "string" ? row.description : null,
     type: typeof row.type === "string" ? row.type : undefined,
     router_id: positivePortalId(row.router_id),
@@ -574,6 +576,8 @@ function HotspotLoginView({
   const legacyPaymentPhoneStorageKey = `ochola_hotspot_payment_phone_v1:${typeof window !== "undefined" ? window.location.host : "portal"}:${adminId || "tenant"}:${portalScope.routerId || 0}:${portalScope.portId || 0}`;
 
   const [plans, setPlans] = useState<Plan[]>(HOTSPOT_RUNTIME_CONFIG.plans);
+  const tvPlans = plans.filter(plan => plan.is_tv_package === true);
+  const hotspotPlans = plans.filter(plan => plan.is_tv_package !== true);
   const [plansLoading, setPlansLoading] = useState(
     HOTSPOT_RUNTIME_CONFIG.previewOnly !== true && HOTSPOT_RUNTIME_CONFIG.plans.length === 0,
   );
@@ -1319,6 +1323,7 @@ function HotspotLoginView({
           ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
           ...(macAddress ? { mac_address: macAddress } : {}),
           ...(normalizedDeviceName ? { device_name: normalizedDeviceName } : {}),
+          ...(targetDevice ? { target_device: true } : {}),
           ...(deviceRouterId ? { device_router_id: deviceRouterId } : {}),
           ...(!targetDevice && portalContext.ip ? { client_ip: portalContext.ip } : {}),
         }),
@@ -1341,6 +1346,7 @@ function HotspotLoginView({
           ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
           account_ref: portalBrand.ispName,
           paymentIntent: intentData.paymentIntent,
+          ...(targetDevice ? { target_device: true } : {}),
           ...(macAddress ? { mac_address: macAddress } : {}),
           ...(normalizedDeviceName ? { device_name: normalizedDeviceName } : {}),
         }),
@@ -1495,7 +1501,9 @@ function HotspotLoginView({
     setTvDeviceName(preferredDevice?.name ?? "");
     setRememberTvDevice(Boolean(preferredDevice));
     setTvDeviceSaveNotice("");
-    setTvPlanId(selectedPlan ? String(selectedPlan.id) : plans[0] ? String(plans[0].id) : "");
+    setTvPlanId(selectedPlan?.is_tv_package
+      ? String(selectedPlan.id)
+      : tvPlans[0] ? String(tvPlans[0].id) : "");
     setTvPhone("");
   };
 
@@ -1569,7 +1577,7 @@ function HotspotLoginView({
 
   const handleTvBindPay = async (e: React.FormEvent) => {
     e.preventDefault();
-    const plan = plans.find(item => String(item.id) === tvPlanId);
+    const plan = tvPlans.find(item => String(item.id) === tvPlanId);
     const macAddress = normalizeMacAddress(tvMacAddress);
     if (!plan) {
       setTvDialogError("Choose a package before continuing.");
@@ -3733,13 +3741,13 @@ function HotspotLoginView({
                     <div style={{ display: "flex", justifyContent: "center", padding: "48px 0" }}>
                       <Loader2 size={28} color="var(--isp-accent)" style={{ animation: "spin 1s linear infinite" }} />
                     </div>
-                  ) : plans.length === 0 ? (
+                  ) : hotspotPlans.length === 0 ? (
                     <p className="hp-empty-plans" style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", padding: "48px 0", fontSize: 14 }}>
                       No packages are configured for this hotspot.
                     </p>
                   ) : (
                     <div className={`hp-plans-grid${selectedPlan ? " has-expanded" : ""}`}>
-                      {plans.map((plan, i) => {
+                      {hotspotPlans.map((plan, i) => {
                         const planGradients = portalBranding.portalLayout === "classic"
                           || (!portalBranding.portalLayout && HOTSPOT_RUNTIME_CONFIG.portalLayout === "classic")
                           ? GUEST_PLAN_GRADIENTS
@@ -4429,13 +4437,18 @@ function HotspotLoginView({
                       onChange={e => setTvPlanId(e.target.value)}
                       required
                     >
-                      <option value="" disabled>Choose a package</option>
-                      {plans.map(plan => (
+                      <option value="" disabled>
+                        {plansLoading ? "Loading TV packages…" : tvPlans.length ? "Choose a package" : "No TV packages available"}
+                      </option>
+                      {tvPlans.map(plan => (
                         <option key={plan.id} value={plan.id}>
                           {plan.name} — {getCurrencySymbol()} {plan.price} · {formatValidity(plan)}
                         </option>
                       ))}
                     </select>
+                    {!plansLoading && tvPlans.length === 0 && (
+                      <div className="hp-tv-help">TV packages are not available yet. Please contact your provider.</div>
+                    )}
                   </div>
 
                   <div className="hp-tv-field">
@@ -4466,7 +4479,7 @@ function HotspotLoginView({
                     <button type="button" className="hp-btn hp-tv-cancel" onClick={() => setTvDialogOpen(false)}>
                       Cancel
                     </button>
-                    <button type="submit" className="hp-btn hp-btn-mpesa" disabled={payLoading || plansLoading}>
+                    <button type="submit" className="hp-btn hp-btn-mpesa" disabled={payLoading || plansLoading || tvPlans.length === 0}>
                       {payLoading ? (
                         <><Loader2 size={16} style={{ animation: "spin 1.5s linear infinite" }} /> Starting…</>
                       ) : (

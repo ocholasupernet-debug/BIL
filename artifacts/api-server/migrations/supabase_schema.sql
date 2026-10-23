@@ -144,6 +144,7 @@ create table if not exists isp_plans (
   description    text,
   is_active      boolean not null default true,
   client_can_purchase boolean not null default true,
+  is_tv_package boolean not null default false,
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now()
 );

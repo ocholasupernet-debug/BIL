@@ -96,6 +96,12 @@ async function fetchPlanContext(): Promise<PlanContextResponse> {
 async function fetchPlans(type?: string): Promise<DbPlan[]> {
   const context = await fetchPlanContext();
   if (!type || ["bandwidth", "all"].includes(type)) return context.plans;
+  if (type === "tv") return context.plans.filter(plan =>
+    ["hotspot", "trials", "trial"].includes(String(plan.type).toLowerCase()) && plan.is_tv_package === true,
+  );
+  if (type === "hotspot") return context.plans.filter(plan =>
+    ["hotspot", "trials", "trial"].includes(String(plan.type).toLowerCase()) && plan.is_tv_package !== true,
+  );
   return context.plans.filter(plan => type === "hotspot" ? ["hotspot", "trials", "trial"].includes(plan.type) : plan.type === type);
 }
 
@@ -181,10 +187,12 @@ function AddServicePlanForm({
   onSaved,
 }: ServicePlanFormProps) {
   const isEdit   = !!initialData;
-  const typeLabel= planType === "hotspot" ? "Hotspot" : planType === "pppoe" ? "PPPoE" : planType === "vlan" ? "VLAN" : planType === "trials" ? "Trial" : "Static IP";
-  const isPppoe  = planType === "pppoe";
-  const isHotspot= planType === "hotspot" || planType === "trials";
-  const isVlan = planType === "vlan";
+  const servicePlanType = planType === "tv" ? "hotspot" : planType;
+  const isTvPackage = planType === "tv" || initialData?.is_tv_package === true;
+  const typeLabel= isTvPackage ? "TV" : servicePlanType === "hotspot" ? "Hotspot" : servicePlanType === "pppoe" ? "PPPoE" : servicePlanType === "vlan" ? "VLAN" : servicePlanType === "trials" ? "Trial" : "Static IP";
+  const isPppoe  = servicePlanType === "pppoe";
+  const isHotspot= servicePlanType === "hotspot" || servicePlanType === "trials";
+  const isVlan = servicePlanType === "vlan";
 
   const [status,        setStatus]        = useState<"enable"|"disable">(initialData ? (initialData.is_active ? "enable" : "disable") : "enable");
   const [canBuy,        setCanBuy]        = useState<"yes"|"no">(initialData ? (initialData.client_can_purchase ? "yes" : "no") : "yes");
@@ -308,7 +316,8 @@ function AddServicePlanForm({
             headers: adminApiHeaders(),
           body: JSON.stringify({
             name,
-            type: planType,
+            type: servicePlanType,
+            isTvPackage,
             speedDown,
             speedUp,
             speedDownUnit,
@@ -352,7 +361,8 @@ function AddServicePlanForm({
           headers: adminApiHeaders(),
           body: JSON.stringify({
             name,
-            type: planType,
+            type: servicePlanType,
+            isTvPackage,
             speedDown,
             speedUp,
             speedDownUnit,
@@ -386,7 +396,7 @@ function AddServicePlanForm({
       }
 
       let notice: PlanSyncNotice | undefined;
-      const savedType = savedPlan?.type ?? planType;
+      const savedType = savedPlan?.type ?? servicePlanType;
       if (isRouterProfilePlanType(savedType)) {
         const serviceLabel = planProfileServiceLabel(savedType);
         const planId = Number(savedPlan?.id ?? initialData?.id);
@@ -1077,7 +1087,7 @@ function BandwidthPlansTab() {
    MAIN PLANS PAGE
 ═══════════════════════════════════════════════════════════ */
 const TAB_LABELS: Record<string, string> = {
-  all: "All Plans", hotspot: "Hotspot Plans", pppoe: "PPPoE Plans", static: "Static IP Plans", vlan: "VLAN Plans",
+  all: "All Plans", hotspot: "Hotspot Plans", tv: "TV Packages", pppoe: "PPPoE Plans", static: "Static IP Plans", vlan: "VLAN Plans",
   bandwidth: "Bandwidth Plans", trials: "Hotspot Trials", fup: "FUP",
 };
 
@@ -1341,7 +1351,7 @@ export default function Plans() {
             {activeTab === "all" && (
               <label className="plans-filter">
                 <span>Service</span>
-                <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value as "all" | "pppoe" | "hotspot" | "vlan")}>
+                   <select value={serviceFilter} onChange={(event) => setServiceFilter(event.target.value as "all" | "pppoe" | "hotspot" | "vlan")}>
                   <option value="all">All services</option>
                   <option value="pppoe">PPPoE</option>
                   <option value="hotspot">Hotspot</option>
@@ -1434,7 +1444,7 @@ export default function Plans() {
                 </div>
                 {visiblePlans.map((p) => {
                   const serviceType = p.type === "pppoe" ? "pppoe" : p.type === "vlan" ? "vlan" : p.type === "hotspot" || p.type === "trials" ? "hotspot" : "other";
-                  const serviceLabel = serviceType === "pppoe" ? "PPPoE" : serviceType === "vlan" ? "VLAN" : serviceType === "hotspot" ? "Hotspot" : p.type;
+                  const serviceLabel = p.is_tv_package ? "TV" : serviceType === "pppoe" ? "PPPoE" : serviceType === "vlan" ? "VLAN" : serviceType === "hotspot" ? "Hotspot" : p.type;
                   const speed = p.speed_down === p.speed_up ? `${p.speed_down} Mbps` : `${p.speed_down}/${p.speed_up} Mbps`;
                   const router = routers.find((item) => item.id === p.router_id);
                   const port = p.port_id ? ports.find((item) => item.id === p.port_id) : null;

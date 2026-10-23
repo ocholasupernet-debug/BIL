@@ -207,6 +207,7 @@ export interface DbPlan {
   static_ip_range: string | null;
   description: string | null;
   is_active: boolean;
+  is_tv_package?: boolean;
   created_at: string;
   updated_at: string;
 }

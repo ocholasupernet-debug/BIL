@@ -38,6 +38,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_admin_payment_gateway.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_secure_mpesa_callback_processing.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_tv_mac_address.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_hotspot_tv_packages.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_vpn_ip.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_management_vpn_credentials.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_migration_jobs.sql", import.meta.url)),

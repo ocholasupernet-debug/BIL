@@ -59,6 +59,7 @@ export function planWritePayload(
     fup_speed_up: fup.fupSpeedUp,
     is_active: input.isActive ?? true,
     client_can_purchase: input.clientCanPurchase ?? true,
+    is_tv_package: input.isTvPackage === true,
     description: input.description ?? null,
   };
 }

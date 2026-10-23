@@ -168,6 +168,7 @@ const navSections: NavSection[] = [
         name: "Packages / Plans", icon: Package, visibilityKey: "billing.plans",
         children: [
           { name: "Hotspot Plans", href: "/admin/plans?type=hotspot" },
+          { name: "TV Packages", href: "/admin/plans?type=tv" },
           { name: "PPPoE Plans",   href: "/admin/plans?type=pppoe" },
           { name: "Static IP",     href: "/admin/plans?type=static" },
           { name: "Bandwidth",     href: "/admin/plans?type=bandwidth" },

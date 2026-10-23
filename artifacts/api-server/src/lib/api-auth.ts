@@ -79,6 +79,7 @@ export interface PaymentIntentPayload {
   macAddress?: string;
   deviceName?: string;
   amountBreakdown?: { package: number; router: number; labour: number };
+  targetDevice?: boolean;
   issuedAt: number;
   nonce: string;
 }

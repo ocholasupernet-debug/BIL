@@ -694,6 +694,10 @@ router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
     res.status(400).json({ error: "type must be hotspot, pppoe, static, trial, or vlan." });
     return;
   }
+  if (req.body.isTvPackage === true && !["hotspot", "trial", "trials"].includes(normalizedType)) {
+    res.status(400).json({ error: "TV packages must use a Hotspot service plan." });
+    return;
+  }
   if (!name || price === undefined) {
     res.status(400).json({ error: "name and price are required" });
     return;
@@ -725,7 +729,7 @@ router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
     res.status(403).json({ error: error instanceof Error ? error.message : "A valid signed-in account is required." });
     return;
   }
-  const requestedAccountId = parseRequiredId(adminId ?? ispId);
+     const requestedAccountId = parseRequiredId(adminId ?? ispId);
   if (context.account.role !== "reseller" && requestedAccountId !== null && requestedAccountId !== context.tenantId) {
     res.status(403).json({ error: "The selected ISP account does not match the signed-in account." });
     return;
@@ -756,6 +760,7 @@ router.post("/plans", requireAdmin(), async (req, res): Promise<void> => {
         tetheringAllowed: req.body.tetheringAllowed,
        fupSpeedDown: req.body.fupSpeedDown, fupSpeedUp: req.body.fupSpeedUp,
        isActive, clientCanPurchase,
+        isTvPackage: req.body.isTvPackage === true,
      }, scope, pools),
   });
   if (!row) { res.status(500).json({ error: "Failed to create plan" }); return; }
@@ -789,15 +794,23 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
     speed_down_unit: string | null;
     speed_up_unit: string | null;
     tethering_allowed: boolean | null;
+    is_tv_package: boolean;
   }>(
     "isp_plans",
-    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}&select=id,name,type,router_id,port_id,expired_ip_pool,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit,tethering_allowed&limit=1`,
+    `id=eq.${id}&admin_id=eq.${effectiveAdminId}&${planOwnerFilter(context.account.role === "reseller" ? context.account.id : null)}&select=id,name,type,router_id,port_id,expired_ip_pool,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up,speed_down,speed_up,speed_down_unit,speed_up_unit,tethering_allowed,is_tv_package&limit=1`,
   );
   const source = sourceRows[0];
   if (!source) { res.status(404).json({ error: "Plan not found" }); return; }
   const normalizedType = String(req.body.type ?? source.type ?? "hotspot").trim().toLowerCase();
   if (!isSupportedPlanType(normalizedType)) {
     res.status(400).json({ error: "type must be hotspot, pppoe, static, trial, or vlan." });
+    return;
+  }
+  const nextIsTvPackage = req.body.isTvPackage === undefined
+    ? source.is_tv_package === true
+    : req.body.isTvPackage === true;
+  if (nextIsTvPackage && !["hotspot", "trial", "trials"].includes(normalizedType)) {
+    res.status(400).json({ error: "TV packages must use a Hotspot service plan." });
     return;
   }
 
@@ -858,6 +871,7 @@ router.patch("/plans/:id", requireAdmin(), async (req, res): Promise<void> => {
 
   const updates: Record<string, unknown> = {
     ...planWritePayload(fupInput, scope, pools),
+    is_tv_package: nextIsTvPackage,
     updated_at: new Date().toISOString(),
   };
   if (req.body.name === undefined) delete updates.name;
@@ -959,6 +973,7 @@ router.post("/plans/:id/copy", requireAdmin(), async (req, res): Promise<void> =
     is_active: source.is_active ?? true,
     client_can_purchase: source.client_can_purchase ?? true,
     description: source.description ?? null,
+    is_tv_package: source.is_tv_package === true,
   };
   const [row] = await sbInsert<Record<string, unknown>>("isp_plans", copyPayload);
   if (!row) {
