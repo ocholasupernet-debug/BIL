@@ -7809,6 +7809,9 @@ function generateCoexistenceServiceSetupScript(
   const hotspotGateway = "172.16.99.1/24";
   const coexistNetwork = "172.16.99.0/24";
   const poolRange = "172.16.99.10-172.16.99.254";
+  const pppoeGateway = "172.16.100.1";
+  const pppoeNetwork = "172.16.100.0/24";
+  const pppoePoolRange = "172.16.100.10-172.16.100.254";
   const portalHostnames = Array.from(new Set((options.portalHostnames ?? [])
     .map(host => String(host).trim().toLowerCase())
     .filter(host => host.length > 0 && host.length <= 253 && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(host))));
@@ -7969,23 +7972,39 @@ ${walledGardenHostnames.map(hostname => `:if ([:len [/ip hotspot walled-garden i
   blocks.push(`# Allow the chat widget only on this isolated Hotspot server
 ${renderHotspotChatWalledGardenRules(hotspotServer)}`);
 
-  blocks.push(`# 6. Isolated PPPoE pool, profile, and server
-${ownedOrConflict(
-  "coexistPppoePool",
-  "/ip pool",
-  `name=${routerOsString(pppoePool)}`,
-  pppoePool,
-  `${tag} owned PPPoE pool`,
-  `/ip pool add name=${routerOsString(pppoePool)} ranges=${routerOsString(poolRange)} comment=${routerOsString(`${tag} owned PPPoE pool`)}`,
-)}
-${ownedOrConflict(
-  "coexistPppoeProfile",
-  "/ppp profile",
-  `name=${routerOsString(pppoeProfile)}`,
-  pppoeProfile,
-  pppoeProfileComment,
-  `/ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString("172.16.99.1")} remote-address=${routerOsString(pppoePool)} use-radius=yes only-one=yes comment=${routerOsString(pppoeProfileComment)}`,
-)}
+  blocks.push(`# 6. Isolated PPPoE pool, profile, and server. PPPoE has a separate subnet
+# so firewall exclusions can identify PPPoE without exempting Hotspot clients.
+# Existing PPPoE sessions may need to reconnect after the pool moves to this subnet;
+# this script does not disconnect sessions.
+:local coexistPppoeAddressConflicts [/ip address find where address~"172.16.100."]
+:local coexistPppoePoolConflicts [/ip pool find where name!=${routerOsString(pppoePool)} && ranges~"172.16.100."]
+:if (([:len $coexistPppoeAddressConflicts] > 0) || ([:len $coexistPppoePoolConflicts] > 0)) do={
+    :set coexistError "${tag}: 172.16.100.0/24 is already used by another address or IP pool; PPPoE resources were not changed."
+    :error $coexistError
+}
+:local coexistPppoePoolIds [/ip pool find where name=${routerOsString(pppoePool)}]
+:if ([:len $coexistPppoePoolIds] = 0) do={
+    /ip pool add name=${routerOsString(pppoePool)} ranges=${routerOsString(pppoePoolRange)} comment=${routerOsString(`${tag} owned PPPoE pool`)}
+} else={
+    :local coexistPppoePoolId [:pick $coexistPppoePoolIds 0]
+    :if ([/ip pool get $coexistPppoePoolId comment] != ${routerOsString(`${tag} owned PPPoE pool`)}) do={
+        :set coexistError "${tag}: a foreign pool uses the PPPoE pool name; it was preserved."
+        :error $coexistError
+    }
+    /ip pool set $coexistPppoePoolId ranges=${routerOsString(pppoePoolRange)} comment=${routerOsString(`${tag} owned PPPoE pool`)}
+}
+:local coexistPppoeProfileIds [/ppp profile find where name=${routerOsString(pppoeProfile)}]
+:if ([:len $coexistPppoeProfileIds] = 0) do={
+    /ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString("172.16.100.1,8.8.8.8")} only-one=yes comment=${routerOsString(pppoeProfileComment)}
+} else={
+    :local coexistPppoeProfileId [:pick $coexistPppoeProfileIds 0]
+    :if ([/ppp profile get $coexistPppoeProfileId comment] != ${routerOsString(pppoeProfileComment)}) do={
+        :set coexistError "${tag}: a foreign PPPoE profile uses the managed profile name; it was preserved."
+        :error $coexistError
+    }
+    /ppp profile set $coexistPppoeProfileId local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString("172.16.100.1,8.8.8.8")} only-one=yes comment=${routerOsString(pppoeProfileComment)}
+}
+:put "${tag}: PPPoE now uses 172.16.100.0/24; existing sessions may need to reconnect. No sessions were disconnected."
 ${ownedOrConflict(
   "coexistPppoeServer",
   "/interface pppoe-server server",
@@ -8044,9 +8063,26 @@ ${ownedOrConflict(
             :error $coexistError
         }
     }
+    # Keep PPPoE flows out of any later FastTrack rule so their dynamic Simple Queues shape traffic.
+    :do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} pppoe-to-wan`)}] } on-error={}
+    :do { /ip firewall filter add chain=forward action=accept src-address=${routerOsString(pppoeNetwork)} out-interface-list=WAN connection-state=new,established,related comment=${routerOsString(`${tag} pppoe-to-wan`)} place-before=0 } on-error={
+        :set coexistError ("${tag}: PPPoE queue-preserving forwarding rule could not be added: " . $error)
+        :error $coexistError
+    }
+    :do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} pppoe-from-wan`)}] } on-error={}
+    :do { /ip firewall filter add chain=forward action=accept in-interface-list=WAN dst-address=${routerOsString(pppoeNetwork)} connection-state=established,related comment=${routerOsString(`${tag} pppoe-from-wan`)} place-before=0 } on-error={
+        :set coexistError ("${tag}: PPPoE return-traffic queue rule could not be added: " . $error)
+        :error $coexistError
+    }
     :if ([:len [/ip firewall nat find where comment=${routerOsString(`${tag} masquerade`)}]] = 0) do={
         :do { /ip firewall nat add chain=srcnat action=masquerade src-address=${routerOsString(coexistNetwork)} out-interface-list=WAN comment=${routerOsString(`${tag} masquerade`)} } on-error={
             :set coexistError ("${tag}: isolated NAT rule could not be added: " . $error)
+            :error $coexistError
+        }
+    }
+    :if ([:len [/ip firewall nat find where comment=${routerOsString(`${tag} pppoe masquerade`)}]] = 0) do={
+        :do { /ip firewall nat add chain=srcnat action=masquerade src-address=${routerOsString(pppoeNetwork)} out-interface-list=WAN comment=${routerOsString(`${tag} pppoe masquerade`)} } on-error={
+            :set coexistError ("${tag}: isolated PPPoE NAT rule could not be added: " . $error)
             :error $coexistError
         }
     }
@@ -8196,6 +8232,10 @@ export function generateServiceSetupScript(
 }
 :if ([:len [/radius find where service=${routerOsString("hotspot,ppp")} && address=${routerOsString(takeoverRadiusIp)} && disabled=no]] = 0) do={
     :set serviceError "${tag}: OcholaSuperNet RADIUS profile was not verified."
+    :error $serviceError
+}
+:do { /ppp aaa set use-radius=yes } on-error={
+    :set serviceError ("${tag}: PPP RADIUS authentication could not be enabled: " . $error)
     :error $serviceError
 }
 :put "${tag}: OcholaSuperNet RADIUS is configured for Hotspot and PPPoE."`
@@ -8510,7 +8550,7 @@ ${portalFileUrls ? `:if ([:len [/file find where name=($hsdir . "/login.html")]]
         /ip pool set [find where name=${routerOsString(pppoeExpiredPool)}] ranges=${routerOsString(pppoeExpiredPoolRange)}
     }
     :if ([:len [/ppp profile find where name=${routerOsString(pppoeProfile)}]] = 0) do={
-        /ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes${radiusProfileSetting} comment=${routerOsString(`${tag} PPPoE profile`)}
+        /ppp profile add name=${routerOsString(pppoeProfile)} local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes comment=${routerOsString(`${tag} PPPoE profile`)}
     } else={
         /ppp profile set [find where name=${routerOsString(pppoeProfile)}] local-address=${routerOsString(pppoeGateway)} remote-address=${routerOsString(pppoePool)} dns-server=${routerOsString(`${hotspotGateway},8.8.8.8`)} only-one=yes use-encryption=yes change-tcp-mss=yes${radiusProfileSetting} comment=${routerOsString(`${tag} PPPoE profile`)}
     }
@@ -8550,6 +8590,12 @@ ${portalFileUrls ? `:if ([:len [/file find where name=($hsdir . "/login.html")]]
     :set serviceStepFailed true
     :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: PPPoE forwarding could not be added: " . $error . " | ")
     :put ("${tag}: PPPoE forwarding could not be added: " . $error)
+}
+:do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} pppoe-from-wan`)}] } on-error={}
+:do { /ip firewall filter add chain=forward action=accept in-interface-list=WAN dst-address=${routerOsString(pppoeNetwork)} connection-state=established,related comment=${routerOsString(`${tag} pppoe-from-wan`)} place-before=0 } on-error={
+    :set serviceStepFailed true
+    :set serviceFailures ($serviceFailures . "SERVICE STEP 7/7: PPPoE return traffic queue exclusion could not be added: " . $error . " | ")
+    :put ("${tag}: PPPoE return traffic queue exclusion could not be added: " . $error)
 }
 :do { /ip firewall filter remove [find where comment=${routerOsString(`${tag} allow-service-dns-udp`)}] } on-error={}
 :do { /ip firewall filter add chain=input action=accept in-interface=${routerOsString(bridgeName)} protocol=udp dst-port=53 comment=${routerOsString(`${tag} allow-service-dns-udp`)} place-before=0 } on-error={

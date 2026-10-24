@@ -1488,6 +1488,12 @@ router.post("/router/:id/files/generated/deploy", requireAdmin(), async (req, re
 :if ([:len [/ip pool find where name=$expiredPool]] = 0) do={ /ip pool add name=$expiredPool ranges=192.168.191.10-192.168.191.254 comment="${tag} PPPoE expired pool"; }
 :if ([:len [/ppp profile find where name=$pppProfile]] = 0) do={ /ppp profile add name=$pppProfile local-address=192.168.99.1 remote-address=$activePool dns-server=1.1.1.1,8.8.8.8 only-one=yes change-tcp-mss=yes comment="${tag} PPPoE profile"; }
 :if ([:len [/interface pppoe-server server find where service-name=$pppService]] = 0) do={ /interface pppoe-server server add service-name=$pppService interface=$bridge default-profile=$pppProfile one-session-per-host=yes disabled=no; }
+:if ([:len [/interface list find where name="WAN"]] > 0) do={
+  :do { /ip firewall filter remove [find where comment="${tag} pppoe-to-wan"] } on-error={}
+  /ip firewall filter add chain=forward action=accept src-address=192.168.99.0/24 out-interface-list=WAN connection-state=new,established,related comment="${tag} pppoe-to-wan" place-before=0
+  :do { /ip firewall filter remove [find where comment="${tag} pppoe-from-wan"] } on-error={}
+  /ip firewall filter add chain=forward action=accept in-interface-list=WAN dst-address=192.168.99.0/24 connection-state=established,related comment="${tag} pppoe-from-wan" place-before=0
+}
 :put "Separate PPPoE setup prepared. Expired pool is not automatically assigned to expired users."
 `;
       fileName = `pppoe-setup-${id}.rsc`;

@@ -89,6 +89,8 @@ test("service setup links the shared bridge to Hotspot and PPPoE", () => {
   assert.match(script, /interface list member add list="LAN" interface="co-hotspot-bridge-104"/);
   assert.match(script, /chain=forward action=accept in-interface="co-hotspot-bridge-104" out-interface-list=WAN hotspot=auth/);
   assert.match(script, /chain=forward action=accept src-address="192\.168\.99\.0\/24" out-interface-list=WAN/);
+  assert.match(script, /chain=forward action=accept in-interface-list=WAN dst-address="192\.168\.99\.0\/24" connection-state=established,related comment="ochola-services-104 pppoe-from-wan" place-before=0/);
+  assert.ok(script.indexOf('comment="ochola-services-104 pppoe-from-wan" place-before=0') < script.indexOf('comment="ochola-services-104 PPPoE masquerade"'));
   assert.doesNotMatch(script, /chain=forward action=accept in-interface="co-hotspot-bridge-104" out-interface-list=WAN connection-state=new,established,related comment="ochola-services-104 service-to-wan"/);
   assert.match(script, /ip dns set allow-remote-requests=yes/);
   assert.match(script, /chain=input action=accept in-interface="co-hotspot-bridge-104" protocol=udp dst-port=53/);
@@ -215,7 +217,8 @@ test("Takeover routes Hotspot and PPPoE through Ochola RADIUS and the current po
 
   assert.match(script, /\/radius add service="hotspot,ppp" address="10\.8\.5\.1"/);
   assert.match(script, /ip hotspot profile add name="hsprof"[^\n]*dns-name="come\.isplatty\.org"[^\n]*use-radius=yes/);
-  assert.match(script, /ppp profile add name="ochola-services-104-pppoe-profile"[^\n]*use-radius=yes/);
+  assert.match(script, /\/ppp aaa set use-radius=yes/);
+  assert.doesNotMatch(script, /ppp profile (?:add|set)[^\n]*use-radius=/);
   assert.match(script, /OcholaSuperNet RADIUS is configured for Hotspot and PPPoE/);
   assert.match(script, /walled-garden ip add dst-host="come\.isplatty\.org"/);
   assert.doesNotMatch(script, /ispledger|netkali|freeispradius|proxyserver/i);
@@ -259,6 +262,11 @@ test("coexistence service setup compiles one isolated, delayed payload", () => {
   assert.match(script, /interface bridge add name="br-ochola-coexist"/);
   assert.match(script, /172\.16\.99\.1\/24/);
   assert.match(script, /172\.16\.99\.10-172\.16\.99\.254/);
+  assert.match(script, /172\.16\.100\.10-172\.16\.100\.254/);
+  assert.match(script, /pppoe-to-wan/);
+  assert.match(script, /src-address="172\.16\.100\.0\/24" out-interface-list=WAN connection-state=new,established,related/);
+  assert.match(script, /in-interface-list=WAN dst-address="172\.16\.100\.0\/24" connection-state=established,related/);
+  assert.match(script, /pppoe masquerade/);
   assert.match(script, /html-directory="flash\/hotspot\/coexist_hs_ether3"/);
   assert.match(script, /ip hotspot add name="coexist_hs_ether3"/);
   assert.match(script, /service-name="pppoe_ochola_ether3"/);
@@ -307,6 +315,8 @@ test("coexistence keeps portal access scoped and requires Hotspot authentication
   assert.match(script, /add server="coexist_hs_ether4" dst-host=ocholasupernet\.isplatty\.org action=allow comment="Allow OcholaSupernet Portal Domain"/);
   assert.match(script, /chain=forward action=accept in-interface="co-hotspot-bridge" out-interface-list=WAN hotspot=auth/);
   assert.doesNotMatch(script, /chain=forward action=accept src-address="172\.16\.99\.0\/24" out-interface-list=WAN/);
+  assert.match(script, /src-address="172\.16\.100\.0\/24" out-interface-list=WAN connection-state=new,established,related/);
+  assert.match(script, /dst-address="172\.16\.100\.0\/24" connection-state=established,related/);
   assert.match(script, /chain=input action=accept in-interface="co-hotspot-bridge" protocol=tcp dst-port=53/);
 });
 
