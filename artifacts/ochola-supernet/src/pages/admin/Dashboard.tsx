@@ -590,6 +590,18 @@ export default function Dashboard() {
     ),
     [uniqueServiceCustomers, livePresenceByRouter, customerPlanScopeMap],
   );
+  const onlineCustomerCountByRouter = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const customer of onlineServiceCustomers) {
+      const planRouterId = customer.plan_id == null
+        ? null
+        : customerPlanScopeMap[customer.plan_id]?.router_id ?? null;
+      const routerId = customer.router_id ?? planRouterId;
+      if (routerId == null) continue;
+      counts.set(routerId, (counts.get(routerId) ?? 0) + 1);
+    }
+    return counts;
+  }, [onlineServiceCustomers, customerPlanScopeMap]);
   const onlineHotspotUsers = onlineServiceCustomers.filter(
     customer => prepaidServiceType(customer.type) === "hotspot",
   ).length;
@@ -867,6 +879,9 @@ export default function Dashboard() {
                   </div>
                   <div className="router-host">{router.host}</div>
                   <div className="router-meta">{router.model ?? "MikroTik"} {router.ros_version ? `· ROS v${router.ros_version}` : ""}</div>
+                  <div className="router-meta">
+                    {onlineCustomerCountByRouter.get(router.id) ?? 0} eligible package users online
+                  </div>
                   {isOnline && router.router_uptime && (
                     <div className="router-meta router-uptime">Uptime: {formatRouterUptime(router.router_uptime)}</div>
                   )}
