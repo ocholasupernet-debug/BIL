@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { randomBytes } from "node:crypto";
 import {
+  collectIdOrderedPages,
   sbSelect,
   sbSelectStrict,
   sbInsert,
@@ -781,9 +782,12 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
   }
   // Filter in application code so the ordinary customer list remains compatible
   // until the staged archived_at migration is applied to the database.
-  const rows = await sbSelect<{ archived_at?: string | null } & Record<string, unknown>>(
-    "isp_customers",
-    `admin_id=eq.${adminId}&select=*`,
+  const rows = await collectIdOrderedPages(
+    (afterId, pageSize) => sbSelectStrict<{ id: number; archived_at?: string | null } & Record<string, unknown>>(
+      "isp_customers",
+      `admin_id=eq.${adminId}&id=gt.${afterId}&select=*&order=id.asc&limit=${pageSize}`,
+      "the customer list",
+    ),
   );
   const includeArchived = req.query.includeArchived === "true";
   res.json(rows.filter(row => includeArchived ? Boolean(row.archived_at) : !row.archived_at));
