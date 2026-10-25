@@ -9,6 +9,7 @@ export function prepaidLiveQueryKey(routerId: number) {
 async function fetchPrepaidRouterLive(router: PrepaidLiveRouter): Promise<PrepaidLiveData> {
   const token = getAdminApiToken();
   const response = await fetch(`/api/router/${router.id}/live`, {
+    cache: "no-store",
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!response.ok) throw new Error(`Router ${router.name} is unavailable`);
@@ -30,6 +31,9 @@ export function usePrepaidLiveQueries(
       queryFn: () => fetchPrepaidRouterLive(router),
       staleTime: 5_000,
       refetchInterval,
+      refetchOnMount: "always",
+      refetchOnWindowFocus: "always",
+      refetchOnReconnect: "always",
     })),
   });
 }

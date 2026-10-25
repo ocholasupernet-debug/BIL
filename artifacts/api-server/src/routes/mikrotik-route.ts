@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { randomBytes } from "crypto";
 import { isIspHotspotTawkEnabled, prepareIspHotspotAsset } from "../lib/isp-hotspot-asset.js";
 import { preserveCumulativeUsage } from "../lib/prepaid-usage.js";
+import { isPrepaidCustomerEntitled } from "../lib/prepaid-entitlement.js";
 import {
   fetchHotspotUsers,
   fetchPPPoEActive,
@@ -496,7 +497,10 @@ type PrepaidPresenceRow = {
   type: string | null;
   username: string | null;
   pppoe_username: string | null;
+  mac_address: string | null;
   ip_address: string | null;
+  status: string | null;
+  depletion_reason: string | null;
   expires_at: string | null;
   updated_at: string | null;
   last_seen: string | null;
@@ -509,8 +513,23 @@ function normalizePrepaidIdentity(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
 }
 
-function prepaidIdentityKeys(row: Pick<PrepaidPresenceRow, "username" | "pppoe_username">): string[] {
-  return Array.from(new Set([row.username, row.pppoe_username].map(normalizePrepaidIdentity).filter(Boolean)));
+function prepaidMacIdentity(value: unknown): string {
+  const mac = String(value ?? "").toLowerCase().replace(/[^a-f0-9]/g, "");
+  return mac.length === 12 ? `mac:${mac}` : "";
+}
+
+function prepaidIdentityKeys(
+  row: Pick<PrepaidPresenceRow, "type" | "username" | "pppoe_username" | "mac_address">,
+): string[] {
+  const serviceType = String(row.type ?? "").toLowerCase();
+  const hotspotMac = ["hotspot", "voucher", "trial", "trials"].includes(serviceType)
+    ? prepaidMacIdentity(row.mac_address)
+    : "";
+  return Array.from(new Set([
+    normalizePrepaidIdentity(row.username),
+    normalizePrepaidIdentity(row.pppoe_username),
+    hotspotMac,
+  ].filter(Boolean)));
 }
 
 function prepaidLiveUsage(
@@ -525,6 +544,11 @@ function prepaidLiveUsage(
     usage.set(key, (usage.get(key) ?? 0) + Math.max(0, incoming) + Math.max(0, outgoing));
   };
   data.hotspotUsers.forEach(session => add(session.user, session.bytesIn, session.bytesOut));
+  data.hotspotUsers.forEach(session => {
+    const macIdentity = prepaidMacIdentity(session.macAddress);
+    if (!macIdentity) return;
+    usage.set(macIdentity, Math.max(0, Number(session.bytesIn) || 0) + Math.max(0, Number(session.bytesOut) || 0));
+  });
   data.pppoeUsers.forEach(session => add(session.name, session.bytesIn, session.bytesOut));
   return usage;
 }
@@ -544,7 +568,7 @@ async function persistPrepaidLiveState(
     : `&router_id=eq.${routerId}`;
   const customers = await sbSelect<PrepaidPresenceRow>(
     "isp_customers",
-    `admin_id=eq.${adminId}${customerScope}&select=id,type,username,pppoe_username,ip_address,expires_at,updated_at,last_seen,data_used_mb,data_used_bytes,service_online`,
+    `admin_id=eq.${adminId}${customerScope}&select=id,type,username,pppoe_username,mac_address,ip_address,status,depletion_reason,expires_at,updated_at,last_seen,data_used_mb,data_used_bytes,service_online`,
   );
   if (customers.length === 0) return data.vlanQueueStatsAvailable ? 0 : null;
 
@@ -574,6 +598,12 @@ async function persistPrepaidLiveState(
       )
       : null;
     if (vlanPresence && !vlanPresence.statsAvailable) continue;
+    const entitled = isPrepaidCustomerEntitled(
+      customer.status,
+      customer.expires_at,
+      customer.depletion_reason,
+      observedAtMs,
+    );
     const sessionBytes = prepaidIdentityKeys(customer)
       .map(identity => usage.get(identity))
       .find(value => value !== undefined);
@@ -590,7 +620,7 @@ async function persistPrepaidLiveState(
       : sessionBytes;
     const expiresAtMs = customer.expires_at ? Date.parse(customer.expires_at) : Number.NaN;
     const expired = Number.isFinite(expiresAtMs) && expiresAtMs <= observedAtMs;
-    let online = sessionBytes !== undefined && !expired;
+    let online = sessionBytes !== undefined && entitled;
     const presenceAvailable = ["hotspot", "voucher"].includes(serviceType)
       ? data.hotspotUsersAvailable !== false
       : serviceType === "pppoe"
@@ -601,7 +631,7 @@ async function persistPrepaidLiveState(
       usageBytes = queue?.statsAvailable && queue.bytesIn !== null && queue.bytesOut !== null
         ? queue.bytesIn + queue.bytesOut
         : undefined;
-      online = vlanPresence.online;
+      online = vlanPresence.online && entitled;
       if (online) onlineVlanUsers += 1;
     }
     const payload: Record<string, unknown> = {};

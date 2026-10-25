@@ -43,6 +43,37 @@ test("online prepaid counts use the normalized live session from the shared rout
   assert.equal(customerIsOnline(pppoe, presence, {}, NOW), true);
 });
 
+test("Hotspot presence matches a live device MAC when its session username differs", () => {
+  const presence = buildLivePresenceByRouter(
+    [{ id: 7 }],
+    [{
+      data: {
+        fetchedAt: "2026-10-07T11:59:55.000Z",
+        hotspotUsers: [{ user: "mac-auth-session", macAddress: "AA:BB:CC:DD:EE:FF" }],
+      },
+    }],
+    NOW,
+  );
+  const user: PrepaidOnlineCustomer = {
+    id: 3,
+    type: "hotspot",
+    username: "saved-hotspot-login",
+    mac_address: "aa-bb-cc-dd-ee-ff",
+    router_id: 7,
+    status: "active",
+    expires_at: "2026-10-08T00:00:00.000Z",
+  };
+  const pppoeWithSameMac: PrepaidOnlineCustomer = {
+    ...user,
+    type: "pppoe",
+    pppoe_username: "different-pppoe-account",
+  };
+
+  assert.equal(customerIsOnline(user, presence, {}, NOW), true);
+  assert.equal(customerIsOnline({ ...user, mac_address: "00:11:22:33:44:55" }, presence, {}, NOW), false);
+  assert.equal(customerIsOnline(pppoeWithSameMac, presence, {}, NOW), false);
+});
+
 test("expired access and suspended prepaid records never count as online", () => {
   const presence = buildLivePresenceByRouter(
     [{ id: 7 }],
