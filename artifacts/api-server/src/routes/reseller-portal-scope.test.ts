@@ -1902,6 +1902,40 @@ test("signed reseller portal requests stay within their assigned service", async
     }
   });
 
+  await t.test("active paid account marks temporary RouterOS failures as retryable", async () => {
+    const previousReconnect = hotspotTroubleshootOperations.reconnectHotspotUserByMac;
+    const previousRouterFixture = includeRouterFixture;
+    const previousClientIp = visibleHotspotClientIp;
+    try {
+      transactions = [{ ...assignedTransaction }];
+      customers = [{ ...assignedCustomer }];
+      includeRouterFixture = true;
+      visibleHotspotClientIp = "10.43.0.10";
+      hotspotTroubleshootOperations.reconnectHotspotUserByMac = async () => {
+        throw new Error("simulated RouterOS timeout");
+      };
+      clearRequests();
+
+      const login = await request("/api/customers/hotspot-troubleshoot", {
+        method: "POST",
+        body: {
+          action: "login",
+          adminId: 7,
+          mac_address: assignedCustomer.mac_address,
+        },
+      });
+      assert.equal(login.status, 503);
+      const result = await login.json() as { status: string; retryable: boolean; connected: boolean };
+      assert.equal(result.status, "active");
+      assert.equal(result.retryable, true);
+      assert.equal(result.connected, false);
+    } finally {
+      hotspotTroubleshootOperations.reconnectHotspotUserByMac = previousReconnect;
+      includeRouterFixture = previousRouterFixture;
+      visibleHotspotClientIp = previousClientIp;
+    }
+  });
+
   await t.test("sibling customer login and troubleshooting do not reach router lookups", async () => {
     customers = [siblingCustomer];
     clearRequests();
@@ -1932,6 +1966,47 @@ test("signed reseller portal requests stay within their assigned service", async
     assert.ok(dbRequests.filter(row => row.table === "isp_plans").every(row =>
       row.rawQuery.includes("admin_id=eq.7")));
     assertNoRouterOrWrites();
+  });
+
+  await t.test("legacy login selects the matching paid account when tenant usernames repeat", async () => {
+    const previousCustomers = customers;
+    const previousRouterFixture = includeRouterFixture;
+    const previousSessions = activeHotspotLoginSessions;
+    const previousClientIp = visibleHotspotClientIp;
+    try {
+      customers = [
+        { ...assignedCustomer, admin_id: 7, password: "different-account-password" },
+        { ...assignedCustomer, id: 803, admin_id: 7, password: "assigned-password" },
+      ];
+      includeRouterFixture = true;
+      activeHotspotLoginSessions = [];
+      visibleHotspotClientIp = "10.43.0.10";
+      routerOperations.length = 0;
+      clearRequests();
+
+      const login = await request("/api/customers/hotspot-login", {
+        method: "POST",
+        token: null,
+        body: {
+          adminId: 7,
+          username: "assigned-account",
+          password: "assigned-password",
+          mac_address: assignedCustomer.mac_address,
+        },
+      });
+      assert.equal(login.status, 200, await login.clone().text());
+      const result = await login.json() as { customer: { id: number }; connected: boolean };
+      assert.equal(result.customer.id, 803);
+      assert.equal(result.connected, true);
+      assert.ok(routerOperations.some(row =>
+        row.name === "connectLoginUser" && row.username === "assigned-account",
+      ));
+    } finally {
+      customers = previousCustomers;
+      includeRouterFixture = previousRouterFixture;
+      activeHotspotLoginSessions = previousSessions;
+      visibleHotspotClientIp = previousClientIp;
+    }
   });
 
   await t.test("sibling payments are hidden before reconnect or activation", async () => {

@@ -3172,7 +3172,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   const portalScope = req.hotspotPortalContext;
   let customer: Record<string, unknown> | undefined;
   if (portalScope) {
-    const usernameFilter = `username=eq.${encodeURIComponent(username)}&select=*&limit=2`;
+    const usernameFilter = `username=eq.${encodeURIComponent(username)}&select=*&limit=25`;
     const [vlanRows, resellerRows, ispVoucherRows] = await Promise.all([
       sbSelectStrict<Record<string, unknown>>(
         "isp_customers",
@@ -3188,17 +3188,23 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
       ),
     ]);
     const scopedCustomers = [...vlanRows, ...resellerRows, ...ispVoucherRows];
-    if (scopedCustomers.length > 1) {
+    const credentialMatches = scopedCustomers.filter(row => row.password === password);
+    if (credentialMatches.length > 1) {
       res.status(409).json({ error: "This username is ambiguous on the assigned Hotspot service. Contact support." });
       return;
     }
-    customer = scopedCustomers[0];
+    customer = credentialMatches[0];
   } else {
     const rows = await sbSelect<Record<string, unknown>>(
       "isp_customers",
-      `admin_id=eq.${adminId}&type=in.(hotspot,voucher)&username=eq.${encodeURIComponent(username)}&select=*&limit=2`,
+      `admin_id=eq.${adminId}&type=in.(hotspot,voucher)&username=eq.${encodeURIComponent(username)}&select=*&limit=25`,
     );
-    customer = rows[0];
+    const credentialMatches = rows.filter(row => row.password === password);
+    if (credentialMatches.length > 1) {
+      res.status(409).json({ error: "These credentials match more than one account. Contact support." });
+      return;
+    }
+    customer = credentialMatches[0];
   }
   if (!customer) {
     res.status(401).json({ error: "Invalid username or password" });
@@ -3284,6 +3290,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   } catch (error) {
     res.status(503).json({
       error: error instanceof Error ? error.message : "The hotspot router is not ready.",
+      retryable: true,
     });
     return;
   }
@@ -3355,6 +3362,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     logger.warn({ err: error, adminId, routerId }, "[customers/hotspot-login] could not read hotspot sessions");
     res.status(503).json({
       ...activePlanDetails,
+      retryable: true,
       error: "Your plan is active, but the hotspot router has not accepted the connection yet.",
     });
     return;
@@ -3397,7 +3405,8 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
       });
       if (!loginAccepted) {
         res.status(503).json({
-        ...activePlanDetails,
+          ...activePlanDetails,
+          retryable: true,
           error: "The router has not confirmed this device's login yet. Please try again.",
         });
         return;
@@ -3406,6 +3415,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
       logger.warn({ err: error, adminId, routerId, username }, "[customers/hotspot-login] router login attempt failed");
       res.status(503).json({
         ...activePlanDetails,
+        retryable: true,
         error: "Your plan is active, but the hotspot router has not accepted the connection yet.",
       });
       return;
@@ -4446,6 +4456,7 @@ router.post("/customers/hotspot-troubleshoot", async (req, res): Promise<void> =
     res.status(503).json({
       ...response,
       ok: false,
+      retryable: true,
       error: error instanceof Error ? error.message : "The hotspot router is not ready.",
     });
     return;
