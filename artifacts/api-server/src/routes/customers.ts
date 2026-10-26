@@ -13,6 +13,7 @@ import {
   sbRpc,
   SupabaseHttpError,
 } from "../lib/supabase-client.js";
+import { collectCustomerCursorPage } from "../lib/customer-pagination.js";
 import { logActivity } from "../lib/activity-log.js";
 import { logger } from "../lib/logger.js";
 import { formatVoucherExpiryInEastAfrica } from "../lib/hotspot-voucher-redemption.js";
@@ -781,6 +782,36 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
     res.status(400).json({ error: "The requested account does not match the signed-in admin session." });
     return;
   }
+  const includeArchived = req.query.includeArchived === "true";
+  if (req.query.pageSize !== undefined) {
+    const pageSize = Number(req.query.pageSize);
+    const beforeId = req.query.beforeId === undefined ? null : Number(req.query.beforeId);
+    if (
+      !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 200
+      || (beforeId !== null && (!Number.isSafeInteger(beforeId) || beforeId < 1))
+    ) {
+      res.status(400).json({ error: "A page size from 1 to 200 and a valid cursor are required." });
+      return;
+    }
+
+    const batchSize = Math.min(500, Math.max(200, pageSize * 2));
+    // Archived state is filtered in application code to remain compatible with
+    // deployments where the staged archived_at column is not yet present.
+    const page = await collectCustomerCursorPage(
+      (cursor, limit) => {
+        const cursorFilter = cursor === null ? "" : `&id=lt.${cursor}`;
+        return sbSelectStrict<{ id: number; archived_at?: string | null } & Record<string, unknown>>(
+          "isp_customers",
+          `admin_id=eq.${adminId}${cursorFilter}&select=*&order=id.desc&limit=${limit}`,
+          "the paginated customer list",
+        );
+      },
+      { pageSize, beforeId, includeArchived, batchSize },
+    );
+    res.json(page);
+    return;
+  }
+
   // Filter in application code so the ordinary customer list remains compatible
   // until the staged archived_at migration is applied to the database.
   const rows = await collectIdOrderedPages(
@@ -790,7 +821,6 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
       "the customer list",
     ),
   );
-  const includeArchived = req.query.includeArchived === "true";
   res.json(rows.filter(row => includeArchived ? Boolean(row.archived_at) : !row.archived_at));
 });
 
