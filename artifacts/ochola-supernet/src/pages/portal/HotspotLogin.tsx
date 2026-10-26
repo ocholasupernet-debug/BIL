@@ -316,9 +316,8 @@ function formatSpeed(mbps: number): string {
   return `${mbps} Mbps`;
 }
 
-function getPortalDnsHostname(): string {
-  if (typeof window === "undefined") return "";
-  const hostname = window.location.hostname.trim().toLowerCase().replace(/\.$/, "");
+function getPortalDnsHostname(configuredHostname?: string): string {
+  const hostname = String(configuredHostname ?? "").trim().toLowerCase().replace(/\.$/, "");
   const labels = hostname.split(".");
   const valid = labels.length >= 2
     && labels.every(label => label.length > 0 && label.length <= 63
@@ -496,7 +495,7 @@ function HotspotLoginView({
     : "OcholaSupernet";
   const isDanstedLayout = portalBranding.portalLayout === "dansted-wifi";
   const configuredLogoUrl = portalBranding.logoUrl?.trim() ?? "";
-  const portalDnsHostname = getPortalDnsHostname();
+  const portalDnsHostname = getPortalDnsHostname(portalBranding.portalHostname);
   const portalLogoUrl = configuredLogoUrl
     && !/ocholasupernet-logo\.png(?:$|[?#])/i.test(configuredLogoUrl)
     ? configuredLogoUrl
