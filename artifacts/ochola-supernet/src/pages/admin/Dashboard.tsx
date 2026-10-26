@@ -623,10 +623,13 @@ export default function Dashboard() {
   const serviceCountsUnavailable = (customersError && customers.length === 0)
     || (customerPlanScopesError && customerPlanScopes.plans.length === 0 && customerPlanScopes.ports.length === 0)
     || expiredHistoryQuery.isError;
+  const onlineCountsLoading = customersLoading || customerPlanScopesLoading;
+  const onlineCountsUnavailable = (customersError && customers.length === 0)
+    || (customerPlanScopesError && customerPlanScopes.plans.length === 0 && customerPlanScopes.ports.length === 0);
   const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredAccountsEver}`;
-  const onlineCountValue = (count: number) => serviceCountsLoading
+  const onlineCountValue = (count: number) => onlineCountsLoading
     ? "…"
-    : serviceCountsUnavailable
+    : onlineCountsUnavailable
       ? "—"
       : String(count);
   const totalOnlineValue = onlineCountValue(onlineServiceCustomers.length);
