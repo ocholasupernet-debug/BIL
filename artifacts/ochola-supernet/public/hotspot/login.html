@@ -163,6 +163,24 @@
       Pick a plan below and connect in seconds — pay securely via <strong style="color:rgba(240,171,252,.85);font-weight:600">M-Pesa</strong>.
       No contracts. Instant activation.
     </p>
+    <div id="portalHotspotAddress" style="display:none;align-items:center;justify-content:center;gap:.5rem;width:max-content;max-width:100%;margin:-1.5rem auto 1.5rem;padding:.5rem .85rem;border:1px solid rgba(255,255,255,.12);border-radius:999px;background:rgba(255,255,255,.05);color:rgba(255,255,255,.62);font-size:.75rem">
+      <span aria-hidden="true" style="color:#70d9bd">●</span>
+      <span>Hotspot address</span>
+      <strong id="portalHotspotAddressName" style="color:white"></strong>
+    </div>
+    <script>
+      (function(){
+        var hostname=String(window.location.hostname||"").trim().toLowerCase().replace(/\.$/,"");
+        var labels=hostname.split(".");
+        var valid=labels.length>=2&&labels.every(function(label){
+          return label.length>0&&label.length<=63&&/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label);
+        })&&!hostname.endsWith(".localhost")&&!hostname.endsWith(".local")&&!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname);
+        if(valid){
+          document.getElementById("portalHotspotAddressName").textContent=hostname;
+          document.getElementById("portalHotspotAddress").style.display="inline-flex";
+        }
+      })();
+    </script>
 
     <div style="display:flex;align-items:center;justify-content:center;gap:1rem;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:.5rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:9999px;padding:.4rem .875rem;font-size:.8125rem;color:rgba(255,255,255,.7)">

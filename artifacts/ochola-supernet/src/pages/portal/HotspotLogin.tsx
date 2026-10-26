@@ -315,6 +315,19 @@ function formatSpeed(mbps: number): string {
   return `${mbps} Mbps`;
 }
 
+function getPortalDnsHostname(): string {
+  if (typeof window === "undefined") return "";
+  const hostname = window.location.hostname.trim().toLowerCase().replace(/\.$/, "");
+  const labels = hostname.split(".");
+  const valid = labels.length >= 2
+    && labels.every(label => label.length > 0 && label.length <= 63
+      && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))
+    && !hostname.endsWith(".localhost")
+    && !hostname.endsWith(".local")
+    && !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname);
+  return valid ? hostname : "";
+}
+
 function formatSessionExpiry(value: string | null): string {
   if (!value) return "No expiry time recorded";
   const timestamp = Date.parse(value);
@@ -480,6 +493,7 @@ function HotspotLoginView({
     ? configuredPortalName
     : "OcholaSupernet";
   const configuredLogoUrl = portalBranding.logoUrl?.trim() ?? "";
+  const portalDnsHostname = getPortalDnsHostname();
   const portalLogoUrl = configuredLogoUrl
     && !/ocholasupernet-logo\.png(?:$|[?#])/i.test(configuredLogoUrl)
     ? configuredLogoUrl
@@ -578,6 +592,7 @@ function HotspotLoginView({
   const [tvPhone, setTvPhone] = useState("");
   const [tvDialogError, setTvDialogError] = useState("");
   const [payLoading, setPayLoading] = useState(false);
+  const [paymentElapsedSeconds, setPaymentElapsedSeconds] = useState(0);
   const [payError, setPayError] = useState<string | null>(null);
   const [stkSent, setStkSent] = useState(false);
   const [checkoutId, setCheckoutId] = useState<string | null>(null);
@@ -595,6 +610,7 @@ function HotspotLoginView({
     ),
   );
   const paymentStartInFlight = useRef(false);
+  const paymentStartedAtRef = useRef<number | null>(null);
   const bindingInFlight = useRef(false);
   const statusPollInFlight = useRef(false);
   const [mpesaStatus, setMpesaStatus] = useState<{
@@ -697,6 +713,17 @@ function HotspotLoginView({
   useEffect(() => {
     setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
   }, [savedTvDevicesStorageKey]);
+
+  useEffect(() => {
+    if ((!payLoading && !stkSent && !loyaltyRedeemLoading) || accessReady || paymentFailed) return;
+    const startedAt = paymentStartedAtRef.current ?? Date.now();
+    paymentStartedAtRef.current = startedAt;
+    setPaymentElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    const timer = window.setInterval(() => {
+      setPaymentElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [payLoading, stkSent, loyaltyRedeemLoading, accessReady, paymentFailed]);
 
   useEffect(() => {
     if (troubleshootingOnly) {
@@ -1244,6 +1271,8 @@ function HotspotLoginView({
     setRememberTvDevice(rememberDevice);
     setTvDeviceSaveNotice("");
     setPhone(phoneValue);
+    paymentStartedAtRef.current = Date.now();
+    setPaymentElapsedSeconds(0);
     setDeviceMacAddress(macAddress);
     setDeviceName(normalizedDeviceName);
     setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setLoyaltyPaidWithPoints(false); setAccessReady(false); setPortalHandoffReady(false); setShowTvSuccess(false); setPaidAccessExpiresAt(null); setHotspotCredentials(null); setPollTimedOut(false); setTvDiagnostic(null);
@@ -1352,6 +1381,8 @@ function HotspotLoginView({
     }
     if (!attempt.checkoutId && !attempt.uncertain && !loyaltyRedeemable) return;
     loyaltyRedeemInFlight.current = true;
+    paymentStartedAtRef.current = Date.now();
+    setPaymentElapsedSeconds(0);
     setLoyaltyRedeemLoading(true);
     setPayError(null);
     try {
@@ -2463,6 +2494,21 @@ function HotspotLoginView({
            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
         }
          .hp-subtitle { max-width: 440px; margin: 0 auto 18px; font-size: 15px; color: rgba(255,255,255,0.52); font-weight: 500; line-height: 1.6; }
+         .hp-dns-address { display:inline-flex; align-items:center; gap:7px; margin:0 auto 18px; padding:8px 12px; border-radius:999px; color:rgba(255,255,255,.62); background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.09); font-size:11px; }
+         .hp-dns-address svg { color:#70d9bd; }
+         .hp-dns-address strong { color:#fff; font-weight:800; }
+         .hp-checkout-progress { padding:20px 10px 12px; text-align:center; color:#173c38; }
+         .hp-checkout-orbit { width:76px; height:76px; display:grid; place-items:center; margin:0 auto 16px; border-radius:50%; color:#fff; background:conic-gradient(from 35deg,#38bdf8,#34d399,#a78bfa,#38bdf8); box-shadow:0 0 0 8px rgba(56,189,248,.08),0 12px 30px rgba(20,184,166,.22); animation:spin 2.4s linear infinite; }
+         .hp-checkout-orbit svg { animation:spin 2.4s linear infinite reverse; }
+         .hp-checkout-progress strong { display:block; font-size:16px; font-weight:850; }
+         .hp-checkout-progress p { margin:7px auto 10px; max-width:280px; color:#647a74; font-size:12px; line-height:1.5; }
+         .hp-checkout-progress span { color:#71827d; font-size:11px; }
+         .hp-checkout-progress b { color:#173c38; font-variant-numeric:tabular-nums; }
+         .hp-setup-steps { display:grid; gap:8px; max-width:340px; margin:0 auto 16px; text-align:left; }
+         .hp-setup-step { display:flex; align-items:center; gap:10px; padding:9px 11px; border-radius:11px; border:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.035); color:rgba(255,255,255,.6); font-size:11px; }
+         .hp-setup-step[data-state="done"] { border-color:rgba(52,211,153,.23); color:#a7f3d0; background:rgba(16,185,129,.08); }
+         .hp-setup-step[data-state="active"] { border-color:var(--isp-accent-border); color:#fff; background:var(--isp-accent-glow); }
+         .hp-setup-step-mark { display:grid; place-items:center; width:22px; height:22px; flex:0 0 22px; border-radius:50%; background:rgba(255,255,255,.08); }
 
          .hp-badges { display: flex; justify-content: center; gap: 22px; flex-wrap: wrap; }
         .hp-badge {
@@ -3210,6 +3256,11 @@ function HotspotLoginView({
               <p className="hp-subtitle">{troubleshootingOnly
                  ? "We’ll check your package and try to reconnect this device automatically."
                 : portalBranding.tagline || "Fast, reliable Wi-Fi for the things you love."}</p>
+              {!troubleshootingOnly && portalDnsHostname && (
+                <div className="hp-dns-address" aria-label={`Hotspot address ${portalDnsHostname}`}>
+                  <Wifi size={13} /><span>Hotspot address</span><strong>{portalDnsHostname}</strong>
+                </div>
+              )}
               <div className="hp-badges">
                 <span className="hp-badge"><Shield size={12} /> Secure</span>
                 <span className="hp-badge"><Zap size={12} /> Instant</span>
@@ -3505,6 +3556,13 @@ function HotspotLoginView({
                               </div>
                             </div>
                           )}
+                        {!accessReady && (
+                          <div className="hp-setup-steps" aria-label="Account setup progress">
+                            <div className="hp-setup-step" data-state="done"><span className="hp-setup-step-mark"><CheckCircle2 size={14} /></span>Payment confirmed</div>
+                            <div className="hp-setup-step" data-state="active"><span className="hp-setup-step-mark"><Loader2 size={13} style={{ animation: "spin 1.2s linear infinite" }} /></span>Preparing your hotspot account</div>
+                            <div className="hp-setup-step" data-state="pending"><span className="hp-setup-step-mark"><Wifi size={13} /></span>Connecting this device</div>
+                          </div>
+                        )}
                         <div className="hp-connected-badge" style={{ marginTop: 16, marginBottom: 24 }}>
                           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399" }} />
                             {accessReady ? "Connected" : portalHandoffReady ? "Connecting" : loyaltyPaidWithPoints ? "Points redeemed" : "Payment received"}
@@ -3775,7 +3833,14 @@ function HotspotLoginView({
                                       </p>
                                     </div>
                                   )}
-                                  {HOTSPOT_RUNTIME_CONFIG.previewOnly ? (
+                                  {payLoading ? (
+                                    <div className="hp-checkout-progress" role="status" aria-live="polite">
+                                      <div className="hp-checkout-orbit"><Phone size={25} /></div>
+                                      <strong>Preparing your M-Pesa prompt</strong>
+                                      <p>Keep this page open. We’re securely starting your payment request.</p>
+                                      <span>Elapsed <b>{String(Math.floor(paymentElapsedSeconds / 60)).padStart(2, "0")}:{String(paymentElapsedSeconds % 60).padStart(2, "0")}</b></span>
+                                    </div>
+                                  ) : HOTSPOT_RUNTIME_CONFIG.previewOnly ? (
                                     <div style={{
                                       padding: 12, borderRadius: 10, textAlign: "center",
                                       background: "rgba(255,255,255,0.04)", color: "rgba(255,255,255,0.5)",

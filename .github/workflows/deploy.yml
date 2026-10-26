@@ -28,6 +28,11 @@ on:
         required: false
         default: false
         type: boolean
+      skip_router_oneshots:
+        description: "Skip all one-time RouterOS actions for an application-only release"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: vps-deploy
@@ -141,7 +146,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -345,6 +350,7 @@ jobs:
           RECONCILE_RESELLER_INTERFACE: ${{ inputs.reconcile_reseller_interface }}
           INSPECT_RESELLER_PORT: ${{ inputs.inspect_reseller_port }}
           DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup }}
+          DEPLOY_SKIP_ROUTER_ONESHOTS: ${{ github.event_name == 'push' || inputs.skip_router_oneshots }}
           DEPLOY_PORTAL_REFRESH_ONLY: ${{ inputs.portal_refresh_only }}
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
           WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN }}
