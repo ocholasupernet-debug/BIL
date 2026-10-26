@@ -76,6 +76,27 @@ test("roaming is limited to hotspot service plans and enabled grants", () => {
   ), false);
 });
 
+test("global roaming allows all ISP Hotspots by default while disabled mode keeps specific permissions", () => {
+  assert.equal(canPlanRoamToService(
+    { type: "hotspot", router_id: 1, port_id: 11 },
+    { routerId: 9, portId: 90 },
+    rules,
+    true,
+  ), true);
+  assert.equal(canPlanRoamToService(
+    { type: "hotspot", router_id: 1, port_id: 11 },
+    { routerId: 9, portId: 90 },
+    rules,
+    false,
+  ), false);
+  assert.equal(canPlanRoamToService(
+    { type: "hotspot", router_id: 1, port_id: 10 },
+    { routerId: 2, portId: 20 },
+    rules,
+    false,
+  ), true);
+});
+
 test("live Hotspot review distinguishes same service, allowed roaming, unapproved router, and unknown scope", () => {
   assert.equal(classifyHotspotSessionService(
     { type: "hotspot", router_id: 1, port_id: 10 },

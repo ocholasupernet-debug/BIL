@@ -102,6 +102,7 @@ import {
   matchingHotspotRoamingRule,
   type HotspotRoamingRule,
 } from "../lib/hotspot-roaming.js";
+import { hotspotRoamingEnabled } from "../lib/hotspot-roaming-settings.js";
 import {
   matchingActiveCustomerRecordsForRouterSession,
   type CustomerEntitlementRecord,
@@ -3790,7 +3791,7 @@ router.get("/admin/hotspot-roaming/live-users", requireAdmin(), async (req, res)
       port_id: number | null;
     };
 
-    const [routerRows, portRows, adminRows, roamingRules] = await Promise.all([
+    const [routerRows, portRows, adminRows, roamingRules, roamingEnabled] = await Promise.all([
       sbSelectStrict<LiveRouter>(
         "isp_routers",
         `admin_id=eq.${tenantId}&status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,name,status&order=name.asc&limit=1000`,
@@ -3807,6 +3808,7 @@ router.get("/admin/hotspot-roaming/live-users", requireAdmin(), async (req, res)
         "isp_hotspot_roaming_rules",
         `admin_id=eq.${tenantId}&enabled=is.true&select=id,source_router_id,source_port_id,target_router_id,target_port_id,enabled&order=created_at.desc&limit=1000`,
       ),
+      hotspotRoamingEnabled(tenantId),
     ]);
     if (
       routerRows.length >= 1000
@@ -4101,7 +4103,16 @@ router.get("/admin/hotspot-roaming/live-users", requireAdmin(), async (req, res)
             );
             return permission ? [{ assignment, permission }] : [];
           });
-      const status = matchingPermissions.length
+      const globallyAllowed = roamingEnabled
+        && connectedPortId !== undefined
+        && crossRouterAssignments.some(assignment =>
+          assignment.validPlanType
+          && assignment.sourceRouterKnown
+          && assignment.sourcePortKnown
+          && !assignment.planReferenceMissing
+          && assignment.routerId !== null,
+        );
+      const status = globallyAllowed || matchingPermissions.length
         ? "authorized"
         : missingAssignmentEvidence || connectedPortId === undefined || crossRouterAssignments.some(assignment => !assignment.sourceRouterKnown || !assignment.validPlanType)
           ? "needs_review"

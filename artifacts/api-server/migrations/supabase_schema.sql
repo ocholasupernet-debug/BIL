@@ -22,6 +22,17 @@ alter table platform_secure_settings enable row level security;
 revoke all on table platform_secure_settings from anon, authenticated;
 grant select, insert, update on table platform_secure_settings to service_role;
 
+-- Tenant-level all-Hotspot roaming defaults to enabled when no row exists.
+create table if not exists public.isp_hotspot_roaming_settings (
+  admin_id bigint primary key,
+  enabled boolean not null default true,
+  updated_at timestamptz not null default now(),
+  constraint isp_hotspot_roaming_settings_positive_admin check (admin_id > 0)
+);
+alter table public.isp_hotspot_roaming_settings enable row level security;
+revoke all on table public.isp_hotspot_roaming_settings from public, anon, authenticated;
+grant select, insert, update on table public.isp_hotspot_roaming_settings to service_role;
+
 -- Platform-wide visibility controls for ISP Admin Panel modules and pages.
 -- The API applies the safe defaults when a row is missing.
 create table if not exists admin_page_visibility (

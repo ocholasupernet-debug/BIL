@@ -172,3 +172,16 @@ test("SSH transfer and deployment retain the verified VPS fingerprint", () => {
     2,
   );
 });
+
+
+test("all-ISP Hotspot roaming defaults to enabled and its setting table is protected", () => {
+  const runner = api("scripts/apply-deployment-migrations.mjs");
+  const migrationName = "2026_hotspot_roaming_global_setting.sql";
+  const migration = api(`migrations/${migrationName}`);
+  const schema = api("migrations/supabase_schema.sql");
+  assert.ok(runner.includes(`../migrations/${migrationName}`), "Roaming setting migration is not registered");
+  assert.match(migration, /enabled boolean not null default true/i);
+  assert.match(migration, /enable row level security/i);
+  assert.match(migration, /revoke all on table public\.isp_hotspot_roaming_settings from public, anon, authenticated/i);
+  assert.match(schema, /create table if not exists public\.isp_hotspot_roaming_settings/i);
+});

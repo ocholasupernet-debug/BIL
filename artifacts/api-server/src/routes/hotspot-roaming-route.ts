@@ -6,6 +6,7 @@ import {
   sbSelectStrict,
   sbUpdateStrict,
 } from "../lib/supabase-client.js";
+import { hotspotRoamingEnabled } from "../lib/hotspot-roaming-settings.js";
 
 const router: IRouter = Router();
 
@@ -73,7 +74,7 @@ router.get("/admin/hotspot-roaming/context", requireAdmin(), async (req, res): P
     return;
   }
   try {
-    const [routers, ports, rules] = await Promise.all([
+    const [routers, ports, rules, roamingEnabled] = await Promise.all([
       sbSelectStrict<RouterRow>(
         "isp_routers",
         `admin_id=eq.${adminId}&status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id,name,status&order=name.asc`,
@@ -86,11 +87,13 @@ router.get("/admin/hotspot-roaming/context", requireAdmin(), async (req, res): P
         "isp_hotspot_roaming_rules",
         `admin_id=eq.${adminId}&enabled=is.true&select=id,admin_id,source_router_id,source_port_id,target_router_id,target_port_id,enabled,created_at&order=created_at.desc&limit=500`,
       ),
+      hotspotRoamingEnabled(adminId),
     ]);
     const routerNames = new Map(routers.map(row => [row.id, row.name]));
     const portNames = new Map(ports.map(row => [row.id, row.interface_name]));
     res.json({
       ok: true,
+      roamingEnabled,
       routers,
       ports,
       rules: rules.map(rule => ({
@@ -103,6 +106,45 @@ router.get("/admin/hotspot-roaming/context", requireAdmin(), async (req, res): P
     });
   } catch {
     res.status(503).json({ ok: false, error: "Roaming permissions could not be loaded. Please try again." });
+  }
+});
+
+router.put("/admin/hotspot-roaming/settings", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = await tenantAdminId(req);
+  if (!adminId) {
+    res.status(403).json({ ok: false, error: "An ISP administrator session is required." });
+    return;
+  }
+  if (typeof req.body?.enabled !== "boolean") {
+    res.status(400).json({ ok: false, error: "Choose whether Hotspot roaming should be enabled." });
+    return;
+  }
+  try {
+    const existing = await sbSelectStrict<{ admin_id: number }>(
+      "isp_hotspot_roaming_settings",
+      `admin_id=eq.${adminId}&select=admin_id&limit=1`,
+    );
+    const settings = { enabled: req.body.enabled, updated_at: new Date().toISOString() };
+    const saved = existing.length
+      ? await sbUpdateStrict<{ admin_id: number; enabled: boolean }>(
+          "isp_hotspot_roaming_settings",
+          `admin_id=eq.${adminId}`,
+          settings,
+        )
+      : await sbInsertStrict<{ admin_id: number; enabled: boolean }>(
+          "isp_hotspot_roaming_settings",
+          [{ admin_id: adminId, ...settings }],
+        );
+    if (!saved[0]) throw new Error("The roaming setting was not saved.");
+    void logActivity({
+      adminId,
+      type: "plan",
+      action: req.body.enabled ? "hotspot_roaming_enabled" : "hotspot_roaming_disabled",
+      subject: "All ISP-owned Hotspot services",
+    });
+    res.json({ ok: true, roamingEnabled: saved[0].enabled });
+  } catch {
+    res.status(503).json({ ok: false, error: "The roaming setting could not be saved. Please try again." });
   }
 });
 

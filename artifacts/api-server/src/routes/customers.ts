@@ -92,6 +92,7 @@ import {
   type HotspotRoamingRule,
   type HotspotRoamingServiceScope,
 } from "../lib/hotspot-roaming.js";
+import { hotspotRoamingEnabled } from "../lib/hotspot-roaming-settings.js";
 import { portServiceResourceNames } from "../lib/port-service-resources.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
@@ -3507,16 +3508,26 @@ async function loadSharedRoamingUsage(
     "isp_hotspot_roaming_rules",
     `admin_id=eq.${adminId}&source_router_id=eq.${plan.router_id}&select=admin_id,source_router_id,source_port_id,target_router_id,target_port_id,enabled&limit=1000`,
   );
+  const tenantRouters = await sbSelectStrict<{ id: number }>(
+    "isp_routers",
+    `admin_id=eq.${adminId}&status=not.in.(setup,awaiting_ports,awaiting_sync,awaiting_connection)&select=id&limit=101`,
+  );
+  if (tenantRouters.length > 100) {
+    throw new Error("Too many ISP routers are configured to verify shared package usage safely.");
+  }
   const applicableRules = historicalRules.filter(rule =>
     rule.source_port_id === null
     || Number(rule.source_port_id) === Number(plan.port_id),
   );
   // Disabled permissions remain in history so earlier usage is still charged
   // to the same purchase after an administrator revokes future roaming.
-  const routerIds = authorizedRoamingRouterIds(
-    { ...plan, type: normalizePlanServiceType(plan.type) },
-    applicableRules.map(rule => ({ ...rule, enabled: true })),
-  );
+  const routerIds = Array.from(new Set([
+    ...authorizedRoamingRouterIds(
+      { ...plan, type: normalizePlanServiceType(plan.type) },
+      applicableRules.map(rule => ({ ...rule, enabled: true })),
+    ),
+    ...tenantRouters.map(router => Number(router.id)).filter(id => Number.isSafeInteger(id) && id > 0),
+  ]));
   const routers = await sbSelectStrict<RouterRow>(
     "isp_routers",
     `admin_id=eq.${adminId}&id=in.(${routerIds.join(",")})&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=100`,
@@ -3636,13 +3647,14 @@ async function lookupLatestHotspotPurchase(
 
   let scopedPlanIds: Set<number> | undefined;
   let targetRules: RoamingRuleRow[] = [];
+  let globalRoamingEnabled = true;
   if (targetScope) {
     const candidatePlanIds = Array.from(new Set(
       [...directTransactions, ...linkedTransactions]
         .map(transaction => Number(transaction.plan_id))
         .filter(id => Number.isSafeInteger(id) && id > 0),
     ));
-    const [candidatePlans, rules] = await Promise.all([
+    const [candidatePlans, rules, roamingEnabled] = await Promise.all([
       candidatePlanIds.length
         ? sbSelectStrict<PlanRow>(
             "isp_plans",
@@ -3650,7 +3662,9 @@ async function lookupLatestHotspotPurchase(
           )
         : Promise.resolve([] as PlanRow[]),
       loadRoamingRulesForTarget(adminId, targetScope),
+      hotspotRoamingEnabled(adminId),
     ]);
+    globalRoamingEnabled = roamingEnabled && !portalScope;
     targetRules = rules;
     scopedPlanIds = new Set(candidatePlans
       .filter(plan =>
@@ -3659,6 +3673,7 @@ async function lookupLatestHotspotPurchase(
             { ...plan, type: normalizePlanServiceType(plan.type) },
             targetScope,
             targetRules,
+            globalRoamingEnabled,
           )
           || (
             portalScope
@@ -3753,7 +3768,7 @@ async function lookupLatestHotspotPurchase(
   }
   if (
     targetScope
-    && !canPlanRoamToService(plan, targetScope, targetRules)
+    && !canPlanRoamToService(plan, targetScope, targetRules, globalRoamingEnabled)
     && !(planServiceType === "vlan"
       && portalScope
       && plan.router_id === targetScope.routerId

@@ -56,6 +56,7 @@ export function canPlanRoamToService(
   plan: HotspotRoamingPlan,
   target: HotspotRoamingServiceScope,
   rules: readonly HotspotRoamingRule[],
+  roamingEnabled?: boolean,
 ): boolean {
   const planType = String(plan.type ?? "").trim().toLowerCase();
   if (!["hotspot", "trial", "trials"].includes(planType)) return false;
@@ -66,6 +67,7 @@ export function canPlanRoamToService(
     && sameNullableId(plan.port_id, target.portId)
   ) return true;
 
+  if (roamingEnabled === true) return true;
   return matchingHotspotRoamingRule(plan, target, rules) !== null;
 }
 
@@ -92,6 +94,7 @@ export function classifyHotspotSessionService(
   plan: HotspotRoamingPlan,
   target: HotspotRoamingServiceScope,
   rules: readonly HotspotRoamingRule[],
+  roamingEnabled?: boolean,
 ): HotspotSessionReviewClassification {
   const planType = String(plan.type ?? "").trim().toLowerCase();
   if (
@@ -105,7 +108,7 @@ export function classifyHotspotSessionService(
     && sameNullableId(plan.port_id, target.portId)
   ) return "same-service";
 
-  return canPlanRoamToService(plan, target, rules)
+  return canPlanRoamToService(plan, target, rules, roamingEnabled)
     ? "allowed-roaming"
     : "unapproved-router";
 }
