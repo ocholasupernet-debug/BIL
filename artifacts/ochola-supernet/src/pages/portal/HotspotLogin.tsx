@@ -2501,6 +2501,12 @@ function HotspotLoginView({
          .hp-dns-address { display:inline-flex; align-items:center; gap:7px; margin:0 auto 18px; padding:8px 12px; border-radius:999px; color:rgba(255,255,255,.62); background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.09); font-size:11px; }
          .hp-dns-address svg { color:#70d9bd; }
          .hp-dns-address strong { color:#fff; font-weight:800; }
+         .hp-root[data-portal-layout="classic"] .hp-dns-address,
+         .hp-root[data-portal-layout="coastal-light"] .hp-dns-address { color:#475569; background:rgba(15,23,42,.055); border-color:rgba(15,23,42,.14); }
+         .hp-root[data-portal-layout="classic"] .hp-dns-address svg,
+         .hp-root[data-portal-layout="coastal-light"] .hp-dns-address svg { color:#16856a; }
+         .hp-root[data-portal-layout="classic"] .hp-dns-address strong,
+         .hp-root[data-portal-layout="coastal-light"] .hp-dns-address strong { color:#173c38; }
          .hp-checkout-progress { padding:20px 10px 12px; text-align:center; color:#173c38; }
          .hp-checkout-orbit { width:76px; height:76px; display:grid; place-items:center; margin:0 auto 16px; border-radius:50%; color:#fff; background:conic-gradient(from 35deg,#38bdf8,#34d399,#a78bfa,#38bdf8); box-shadow:0 0 0 8px rgba(56,189,248,.08),0 12px 30px rgba(20,184,166,.22); animation:spin 2.4s linear infinite; }
          .hp-checkout-orbit svg { animation:spin 2.4s linear infinite reverse; }
