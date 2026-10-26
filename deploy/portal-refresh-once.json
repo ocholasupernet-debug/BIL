@@ -1,8 +1,7 @@
 {
-  "id": "ocholasupernet2-hotspot-portals-loyalty-redemption-20261008",
+  "id": "ocholasupernet-all-hotspot-portals-20261027",
   "adminId": 33,
   "authVersion": 2,
   "tenantSubdomain": "ocholasupernet",
-  "ispBridgeRouterName": "ocholasupernet2",
-  "ispBridgeName": "hotspot-bridge"
+  "allIspBridgeRouters": true
 }
