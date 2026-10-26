@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
 import {
@@ -232,16 +232,32 @@ function Avt({ name, id }: { name?: string | null; id: number }) {
 }
 
 /* ══════════════════════════════ Fetch helpers ══════════════════════════════ */
-async function fetchCustomers(includeArchived = false): Promise<Customer[]> {
-  const response = await adminApiFetch(
-    `/api/customers?adminId=${ADMIN_ID}${includeArchived ? "&includeArchived=true" : ""}`,
-    { cache: "no-store" },
-  );
-  const result = await response.json() as Customer[] | { error?: string };
-  if (!response.ok || !Array.isArray(result)) {
-    throw new Error(!Array.isArray(result) && result.error ? result.error : "Prepaid users could not be loaded.");
+interface CustomerPage {
+  customers: Customer[];
+  nextCursor: number | null;
+  hasMore: boolean;
+}
+
+const PREPAID_CUSTOMER_BATCH_SIZE = 100;
+
+async function fetchCustomerPage(includeArchived: boolean, beforeId: number | null): Promise<CustomerPage> {
+  const params = new URLSearchParams({
+    adminId: String(ADMIN_ID),
+    includeArchived: String(includeArchived),
+    pageSize: String(PREPAID_CUSTOMER_BATCH_SIZE),
+  });
+  if (beforeId !== null) params.set("beforeId", String(beforeId));
+  const response = await adminApiFetch(`/api/customers?${params.toString()}`, { cache: "no-store" });
+  const result = await response.json() as CustomerPage | { error?: string };
+  if (
+    !response.ok
+    || !("customers" in result)
+    || !Array.isArray(result.customers)
+    || typeof result.hasMore !== "boolean"
+  ) {
+    throw new Error("Prepaid users could not be loaded.");
   }
-  return result.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+  return result;
 }
 async function fetchPlans(): Promise<Plan[]> {
   return (await fetchAdminRouterContext()).plans
@@ -721,19 +737,21 @@ export default function PrepaidUsers() {
     },
   };
 
-  const { data: customers = [], isLoading } = useQuery<Customer[]>({
-    queryKey: ["prepaid_customers", ADMIN_ID],
-    queryFn: () => fetchCustomers(false),
-    staleTime: 15_000,
-    refetchInterval: 30_000,
+  const customerPagesQuery = useInfiniteQuery({
+    queryKey: ["prepaid_customers", ADMIN_ID, statusTab === "archived" ? "archived" : "active"],
+    queryFn: ({ pageParam }) => fetchCustomerPage(statusTab === "archived", pageParam),
+    initialPageParam: null as number | null,
+    getNextPageParam: (lastPage) => lastPage.hasMore ? lastPage.nextCursor ?? undefined : undefined,
+    staleTime: 30_000,
   });
-  const archivedCustomersQuery = useQuery<Customer[]>({
-    queryKey: ["prepaid_archived_customers", ADMIN_ID],
-    queryFn: () => fetchCustomers(true),
-    enabled: statusTab === "archived",
-    staleTime: 15_000,
-  });
-  const rowsForView = statusTab === "archived" ? archivedCustomersQuery.data ?? [] : customers;
+  const rowsForView = customerPagesQuery.data?.pages.flatMap(page => page.customers) ?? [];
+  const customers = statusTab === "archived" ? [] : rowsForView;
+  const isLoading = customerPagesQuery.isLoading;
+  const hasMoreRecords = customerPagesQuery.hasNextPage === true;
+  const archivedLoadedCount = useMemo(() => {
+    const archivedData = qc.getQueryData<{ pages?: CustomerPage[] }>(["prepaid_customers", ADMIN_ID, "archived"]);
+    return archivedData?.pages?.reduce((count, page) => count + page.customers.length, 0) ?? 0;
+  }, [qc, customerPagesQuery.data, statusTab]);
   const { data: plans   = [] } = useQuery<Plan[]>({
     queryKey: ["prepaid_plans", ADMIN_ID],
     queryFn:  fetchPlans,
@@ -1065,6 +1083,10 @@ export default function PrepaidUsers() {
 
   async function openArchivePreview() {
     setActionError("");
+    if (hasMoreRecords) {
+      setActionError("Load all prepaid records before previewing the oldest expired accounts.");
+      return;
+    }
     if (!archiveCandidateIds.length) {
       setActionError("No expired prepaid accounts are available to archive.");
       return;
@@ -1326,7 +1348,7 @@ export default function PrepaidUsers() {
     { key: "expired",   label: "Expired",   count: stats.expired,   color: "#f87171" },
     { key: "suspended", label: "Suspended", count: stats.suspended, color: "#fbbf24" },
     { key: "online",    label: "Online",    count: displayCustomers.filter(c => customerIsOnline(c, livePresenceByRouter, planMap)).length, color: "#22c55e" },
-    { key: "archived",  label: "Archived",  count: archivedCustomersQuery.data?.length ?? 0, color: "#94a3b8" },
+    { key: "archived",  label: "Archived",  count: archivedLoadedCount, color: "#94a3b8" },
   ];
 
   return (
@@ -1492,6 +1514,11 @@ export default function PrepaidUsers() {
             <p style={{ fontSize: "0.75rem", color: "var(--isp-text-muted)", margin: 0 }}>
               Manage prepaid access and sync router issues without interrupting valid online sessions. Sync results list only accounts confirmed active on MikroTik.
             </p>
+            {hasMoreRecords && (
+              <p role="status" style={{ fontSize: "0.72rem", color: "#fbbf24", margin: "0.25rem 0 0" }}>
+                Showing {rowsForView.length} newest records. Search and counts cover loaded records; load older users below for a complete list.
+              </p>
+            )}
           </div>
 
           <span
@@ -1509,19 +1536,21 @@ export default function PrepaidUsers() {
           <button
             type="button"
             onClick={() => void reconnectAllEligible()}
-            disabled={reconnectEligibleUsers.length === 0 || Boolean(reconnectProgress?.running)}
-            title="Manually retry all eligible disconnected Hotspot devices. The batch is limited to one device per router at a time."
-            aria-label={`Manually reconnect all ${reconnectEligibleUsers.length} eligible disconnected Hotspot devices`}
+            disabled={reconnectEligibleUsers.length === 0 || hasMoreRecords || Boolean(reconnectProgress?.running)}
+            title={hasMoreRecords
+              ? "Load all prepaid records before reconnecting every eligible offline device."
+              : "Manually retry eligible disconnected Hotspot devices, limited to one device per router at a time."}
+            aria-label={`Manually reconnect ${reconnectEligibleUsers.length} eligible offline Hotspot devices from loaded records`}
             style={{
               ...BTN(reconnectEligibleUsers.length > 0 && !reconnectProgress?.running ? "var(--isp-accent)" : "rgba(255,255,255,0.06)"),
-              opacity: reconnectEligibleUsers.length === 0 || reconnectProgress?.running ? 0.6 : 1,
-              cursor: reconnectEligibleUsers.length === 0 || reconnectProgress?.running ? "not-allowed" : "pointer",
+              opacity: reconnectEligibleUsers.length === 0 || hasMoreRecords || reconnectProgress?.running ? 0.6 : 1,
+              cursor: reconnectEligibleUsers.length === 0 || hasMoreRecords || reconnectProgress?.running ? "not-allowed" : "pointer",
             }}
           >
             {reconnectProgress?.running
               ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} />
               : <RotateCw size={13} />}
-            Reconnect all offline ({reconnectEligibleUsers.length})
+            Reconnect offline ({reconnectEligibleUsers.length})
           </button>
 
           {/* Sync by Router */}
@@ -1563,15 +1592,17 @@ export default function PrepaidUsers() {
           </div>
 
            <button onClick={exportCSV} style={BTN("var(--isp-accent)")}>
-            <Download size={13} /> Export CSV
+            <Download size={13} /> Export loaded CSV
           </button>
           {statusTab !== "archived" && (
             <button
               type="button"
               onClick={() => void openArchivePreview()}
-              disabled={archivePreviewLoading || archiveCandidateGroups.length === 0}
+              disabled={hasMoreRecords || archivePreviewLoading || archiveCandidateGroups.length === 0}
               style={BTN("#64748b")}
-              title="Preview the oldest expired entries before archiving"
+              title={hasMoreRecords
+                ? "Load all prepaid records before previewing the oldest expired entries."
+                : "Preview the oldest expired entries before archiving"}
             >
               {archivePreviewLoading ? <Loader2 size={13} className="prepaid-spin" /> : <Database size={13} />}
               Preview oldest {Math.min(200, archiveCandidateGroups.length)} expired
@@ -1650,10 +1681,10 @@ export default function PrepaidUsers() {
         {/* ── Stat cards ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: "0.625rem" }}>
           {[
-            { label: "Total Users",  value: stats.total,     color: "var(--isp-accent)", icon: <Users      size={18} /> },
-            { label: "Active",       value: stats.active,    color: "#4ade80", icon: <CheckCircle2 size={18} /> },
-            { label: "Expired",      value: stats.expired,   color: "#f87171", icon: <XCircle     size={18} /> },
-            { label: "Suspended",    value: stats.suspended, color: "#fbbf24", icon: <AlertTriangle size={18} /> },
+            { label: hasMoreRecords ? "Loaded Users" : "Total Users", value: stats.total, color: "var(--isp-accent)", icon: <Users size={18} /> },
+            { label: hasMoreRecords ? "Active Loaded" : "Active", value: stats.active, color: "#4ade80", icon: <CheckCircle2 size={18} /> },
+            { label: hasMoreRecords ? "Expired Loaded" : "Expired", value: stats.expired, color: "#f87171", icon: <XCircle size={18} /> },
+            { label: hasMoreRecords ? "Suspended Loaded" : "Suspended", value: stats.suspended, color: "#fbbf24", icon: <AlertTriangle size={18} /> },
           ].map(s => (
             <div key={s.label} style={{
               background: "var(--isp-card)", border: "1px solid var(--isp-border)",
@@ -1848,7 +1879,7 @@ export default function PrepaidUsers() {
               </tr>
             </thead>
             <tbody>
-              {(isLoading || (statusTab === "archived" && archivedCustomersQuery.isLoading)) ? (
+              {isLoading ? (
                 <tr>
                    <td colSpan={13} style={{ ...TD, textAlign: "center", padding: "3rem" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem", color: "var(--isp-text-muted)" }}>
@@ -2024,6 +2055,29 @@ export default function PrepaidUsers() {
             <span style={{ fontSize: "0.69rem", color: "var(--isp-text-muted)", marginLeft: "0.25rem" }}>
               {filtered.length} user{filtered.length !== 1 ? "s" : ""}
             </span>
+          </div>
+        )}
+        {hasMoreRecords && (
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", padding: "0.6rem 0" }}>
+            <span style={{ fontSize: "0.72rem", color: "var(--isp-text-muted)" }}>
+              {rowsForView.length} records loaded. Search, counts, and filters currently cover these records.
+            </span>
+            <button
+              type="button"
+              onClick={() => void customerPagesQuery.fetchNextPage()}
+              disabled={customerPagesQuery.isFetchingNextPage}
+              style={BTN("var(--isp-accent)")}
+            >
+              {customerPagesQuery.isFetchingNextPage
+                ? <Loader2 size={13} className="prepaid-spin" />
+                : <ChevronDown size={13} />}
+              {customerPagesQuery.isFetchingNextPage ? "Loading older users…" : "Load older users"}
+            </button>
+            {customerPagesQuery.isFetchNextPageError && (
+              <span role="alert" style={{ color: "#f87171", fontSize: "0.72rem" }}>
+                Older users could not be loaded. Retry using the button.
+              </span>
+            )}
           </div>
         )}
 
