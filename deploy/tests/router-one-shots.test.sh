@@ -21,8 +21,13 @@ test "$(grep -Fc 'portalFileReplacementConsent: true' "$SCRIPT_DIR/refresh-hotsp
 grep -Fq '"adminId": 33' "$SCRIPT_DIR/portal-refresh-once.json"
 grep -Fq '"authVersion": 2' "$SCRIPT_DIR/portal-refresh-once.json"
 grep -Fq '"tenantSubdomain": "ocholasupernet"' "$SCRIPT_DIR/portal-refresh-once.json"
-grep -Fq '"ispBridgeRouterName": "ocholasupernet2"' "$SCRIPT_DIR/portal-refresh-once.json"
-grep -Fq '"ispBridgeName": "hotspot-bridge"' "$SCRIPT_DIR/portal-refresh-once.json"
+if grep -Fq '"allIspBridgeRouters": true' "$SCRIPT_DIR/portal-refresh-once.json"; then
+  ! grep -Fq '"ispBridgeRouterName"' "$SCRIPT_DIR/portal-refresh-once.json"
+  ! grep -Fq '"ispBridgeName"' "$SCRIPT_DIR/portal-refresh-once.json"
+else
+  grep -Fq '"ispBridgeRouterName": "ocholasupernet2"' "$SCRIPT_DIR/portal-refresh-once.json"
+  grep -Fq '"ispBridgeName": "hotspot-bridge"' "$SCRIPT_DIR/portal-refresh-once.json"
+fi
 grep -Fq 'createAdminSessionToken' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
 ! grep -Fq '"ispBridgeRouterId"' "$SCRIPT_DIR/portal-refresh-once.json"
 grep -Fq 'resolveTenantRouterTargets(await listTenantRouters())' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
