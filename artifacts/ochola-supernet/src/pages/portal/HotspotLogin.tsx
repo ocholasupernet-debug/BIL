@@ -281,6 +281,7 @@ async function fetchActiveHotspotDevices(adminId: number | null, routerId: numbe
 type PortalBranding = {
   ispName?: string;
   tagline?: string;
+  paymentInstructions?: string;
   logoUrl?: string;
   supportPhone?: string;
   supportEmail?: string;
@@ -473,6 +474,7 @@ function HotspotLoginView({
         setPortalBranding({
           ispName: typeof row.ispName === "string" ? row.ispName : undefined,
           tagline: typeof row.tagline === "string" ? row.tagline : undefined,
+          paymentInstructions: typeof row.paymentInstructions === "string" ? row.paymentInstructions : undefined,
           logoUrl: typeof row.logoUrl === "string" && row.logoUrl.length <= 2_000_000 ? row.logoUrl : undefined,
           supportPhone: typeof row.supportPhone === "string" ? row.supportPhone : undefined,
           supportEmail: typeof row.supportEmail === "string" ? row.supportEmail : undefined,
@@ -492,6 +494,7 @@ function HotspotLoginView({
     && !isDefaultPlatformPortalName(configuredPortalName)
     ? configuredPortalName
     : "OcholaSupernet";
+  const isDanstedLayout = portalBranding.portalLayout === "dansted-wifi";
   const configuredLogoUrl = portalBranding.logoUrl?.trim() ?? "";
   const portalDnsHostname = getPortalDnsHostname();
   const portalLogoUrl = configuredLogoUrl
@@ -505,6 +508,7 @@ function HotspotLoginView({
     supportEmail: portalBranding.supportEmail || brand.supportEmail,
     domain: "",
   };
+  const savedSupportPhone = portalBranding.supportPhone?.trim() ?? "";
   const portalCards = portalBranding.portalCards ?? DEFAULT_HOTSPOT_PORTAL_CARDS;
   const [activeTab, setActiveTab] = useState<Tab>("plans");
   useEffect(() => {
@@ -3199,7 +3203,7 @@ function HotspotLoginView({
         <div className="hp-bg-orb" style={{ width: 250, height: 250, top: "40%", left: "60%", background: "rgba(236,72,153,0.06)", animationDelay: "2s" }} />
 
         {/* Header */}
-        {portalCards.header && (
+        {portalCards.header && !isDanstedLayout && (
           <header className="hp-header">
             <div className="hp-logo">
               {portalLogoUrl
@@ -3252,10 +3256,27 @@ function HotspotLoginView({
                   <Wifi size={36} color="var(--isp-accent)" strokeWidth={2} />
                 </div>
               </div>
-              <h1 className="hp-title">{troubleshootingOnly ? "Connection help" : "Your world, connected."}</h1>
-              <p className="hp-subtitle">{troubleshootingOnly
-                 ? "We’ll check your package and try to reconnect this device automatically."
-                : portalBranding.tagline || "Fast, reliable Wi-Fi for the things you love."}</p>
+              <h1 className="hp-title">{troubleshootingOnly
+                ? "Connection help"
+                : portalBranding.portalLayout === "dansted-wifi"
+                  ? portalDisplayName
+                  : "Your world, connected."}</h1>
+              {isDanstedLayout && !troubleshootingOnly ? (
+                <div className="hp-subtitle hp-purchase-instructions">
+                  <strong>How To Purchase:-</strong>
+                  <ol>
+                    <li>1. Tap on your preferred package.</li>
+                    <li>2. Enter your phone number.</li>
+                    <li>3. Click PAY NOW.</li>
+                    <li>4. Enter your M-Pesa PIN, wait for 30sec for M-Pesa authentication.</li>
+                  </ol>
+                  {savedSupportPhone && <p>CUSTOMER CARE CONTACT {savedSupportPhone}</p>}
+                </div>
+              ) : (
+                <p className="hp-subtitle">{troubleshootingOnly
+                  ? "We’ll check your package and try to reconnect this device automatically."
+                  : portalBranding.tagline || "Fast, reliable Wi-Fi for the things you love."}</p>
+              )}
               {!troubleshootingOnly && portalDnsHostname && (
                 <div className="hp-dns-address" aria-label={`Hotspot address ${portalDnsHostname}`}>
                   <Wifi size={13} /><span>Hotspot address</span><strong>{portalDnsHostname}</strong>
@@ -3515,7 +3536,7 @@ function HotspotLoginView({
           ) : (
             <>
           {/* Tabs */}
-          {visibleTabs.length > 0 && (
+          {!isDanstedLayout && visibleTabs.length > 0 && (
           <div className="hp-tabs" id="hp-plan-tabs">
             {visibleTabs.map(tab => (
                <button key={tab.id} onClick={() => handleTabChange(tab.id)} disabled={stkSent}
@@ -3529,7 +3550,7 @@ function HotspotLoginView({
           {loyaltyCardSettings.position === "top" && loyaltyBalanceCard}
 
           {/* ── BUY DATA ── */}
-           {portalCards.packages && (activeTab === "plans" || activeTab === "tv") && (
+            {portalCards.packages && (isDanstedLayout || activeTab === "plans" || activeTab === "tv") && (
             <div className="hp-section">
               {stkSent ? (
                 <div className="hp-glass">
@@ -3978,8 +3999,14 @@ function HotspotLoginView({
 
           {loyaltyCardSettings.position === "after-packages" && loyaltyBalanceCard}
 
+          {isDanstedLayout && portalCards.paymentRecovery && (
+            <div style={{ maxWidth: 840, margin: "0 auto 14px" }}>
+              {mpesaReconnectCard}
+            </div>
+          )}
+
           {/* ── VOUCHER ── */}
-          {portalCards.voucher && activeTab === "voucher" && (
+          {portalCards.voucher && (isDanstedLayout || activeTab === "voucher") && (
             <div className="hp-section">
               <div className="hp-glass">
                 <div className="hp-glass-header">
@@ -4093,11 +4120,13 @@ function HotspotLoginView({
             <div className="hp-troubleshoot-card-copy">
               <div className="hp-troubleshoot-card-icon" aria-hidden="true"><Wifi size={20} /></div>
               <div>
-                <div className="hp-troubleshoot-eyebrow">Connection support</div>
-                <h3>Having trouble connecting?</h3>
+                <div className="hp-troubleshoot-eyebrow">{isDanstedLayout ? "Reconnect account" : "Connection support"}</div>
+                <h3>{isDanstedLayout ? "Reconnect your account" : "Having trouble connecting?"}</h3>
                 <p>{loginSession?.status === "active" && !loginSession.connected
                   ? "Your package is active, but the router has not confirmed sign-in. Tap below to retry."
-                  : "We’ll check your package and attempt sign-in automatically. If the router does not confirm it, you can retry."}</p>
+                  : isDanstedLayout
+                    ? "Already paid? We’ll check your package and retry the router sign-in."
+                    : "We’ll check your package and attempt sign-in automatically. If the router does not confirm it, you can retry."}</p>
               </div>
             </div>
             <button
@@ -4108,15 +4137,17 @@ function HotspotLoginView({
               aria-expanded={troubleshootDialogOpen}
               onClick={() => setTroubleshootDialogOpen(true)}
             >
-              <Wifi size={15} /> {loginSession?.status === "active" && !loginSession.connected ? "Retry sign-in" : "Troubleshoot connection"} <ArrowRight size={15} />
+              <Wifi size={15} /> {loginSession?.status === "active" && !loginSession.connected ? "Retry sign-in" : isDanstedLayout ? "Reconnect" : "Troubleshoot connection"} <ArrowRight size={15} />
             </button>
           </div>
           )}
 
           {portalCards.paymentRecovery && (
-            <div style={{ maxWidth: 840, margin: "0 auto 20px" }}>
-              {mpesaReconnectCard}
-            </div>
+            !isDanstedLayout && (
+              <div style={{ maxWidth: 840, margin: "0 auto 20px" }}>
+                {mpesaReconnectCard}
+              </div>
+            )
           )}
 
           {troubleshootDialogOpen && (

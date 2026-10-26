@@ -47,6 +47,22 @@ export const HOTSPOT_PORTAL_LAYOUTS = [
     panel: "#102a1c",
     accent: "#4ade80",
   },
+  {
+    value: "night-market",
+    label: "Night Market",
+    description: "A textured dark portal with bright green branding and compact outlined packages.",
+    background: "#101112",
+    panel: "#292b2c",
+    accent: "#39e75f",
+  },
+  {
+    value: "dansted-wifi",
+    label: "Metallic Diamond",
+    description: "A compact metallic portal with a diamond texture, centered branding, and outlined package tiles.",
+    background: "#151617",
+    panel: "#363738",
+    accent: "#41d85f",
+  },
 ] as const;
 
 export type HotspotPortalLayout = (typeof HOTSPOT_PORTAL_LAYOUTS)[number]["value"];
@@ -520,6 +536,378 @@ const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
       background: linear-gradient(135deg,#16a34a,#0f766e) !important;
     }
   `,
+  "night-market": `
+    html[data-portal-layout="night-market"] body {
+      color: #f4f6f3 !important;
+      background-color: #111314 !important;
+      background-image:
+        radial-gradient(ellipse at 50% 5%,rgba(255,255,255,.13),transparent 44%),
+        repeating-linear-gradient(45deg,rgba(255,255,255,.045) 0 2px,transparent 2px 8px),
+        repeating-linear-gradient(-45deg,rgba(0,0,0,.18) 0 2px,transparent 2px 8px) !important;
+      background-attachment: fixed !important;
+      font-family: "DM Sans","Trebuchet MS",sans-serif !important;
+    }
+    html[data-portal-layout="night-market"] .hdr {
+      color: #f4f6f3 !important;
+      background: rgba(18,19,20,.9) !important;
+      border-bottom: 1px solid rgba(255,255,255,.12) !important;
+      backdrop-filter: blur(14px);
+    }
+    html[data-portal-layout="night-market"] #portalNameHeader,
+    html[data-portal-layout="night-market"] #portalNameFooter,
+    html[data-portal-layout="night-market"] #portalHeroTitle,
+    html[data-portal-layout="night-market"] #plansSection h2 {
+      color: #39e75f !important;
+      -webkit-text-fill-color: #39e75f !important;
+      background: none !important;
+      text-shadow: 0 2px 18px rgba(57,231,95,.15);
+    }
+    html[data-portal-layout="night-market"] #portalHeroTitle {
+      font-size: clamp(2rem,5vw,3.5rem) !important;
+      letter-spacing: -.045em !important;
+    }
+    html[data-portal-layout="night-market"] #portalTagline,
+    html[data-portal-layout="night-market"] #plansSection > div:first-child > p,
+    html[data-portal-layout="night-market"] #portalHero > div > div:first-child {
+      color: rgba(255,255,255,.76) !important;
+    }
+    html[data-portal-layout="night-market"] body > .hdr + section,
+    html[data-portal-layout="night-market"] .sec-card,
+    html[data-portal-layout="night-market"] #plansGrid .plan-card {
+      color: #f5f6f5 !important;
+      border: 1px solid rgba(255,255,255,.22) !important;
+      border-radius: 12px !important;
+      background: rgba(47,49,50,.78) !important;
+      box-shadow: 0 12px 30px rgba(0,0,0,.28) !important;
+      backdrop-filter: blur(10px);
+    }
+    html[data-portal-layout="night-market"] #portalHero {
+      padding: 1.25rem !important;
+    }
+    html[data-portal-layout="night-market"] #portalHero > div[style*="radial-gradient"],
+    html[data-portal-layout="night-market"] #portalHero .grid-bg { opacity: .18 !important; }
+    html[data-portal-layout="night-market"] .sec-head,
+    html[data-portal-layout="night-market"] #plansGrid .plan-card > div:first-child {
+      color: #fff !important;
+      background: rgba(255,255,255,.08) !important;
+      border-bottom-color: rgba(255,255,255,.16) !important;
+      border-top-color: #39e75f !important;
+    }
+    html[data-portal-layout="night-market"] .sec-head *,
+    html[data-portal-layout="night-market"] .sec-body,
+    html[data-portal-layout="night-market"] .sec-body *,
+    html[data-portal-layout="night-market"] #plansGrid .plan-card > div:first-child * {
+      color: #f5f6f5 !important;
+      -webkit-text-fill-color: #f5f6f5 !important;
+    }
+    html[data-portal-layout="night-market"] #plansGrid .plan-card {
+      border: 2px solid #39e75f !important;
+      border-radius: 3px !important;
+      background: rgba(27,29,30,.88) !important;
+    }
+    html[data-portal-layout="night-market"] #plansGrid {
+      grid-template-columns: repeat(auto-fit,minmax(118px,1fr)) !important;
+      gap: .7rem !important;
+    }
+    html[data-portal-layout="night-market"] #plansGrid .plan-card {
+      min-width: 0;
+    }
+    html[data-portal-layout="night-market"] #plansGrid .plan-card > div:first-child > span {
+      color: #39e75f !important;
+      -webkit-text-fill-color: #39e75f !important;
+      background: rgba(57,231,95,.12) !important;
+    }
+    html[data-portal-layout="night-market"] .inp {
+      color: #f5f6f5 !important;
+      background: rgba(18,19,20,.82) !important;
+      border-color: #39e75f !important;
+    }
+    html[data-portal-layout="night-market"] .inp::placeholder { color: rgba(255,255,255,.58) !important; }
+    html[data-portal-layout="night-market"] .plan-connect-button,
+    html[data-portal-layout="night-market"] .sec-body .btn,
+    html[data-portal-layout="night-market"] .sec-body button {
+      color: #111 !important;
+      background: linear-gradient(100deg,#f04432,#b8f64a) !important;
+      border-color: #39e75f !important;
+    }
+    html[data-portal-layout="night-market"] #portalFooter {
+      color: rgba(255,255,255,.7) !important;
+      background: rgba(25,26,27,.76) !important;
+      border-top-color: rgba(255,255,255,.14) !important;
+    }
+    html[data-portal-layout="night-market"] #portalFooter * { color: rgba(255,255,255,.7) !important; }
+    @media (max-width: 640px) {
+      html[data-portal-layout="night-market"] body { padding: 0 !important; }
+      html[data-portal-layout="night-market"] body > .hdr + section {
+        margin: .75rem !important;
+        padding: 1.5rem .9rem !important;
+      }
+      html[data-portal-layout="night-market"] #plansSection { padding-inline: .75rem !important; }
+      html[data-portal-layout="night-market"] #plansGrid { gap: .65rem !important; }
+    }
+  `,
+  "dansted-wifi": `
+    html[data-portal-layout="dansted-wifi"] .hdr { display:none !important; }
+    html[data-portal-layout="dansted-wifi"] body {
+      color:#f5f5f5 !important;
+      background-color:#151617 !important;
+      background-image:
+        linear-gradient(63deg,transparent 0 34%,rgba(255,255,255,.15) 35%,rgba(255,255,255,.025) 40%,transparent 47%),
+        linear-gradient(112deg,transparent 0 54%,rgba(255,255,255,.12) 55%,rgba(255,255,255,.02) 60%,transparent 67%),
+        repeating-linear-gradient(45deg,#252627 0 3px,#101112 3px 7px),
+        repeating-linear-gradient(-45deg,rgba(255,255,255,.13) 0 2px,transparent 2px 7px) !important;
+      background-attachment:fixed !important;
+      font-family:"DM Sans","Trebuchet MS",sans-serif !important;
+    }
+    html[data-portal-layout="dansted-wifi"] .hdr {
+      color:#f5f5f5 !important;
+      background:rgba(14,15,16,.94) !important;
+      border-bottom:1px solid rgba(255,255,255,.13) !important;
+      box-shadow:0 5px 20px rgba(0,0,0,.32) !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #portalLogoIcon { display:none !important; }
+    html[data-portal-layout="dansted-wifi"] .hdr-inner { min-height:54px !important; }
+    html[data-portal-layout="dansted-wifi"] #portalNameHeader {
+      color:#f2f2f2 !important;
+      -webkit-text-fill-color:#f2f2f2 !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #portalHero {
+      padding:.2rem .75rem .5rem !important;
+      text-align:center !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #portalHero > div[style*="radial-gradient"],
+    html[data-portal-layout="dansted-wifi"] #portalHero .grid-bg,
+    html[data-portal-layout="dansted-wifi"] #portalHero .anim-pulse,
+    html[data-portal-layout="dansted-wifi"] #portalHero > div > div:nth-child(2) { display:none !important; }
+    html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up {
+      max-width:720px !important;
+      padding:0 !important;
+      border:0;
+      border-radius:0;
+      background:transparent;
+      box-shadow:none;
+    }
+    html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up > div:first-child,
+    html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up > div:nth-child(3),
+    html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up > div:last-child { display:none !important; }
+    html[data-portal-layout="dansted-wifi"] #portalHeroTitle {
+      width:min(100%,360px);
+      margin:0 auto .55rem !important;
+      padding:4px 8px !important;
+      color:#38d856 !important;
+      -webkit-text-fill-color:#38d856 !important;
+      border:1px solid rgba(255,255,255,.13);
+      border-radius:7px;
+      background:rgba(77,78,79,.78) !important;
+      box-shadow:0 5px 18px rgba(0,0,0,.16);
+      font-size:clamp(1rem,4vw,1.5rem) !important;
+      font-weight:800 !important;
+      letter-spacing:-.035em !important;
+      text-transform:uppercase;
+      line-height:1.2 !important;
+      overflow-wrap:anywhere;
+    }
+    html[data-portal-layout="dansted-wifi"] #portalTagline {
+      display:block;
+      width:100%;
+      max-width:none !important;
+      margin:0 auto !important;
+      padding:10px 12px !important;
+      color:#f5f5f5 !important;
+      border:1px solid rgba(255,255,255,.16);
+      border-radius:9px;
+      background:rgba(77,78,79,.8);
+      box-shadow:0 8px 20px rgba(0,0,0,.2);
+      font-size:.84rem !important;
+      line-height:1.5 !important;
+      text-align:left !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #portalTagline > strong {
+      display:block;
+      margin-bottom:.35rem;
+      text-align:center;
+      font-size:.95rem;
+    }
+    html[data-portal-layout="dansted-wifi"] #portalTagline ol {
+      margin:0;
+      padding:0;
+      list-style:none;
+      text-align:left;
+    }
+    html[data-portal-layout="dansted-wifi"] #portalTagline li { margin:.12rem 0; }
+    html[data-portal-layout="dansted-wifi"] #portalTagline p {
+      margin:.4rem 0 0;
+      text-align:center;
+      font-size:.76rem;
+    }
+    html[data-portal-layout="dansted-wifi"] body > .hdr + section {
+      max-width:720px !important;
+      margin:.5rem auto 1rem !important;
+      padding:0 !important;
+      background:none !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansSection {
+      max-width:900px !important;
+      margin:0 auto !important;
+      padding:.25rem 1rem 2rem !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #portalRecoveryCards {
+      max-width:720px !important;
+      margin:1.2rem auto 0 !important;
+      padding:0 1rem 1.25rem !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansSection > div:first-child {
+      margin-bottom:.7rem !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansSection > div:first-child > p:first-child,
+    html[data-portal-layout="dansted-wifi"] #plansSection > div:first-child > p:nth-child(3) { display:none !important; }
+    html[data-portal-layout="dansted-wifi"] #plansSection h2 { display:none !important; }
+    html[data-portal-layout="dansted-wifi"] #tvConnectButton {
+      position:fixed !important;
+      z-index:40 !important;
+      right:14px !important;
+      bottom:14px !important;
+      margin:0 !important;
+      padding:.7rem 1rem !important;
+      color:#fff !important;
+      background:#e81e51 !important;
+      border:0 !important;
+      border-radius:999px !important;
+      box-shadow:0 5px 16px rgba(0,0,0,.42) !important;
+      opacity:1 !important;
+      cursor:pointer !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #mpesaBanner { display:none !important; }
+    html[data-portal-layout="dansted-wifi"] #plansGrid {
+      display:flex !important;
+      flex-wrap:wrap !important;
+      justify-content:center !important;
+      gap:10px !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card {
+      flex:0 1 126px !important;
+      min-width:112px !important;
+      min-height:100px;
+      color:#191919 !important;
+      border:2px solid #3c8dff !important;
+      border-radius:0 !important;
+      background:#fff !important;
+      box-shadow:0 4px 12px rgba(0,0,0,.32) !important;
+      overflow:hidden;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card:nth-child(4n + 2) { border-color:#63bd42 !important; }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card:nth-child(4n + 3) { border-color:#a341cf !important; }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card:nth-child(4n + 4) { border-color:#d84c4c !important; }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child {
+      padding:10px 7px 5px !important;
+      color:#202020 !important;
+      background:#fff !important;
+      border-top:0 !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child * {
+      color:#252525 !important;
+      -webkit-text-fill-color:#252525 !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child > span {
+      color:#208d42 !important;
+      -webkit-text-fill-color:#208d42 !important;
+      background:transparent !important;
+      padding:0 !important;
+      margin:0 0 .2rem !important;
+      border-radius:0 !important;
+      font-size:.72rem !important;
+      letter-spacing:0 !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child > div {
+      color:#c9343e !important;
+      -webkit-text-fill-color:#c9343e !important;
+      font-size:1rem !important;
+      line-height:1.1 !important;
+      letter-spacing:0 !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child > div span {
+      color:#c9343e !important;
+      -webkit-text-fill-color:#c9343e !important;
+      font-size:.65rem !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child p {
+      margin:.15rem 0 0 !important;
+      font-size:.56rem !important;
+      line-height:1.2 !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:last-child {
+      padding:5px 7px 9px !important;
+      color:#252525 !important;
+      background:#fff !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:last-child * { color:#262626 !important; }
+    html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card .plan-connect-button {
+      color:#fff !important;
+      background:linear-gradient(100deg,#ed2f25,#baf03d) !important;
+      border:0 !important;
+      padding:5px 2px !important;
+      font-size:.56rem !important;
+      line-height:1.15 !important;
+      white-space:nowrap;
+    }
+    html[data-portal-layout="dansted-wifi"] .sec-card {
+      color:#f5f5f5 !important;
+      border:1px solid rgba(255,255,255,.2) !important;
+      border-radius:10px !important;
+      background:rgba(77,78,79,.76) !important;
+      box-shadow:0 8px 20px rgba(0,0,0,.2) !important;
+      backdrop-filter:blur(7px);
+    }
+    html[data-portal-layout="dansted-wifi"] .sec-head,
+    html[data-portal-layout="dansted-wifi"] .sec-body { color:#f5f5f5 !important; background:transparent !important; }
+    html[data-portal-layout="dansted-wifi"] .sec-head * { color:#fff !important; }
+    html[data-portal-layout="dansted-wifi"] .inp {
+      color:#222 !important;
+      background:#fff !important;
+      border-color:#e84c4c !important;
+    }
+    html[data-portal-layout="dansted-wifi"] .inp::placeholder { color:#777 !important; }
+    html[data-portal-layout="dansted-wifi"] .sec-body .btn,
+    html[data-portal-layout="dansted-wifi"] .sec-body button {
+      color:#172016 !important;
+      background:linear-gradient(100deg,#f04432,#b8f64a) !important;
+      border:0 !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #loyaltyPointsSection,
+    html[data-portal-layout="dansted-wifi"] #portalRecoveryCards,
+    html[data-portal-layout="dansted-wifi"] #voucherSection,
+    html[data-portal-layout="dansted-wifi"] #troubleshootModule { color:#f5f5f5 !important; }
+    html[data-portal-layout="dansted-wifi"] #loyaltyPointsCard {
+      color:#f5f5f5 !important;
+      border:1px solid rgba(255,255,255,.2) !important;
+      border-radius:10px !important;
+      background:rgba(77,78,79,.76) !important;
+      box-shadow:0 8px 20px rgba(0,0,0,.2) !important;
+      backdrop-filter:blur(7px);
+    }
+    html[data-portal-layout="dansted-wifi"] #loyaltyPointsCard h2,
+    html[data-portal-layout="dansted-wifi"] #loyaltyPointsCard p,
+    html[data-portal-layout="dansted-wifi"] #loyaltyPointsCard div { color:#f5f5f5 !important; }
+    html[data-portal-layout="dansted-wifi"] #portalFooter {
+      color:rgba(255,255,255,.68) !important;
+      background:rgba(25,26,27,.78) !important;
+      border-top-color:rgba(255,255,255,.14) !important;
+    }
+    html[data-portal-layout="dansted-wifi"] #portalFooter * { color:rgba(255,255,255,.68) !important; }
+    @media (max-width:640px) {
+      html[data-portal-layout="dansted-wifi"] body { padding:0 !important; }
+      html[data-portal-layout="dansted-wifi"] .hdr-inner { padding:0 .8rem !important; }
+      html[data-portal-layout="dansted-wifi"] #portalHero { padding:.75rem .65rem .45rem !important; }
+      html[data-portal-layout="dansted-wifi"] #portalHero > div.fade-up { padding:0 !important; }
+      html[data-portal-layout="dansted-wifi"] body > .hdr + section { margin:.4rem .65rem .7rem !important; }
+      html[data-portal-layout="dansted-wifi"] #plansSection { margin-top:.9rem !important; padding:.2rem .65rem 1.5rem !important; }
+      html[data-portal-layout="dansted-wifi"] #plansGrid { gap:8px !important; }
+      html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card { flex-basis:calc(25% - 8px) !important; min-width:78px !important; min-height:100px; }
+      html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:first-child { padding:7px 4px 4px !important; }
+      html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card > div:last-child { padding:4px 4px 7px !important; }
+      html[data-portal-layout="dansted-wifi"] #portalRecoveryCards { margin-top:1.2rem !important; }
+    }
+  `,
 };
 
 export const STATIC_PORTAL_LAYOUT_CSS_TEXT = Object.values(STATIC_PORTAL_LAYOUT_CSS).join("\n");
@@ -884,6 +1272,349 @@ export const HOSTED_PORTAL_LAYOUT_CSS = `
     border-radius:22px;
     background:rgba(8,35,20,.94);
   }
+  .hp-root[data-portal-layout="night-market"] {
+    color:#f4f5f3;
+    background-color:#111314;
+    background-image:
+      radial-gradient(ellipse at 50% 4%,rgba(255,255,255,.16),transparent 42%),
+      repeating-linear-gradient(45deg,rgba(255,255,255,.045) 0 2px,transparent 2px 8px),
+      repeating-linear-gradient(-45deg,rgba(0,0,0,.18) 0 2px,transparent 2px 8px);
+    background-attachment:fixed;
+    font-family:"DM Sans","Trebuchet MS",sans-serif;
+    --isp-accent:#39e75f !important;
+    --isp-accent-glow:rgba(57,231,95,.15) !important;
+    --isp-accent-border:rgba(57,231,95,.55) !important;
+    --isp-accent-strong:#39e75f !important;
+  }
+  .hp-root[data-portal-layout="night-market"]::before {
+    opacity:.16;
+    background-image:radial-gradient(rgba(255,255,255,.55) .8px,transparent .8px);
+    background-size:15px 15px;
+    mask-image:linear-gradient(to bottom,black,transparent 88%);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-header {
+    color:#f4f5f3;
+    background:rgba(18,19,20,.88);
+    border-bottom:1px solid rgba(255,255,255,.13);
+    box-shadow:0 8px 26px rgba(0,0,0,.22);
+    backdrop-filter:blur(14px);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-brand-name,
+  .hp-root[data-portal-layout="night-market"] .hp-title { color:#39e75f; }
+  .hp-root[data-portal-layout="night-market"] .hp-title {
+    background:none;
+    -webkit-text-fill-color:#39e75f;
+    letter-spacing:-.045em;
+    font-size:clamp(2rem,5vw,3.4rem);
+    text-shadow:0 2px 20px rgba(57,231,95,.17);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-logo-sub,
+  .hp-root[data-portal-layout="night-market"] .hp-subtitle,
+  .hp-root[data-portal-layout="night-market"] .hp-badge { color:rgba(255,255,255,.76); }
+  .hp-root[data-portal-layout="night-market"] .hp-status {
+    color:#8df6a2;background:rgba(57,231,95,.1);border-color:rgba(57,231,95,.28);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-status-dot { background:#39e75f; }
+  .hp-root[data-portal-layout="night-market"] .hp-main { max-width:1080px; }
+  .hp-root[data-portal-layout="night-market"] .hp-hero {
+    margin:18px auto 14px;
+    padding:18px 16px;
+    border:1px solid rgba(255,255,255,.23);
+    border-radius:12px;
+    background:rgba(55,57,58,.72);
+    box-shadow:0 12px 30px rgba(0,0,0,.25);
+    backdrop-filter:blur(10px);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-glass,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-card {
+    color:#f5f6f5;
+    border:1px solid rgba(255,255,255,.23);
+    border-radius:10px;
+    background:rgba(45,47,48,.8);
+    box-shadow:0 12px 30px rgba(0,0,0,.27);
+    backdrop-filter:blur(10px);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-glass-header { border-bottom-color:rgba(255,255,255,.15); }
+  .hp-root[data-portal-layout="night-market"] .hp-glass-title,
+  .hp-root[data-portal-layout="night-market"] .hp-glass-desc,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-title,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-meta { color:#f4f5f3; }
+  .hp-root[data-portal-layout="night-market"] .hp-purchase-hero {
+    color:#f5f6f5;background:rgba(255,255,255,.09);border-color:rgba(255,255,255,.2);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-purchase-title,
+  .hp-root[data-portal-layout="night-market"] .hp-purchase-copy { color:#f4f5f3; }
+  .hp-root[data-portal-layout="night-market"] .hp-trust-item {
+    color:rgba(255,255,255,.84);background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-plan {
+    min-height:128px;
+    padding:12px 11px;
+    color:#f4f5f3;
+    border:2px solid #39e75f;
+    border-radius:3px;
+    background:rgba(27,29,30,.9);
+    box-shadow:0 8px 20px rgba(0,0,0,.24);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-plans-grid {
+    grid-template-columns:repeat(auto-fit,minmax(126px,1fr));
+    gap:10px;
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-plans-grid.has-expanded { grid-template-columns:1fr; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-top { padding:11px 10px 0; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-body { padding:6px 10px 11px; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan:hover { border-color:#b8f64a; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-name { color:#7cf394; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-price { color:#ff6b63; }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-price span,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-meta-row,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-action { color:rgba(255,255,255,.8); }
+  .hp-root[data-portal-layout="night-market"] .hp-plan-action,
+  .hp-root[data-portal-layout="night-market"] .hp-plan-pay { border-top-color:rgba(255,255,255,.18); }
+  .hp-root[data-portal-layout="night-market"] .hp-input,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-input,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-select {
+    color:#f5f6f5;background:rgba(18,19,20,.82);border-color:#39e75f;
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-input::placeholder,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-input::placeholder { color:rgba(255,255,255,.58); }
+  .hp-root[data-portal-layout="night-market"] .hp-label,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-label { color:rgba(255,255,255,.8); }
+  .hp-root[data-portal-layout="night-market"] .hp-btn {
+    color:#151715;background:linear-gradient(100deg,#f04432,#b8f64a);border-color:#39e75f;
+    box-shadow:0 7px 18px rgba(0,0,0,.2);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-btn:hover:not(:disabled) { filter:brightness(1.08); }
+  .hp-root[data-portal-layout="night-market"] .hp-troubleshoot-dialog,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-modal,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-success-card {
+    color:#f4f5f3;background:#252728;border-color:rgba(255,255,255,.2);
+  }
+  .hp-root[data-portal-layout="night-market"] .hp-troubleshoot-dialog-title,
+  .hp-root[data-portal-layout="night-market"] .hp-troubleshoot-dialog-description,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-modal-head h3,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-modal-head p,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-device-row strong,
+  .hp-root[data-portal-layout="night-market"] .hp-tv-save-device strong { color:#f4f5f3; }
+  .hp-root[data-portal-layout="night-market"] .hp-footer { color:rgba(255,255,255,.68); }
+  .hp-root[data-portal-layout="dansted-wifi"] {
+    color:#f5f5f5;
+    background-color:#151617;
+    background-image:
+      linear-gradient(63deg,transparent 0 34%,rgba(255,255,255,.15) 35%,rgba(255,255,255,.025) 40%,transparent 47%),
+      linear-gradient(112deg,transparent 0 54%,rgba(255,255,255,.12) 55%,rgba(255,255,255,.02) 60%,transparent 67%),
+      repeating-linear-gradient(45deg,#252627 0 3px,#101112 3px 7px),
+      repeating-linear-gradient(-45deg,rgba(255,255,255,.13) 0 2px,transparent 2px 7px);
+    background-attachment:fixed;
+    font-family:"DM Sans","Trebuchet MS",sans-serif;
+    --isp-accent:#3acb56 !important;
+    --isp-accent-glow:rgba(58,203,86,.14) !important;
+    --isp-accent-border:rgba(58,203,86,.5) !important;
+    --isp-accent-strong:#38c957 !important;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-header,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-tabs { display:none !important; }
+  .hp-root[data-portal-layout="dansted-wifi"]::before {
+    opacity:.14;
+    background-image:linear-gradient(45deg,rgba(255,255,255,.42) 1px,transparent 1px);
+    background-size:14px 14px;
+    mask-image:linear-gradient(to bottom,black,transparent 86%);
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-header {
+    min-height:54px;
+    color:#f3f3f3;
+    background:rgba(14,15,16,.94);
+    border-bottom:1px solid rgba(255,255,255,.13);
+    box-shadow:0 5px 20px rgba(0,0,0,.32);
+    backdrop-filter:blur(9px);
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-logo-image,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-brand-mark,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-status { display:none; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-brand-name { color:#f3f3f3; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-header-reconnect {
+    color:#f4f4f4;
+    font-size:.78rem;
+    text-decoration:none;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-main { max-width:900px; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-hero {
+    max-width:720px;
+    margin:0 auto 12px;
+    padding:0;
+    border:0;
+    border-radius:0;
+    background:transparent;
+    box-shadow:none;
+    backdrop-filter:none;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-wifi-wrap,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-badges,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-kicker,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-icon,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-trust-row { display:none; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-title {
+    display:block;
+    width:min(100%,360px);
+    margin:0 auto 9px;
+    padding:4px 8px;
+    color:#38d856;
+    border:1px solid rgba(255,255,255,.13);
+    border-radius:7px;
+    background:rgba(77,78,79,.78);
+    box-shadow:0 5px 18px rgba(0,0,0,.16);
+    -webkit-text-fill-color:#38d856;
+    font-size:clamp(1rem,4vw,1.5rem);
+    overflow-wrap:anywhere;
+    font-weight:800;
+    letter-spacing:-.035em;
+    line-height:1.2;
+    text-transform:uppercase;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-subtitle {
+    max-width:none;
+    margin:5px 0 0;
+    color:#f5f5f5;
+    font-size:.84rem;
+    line-height:1.5;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-main { padding:0 12px 24px; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-instructions { text-align:left; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-instructions {
+    margin:0 auto;
+    padding:10px 12px;
+    border:1px solid rgba(255,255,255,.16);
+    border-radius:9px;
+    background:rgba(77,78,79,.8);
+    box-shadow:0 8px 20px rgba(0,0,0,.2);
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-instructions > strong {
+    display:block;
+    margin-bottom:6px;
+    text-align:center;
+    font-size:.94rem;
+    font-weight:800;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-instructions ol {
+    margin:0;
+    padding:0;
+    list-style:none;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-instructions li {
+    margin:2px 0;
+    color:#f5f5f5;
+    font-size:.78rem;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-instructions p {
+    margin:6px 0 0;
+    text-align:center;
+    color:#f5f5f5;
+    font-size:.76rem;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-section {
+    padding:8px 12px 24px;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-hero {
+    margin:0 auto 10px;
+    padding:12px 14px;
+    color:#f5f5f5;
+    border:1px solid rgba(255,255,255,.14);
+    border-radius:9px;
+    background:rgba(76,77,78,.68);
+    text-align:center;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-title,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-copy { color:#f5f5f5; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-title { font-size:.95rem; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-purchase-copy { font-size:.78rem; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-tv-trigger {
+    position:fixed;
+    z-index:45;
+    right:14px;
+    bottom:14px;
+    color:#fff;
+    background:#e81e51;
+    border:0;
+    border-radius:999px;
+    box-shadow:0 5px 16px rgba(0,0,0,.42);
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plans-grid {
+    display:flex;
+    flex-wrap:wrap;
+    justify-content:center;
+    gap:10px;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan {
+    flex:0 1 126px;
+    min-width:112px;
+    min-height:118px;
+    padding:10px 9px;
+    color:#202020;
+    border:2px solid #4389ef;
+    border-radius:0;
+    background:#fff;
+    box-shadow:0 4px 12px rgba(0,0,0,.32);
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan:nth-child(4n + 2) { border-color:#63bd42; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan:nth-child(4n + 3) { border-color:#a341cf; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan:nth-child(4n + 4) { border-color:#d84c4c; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-name { color:#218d43; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-price { color:#d13b42; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-price span,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-meta-row,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-action { color:#252525; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-action,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-pay { border-top-color:#e2e2e2; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-accent { display:none; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-pay .hp-btn,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-btn {
+    color:#172016;
+    background:linear-gradient(100deg,#f04432,#b8f64a);
+    border-color:#39c955;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-glass,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-card,
+  .hp-root[data-portal-layout="dansted-wifi"] [aria-labelledby="hp-loyalty-balance-title"] {
+    color:#f5f5f5;
+    border:1px solid rgba(255,255,255,.2);
+    border-radius:10px;
+    background:rgba(77,78,79,.76);
+    box-shadow:0 8px 20px rgba(0,0,0,.2);
+    backdrop-filter:blur(7px);
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] [aria-labelledby="hp-loyalty-balance-title"] {
+    color:#f5f5f5 !important;
+    background:rgba(77,78,79,.76) !important;
+    border:1px solid rgba(255,255,255,.2) !important;
+    border-radius:10px !important;
+    box-shadow:0 8px 20px rgba(0,0,0,.2) !important;
+    backdrop-filter:blur(7px);
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-glass-header { border-bottom-color:rgba(255,255,255,.14); }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-glass-title,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-glass-desc { color:#f5f5f5; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-input,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-tv-input,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-tv-select {
+    color:#222;
+    background:#fff;
+    border-color:#e84c4c;
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-input::placeholder,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-tv-input::placeholder { color:#777; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-label,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-tv-label { color:rgba(255,255,255,.84); }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-troubleshoot-dialog,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-tv-modal,
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-tv-success-card {
+    color:#f4f5f3;
+    background:#292b2c;
+    border-color:rgba(255,255,255,.2);
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-footer { color:rgba(255,255,255,.68); }
+  .hp-root[data-portal-layout="dansted-wifi"] [aria-labelledby="hp-loyalty-balance-title"] h2,
+  .hp-root[data-portal-layout="dansted-wifi"] [aria-labelledby="hp-loyalty-balance-title"] p,
+  .hp-root[data-portal-layout="dansted-wifi"] [aria-labelledby="hp-loyalty-balance-title"] div { color:#f5f5f5 !important; }
   @media (max-width:760px) {
     .hp-root[data-portal-layout="classic"] .hp-main.has-hero {
       display:flex;
@@ -904,5 +1635,21 @@ export const HOSTED_PORTAL_LAYOUT_CSS = `
       width:100%;
     }
     .hp-root[data-portal-layout="split-horizon"] .hp-main > :not(.hp-hero) { width:100%; }
+  }
+  @media (max-width:760px) {
+    .hp-root[data-portal-layout="night-market"] .hp-hero { margin:12px 12px 10px; padding:16px 13px; }
+    .hp-root[data-portal-layout="night-market"] .hp-main { padding-inline:12px; }
+    .hp-root[data-portal-layout="night-market"] .hp-plans-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .hp-root[data-portal-layout="night-market"] .hp-plan { min-height:118px; padding:10px 8px; }
+    .hp-root[data-portal-layout="dansted-wifi"] .hp-main { padding-inline:0; }
+    .hp-root[data-portal-layout="dansted-wifi"] .hp-hero { margin:8px 12px 12px; padding:0; }
+    .hp-root[data-portal-layout="dansted-wifi"] .hp-plans-grid { gap:8px; }
+    .hp-root[data-portal-layout="dansted-wifi"] .hp-plan {
+      flex-basis:calc(25% - 8px);
+      min-width:78px;
+      min-height:108px;
+      padding:8px 5px;
+    }
+    .hp-root[data-portal-layout="dansted-wifi"] .hp-section { padding:6px 8px 20px; }
   }
 `;

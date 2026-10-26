@@ -536,6 +536,7 @@ var COLORS=[
 ];
 
  var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=false;
+ var portalCheckoutStartedAt=0, portalCheckoutElapsedTimer=null;
  var PAYMENT_STATUS_LOADED=false, PAYMENT_METHOD_READY=false, PAYMENT_STATUS_FAILED=false, PAYMENT_GATEWAY="";
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="";
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
@@ -1166,6 +1167,11 @@ function applyPortalBackground(value){
   };
   PORTAL_BACKGROUND=normalisePortalBackground(value);
   document.body.setAttribute("data-portal-background",PORTAL_BACKGROUND);
+  if(document.documentElement.getAttribute("data-portal-layout")==="dansted-wifi"){
+    document.body.style.setProperty("background","linear-gradient(63deg,transparent 0 34%,rgba(255,255,255,.15) 35%,rgba(255,255,255,.025) 40%,transparent 47%),linear-gradient(112deg,transparent 0 54%,rgba(255,255,255,.12) 55%,rgba(255,255,255,.02) 60%,transparent 67%),repeating-linear-gradient(45deg,#252627 0 3px,#101112 3px 7px),repeating-linear-gradient(-45deg,rgba(255,255,255,.13) 0 2px,transparent 2px 7px),#151617","important");
+    document.body.style.setProperty("background-attachment","fixed","important");
+    return;
+  }
   document.body.style.setProperty("background",backgrounds[PORTAL_BACKGROUND],"important");
 }
 function normalisePlanList(value){
@@ -1267,8 +1273,9 @@ function applyPortalConfig(data){
    var isPlatformName=configuredName.toLowerCase().replace(/[^a-z0-9]/g,"")==="ocholasupernet";
     var name=configuredName&&!isPlatformName?configuredName:"OcholaSupernet";
   setPortalText("portalNameHeader",name);setPortalText("portalNameFooter",name);
-  setPortalText("portalHeroTitle","Connect with "+name);
-  setPortalText("portalTagline",typeof data.tagline==="string"?data.tagline:"");
+   var isMetallicDiamond=document.documentElement.getAttribute("data-portal-layout")==="dansted-wifi";
+   setPortalText("portalHeroTitle",isMetallicDiamond?name:"Connect with "+name);
+   if(!isMetallicDiamond)setPortalText("portalTagline",typeof data.tagline==="string"?data.tagline:"");
   document.title=name+" — Hotspot Portal";
   var supportPhone=typeof data.supportPhone==="string"?data.supportPhone.trim():"";
   var phoneHref=supportPhone.replace(/[^\d+]/g,"");
@@ -1623,7 +1630,33 @@ function pingRings(color,delay){
   return [1,2,3].map(function(i){return '<div class="anim-ping" style="position:absolute;inset:0;border-radius:50%;border:1.5px solid '+color+';opacity:'+(0.7-i*0.18)+';transform:scale('+(1+i*0.32)+');animation-delay:'+(i*0.28+Number(delay))+'s"></div>';}).join("");
 }
 
+function formatPortalCheckoutElapsed(){
+  var elapsed=Math.max(0,Math.floor((Date.now()-portalCheckoutStartedAt)/1000));
+  return String(Math.floor(elapsed/60)).padStart(2,"0")+":"+String(elapsed%60).padStart(2,"0");
+}
+function updatePortalCheckoutElapsed(){
+  var label=document.getElementById("portalCheckoutElapsed");
+  if(label)label.textContent=formatPortalCheckoutElapsed();
+}
+function startPortalCheckoutElapsed(){
+  if(portalCheckoutElapsedTimer)clearInterval(portalCheckoutElapsedTimer);
+  portalCheckoutStartedAt=Date.now();
+  portalCheckoutElapsedTimer=window.setInterval(updatePortalCheckoutElapsed,1000);
+}
+function stopPortalCheckoutElapsed(){
+  if(portalCheckoutElapsedTimer)clearInterval(portalCheckoutElapsedTimer);
+  portalCheckoutElapsedTimer=null;
+}
+function portalCheckoutElapsedMarkup(){
+  return '<p style="margin:.75rem 0 0;color:rgba(255,255,255,.45);font-size:.75rem">Elapsed <strong id="portalCheckoutElapsed" style="color:#fff;font-variant-numeric:tabular-nums">'+formatPortalCheckoutElapsed()+'</strong></p>';
+}
+
 function renderModal(){
+  if(stkState==="loading"||stkState==="sent"||stkState==="provisioning"){
+    if(!portalCheckoutElapsedTimer)startPortalCheckoutElapsed();
+  }else if(stkState==="confirmed"||stkState==="error"||stkState==="access_error"){
+    stopPortalCheckoutElapsed();
+  }
   var b=document.getElementById("modalBody");
   if(stkState==="idle"){
     var existingPhone=document.getElementById("stkPhoneInput");
@@ -1671,8 +1704,9 @@ function renderModal(){
       '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">'+
       '<div style="width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,#a855f7,#6d28d9);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(147,51,234,.5)">'+PHONE_SVG+'</div>'+
       '</div></div>'+
-      '<p style="font-size:1rem;font-weight:700;color:#d8b4fe;margin-bottom:.5rem">'+(loyRedeeming?"Redeeming points…":"Sending STK Push…")+'</p>'+
-      '<p style="color:rgba(255,255,255,.45);font-size:.875rem">'+(loyRedeeming?"Confirming your balance, please wait":"Contacting M-Pesa, please wait")+'</p></div>';
+       '<p style="font-size:1rem;font-weight:700;color:#d8b4fe;margin-bottom:.5rem">'+(loyRedeeming?"Redeeming points…":"Preparing your M-Pesa prompt")+'</p>'+
+       '<p style="color:rgba(255,255,255,.55);font-size:.875rem">'+(loyRedeeming?"Confirming your balance. Keep this page open.":"We’re securely contacting M-Pesa. Enter your PIN when the prompt appears.")+'</p>'+
+       portalCheckoutElapsedMarkup()+'</div>';
    }else if(stkState==="provisioning"){
      b.innerHTML='<div style="text-align:center;padding:2.5rem 0">'+
        '<div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">'+
@@ -1680,8 +1714,9 @@ function renderModal(){
        '<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">'+
        '<div style="width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,#34d399,#059669);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(16,185,129,.4)">'+PHONE_SVG+'</div>'+
        '</div></div>'+
-       '<p style="font-size:1rem;font-weight:700;color:#6ee7b7;margin-bottom:.5rem">Assigning your hotspot credentials…</p>'+
-       '<p style="color:rgba(255,255,255,.45);font-size:.875rem">Payment is confirmed. Updating your sign-in account</p></div>';
+        '<p style="font-size:1rem;font-weight:700;color:#6ee7b7;margin-bottom:.5rem">Preparing your hotspot account</p>'+
+        '<p style="color:rgba(255,255,255,.55);font-size:.875rem">Payment is confirmed. We’re setting up your sign-in and connecting this device.</p>'+
+        portalCheckoutElapsedMarkup()+'</div>';
    }else if(stkState==="sent"){
     b.innerHTML='<div style="text-align:center;padding:2.5rem 0">'+
       '<div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">'+
@@ -1691,7 +1726,8 @@ function renderModal(){
       '</div></div>'+
       '<p style="font-size:1rem;font-weight:700;color:#fbbf24;margin-bottom:.5rem">STK Push Sent!</p>'+
       '<p style="color:rgba(255,255,255,.5);font-size:.8375rem;margin-bottom:.75rem">Check your phone and enter your M-Pesa PIN to complete payment</p>'+
-      '<p style="color:rgba(255,255,255,.3);font-size:.75rem" id="pollCounter">Verifying payment… (0/12)</p></div>';
+       '<p style="color:rgba(255,255,255,.5);font-size:.75rem" id="pollCounter">Verifying payment…</p>'+
+       portalCheckoutElapsedMarkup()+'</div>';
    }else if(stkState==="access_error"){
      b.innerHTML='<div style="text-align:center;padding:2.25rem 0">'+
        '<div style="width:72px;height:72px;border-radius:50%;background:rgba(245,158,11,.12);border:2px solid rgba(245,158,11,.25);display:flex;align-items:center;justify-content:center;margin:0 auto 1.25rem">'+
