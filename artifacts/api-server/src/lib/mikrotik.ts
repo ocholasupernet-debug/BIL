@@ -3882,6 +3882,7 @@ async function resolveHotspotClientIpByMacOnConnection(
   const dhcpRows = await readOptionalRows([
     "/ip/dhcp-server/lease/print",
     "?status=bound",
+    `?mac-address=${targetMac}`,
     "=.proplist=host-name,address,mac-address,comment",
   ]);
   const dhcpAddress = addressForTarget(dhcpRows);
@@ -3890,8 +3891,16 @@ async function resolveHotspotClientIpByMacOnConnection(
   // Host and ARP are independent read-only fallbacks. Run them together only
   // after DHCP misses, while preferring the Hotspot host result when both match.
   const [hostRows, arpRows] = await Promise.all([
-    readOptionalRows(["/ip/hotspot/host/print", "=.proplist=address,mac-address,host-name,comment"]),
-    readOptionalRows(["/ip/arp/print", "=.proplist=address,mac-address,interface,complete"]),
+    readOptionalRows([
+      "/ip/hotspot/host/print",
+      `?mac-address=${targetMac}`,
+      "=.proplist=address,mac-address,host-name,comment",
+    ]),
+    readOptionalRows([
+      "/ip/arp/print",
+      `?mac-address=${targetMac}`,
+      "=.proplist=address,mac-address,interface,complete",
+    ]),
   ]);
   const hostAddress = addressForTarget(hostRows);
   if (hostAddress) return hostAddress;
@@ -3949,6 +3958,7 @@ export async function reconnectHotspotUserByMac(
     const activeRows = await measure("router_active_session_read", async () => {
       const rows = await withTimeout(conn.write([
         "/ip/hotspot/active/print",
+        `?user=${opts.user}`,
         "=.proplist=.id,user,address,mac-address,server,comment,host-name",
       ]), ms);
       return Array.isArray(rows) ? rows as Record<string, string>[] : [];

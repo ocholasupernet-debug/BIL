@@ -165,6 +165,26 @@ test("a matching paid hotspot session is reused without disconnecting it", async
   });
 });
 
+test("an already-active paid Hotspot reconnect exits after one user-scoped read", async () => {
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/print") {
+      return [{ user: "paid-user", address: "10.0.0.88", "mac-address": targetMac, server: "hotspot" }];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    const result = await reconnectHotspotUserByMac(routerCredentials(port), {
+      user: "paid-user",
+      password: "test-password",
+      macAddress: targetMac,
+    });
+
+    assert.equal(result.kind, "connected");
+    assert.deepEqual(commands.map(({ command }) => command[0]), ["/ip/hotspot/active/print"]);
+    assert.ok(commands[0]?.command.includes("?user=paid-user"));
+  });
+});
+
 test("hotspot login uses the selected device IP and confirms its MAC session", async () => {
   let loginSeen = false;
   const targetMac = "AA:BB:CC:DD:EE:FF";
@@ -225,6 +245,9 @@ test("paid Hotspot reconnect discovers and confirms a device over one RouterOS c
     assert.equal(result.kind, "connected");
     assert.equal(connectedUsers.length, 1);
     assert.equal(typeof result.stageDurationsMs.router_connection_setup, "number");
+    assert.ok(commands[0]?.command.includes("?user=tv-package"));
+    assert.ok(commands.find(({ command }) => command[0] === "/ip/dhcp-server/lease/print")
+      ?.command.includes(`?mac-address=${targetMac}`));
     assert.deepEqual(commands.map(({ command }) => command[0]), [
       "/ip/hotspot/active/print",
       "/ip/dhcp-server/lease/print",
@@ -260,7 +283,7 @@ test("paid Hotspot reconnect moves a single-device session only after finding th
     }
     if (command[0] === "/ip/hotspot/active/print") {
       const userScoped = command.some(value => String(value).startsWith("?user="));
-      if (!userScoped && !previousSessionRemoved) {
+      if (!previousSessionRemoved && !loginSeen) {
         return [{ ".id": "*1", user: "one-device-plan", "mac-address": previousMac }];
       }
       if (userScoped && loginSeen) {
@@ -311,8 +334,8 @@ test("paid Hotspot reconnect limits a pending login to two confirmation reads", 
         command[0] === "/ip/hotspot/active/print"
         && command.some(value => String(value).startsWith("?user=")),
       ).length,
-      3,
-      "one pre-login check plus two confirmation reads",
+      4,
+      "initial scoped read, pre-login check, and two confirmation reads",
     );
     assert.equal(typeof result.stageDurationsMs.routeros_active_login_command, "number");
     assert.equal(typeof result.stageDurationsMs.routeros_login_confirmation_1, "number");
@@ -358,6 +381,10 @@ test("paid Hotspot reconnect checks Host and ARP fallbacks concurrently after a 
     assert.equal(result.kind, "connected");
     assert.equal(connectedUsers.length, 1);
     assert.equal(maxActiveFallbackReads, 2);
+    for (const path of ["/ip/hotspot/host/print", "/ip/arp/print"]) {
+      assert.ok(commands.find(({ command }) => command[0] === path)
+        ?.command.includes(`?mac-address=${targetMac}`));
+    }
     assert.deepEqual(
       new Set(commands.map(({ command }) => command[0])),
       new Set([
