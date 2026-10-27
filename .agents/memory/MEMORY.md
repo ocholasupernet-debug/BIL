@@ -1,3 +1,4 @@
+- [Hotspot layout module styling](hotspot-module-styling.md) — Keep checkout behavior layout-specific; Dansted package selection opens its own phone and payment flow.
 - [VPS deployment verification](vps-deployment-verification.md) — Verify live source/artifacts; preserve composite fixes, build off-server, and drain API requests before restart.
 - [Authorization test contracts](authorization-test-contracts.md) — Verify tenant ownership and actual service denial; roaming can legitimately read plans from another origin service.
 - [Theme token cascade](theme-token-cascade.md) — Update the final legacy token layer too; later root declarations can silently override the primary design system.
