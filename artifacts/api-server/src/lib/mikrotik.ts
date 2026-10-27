@@ -3925,6 +3925,7 @@ export async function reconnectHotspotUserByMac(
     expectedServer?: string;
     loginIp?: string;
     verifyOnly?: boolean;
+    replacePreviousSession?: boolean;
   },
 ): Promise<HotspotMacReconnectResult> {
   const stageDurationsMs: Record<string, number> = {};
@@ -3948,7 +3949,7 @@ export async function reconnectHotspotUserByMac(
     const activeRows = await measure("router_active_session_read", async () => {
       const rows = await withTimeout(conn.write([
         "/ip/hotspot/active/print",
-        "=.proplist=user,address,mac-address,server,comment,host-name",
+        "=.proplist=.id,user,address,mac-address,server,comment,host-name",
       ]), ms);
       return Array.isArray(rows) ? rows as Record<string, string>[] : [];
     });
@@ -3969,6 +3970,20 @@ export async function reconnectHotspotUserByMac(
 
     const loginIp = opts.loginIp?.trim() || discoveredIp;
     const loginAccepted = await measure("routeros_login_and_confirmation", async () => {
+      if (opts.replacePreviousSession) {
+        const previousSessions = activeRows.filter(session =>
+          session.user === opts.user
+          && validRouterMac(session["mac-address"]) !== targetMac
+          && typeof session[".id"] === "string"
+          && session[".id"].trim(),
+        );
+        for (const session of previousSessions) {
+          await withTimeout(conn.write([
+            "/ip/hotspot/active/remove",
+            `=.id=${session[".id"]}`,
+          ]), ms);
+        }
+      }
       const readActiveForUser = async (): Promise<Record<string, string>[]> => {
         const rows = await withTimeout(conn.write([
           "/ip/hotspot/active/print",

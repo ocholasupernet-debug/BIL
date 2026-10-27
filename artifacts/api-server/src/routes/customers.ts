@@ -3020,7 +3020,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   const plan = customerRow.plan_id
     ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
-        `id=eq.${customerRow.plan_id}&admin_id=eq.${planAdminId}&select=id,name,router_id,port_id,owner_reseller_id,type,plan_type&limit=1`,
+        `id=eq.${customerRow.plan_id}&admin_id=eq.${planAdminId}&select=id,name,router_id,port_id,owner_reseller_id,type,plan_type,shared_users&limit=1`,
       ))[0]
     : undefined;
   if (
@@ -3134,29 +3134,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     });
     return;
   }
-  if (macChanged) {
-    let activeUsers: Awaited<ReturnType<typeof fetchHotspotUsers>>;
-    try {
-      activeUsers = await fetchHotspotUsers(creds);
-    } catch (error) {
-      logger.warn({ err: error, adminId, routerId }, "[customers/hotspot-login] could not verify the previous device session");
-      res.status(503).json({
-        ...activePlanDetails,
-        retryable: true,
-        error: "Your plan is active, but the router has not confirmed the device yet.",
-      });
-      return;
-    }
-    if (activeUsers.some(user =>
-      user.user === username && normalisePortalMac(user.macAddress) !== targetMac,
-    )) {
-      res.status(409).json({
-        ...activePlanDetails,
-        error: "This account is still connected on its previous device address. Disconnect that session, then try again.",
-      });
-      return;
-    }
-  }
+  const maxSharedUsers = Math.max(1, Math.floor(Number(plan?.shared_users ?? 1)));
 
   try {
     // Keep the common login/reconnect path on one RouterOS API connection.
@@ -3171,6 +3149,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
         ? { expectedIp: String(customerRow.ip_address) }
         : {}),
       ...(customerRow.type === "vlan" ? { loginIp: String(customerRow.ip_address) } : {}),
+      ...(macChanged && maxSharedUsers === 1 ? { replacePreviousSession: true } : {}),
     });
     if (reconnect.kind === "device-not-found") {
       res.status(503).json({

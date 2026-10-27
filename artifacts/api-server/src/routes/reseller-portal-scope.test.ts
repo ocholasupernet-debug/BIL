@@ -1442,7 +1442,9 @@ test("signed reseller portal requests stay within their assigned service", async
 
   await t.test("saved Hotspot login reconnects through one combined RouterOS operation and retries a not-yet-visible device", async () => {
     const previousCustomers = customers;
+    const previousTransactions = transactions;
     const previousRouterFixture = includeRouterFixture;
+    const previousSharedUsers = assignedPlan.shared_users;
     let reconnectKind: "connected" | "device-not-found" = "connected";
     try {
       customers = [{ ...assignedCustomer }];
@@ -1454,6 +1456,7 @@ test("signed reseller portal requests stay within their assigned service", async
           username: options.user,
           macAddress: options.macAddress,
           expectedServer: options.expectedServer,
+          replacePreviousSession: options.replacePreviousSession,
         });
         return { kind: reconnectKind, stageDurationsMs: {} };
       };
@@ -1484,9 +1487,39 @@ test("signed reseller portal requests stay within their assigned service", async
       const waitingResult = await waiting.json() as { activePlan: boolean; retryable: boolean };
       assert.equal(waitingResult.activePlan, true);
       assert.equal(waitingResult.retryable, true);
+
+      transactions = [{ ...assignedTransaction }];
+      const changedMac = "AA:BB:CC:DD:EE:01";
+      reconnectKind = "connected";
+      routerOperations.length = 0;
+      const movedSingleDevice = await request("/api/customers/hotspot-login", {
+        method: "POST",
+        body: {
+          username: assignedCustomer.username,
+          password: assignedCustomer.password,
+          mac_address: changedMac,
+        },
+      });
+      assert.equal(movedSingleDevice.status, 200, await movedSingleDevice.clone().text());
+      assert.equal(routerOperations.at(-1)?.replacePreviousSession, true);
+
+      assignedPlan.shared_users = 2;
+      routerOperations.length = 0;
+      const sharedPlanLogin = await request("/api/customers/hotspot-login", {
+        method: "POST",
+        body: {
+          username: assignedCustomer.username,
+          password: assignedCustomer.password,
+          mac_address: changedMac,
+        },
+      });
+      assert.equal(sharedPlanLogin.status, 200, await sharedPlanLogin.clone().text());
+      assert.equal(routerOperations.at(-1)?.replacePreviousSession, undefined);
     } finally {
       customers = previousCustomers;
+      transactions = previousTransactions;
       includeRouterFixture = previousRouterFixture;
+      assignedPlan.shared_users = previousSharedUsers;
     }
   });
 

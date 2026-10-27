@@ -243,6 +243,54 @@ test("paid Hotspot reconnect discovers and confirms a device over one RouterOS c
   });
 });
 
+test("paid Hotspot reconnect moves a single-device session only after finding the new device", async () => {
+  const previousMac = "AA:BB:CC:DD:EE:01";
+  const targetMac = "AA:BB:CC:DD:EE:02";
+  let previousSessionRemoved = false;
+  let loginSeen = false;
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/remove") {
+      previousSessionRemoved = true;
+      return [];
+    }
+    if (command[0] === "/ip/hotspot/active/login") {
+      assert.equal(previousSessionRemoved, true);
+      loginSeen = true;
+      return [];
+    }
+    if (command[0] === "/ip/hotspot/active/print") {
+      const userScoped = command.some(value => String(value).startsWith("?user="));
+      if (!userScoped && !previousSessionRemoved) {
+        return [{ ".id": "*1", user: "one-device-plan", "mac-address": previousMac }];
+      }
+      if (userScoped && loginSeen) {
+        return [{ user: "one-device-plan", address: "10.0.0.88", "mac-address": targetMac }];
+      }
+      return [];
+    }
+    if (command[0] === "/ip/dhcp-server/lease/print") {
+      return [{ status: "bound", address: "10.0.0.88", "mac-address": targetMac }];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    const result = await reconnectHotspotUserByMac(routerCredentials(port), {
+      user: "one-device-plan",
+      password: "test-password",
+      macAddress: targetMac,
+      replacePreviousSession: true,
+    });
+
+    assert.equal(result.kind, "connected");
+    const removalIndex = commands.findIndex(({ command }) => command[0] === "/ip/hotspot/active/remove");
+    const loginIndex = commands.findIndex(({ command }) => command[0] === "/ip/hotspot/active/login");
+    assert.ok(removalIndex >= 0 && removalIndex < loginIndex);
+    assert.deepEqual(commands[removalIndex].command, [
+      "/ip/hotspot/active/remove",
+      "=.id=*1",
+    ]);
+  });
+});
+
 test("paid Hotspot reconnect limits a pending login to two confirmation reads", async () => {
   const targetMac = "AA:BB:CC:DD:EE:FF";
   await withMockRouterApi((_username, command) => {
