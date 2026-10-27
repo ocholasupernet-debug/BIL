@@ -605,6 +605,7 @@ function HotspotLoginView({
   const [accessReady, setAccessReady] = useState(false);
   const [portalHandoffReady, setPortalHandoffReady] = useState(false);
   const [accessRetrying, setAccessRetrying] = useState(false);
+  const [accessSetupPending, setAccessSetupPending] = useState(false);
   const [tvDiagnostic, setTvDiagnostic] = useState<TvPackageDiagnostic | null>(null);
   const [tvDiagnosticLoading, setTvDiagnosticLoading] = useState(false);
   const [paymentFailed, setPaymentFailed] = useState(false);
@@ -617,6 +618,7 @@ function HotspotLoginView({
   const paymentStartInFlight = useRef(false);
   const paymentStartedAtRef = useRef<number | null>(null);
   const bindingInFlight = useRef(false);
+  const accessRetryAttemptRef = useRef(0);
   const statusPollInFlight = useRef(false);
   const [mpesaStatus, setMpesaStatus] = useState<{
     configured: boolean;
@@ -1001,6 +1003,8 @@ function HotspotLoginView({
     retryRouter = false,
     targetMacAddress = deviceMacAddress,
   ): Promise<boolean> => {
+    let retryableFailure = true;
+    setAccessSetupPending(true);
     setAccessRetrying(true);
     try {
       const accessResponse = await hotspotPortalFetch(hotspotApiUrl("/api/mpesa/hotspot-mac-access"), {
@@ -1032,6 +1036,11 @@ function HotspotLoginView({
         device_authorization_expires_at?: number;
       };
       if (!accessResponse.ok || !accessData.ok || !accessData.credentials?.username || !accessData.credentials.password) {
+        retryableFailure = accessResponse.status === 408
+          || accessResponse.status === 425
+          || accessResponse.status === 429
+          || accessResponse.status >= 500
+          || (accessResponse.status === 409 && /payment is not confirmed yet/i.test(accessData.error ?? ""));
         throw new Error(accessData.error || "Payment confirmed, but the hotspot router could not be updated yet.");
       }
       if (typeof accessData.device_authorization === "string") {
@@ -1050,6 +1059,7 @@ function HotspotLoginView({
       const portalHandoff = accessData.portal_login_handoff === true;
       setAccessReady(connected);
       setPortalHandoffReady(portalHandoff);
+      setAccessSetupPending(!connected && !portalHandoff);
       setPaidAccessExpiresAt(accessData.expires_at ?? null);
       setShowTvSuccess(connected && paymentMode === "tv");
       if (connected && paymentMode === "tv") {
@@ -1085,6 +1095,7 @@ function HotspotLoginView({
       setAccessReady(false);
       setPortalHandoffReady(false);
       setShowTvSuccess(false);
+      setAccessSetupPending(retryableFailure);
       setPayError(error instanceof Error ? error.message : "The hotspot router could not be updated yet.");
       return false;
     } finally {
@@ -1109,6 +1120,42 @@ function HotspotLoginView({
     rememberTvDevice,
     savedTvDevices,
     savedTvDevicesStorageKey,
+  ]);
+
+  useEffect(() => {
+    accessRetryAttemptRef.current = 0;
+  }, [checkoutId]);
+
+  useEffect(() => {
+    if (
+      !paymentConfirmed
+      || !checkoutId
+      || !accessSetupPending
+      || accessRetrying
+      || accessReady
+      || portalHandoffReady
+      || paymentFailed
+    ) return;
+
+    const attempt = accessRetryAttemptRef.current;
+    const delayMs = Math.min(1_500 * (2 ** Math.min(attempt, 5)), 30_000);
+    const timer = window.setTimeout(() => {
+      if (bindingInFlight.current) return;
+      accessRetryAttemptRef.current += 1;
+      bindingInFlight.current = true;
+      void bindPaidHotspotAccess(checkoutId, true);
+    }, delayMs);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    accessReady,
+    accessRetrying,
+    accessSetupPending,
+    bindPaidHotspotAccess,
+    checkoutId,
+    paymentConfirmed,
+    paymentFailed,
+    portalHandoffReady,
   ]);
 
   const checkTvPackageStatus = useCallback(async (): Promise<TvPackageDiagnostic> => {
@@ -1284,7 +1331,7 @@ function HotspotLoginView({
     setPaymentElapsedSeconds(0);
     setDeviceMacAddress(macAddress);
     setDeviceName(normalizedDeviceName);
-    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setLoyaltyPaidWithPoints(false); setAccessReady(false); setPortalHandoffReady(false); setShowTvSuccess(false); setPaidAccessExpiresAt(null); setHotspotCredentials(null); setPollTimedOut(false); setTvDiagnostic(null);
+    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setLoyaltyPaidWithPoints(false); setAccessReady(false); setPortalHandoffReady(false); setAccessSetupPending(false); setShowTvSuccess(false); setPaidAccessExpiresAt(null); setHotspotCredentials(null); setPollTimedOut(false); setTvDiagnostic(null);
     bindingInFlight.current = false;
     try {
       const intentResponse = await hotspotPortalFetch(hotspotApiUrl("/api/mpesa/intent"), {
@@ -3201,7 +3248,15 @@ function HotspotLoginView({
                   <small>Time {String(Math.floor(paymentElapsedSeconds / 60)).padStart(2, "0")}:{String(paymentElapsedSeconds % 60).padStart(2, "0")}</small>
                 </div>
               )}
-              {paymentConfirmed && !accessReady && Boolean(payError) && (
+              {paymentConfirmed && !accessReady && accessSetupPending && (
+                <div className="dansted-checkout-progress" role="status" aria-live="polite">
+                  <div className="dansted-checkout-loader"><span>LOADING</span></div>
+                  <strong>Preparing your account...</strong>
+                  <p>Payment received. We’re connecting your device automatically. Please keep this page open.</p>
+                  <small>{accessRetrying ? "Connecting…" : "Retrying automatically…"}</small>
+                </div>
+              )}
+              {paymentConfirmed && !accessReady && !accessSetupPending && Boolean(payError) && (
                 <div className="dansted-checkout-progress" role="alert">
                   <strong>Payment received</strong>
                   <p>{payError}</p>
@@ -3738,7 +3793,7 @@ function HotspotLoginView({
                         {payError && <p style={{ fontSize: 12, color: "#fbbf24", marginBottom: 8 }}>{payError}</p>}
                         <p style={{ fontSize: 12, color: "rgba(255,255,255,0.35)", marginBottom: 20 }}>Check M-Pesa before retrying if you believe the amount was deducted.</p>
                         <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
-                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setLoyaltyPaidWithPoints(false); setAccessReady(false); setPaymentFailed(false); setPollTimedOut(false); bindingInFlight.current = false; }}>
+                          onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setLoyaltyPaidWithPoints(false); setAccessReady(false); setAccessSetupPending(false); setPaymentFailed(false); setPollTimedOut(false); bindingInFlight.current = false; }}>
                           Try Again
                         </button>
                       </>
@@ -3770,7 +3825,7 @@ function HotspotLoginView({
                           </div>
                         )}
                         <button className="hp-btn hp-btn-ghost" style={{ width: "auto", display: "inline-flex", padding: "10px 24px" }}
-                           onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setLoyaltyPaidWithPoints(false); setAccessReady(false); setPaymentFailed(false); setPollTimedOut(false); bindingInFlight.current = false; }}>
+                           onClick={() => { setStkSent(false); setSelectedPlan(null); setPhone(""); setCheckoutId(null); setPaymentConfirmed(false); setLoyaltyPaidWithPoints(false); setAccessReady(false); setAccessSetupPending(false); setPaymentFailed(false); setPollTimedOut(false); bindingInFlight.current = false; }}>
                           {pollTimedOut ? "Try Again" : "Cancel & Start Over"}
                         </button>
                       </>
