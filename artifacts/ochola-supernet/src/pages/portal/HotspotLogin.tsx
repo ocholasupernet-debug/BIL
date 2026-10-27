@@ -1792,6 +1792,7 @@ function HotspotLoginView({
         ok?: boolean;
         error?: string;
         activePlan?: boolean;
+        retryable?: boolean;
         planName?: string | null;
         expiresAt?: string | null;
         customer?: { expires_at?: string | null; username?: string | null };
@@ -1812,7 +1813,9 @@ function HotspotLoginView({
             attempted: true,
             signedIn: false,
             activePlan: true,
-            retryable: response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500,
+            retryable: typeof data.retryable === "boolean"
+              ? data.retryable
+              : response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500,
             error: data.error,
           };
         }

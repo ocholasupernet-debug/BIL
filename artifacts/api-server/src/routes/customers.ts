@@ -121,6 +121,7 @@ export const prepaidHotspotReconnectOperations = {
   resolveHotspotClientIpByMac,
   reconcileHotspotUserAccess,
   connectHotspotUser,
+  reconnectHotspotUserByMac,
 };
 
 export const hotspotTroubleshootOperations = {
@@ -3126,66 +3127,82 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   // purchased account. Keep its stored MAC unchanged; only use the new MAC
   // after proving the old session is no longer active.
   const targetMac = macChanged ? requestedMac : customerMac || requestedMac;
-  let activeUsers: Awaited<ReturnType<typeof fetchHotspotUsers>> = [];
+  if (!targetMac) {
+    res.status(409).json({
+      ...activePlanDetails,
+      error: "Connect this device to the hotspot Wi-Fi, then try again.",
+    });
+    return;
+  }
+  if (macChanged) {
+    let activeUsers: Awaited<ReturnType<typeof fetchHotspotUsers>>;
+    try {
+      activeUsers = await fetchHotspotUsers(creds);
+    } catch (error) {
+      logger.warn({ err: error, adminId, routerId }, "[customers/hotspot-login] could not verify the previous device session");
+      res.status(503).json({
+        ...activePlanDetails,
+        retryable: true,
+        error: "Your plan is active, but the router has not confirmed the device yet.",
+      });
+      return;
+    }
+    if (activeUsers.some(user =>
+      user.user === username && normalisePortalMac(user.macAddress) !== targetMac,
+    )) {
+      res.status(409).json({
+        ...activePlanDetails,
+        error: "This account is still connected on its previous device address. Disconnect that session, then try again.",
+      });
+      return;
+    }
+  }
+
   try {
-    activeUsers = await fetchHotspotUsers(creds);
+    // Keep the common login/reconnect path on one RouterOS API connection.
+    // The helper reads active sessions, discovers the device IP, logs in, and
+    // confirms the session without opening separate API connections per step.
+    const reconnect = await prepaidHotspotReconnectOperations.reconnectHotspotUserByMac(creds, {
+      user: username,
+      password,
+      macAddress: targetMac,
+      ...(hotspotServer ? { expectedServer: hotspotServer } : {}),
+      ...(portalScope && customerRow.type === "vlan"
+        ? { expectedIp: String(customerRow.ip_address) }
+        : {}),
+      ...(customerRow.type === "vlan" ? { loginIp: String(customerRow.ip_address) } : {}),
+    });
+    if (reconnect.kind === "device-not-found") {
+      res.status(503).json({
+        ...activePlanDetails,
+        retryable: true,
+        error: "Your package is active. Keep this device connected to Wi-Fi while we reconnect it.",
+      });
+      return;
+    }
+    if (reconnect.kind === "ip-mismatch") {
+      res.status(409).json({
+        ...activePlanDetails,
+        error: "This device is not using the static IP assigned to its VLAN account.",
+      });
+      return;
+    }
+    if (reconnect.kind !== "connected") {
+      res.status(503).json({
+        ...activePlanDetails,
+        retryable: true,
+        error: "Your plan is active, but the router has not confirmed this device's login yet.",
+      });
+      return;
+    }
   } catch (error) {
-    logger.warn({ err: error, adminId, routerId }, "[customers/hotspot-login] could not read hotspot sessions");
+    logger.warn({ err: error, adminId, routerId, username }, "[customers/hotspot-login] router login attempt failed");
     res.status(503).json({
       ...activePlanDetails,
+      retryable: true,
       error: "Your plan is active, but the hotspot router has not accepted the connection yet.",
     });
     return;
-  }
-  if (macChanged && activeUsers.some(user =>
-    user.user === username && normalisePortalMac(user.macAddress) !== targetMac,
-  )) {
-    res.status(409).json({
-      ...activePlanDetails,
-      error: "This account is still connected on its previous device address. Disconnect that session, then try again.",
-    });
-    return;
-  }
-
-  const connected = activeUsers.some(user =>
-    user.user === username && !!targetMac && normalisePortalMac(user.macAddress) === targetMac,
-  );
-  if (!connected) {
-    const discoveredIp = targetMac ? await resolveHotspotClientIpByMac(creds, targetMac).catch(() => null) : null;
-    if (!discoveredIp || !targetMac) {
-      res.status(409).json({
-        ...activePlanDetails,
-        error: "Credentials are valid, but the router cannot find this device on the hotspot Wi-Fi yet. Connect the device to Wi-Fi and try again.",
-      });
-      return;
-    }
-    if (portalScope && customerRow.type === "vlan" && discoveredIp !== customerRow.ip_address) {
-      res.status(409).json({ error: "This device is not using the static IP assigned to its VLAN account." });
-      return;
-    }
-    try {
-      const loginAccepted = await connectHotspotUser(creds, {
-        user: username,
-        password,
-        ip: customerRow.type === "vlan" ? String(customerRow.ip_address) : discoveredIp,
-        macAddress: targetMac,
-        ...(hotspotServer ? { server: hotspotServer } : {}),
-      });
-      if (!loginAccepted) {
-        res.status(503).json({
-        ...activePlanDetails,
-          error: "The router has not confirmed this device's login yet. Please try again.",
-        });
-        return;
-      }
-    } catch (error) {
-      logger.warn({ err: error, adminId, routerId, username }, "[customers/hotspot-login] router login attempt failed");
-      res.status(503).json({
-        ...activePlanDetails,
-        error: "Your plan is active, but the hotspot router has not accepted the connection yet.",
-      });
-      return;
-    }
   }
 
   // Return customer without exposing password.

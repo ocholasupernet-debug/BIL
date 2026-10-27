@@ -196,7 +196,7 @@ function matches(row: Record<string, unknown>, query: URLSearchParams): boolean 
 test("signed reseller portal requests stay within their assigned service", async (t) => {
   const [
     { generateAdminSessionToken, generatePaymentIntent, resolveVlanHotspotPortalRequest },
-    { default: customersRouter, hotspotTroubleshootOperations },
+    { default: customersRouter, hotspotTroubleshootOperations, prepaidHotspotReconnectOperations },
     {
       default: mpesaRouter,
       loadHotspotPortContext,
@@ -250,6 +250,7 @@ test("signed reseller portal requests stay within their assigned service", async
   };
   const originalHotspotOperations = { ...hotspotPaymentOperations };
   const originalHotspotTroubleshootOperations = { ...hotspotTroubleshootOperations };
+  const originalPrepaidHotspotReconnectOperations = { ...prepaidHotspotReconnectOperations };
 
   hotspotTroubleshootOperations.fetchHotspotUsers = async () => {
     recordRouterOperation("readActiveUsers");
@@ -562,6 +563,7 @@ test("signed reseller portal requests stay within their assigned service", async
     globalThis.fetch = originalFetch;
     Object.assign(hotspotPaymentOperations, originalHotspotOperations);
     Object.assign(hotspotTroubleshootOperations, originalHotspotTroubleshootOperations);
+    Object.assign(prepaidHotspotReconnectOperations, originalPrepaidHotspotReconnectOperations);
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   });
 
@@ -1436,6 +1438,56 @@ test("signed reseller portal requests stay within their assigned service", async
     assert.equal(troubleshooting.status, "active");
     assert.equal(troubleshooting.planName, assignedPlan.name);
     assert.equal(dbRequests.some(row => row.table === "isp_routers"), false);
+  });
+
+  await t.test("saved Hotspot login reconnects through one combined RouterOS operation and retries a not-yet-visible device", async () => {
+    const previousCustomers = customers;
+    const previousRouterFixture = includeRouterFixture;
+    let reconnectKind: "connected" | "device-not-found" = "connected";
+    try {
+      customers = [{ ...assignedCustomer }];
+      includeRouterFixture = true;
+      routerOperations.length = 0;
+      clearRequests();
+      prepaidHotspotReconnectOperations.reconnectHotspotUserByMac = async (_credentials, options) => {
+        recordRouterOperation("savedLoginReconnect", {
+          username: options.user,
+          macAddress: options.macAddress,
+          expectedServer: options.expectedServer,
+        });
+        return { kind: reconnectKind, stageDurationsMs: {} };
+      };
+
+      const connected = await request("/api/customers/hotspot-login", {
+        method: "POST",
+        body: {
+          username: assignedCustomer.username,
+          password: assignedCustomer.password,
+          mac_address: assignedCustomer.mac_address,
+        },
+      });
+      assert.equal(connected.status, 200, await connected.clone().text());
+      assert.equal((await connected.json() as { connected: boolean }).connected, true);
+      assert.deepEqual(routerOperations.map(row => row.name), ["savedLoginReconnect"]);
+
+      routerOperations.length = 0;
+      reconnectKind = "device-not-found";
+      const waiting = await request("/api/customers/hotspot-login", {
+        method: "POST",
+        body: {
+          username: assignedCustomer.username,
+          password: assignedCustomer.password,
+          mac_address: assignedCustomer.mac_address,
+        },
+      });
+      assert.equal(waiting.status, 503);
+      const waitingResult = await waiting.json() as { activePlan: boolean; retryable: boolean };
+      assert.equal(waitingResult.activePlan, true);
+      assert.equal(waitingResult.retryable, true);
+    } finally {
+      customers = previousCustomers;
+      includeRouterFixture = previousRouterFixture;
+    }
   });
 
   await t.test("troubleshooting fetches the paid plan even when it is hidden from purchase cards", async () => {
