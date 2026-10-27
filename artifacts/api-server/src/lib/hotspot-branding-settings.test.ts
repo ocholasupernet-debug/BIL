@@ -76,6 +76,10 @@ test("keeps only supported portal layout values", () => {
     { portalLayout: "coastal-light" },
   );
   assert.deepEqual(
+    sanitizeHotspotBrandingSettings({ portalLayout: "dansted-wifi" }),
+    { portalLayout: "dansted-wifi" },
+  );
+  assert.deepEqual(
     sanitizeHotspotBrandingSettings({ portalLayout: "unknown-layout" }),
     {},
   );

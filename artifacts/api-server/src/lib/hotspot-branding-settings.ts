@@ -14,6 +14,7 @@ const SAFE_PORTAL_CARD_KEYS = new Set([
 
 const SAFE_PORTAL_LAYOUTS = new Set([
   "classic", "split-horizon", "coastal-light", "signal-grid", "warm-studio", "forest-pulse",
+  "dansted-wifi",
 ]);
 const SAFE_LOYALTY_CARD_SETTINGS = {
   position: new Set(["top", "after-packages", "bottom"]),

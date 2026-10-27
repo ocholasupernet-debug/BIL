@@ -9,11 +9,11 @@ import {
 } from "./hotspot-layouts.js";
 
 test("the portal layout list keeps Classic first and provides five alternatives", () => {
-  assert.equal(HOTSPOT_PORTAL_LAYOUTS.length, 6);
+  assert.equal(HOTSPOT_PORTAL_LAYOUTS.length, 7);
   assert.equal(HOTSPOT_PORTAL_LAYOUTS[0].value, "classic");
   assert.deepEqual(
     HOTSPOT_PORTAL_LAYOUTS.slice(1).map(layout => layout.label),
-    ["Split Horizon", "Coastal Light", "Signal Grid", "Warm Studio", "Forest Pulse"],
+    ["Split Horizon", "Coastal Light", "Signal Grid", "Warm Studio", "Forest Pulse", "Metallic Diamond"],
   );
 });
 
