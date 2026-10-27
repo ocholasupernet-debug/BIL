@@ -18,6 +18,8 @@ function matches(row: FixtureRow, query: URLSearchParams): boolean {
       return false;
     } else if (filter === "not.is.null" && value == null) {
       return false;
+    } else if (filter.startsWith("gt.") && Number(value) <= Number(filter.slice(3))) {
+      return false;
     } else if (filter.startsWith("in.(") && !filter.slice(4, -1).split(",").includes(String(value))) {
       return false;
     }
@@ -69,6 +71,8 @@ test("expired customer archive preserves every transaction field and can be rest
           ? [{ id: 7, is_active: true, role: "isp_admin", parent_id: null }]
           : [];
     const rows = source.filter(row => matches(row, query));
+  if (query.has("order")) rows.sort((a, b) => Number(a.id ?? 0) - Number(b.id ?? 0));
+    if (query.has("limit")) rows.splice(Number(query.get("limit")));
     if (method === "PATCH" && body) rows.forEach(row => Object.assign(row, body));
     return new Response(JSON.stringify(rows), {
       status: 200,
@@ -112,5 +116,21 @@ test("expired customer archive preserves every transaction field and can be rest
   assert.equal(restored.status, 200, await restored.clone().text());
   assert.equal(customers.find(row => row.id === 801)?.archived_at, null);
   assert.deepEqual(transactions, beforeTransactions);
+  for (let id = 9000; id < 10005; id += 1) {
+    customers.push({
+      id, admin_id: 7, status: "expired", expires_at: "2020-01-01T00:00:00Z",
+      depletion_reason: null, archived_at: null,
+    });
+  }
   assert.equal(requests.some(request => request.table === "isp_transactions" && request.method === "PATCH"), false);
+
+  const history = await originalFetch(`${origin}/api/customers/expired-history`, { headers });
+  assert.equal(history.status, 200, await history.clone().text());
+  assert.deepEqual(await history.json(), {
+    ok: true,
+    currentExpiredCount: 1006,
+    archivedExpiredCount: 1,
+    permanentlyDeletedExpiredCount: 4,
+  });
+
 });

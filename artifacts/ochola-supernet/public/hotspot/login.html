@@ -537,11 +537,24 @@ var COLORS=[
   {from:"#fb923c",to:"#c2410c",badge:"#7c2d12",glow:"#fb923c"},
 ];
 
- var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=false;
+ var PLANS=[]; var selectedPlan=null, stkState="idle", stkPhone="", stkError="", pollTimer=null, pollCount=0, paidCheckoutId="", hotspotCredentials=null, MPESA_PROMPT_ENABLED=false, stkWaitTimer=null, stkStartedAt=0;
  var portalCheckoutStartedAt=0, portalCheckoutElapsedTimer=null;
  var PAYMENT_STATUS_LOADED=false, PAYMENT_METHOD_READY=false, PAYMENT_STATUS_FAILED=false, PAYMENT_GATEWAY="";
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="";
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
+  function paymentPhoneStorageKey(){return "ochola_hotspot_payment_phone_v2:"+window.location.host+":"+(PORTAL_ADMIN_ID||"tenant")+":"+(PORTAL_ROUTER_ID||0)+":"+(PORTAL_PORT_ID||0);}
+ function readLastPaymentPhone(){try{return (window.localStorage.getItem(paymentPhoneStorageKey())||"").slice(0,24);}catch(e){return "";}}
+ function rememberPaymentPhone(value){var phone=String(value||"").trim().slice(0,24);if(phone){try{window.localStorage.setItem(paymentPhoneStorageKey(),phone);}catch(e){}}}
+ function startStkWaitTimer(){
+   if(stkWaitTimer)return;
+   var update=function(){
+     var el=document.getElementById("stkWaitTimer");
+     if(!el){window.clearInterval(stkWaitTimer);stkWaitTimer=null;return;}
+     var elapsed=Math.max(0,Math.floor((Date.now()-stkStartedAt)/1000));
+     el.textContent=String(Math.floor(elapsed/60)).padStart(2,"0")+":"+String(elapsed%60).padStart(2,"0");
+   };
+   update();stkWaitTimer=window.setInterval(update,1000);
+ }
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
    var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalAutoReconnectStartedAt=0, portalPaidLoginHandoff=false;
    var portalMpesaVerifyBusy=false;
@@ -851,7 +864,7 @@ function redeemLoyaltyPoints(){
   if(!loyaltyRedeemable()&&!loyUncertain[attempt])return;
   if(!loyKeys[attempt])loyKeys[attempt]=newLoyaltyKey();
   if(!PORTAL_DEVICE_MAC||PORTAL_ADMIN_ID<1){stkError="This device could not be identified. Reconnect to the hotspot Wi-Fi and try again.";stkState="error";renderModal();return;}
-  loyRedeemBusy=true; loyRedeeming=true; stkError=""; stkState="loading"; renderModal();
+  loyRedeemBusy=true; loyRedeeming=true; stkError=""; stkState="loading"; stkStartedAt=Date.now(); renderModal(); startStkWaitTimer();
   var payload=loyaltyScopePayload(); payload.plan_id=planId; payload.idempotency_key=loyKeys[attempt];
   portalPaymentRequest("/api/hotspot/loyalty/redeem",payload,"Points redemption")
     .catch(function(error){return{ok:false,uncertain:true,data:{error:error&&error.message?error.message:"Points redemption failed before a response was received."}};})
@@ -1598,6 +1611,7 @@ function renderPlans(preserveLoadingMarkup){
   }
   grid.innerHTML=PLANS.map(function(p,i){
     var c=COLORS[i%COLORS.length];
+    var isDanstedLayout=document.documentElement.getAttribute("data-portal-layout")==="dansted-wifi";
     var dataAllowance=formatPortalDataAllowance(p);
     var sharedDevices=formatPortalSharedDevices(p.shared_users);
     var checkoutAvailable=canOpenPurchaseModal();
@@ -1615,9 +1629,9 @@ function renderPlans(preserveLoadingMarkup){
       '<p style="font-size:.75rem;color:rgba(255,255,255,.5);margin:.625rem 0 0;font-weight:400;line-height:1.4">'+p.validity+' '+p.unit+'</p>'+
       '<p style="font-size:.75rem;color:rgba(255,255,255,.72);margin:.375rem 0 0;font-weight:600;line-height:1.4">'+dataAllowance+'</p>'+
       '<p style="font-size:.75rem;color:rgba(255,255,255,.72);margin:.375rem 0 0;font-weight:600;line-height:1.4">'+sharedDevices+'</p>'+
-      '</div>'+
-        '<button type="button" class="plan-connect-button" data-plan-index="'+i+'" '+(checkoutAvailable?'':'disabled aria-disabled="true"')+' style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:'+(checkoutAvailable?'pointer':'not-allowed')+';opacity:'+(checkoutAvailable?'1':'.55')+';font-family:inherit;transition:opacity .15s" onmouseover="if(!this.disabled)this.style.opacity=\'.88\'" onmouseout="if(!this.disabled)this.style.opacity=\'1\'">'+
-       checkoutLabel+'</button></div>';
+      (isDanstedLayout?(checkoutAvailable?'<div class="dansted-package-pay" style="margin:.6rem auto 0;padding:.4rem .8rem;border-radius:999px;color:white;background:linear-gradient(135deg,#16a34a,#0f766e);font-size:.68rem;font-weight:800;box-shadow:0 4px 12px rgba(22,163,74,.26)">Pay now</div>':''):'<button type="button" class="plan-connect-button" data-plan-index="'+i+'" '+(checkoutAvailable?'':'disabled aria-disabled="true"')+' style="width:100%;padding:.875rem;font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:white;background:linear-gradient(135deg,var(--portal-accent),var(--portal-accent-dark));border:none;cursor:'+(checkoutAvailable?'pointer':'not-allowed')+';opacity:'+(checkoutAvailable?'1':'.55')+';font-family:inherit">'+checkoutLabel+'</button>')+
+       '</div></div>';
+
   }).join("");
    bindPlanButtons();
 }
@@ -1629,8 +1643,9 @@ function openModal(i){
   tvPurchase=false; tvDeviceName=""; tvDeviceRouterId=0; tvRememberDevice=false; tvDeviceSaveNotice="";
   selectedPlan=PLANS[i]; stkState="idle"; stkPhone="";
   loadLoyaltyQuoteForPlan(false);
-  document.getElementById("modalPlanName").textContent=selectedPlan.name;
-  document.getElementById("modalPlanDetails").textContent="Ksh "+selectedPlan.price+" · "+selectedPlan.validity+" "+selectedPlan.unit+" · "+formatPortalDataAllowance(selectedPlan)+" · "+formatPortalSharedDevices(selectedPlan.shared_users);
+  var isDanstedLayout=document.documentElement.getAttribute("data-portal-layout")==="dansted-wifi";
+  document.getElementById("modalPlanName").textContent=isDanstedLayout?"":selectedPlan.name;
+  document.getElementById("modalPlanDetails").textContent=isDanstedLayout?"":"Ksh "+selectedPlan.price+" · "+selectedPlan.validity+" "+selectedPlan.unit+" · "+formatPortalDataAllowance(selectedPlan)+" · "+formatPortalSharedDevices(selectedPlan.shared_users);
   renderModal();
   document.getElementById("stkModal").style.display="flex";
 }
@@ -1681,10 +1696,10 @@ function renderModal(){
     var existingPhone=document.getElementById("stkPhoneInput");
     if(existingPhone)stkPhone=existingPhone.value;
     var mpesaOk=canStartPaymentCheckout();
-    var mode=loyaltyEffectiveMode();
+    var mode=isDanstedLayout?"mpesa":loyaltyEffectiveMode();
     var identified=(DEVICE_MAC||DEVICE_IP)&&PORTAL_ADMIN_ID>0;
     var loyHtml="";
-    if(!tvPurchase&&loyState==="loading"){
+    if(!isDanstedLayout&&!tvPurchase&&loyState==="loading"){
       loyHtml='<p role="status" style="margin-bottom:1rem;font-size:.8rem;color:rgba(255,255,255,.55)">Checking loyalty points for this device…</p>';
     }else if(loyaltyRedeemable()){
       var radio=function(value,label){
@@ -1699,24 +1714,23 @@ function renderModal(){
         '</div>';
     }
     var phoneHtml=mode==="points"?'':
-      '<label class="lbl" style="color:rgba(192,38,211,.8)">M-Pesa Phone Number</label>'+
-      '<input id="stkPhoneInput" type="tel" placeholder="07XXXXXXXX, 01XXXXXXXX, 2547XXXXXXXX, or 2541XXXXXXXX" class="inp" style="margin-bottom:1.25rem" value="'+escapePortalText(stkPhone)+'" />';
+      '<label class="lbl" style="color:'+(isDanstedLayout?'#86efac':'rgba(192,38,211,.8)')+'">'+(isDanstedLayout?'ENTER SAFARICOM NUMBER':'M-Pesa Phone Number')+'</label>'+
+      '<input id="stkPhoneInput" type="tel" inputmode="tel" autocomplete="tel-national" aria-label="Safaricom mobile number" placeholder="Safaricom number (07… or 01…)" onblur="rememberPaymentPhone(this.value)" class="inp" style="margin-bottom:.75rem" value="'+escapePortalText(stkPhone||readLastPaymentPhone())+'" />';
     var noMethod=!mpesaOk&&mode!=="points"&&loyState!=="loading";
-    b.innerHTML='<div style="border-radius:.875rem;padding:1rem 1.125rem;margin-bottom:1.25rem;background:rgba(147,51,234,.1);border:1px solid rgba(147,51,234,.22)">'+
-       '<p id="paymentInstructionText" style="font-size:.8375rem;color:rgba(255,255,255,.65);line-height:1.65">'+(mode==="points"
-          ?(loyaltyPendingCheckout()?'Your points were already redeemed for this package. Finish setting up your access; no more points will be used.':'Redeem your loyalty points to receive a Hotspot account automatically. No username or password is needed.')
-         :noMethod?'No M-Pesa payment method is available for this service, and this device cannot pay with points for this package.'
-         :'Enter your <span style="color:#d8b4fe;font-weight:600">Safaricom M-Pesa number</span>. We\'ll send a payment prompt — just enter your PIN to pay and get connected instantly.')+'</p>'+
-       '</div>'+loyHtml+(noMethod?'':phoneHtml)+
+    var instructionHtml=isDanstedLayout?(noMethod?'<p class="payment-note" role="alert">Payment unavailable.</p>':""):noMethod
+      ?'<p class="payment-note" role="alert">Payment is unavailable for this hotspot.</p>'
+      :(PORTAL_PAYMENT_INSTRUCTIONS&&mode!=="points"?'<p id="paymentInstructionText" class="payment-note"></p>':"");
+    b.innerHTML=loyHtml+instructionHtml+(noMethod?"":phoneHtml)+
       '<div id="stkErrBox" style="display:none;margin-bottom:.875rem;padding:.75rem 1rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>'+
-      (noMethod?'':'<button onclick="'+(mode==="points"?'redeemLoyaltyPoints()':'sendStk()')+'" '+(identified?'':'disabled')+' class="btn btn-purple btn-full" style="font-size:.875rem;padding:.875rem;opacity:'+(identified?'1':'.5')+'">'+
-       (mode==="points"?(loyaltyPendingCheckout()?'Finish access setup':'Redeem '+formatPortalLoyaltyPoints(loyQuote.pointsRequired)+' points'):(isDanstedLayout?'Pay now':'Send STK Push &mdash; Ksh '+(selectedPlan?selectedPlan.price:"")))+
+      (noMethod?'':'<button onclick="'+(mode==="points"?'redeemLoyaltyPoints()':'sendStk()')+'" '+(identified?'':'disabled')+' class="btn '+(isDanstedLayout?'btn-green':'btn-purple')+' btn-full" style="font-size:.875rem;padding:.875rem;opacity:'+(identified?'1':'.5')+(isDanstedLayout?';background:linear-gradient(135deg,#16a34a,#0f766e);border:0;box-shadow:0 8px 22px rgba(16,185,129,.24)':'')+'">'+
+        (mode==="points"?(loyaltyPendingCheckout()?'Finish access setup':'Redeem '+formatPortalLoyaltyPoints(loyQuote.pointsRequired)+' points'):(isDanstedLayout?'Pay now':'Send payment prompt'))+
+
       '</button>');
      if(PORTAL_PAYMENT_INSTRUCTIONS&&mode!=="points"&&!noMethod){
        var instruction=document.getElementById("paymentInstructionText");
        if(instruction)instruction.textContent=PORTAL_PAYMENT_INSTRUCTIONS;
      }
-  }else if(stkState==="loading"){
+  }else if(stkState==="loading"||(isDanstedLayout&&stkState==="sent")){
     b.innerHTML='<div style="text-align:center;padding:2.5rem 0">'+
       '<div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">'+
       pingRings("#a855f7")+
@@ -1725,10 +1739,20 @@ function renderModal(){
          ?'<div role="status" aria-label="Waiting for M-Pesa" style="width:42px;height:42px;border:4px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:portalPaySpin .8s linear infinite"></div>'
          :'<div style="width:68px;height:68px;border-radius:50%;background:linear-gradient(135deg,#a855f7,#6d28d9);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(147,51,234,.5)">'+PHONE_SVG+'</div>')+
       '</div></div>'+
-        '<p style="font-size:1rem;font-weight:700;color:'+(isDanstedLayout?'#6ee7b7':'#d8b4fe')+';margin-bottom:.5rem">'+(loyRedeeming?"Redeeming points…":isDanstedLayout?"Connecting to M-Pesa…":"Preparing your M-Pesa prompt")+'</p>'+
-        '<p style="color:rgba(255,255,255,.65);font-size:.875rem">'+(loyRedeeming?"Confirming your balance. Keep this page open.":isDanstedLayout?"Check your phone for a secure M-Pesa prompt, then enter your PIN to finish.":"We’re securely contacting M-Pesa. Enter your PIN when the prompt appears.")+'</p>'+
-       portalCheckoutElapsedMarkup()+'</div>';
+        '<p style="font-size:1rem;font-weight:700;color:'+(isDanstedLayout?'#86efac':'#fff')+';margin-bottom:.5rem">'+(isDanstedLayout?"Waiting for Safaricom PIN":loyRedeeming?"Redeeming points…":"Sending payment prompt…")+'</p>'+
+        (isDanstedLayout?'':'<p style="color:rgba(255,255,255,.82);font-size:.82rem;line-height:1.5">'+(loyRedeeming?"Confirming your balance securely.":"Approve the Safaricom request on your phone with your PIN.")+'</p>')+
+       '<p style="color:rgba(255,255,255,.48);font-size:.75rem;margin-top:.65rem"><strong id="stkWaitTimer" style="color:#d1fae5;font-variant-numeric:tabular-nums">00:00</strong></p></div>';
+
    }else if(stkState==="provisioning"){
+     if(isDanstedLayout){
+       b.innerHTML='<div style="text-align:center;padding:1.75rem .5rem">'+
+         '<div style="position:relative;width:116px;height:116px;margin:0 auto 1rem;border-radius:50%;background:radial-gradient(circle,rgba(34,197,94,.25),rgba(15,118,110,.08) 60%,transparent 70%);display:flex;align-items:center;justify-content:center">'+
+         pingRings("#4ade80")+
+         '<div style="width:76px;height:76px;border-radius:50%;background:linear-gradient(135deg,#16a34a,#0f766e);display:flex;align-items:center;justify-content:center;box-shadow:0 0 34px rgba(34,197,94,.36);color:white">'+SPINNER+'</div></div>'+
+         '<p style="font-size:1.05rem;font-weight:800;color:#bbf7d0;margin:.25rem 0 .7rem">Preparing account</p>'+
+         '<div style="display:inline-flex;align-items:center;justify-content:center;min-width:112px;padding:.55rem 1rem;border:1px solid rgba(134,239,172,.25);border-radius:999px;background:rgba(20,83,45,.45);color:#dcfce7;font:800 1rem/1.2 ui-monospace,monospace;font-variant-numeric:tabular-nums;box-shadow:0 4px 22px rgba(22,163,74,.16)"><span id="stkWaitTimer">00:00</span></div></div>';
+       return;
+     }
      b.innerHTML='<div style="text-align:center;padding:2.5rem 0">'+
        '<div style="position:relative;width:100px;height:100px;margin:0 auto 1.75rem">'+
        pingRings("#34d399")+

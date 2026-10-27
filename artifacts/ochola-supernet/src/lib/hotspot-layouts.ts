@@ -795,6 +795,11 @@ const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
       box-shadow:0 4px 12px rgba(0,0,0,.32) !important;
       overflow:hidden;
     }
+    html[data-portal-layout="dansted-wifi"] .hp-plan.expanded .hp-plan-top,
+    html[data-portal-layout="dansted-wifi"] .hp-plan.expanded .hp-plan-inline-meta,
+    html[data-portal-layout="dansted-wifi"] .hp-plan.expanded .hp-plan-pay > div:first-child,
+    html[data-portal-layout="dansted-wifi"] .hp-plan.expanded .hp-secured,
+    html[data-portal-layout="dansted-wifi"] .hp-plan.expanded .hp-plan-change { display:none !important; }
     html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card:nth-child(4n + 2) { border-color:#63bd42 !important; }
     html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card:nth-child(4n + 3) { border-color:#a341cf !important; }
     html[data-portal-layout="dansted-wifi"] #plansGrid .plan-card:nth-child(4n + 4) { border-color:#d84c4c !important; }

@@ -3877,13 +3877,16 @@ function HotspotLoginView({
                                   ) : <form onSubmit={handlePay}>
                                     <div className="hp-input-group">
                                       <div className="hp-input-wrap">
+                                        {isDanstedLayout && <label style={{ display: "block", marginBottom: 6, color: "#86efac", fontSize: 11, fontWeight: 800, letterSpacing: ".07em" }}>ENTER SAFARICOM NUMBER</label>}
                                         <input className="hp-input hp-input-phone" type="tel"
-                                          inputMode="tel" placeholder="07XX XXX XXX or 01XX XXX XXX (for M-Pesa)" required={effectiveLoyaltyPayment !== "points"}
+                                          inputMode="tel" autoComplete="tel-national" aria-label="Safaricom mobile number"
+                                          placeholder={isDanstedLayout ? "07… or 01…" : "Safaricom number (07… or 01…)"} required={effectiveLoyaltyPayment !== "points"}
+
                                           value={phone} onChange={e => setPhone(e.target.value)} />
                                       </div>
                                     </div>
 
-                                    {(loyaltyQuoteLoading || loyaltyQuote || loyaltyQuoteError) && (
+                                    {!isDanstedLayout && (loyaltyQuoteLoading || loyaltyQuote || loyaltyQuoteError) && (
                                       <div style={{ margin: "0 0 12px", padding: "11px 12px", borderRadius: 10, background: "rgba(255,255,255,0.045)", border: "1px solid rgba(255,255,255,0.10)", color: "rgba(255,255,255,0.78)", fontSize: 12 }}>
                                         {loyaltyQuoteLoading ? (
                                           <div role="status" style={{ display: "flex", alignItems: "center", gap: 8 }}><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Checking loyalty balance…</div>
@@ -3926,7 +3929,7 @@ function HotspotLoginView({
                                       </div>
                                     )}
 
-                                    <button type="submit" aria-busy={payLoading} disabled={effectiveLoyaltyPayment === "points"
+                                    <button type="submit" aria-busy={payLoading} style={isDanstedLayout ? { background: "linear-gradient(135deg,#16a34a,#0f766e)", boxShadow: "0 8px 22px rgba(16,185,129,.24)" } : undefined} disabled={effectiveLoyaltyPayment === "points"
                                       ? loyaltyRedeemLoading || !(loyaltyRedeemable || pendingLoyaltyCheckout)
                                       : payLoading || !canAttemptHotspotCheckout(mpesaStatus, HOTSPOT_RUNTIME_CONFIG.previewOnly)} className="hp-btn hp-btn-mpesa">
                                       {effectiveLoyaltyPayment === "points" ? loyaltyRedeemLoading ? (
@@ -3987,7 +3990,7 @@ function HotspotLoginView({
                                   )}
                                 </div>
                                  <div className="hp-plan-action">
-                                   <span>{isTvMode ? "Choose for TV" : "Choose plan"}</span>
+                                   <span>{isDanstedLayout ? "Pay now" : isTvMode ? "Choose for TV" : "Choose plan"}</span>
                                    <ArrowUpRight size={15} />
                                  </div>
                               </div>

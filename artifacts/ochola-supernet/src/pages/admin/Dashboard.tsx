@@ -191,14 +191,29 @@ type CustomerBasic = {
   ip_address: string | null;
   service_online: boolean | null;
 };
-type CustomerPlanScope = { id: number; router_id: number | null };
+type CustomerPlanScope = { id: number; router_id: number | null; port_id: number | null };
 type CustomerPortScope = { id: number; router_id: number };
+type ExpiredCustomerHistory = {
+  currentExpiredCount: number;
+  archivedExpiredCount: number;
+  permanentlyDeletedExpiredCount: number;
+};
+
 
 async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
   const response = await adminApiFetch(`/api/customers?adminId=${ADMIN_ID}`, { cache: "no-store" });
   const result = await response.json() as CustomerBasic[] | { error?: string };
   if (!response.ok || !Array.isArray(result)) {
     throw new Error(!Array.isArray(result) && result.error ? result.error : "Customer data could not be loaded.");
+  }
+  return result;
+}
+
+async function fetchExpiredCustomerHistory(): Promise<ExpiredCustomerHistory> {
+  const response = await adminApiFetch(`/api/customers/expired-history?adminId=${ADMIN_ID}`, { cache: "no-store" });
+  const result = await response.json() as ExpiredCustomerHistory | { error?: string };
+  if (!response.ok || !("archivedExpiredCount" in result)) {
+    throw new Error("Historical expired-account counts could not be loaded.");
   }
   return result;
 }
@@ -515,6 +530,11 @@ export default function Dashboard() {
     queryFn: fetchCustomersBasic,
     refetchInterval: 60_000,
   });
+  const expiredHistoryQuery = useQuery({
+    queryKey: ["isp_expired_customer_history", ADMIN_ID],
+    queryFn: fetchExpiredCustomerHistory,
+    refetchInterval: 60_000,
+  });
   const {
     data: customerPlanScopes = { plans: [], ports: [] },
     isLoading: customerPlanScopesLoading,
@@ -590,11 +610,15 @@ export default function Dashboard() {
     customer => prepaidServiceType(customer.type) === "static",
   ).length;
   const activeUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "active").length;
-  const expiredUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "expired").length;
-  const serviceCountsLoading = customersLoading || customerPlanScopesLoading;
-  const serviceCountsUnavailable = (customersError && customers.length === 0)
+  const expiredAccountsEver = (expiredHistoryQuery.data?.currentExpiredCount ?? 0)
+    + (expiredHistoryQuery.data?.archivedExpiredCount ?? 0)
+    + (expiredHistoryQuery.data?.permanentlyDeletedExpiredCount ?? 0);
+  const serviceCountsLoading = customersLoading || customerPlanScopesLoading || expiredHistoryQuery.isLoading;
+
+  const serviceCountsUnavailable = expiredHistoryQuery.isError
+    || (customersError && customers.length === 0)
     || (customerPlanScopesError && customerPlanScopes.plans.length === 0 && customerPlanScopes.ports.length === 0);
-  const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredUsers}`;
+  const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredAccountsEver}`;
   const onlineCountsLoading = serviceCountsLoading
     || routersLoading
     || routers.some((_, index) => !liveQueries[index]?.data && !liveQueries[index]?.isError);
@@ -652,6 +676,7 @@ export default function Dashboard() {
       refetchRouters(),
       refetchCustomers(),
       refetchCustomerPlanScopes(),
+      expiredHistoryQuery.refetch(),
       refetchTransactions(),
       refetchRevenue(),
       telemetryQuery.refetch(),
