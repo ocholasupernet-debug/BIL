@@ -780,7 +780,6 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
         return sbSelectStrict<{ id: number; archived_at?: string | null } & Record<string, unknown>>(
           "isp_customers",
           `admin_id=eq.${adminId}${cursorFilter}&select=*&order=id.desc&limit=${limit}`,
-          "the paginated customer list",
         );
       },
       { pageSize, beforeId, includeArchived, batchSize },
