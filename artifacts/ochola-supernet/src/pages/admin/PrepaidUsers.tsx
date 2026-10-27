@@ -840,17 +840,6 @@ export default function PrepaidUsers() {
   const livePresenceByRouter = useMemo(() => {
     return buildLivePresenceByRouter(routers, liveQueries);
   }, [routers, liveQueries]);
-  const liveSnapshotKey = liveQueries
-    .map(query => query.data?.fetchedAt ?? "")
-    .filter(Boolean)
-    .join("|");
-  useEffect(() => {
-    if (!liveSnapshotKey) return;
-    // The live endpoint persists router counters and connection state; reload
-    // the customer rows after each successful snapshot so the table reflects
-    // that durable state, including for users who are currently offline.
-    void qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
-  }, [qc, liveSnapshotKey]);
   const liveUsage = useMemo(() => {
     const usage = new Map<string, number>();
     const add = (identity?: string, bytesIn?: number, bytesOut?: number) => {

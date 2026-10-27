@@ -14,6 +14,7 @@ import {
   fetchInterfaces,
   fetchTraffic,
   fetchRouterLiveData,
+  fetchRouterLiveSessions,
   fetchWireless,
   createWirelessVirtualAp,
   patchWirelessInterface,
@@ -650,6 +651,41 @@ async function persistPrepaidLiveState(
     }
   }
   return data.vlanQueueStatsAvailable ? onlineVlanUsers : null;
+}
+
+const prepaidLiveRefreshInFlight = new Set<number>();
+const prepaidLiveRefreshLastStartedAt = new Map<number, number>();
+const PREPAID_LIVE_REFRESH_COOLDOWN_MS = 30_000;
+
+function schedulePrepaidLiveRefresh(
+  routerId: number,
+  adminId: number,
+  creds: RouterCredentials,
+): void {
+  const now = Date.now();
+  const lastStartedAt = prepaidLiveRefreshLastStartedAt.get(routerId) ?? 0;
+  if (
+    prepaidLiveRefreshInFlight.has(routerId)
+    || now - lastStartedAt < PREPAID_LIVE_REFRESH_COOLDOWN_MS
+  ) {
+    return;
+  }
+
+  prepaidLiveRefreshInFlight.add(routerId);
+  prepaidLiveRefreshLastStartedAt.set(routerId, now);
+  void (async () => {
+    try {
+      const data = await fetchRouterLiveData(creds);
+      await persistPrepaidLiveState(routerId, adminId, data);
+    } catch (error) {
+      logger.warn(
+        { routerId, error: error instanceof Error ? error.message : String(error) },
+        "background prepaid live-state refresh failed",
+      );
+    } finally {
+      prepaidLiveRefreshInFlight.delete(routerId);
+    }
+  })();
 }
 
 /* ─── Build MikroTik credentials from a Supabase row ────────────────────── */
@@ -3682,18 +3718,11 @@ router.get("/router/:id/live", requireAdmin(), async (req, res): Promise<void> =
   const found = await getRouterCreds(id, tenantId);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {
-    const data = await fetchRouterLiveData(found.creds);
-    let onlineVlanUsers: number | null = null;
-    try {
-      const liveVlanUsers = await persistPrepaidLiveState(id, found.row.admin_id, data);
-      if (account.role !== "reseller") onlineVlanUsers = liveVlanUsers;
-    } catch (error) {
-      logger.warn(
-        { routerId: id, error: error instanceof Error ? error.message : String(error) },
-        "prepaid live state could not be persisted",
-      );
+    const data = await fetchRouterLiveSessions(found.creds);
+    if (account.role !== "reseller") {
+      schedulePrepaidLiveRefresh(id, found.row.admin_id, found.creds);
     }
-    res.json({ routerId: id, ...data, onlineVlanUsers });
+    res.json({ routerId: id, ...data, onlineVlanUsers: null });
   } catch (err) {
     routerErrorResponse(res, err);
   }

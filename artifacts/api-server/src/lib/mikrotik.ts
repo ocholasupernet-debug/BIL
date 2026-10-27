@@ -2439,6 +2439,14 @@ export interface RouterLiveData {
   connectedHost: string;
 }
 
+export interface RouterLiveSessions {
+  hotspotUsers: ActiveHotspotUser[];
+  hotspotUsersAvailable: boolean;
+  pppoeUsers: ActivePPPoESession[];
+  pppoeUsersAvailable: boolean;
+  fetchedAt: string;
+}
+
 /* ─── Parsers ────────────────────────────────────────────────────────────── */
 
 function parseBytes(val: unknown): number {
@@ -2471,6 +2479,69 @@ export async function fetchHotspotUsers(
       bytesOut:   parseBytes(r["bytes-out"]),
       server:     r.server         ?? "",
     }));
+  });
+}
+
+/**
+ * Read only active service sessions for views that need online presence.
+ * Keep counters, queues, interfaces, and traffic out of the interactive path.
+ */
+export async function fetchRouterLiveSessions(
+  creds: RouterCredentials
+): Promise<RouterLiveSessions> {
+  return withConn(creds, async (conn) => {
+    const requestMs = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    let hotspotUsersAvailable = true;
+    let pppoeUsersAvailable = true;
+    let hotspotRows: Record<string, string>[] = [];
+    let pppoeRows: Record<string, string>[] = [];
+
+    try {
+      const result = await withTimeout(
+        conn.write(["/ip/hotspot/active/print"]),
+        requestMs,
+      );
+      hotspotRows = Array.isArray(result) ? result as Record<string, string>[] : [];
+    } catch (error) {
+      hotspotUsersAvailable = false;
+      logger.warn({ err: error instanceof Error ? error.message : String(error) }, "hotspot live-session fetch failed");
+    }
+
+    try {
+      const result = await withTimeout(
+        conn.write(["/ppp/active/print"]),
+        requestMs,
+      );
+      pppoeRows = Array.isArray(result) ? result as Record<string, string>[] : [];
+    } catch (error) {
+      pppoeUsersAvailable = false;
+      logger.warn({ err: error instanceof Error ? error.message : String(error) }, "PPPoE live-session fetch failed");
+    }
+
+    return {
+      hotspotUsers: hotspotRows.map(row => ({
+        id: row[".id"] ?? "",
+        user: row.user ?? "",
+        address: row.address ?? "",
+        macAddress: row["mac-address"] ?? "",
+        uptime: row.uptime ?? "",
+        bytesIn: parseBytes(row["bytes-in"]),
+        bytesOut: parseBytes(row["bytes-out"]),
+        server: row.server ?? "",
+      })),
+      hotspotUsersAvailable,
+      pppoeUsers: pppoeRows.map(row => ({
+        id: row[".id"] ?? "",
+        name: row.name ?? "",
+        address: row.address ?? "",
+        uptime: row.uptime ?? "",
+        bytesIn: parseBytes(row["bytes-in"]),
+        bytesOut: parseBytes(row["bytes-out"]),
+        service: row.service ?? "",
+      })),
+      pppoeUsersAvailable,
+      fetchedAt: new Date().toISOString(),
+    };
   });
 }
 
@@ -5389,7 +5460,7 @@ export async function fetchRouterLiveData(
   const usingSSL = creds.useSSL ?? creds.port === 8729;
 
   /* Share a single connection across all queries for efficiency */
-  const { conn, connectedHost } = await connectWithRetry(creds);
+  const { conn, connectedHost, closeForward } = await connectWithRetry(creds);
   const requestMs = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
 
   try {
@@ -5538,6 +5609,7 @@ export async function fetchRouterLiveData(
     };
   } finally {
     try { conn.close(); } catch { /* ignore */ }
+    await closeForward?.();
   }
 }
 
