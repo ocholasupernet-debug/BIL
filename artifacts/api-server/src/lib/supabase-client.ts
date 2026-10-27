@@ -109,6 +109,38 @@ export async function sbSelectStrict<T>(
   return res.json() as Promise<T[]>;
 }
 
+export async function collectIdOrderedPages<T extends { id: number }>(
+  fetchPage: (afterId: number, pageSize: number) => Promise<T[]>,
+  pageSize = 1000,
+): Promise<T[]> {
+  if (!Number.isSafeInteger(pageSize) || pageSize < 1) {
+    throw new Error("Page size must be a positive safe integer.");
+  }
+
+  const rows: T[] = [];
+  let afterId = 0;
+  for (let pageNumber = 0; pageNumber < 10_000; pageNumber += 1) {
+    const page = await fetchPage(afterId, pageSize);
+    if (page.length > pageSize) {
+      throw new Error("A paginated query returned more rows than requested.");
+    }
+    if (page.length === 0) return rows;
+
+    let lastId = afterId;
+    for (const row of page) {
+      if (!Number.isSafeInteger(row.id) || row.id <= lastId) {
+        throw new Error("A paginated query returned an invalid or unordered ID.");
+      }
+      lastId = row.id;
+    }
+    rows.push(...page);
+    afterId = lastId;
+    if (page.length < pageSize) return rows;
+  }
+
+  throw new Error("The paginated query exceeded its safe page limit.");
+}
+
 /** INSERT row(s). Returns the inserted rows. */
 export async function sbInsert<T>(
   table: string,

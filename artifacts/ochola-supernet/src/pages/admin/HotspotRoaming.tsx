@@ -34,6 +34,8 @@ interface RoamingContext {
   routers: RouterOption[];
   ports: PortOption[];
   rules: RoamingRule[];
+  roamingEnabled: boolean;
+  roamingBlockedRouters?: string[];
 }
 
 interface LiveRoamingAssignment {
@@ -193,6 +195,24 @@ export default function AdminHotspotRoaming() {
 
   const routers = context?.routers ?? [];
   const rules = context?.rules ?? [];
+  const roamingEnabled = context?.roamingEnabled ?? true;
+  const updateRoamingSetting = useMutation({
+    mutationFn: (enabled: boolean) => roamingApi<{ ok: true; roamingEnabled: boolean; updatedAccounts: number }>("/api/admin/hotspot-roaming/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    }),
+    onSuccess: async result => {
+      setMessage(result.roamingEnabled
+        ? `Roaming enabled across ISP Hotspots; ${result.updatedAccounts} active accounts synchronized.`
+        : `All-network roaming disabled; ${result.updatedAccounts} active accounts synchronized and specific permissions remain active.`);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["admin-hotspot-roaming"] }),
+        queryClient.invalidateQueries({ queryKey: ["admin-hotspot-roaming-live-users"] }),
+      ]);
+    },
+    onError: error => setMessage(error instanceof Error ? error.message : "The roaming setting could not be saved."),
+  });
   const liveSessions = liveUsersQuery.data?.sessions ?? [];
   const unavailableRouters = liveUsersQuery.data?.unavailableRouters ?? [];
 
@@ -206,16 +226,47 @@ export default function AdminHotspotRoaming() {
           <div>
             <h1 style={{ margin: 0, fontSize: "1.45rem", fontWeight: 800 }}>Hotspot roaming</h1>
             <p style={{ margin: "0.35rem 0 0", color: "var(--isp-text-muted)", lineHeight: 1.5 }}>
-              Grant a purchased Hotspot package access to other Wi-Fi services. No roaming is allowed until you add a permission.
+              Let customers use a purchased Hotspot package across different ISP-owned SSIDs and MikroTik routers.
             </p>
           </div>
         </div>
+
+        <section style={{ ...cardStyle, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 16 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "0.96rem", fontWeight: 800 }}>Allow roaming across all ISP Hotspots</h2>
+            <p style={{ margin: "5px 0 0", color: "var(--isp-text-muted)", fontSize: "0.8rem", lineHeight: 1.45 }}>
+              {contextQuery.isLoading
+                ? "Loading the saved roaming setting…"
+                : roamingEnabled
+                  ? "Enabled by default. Turning this off leaves only the specific permissions below active."
+                  : "Disabled. Only the specific permissions below allow access to another Hotspot service."}
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={roamingEnabled}
+            disabled={contextQuery.isLoading || Boolean(contextQuery.error) || updateRoamingSetting.isPending}
+            onClick={() => {
+              setMessage("");
+              updateRoamingSetting.mutate(!roamingEnabled);
+            }}
+            style={{ minHeight: 42, minWidth: 138, border: 0, borderRadius: 10, padding: "0.65rem 0.9rem", background: roamingEnabled ? "#059669" : "var(--isp-border)", color: roamingEnabled ? "white" : "var(--isp-text)", fontWeight: 800, cursor: updateRoamingSetting.isPending ? "wait" : "pointer", opacity: contextQuery.isLoading || Boolean(contextQuery.error) || updateRoamingSetting.isPending ? 0.65 : 1 }}
+          >
+            {updateRoamingSetting.isPending ? "Saving…" : roamingEnabled ? "Enabled" : "Disabled"}
+          </button>
+        </section>
+        {!!context?.roamingBlockedRouters?.length && (
+          <div role="status" style={{ ...cardStyle, marginBottom: 16, color: "var(--isp-warning, #b45309)", lineHeight: 1.5 }}>
+            Roaming cannot use “all Hotspot servers” on {context.roamingBlockedRouters.join(", ")} because those MikroTiks also host reseller-owned Hotspots. Their ISP accounts stay restricted to their assigned server to protect reseller access.
+          </div>
+        )}
 
         <div style={{ ...cardStyle, display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 20, background: "color-mix(in srgb, var(--isp-accent) 5%, var(--isp-card))" }}>
           <ShieldCheck size={20} color="var(--isp-accent)" style={{ marginTop: 2, flexShrink: 0 }} />
           <div style={{ fontSize: "0.86rem", lineHeight: 1.55, color: "var(--isp-text-muted)" }}>
             <strong style={{ color: "var(--isp-text)" }}>The purchased package keeps its shared data allowance.</strong>{" "}
-            Usage is checked across the source MikroTik and every permitted destination. Before a roam, sessions on other MikroTik routers or a different Hotspot service are disconnected; the package's device limit still applies. If a router needed to verify usage is offline, login is blocked until it can be checked.
+            Usage is checked across ISP routers to preserve one package balance. A capped package may not reconnect if a router needed for usage verification is offline. The device limit still applies; existing sessions continue until they disconnect normally after a setting change.
           </div>
         </div>
 
@@ -320,9 +371,11 @@ export default function AdminHotspotRoaming() {
                           </span>
                           <div style={{ marginTop: 5, color: "var(--isp-text-muted)", lineHeight: 1.45 }}>
                             {session.status === "authorized"
-                              ? `Permission #${session.permissionId} covers this assigned-to-current router path.`
+                              ? session.permissionId
+                                ? `Permission #${session.permissionId} covers this assigned-to-current router path.`
+                                : "Allowed by the all-ISP Hotspot roaming setting."
                               : session.status === "unapproved"
-                                ? "The account is active, but no enabled rule covers this assigned router and current router."
+                                ? "The account is active, but all-network roaming is off and no specific permission covers this route."
                                 : "The account, plan, or live Hotspot port could not be linked safely."}
                           </div>
                         </td>
@@ -343,7 +396,7 @@ export default function AdminHotspotRoaming() {
             <Plus size={18} color="var(--isp-accent)" /> Grant permission
           </h2>
           <p style={{ fontSize: "0.82rem", color: "var(--isp-text-muted)", margin: "0 0 18px", lineHeight: 1.5 }}>
-            Choose where the purchase was made and which service can accept it. “All Hotspot ports” covers every active Hotspot port on that MikroTik.
+            These specific permissions remain active if all-network roaming is turned off. “All Hotspot ports” covers every active ISP-owned Hotspot port on that MikroTik.
           </p>
 
           {contextQuery.isLoading ? (
@@ -414,10 +467,16 @@ export default function AdminHotspotRoaming() {
           {contextQuery.isLoading ? (
             <p style={{ color: "var(--isp-text-muted)", fontSize: "0.86rem" }}>Loading permissions…</p>
           ) : rules.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "2rem 1rem", color: "var(--isp-text-muted)" }}>
+              <div style={{ textAlign: "center", padding: "2rem 1rem", color: "var(--isp-text-muted)" }}>
               <Wifi size={24} style={{ opacity: 0.55, marginBottom: 8 }} />
-              <div style={{ fontWeight: 700, color: "var(--isp-text)" }}>Roaming is off</div>
-              <div style={{ fontSize: "0.82rem", marginTop: 4 }}>Add a permission above to let customers use a purchase on another Hotspot service.</div>
+                <div style={{ fontWeight: 700, color: "var(--isp-text)" }}>
+                  {roamingEnabled ? "All ISP Hotspots are available" : "No specific roaming permissions"}
+                </div>
+                <div style={{ fontSize: "0.82rem", marginTop: 4 }}>
+                  {roamingEnabled
+                    ? "The all-network setting already allows cross-service access."
+                    : "Add a permission above to allow selected purchases on another Hotspot service."}
+                </div>
             </div>
           ) : (
             <div style={{ display: "grid", gap: 9 }}>

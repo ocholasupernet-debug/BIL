@@ -2619,6 +2619,69 @@ export async function fetchHotspotUserList(creds: RouterCredentials): Promise<Ho
   });
 }
 
+export type HotspotUserServerChange = {
+  name: string;
+  expectedServer?: string | readonly string[];
+  server: string;
+};
+
+/**
+ * Change only the RouterOS Hotspot user's server binding. Use one API
+ * connection for the whole batch so tenant roaming toggles do not create a
+ * connection per customer or alter passwords, profiles, quotas, or sessions.
+ */
+export async function updateHotspotUserServers(
+  creds: RouterCredentials,
+  changes: readonly HotspotUserServerChange[],
+): Promise<Array<{ name: string; previousServer: string; server: string }>> {
+  if (!changes.length) return [];
+  return withConn(creds, async conn => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const rows = (await withTimeout(
+      conn.write(["/ip/hotspot/user/print"]),
+      ms,
+    )) as Record<string, string>[];
+    const updated: Array<{ name: string; previousServer: string; server: string }> = [];
+    try {
+      for (const change of changes) {
+        const matchingName = (Array.isArray(rows) ? rows : []).filter(row => row.name === change.name);
+        const expectedServers = change.expectedServer === undefined
+          ? null
+          : new Set(typeof change.expectedServer === "string" ? [change.expectedServer] : change.expectedServer);
+        const scoped = expectedServers === null
+          ? matchingName
+          : matchingName.filter(row => expectedServers.has(row.server || "all"));
+        if (scoped.length !== 1 || !scoped[0][".id"]) {
+          throw new Error(scoped.length
+            ? `The Hotspot account '${change.name}' has an ambiguous server binding.`
+            : `The Hotspot account '${change.name}' was not found on its MikroTik.`);
+        }
+        const current = scoped[0].server || "all";
+        if (current === change.server) continue;
+        await withTimeout(
+          conn.write(["/ip/hotspot/user/set", `=.id=${scoped[0][".id"]}`, `=server=${change.server}`]),
+          ms,
+        );
+        updated.push({ name: change.name, previousServer: current, server: change.server });
+        scoped[0].server = change.server;
+      }
+    } catch (error) {
+      for (const change of updated.reverse()) {
+        const row = (Array.isArray(rows) ? rows : []).find(entry =>
+          entry.name === change.name && (entry.server || "all") === change.server,
+        );
+        if (!row?.[".id"]) continue;
+        await withTimeout(
+          conn.write(["/ip/hotspot/user/set", `=.id=${row[".id"]}`, `=server=${change.previousServer}`]),
+          ms,
+        ).catch(() => {});
+      }
+      throw error;
+    }
+    return updated;
+  });
+}
+
 export interface HotspotUserProfile {
   id: string;
   name: string;

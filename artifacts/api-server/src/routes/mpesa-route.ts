@@ -73,6 +73,7 @@ import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { isKenyanMobileNumber, normaliseKenyanMobile } from "../lib/kenyan-phone.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 import { portServiceResourceNames, type PortServiceResourceInput } from "../lib/port-service-resources.js";
+import { hotspotUserServerForTenant } from "../lib/hotspot-roaming-settings.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
 import {
   bankBusinessNumberFor,
@@ -3347,6 +3348,10 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     }
   }
   timing("portServiceReady");
+  const userHotspotServer = !portalScope
+    && plan.owner_reseller_id == null
+    ? await hotspotUserServerForTenant(adminId, Number(plan.router_id), hotspotServer)
+    : hotspotServer;
 
   try {
     const hotspotProfile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
@@ -3397,7 +3402,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
       profile: hotspotProfile,
       disabled: false,
       comment: hotspotUsername,
-      server: hotspotServer,
+      server: userHotspotServer,
       limitBytesTotal,
     });
     if (!isSameCheckoutRetry) {
@@ -4467,6 +4472,10 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
       return;
     }
   }
+  const userHotspotServer = !portalScope
+    && plan.owner_reseller_id == null
+    ? await hotspotUserServerForTenant(adminId, Number(plan.router_id), hotspotServer)
+    : hotspotServer;
   const expiresInSeconds = Math.max(1, Math.ceil((expiresAtMs - Date.now()) / 1000));
   const hotspotProfile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
   const rawDataLimitMb = Number(customer.fup_limit_mb ?? plan.data_limit_mb);
@@ -4561,7 +4570,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         profile: hotspotProfile,
         disabled: false,
         comment: customer.username,
-        server: hotspotServer,
+        server: userHotspotServer,
         address: routerAddress || undefined,
         limitBytesTotal,
       });
@@ -4571,7 +4580,7 @@ router.post("/mpesa/verify", async (req: Request, res: Response): Promise<void> 
         password: customer.password,
         profile: hotspotProfile,
         comment: customer.username,
-        server: hotspotServer,
+        server: userHotspotServer,
         address: routerAddress || undefined,
         limitBytesTotal,
       });
