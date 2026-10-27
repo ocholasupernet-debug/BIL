@@ -1,4 +1,3628 @@
-  <strong style={{ color: "#fff", fontSize: 14 }}>{hotspotCredentials.password}</strong>
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import {
+  Wifi, Phone, Zap, CheckCircle2, Ticket,
+  AlertCircle, Loader2, Shield, Clock, Users, XCircle,
+  ArrowRight, ArrowUpRight, CreditCard, Tv, Sparkles, Database,
+} from "lucide-react";
+import { useBrand } from "@/context/BrandContext";
+import { getCurrencySymbol } from "@/lib/utils";
+import { formatHotspotDataAllowance, formatHotspotSharedDevices } from "@/lib/hotspot-plan-labels";
+import {
+  forgetHotspotDevice,
+  hotspotSavedDevicesStorageKey,
+  readSavedHotspotDevices,
+  renameHotspotDevice,
+  saveHotspotDevice,
+  type SavedHotspotDevice,
+} from "@/lib/saved-hotspot-devices";
+import {
+  DEFAULT_HOTSPOT_LOYALTY_CARD_SETTINGS,
+  DEFAULT_HOTSPOT_PORTAL_CARDS,
+  isDefaultPlatformPortalName,
+  normalizeHotspotLoyaltyCardSettings,
+  normalizeHotspotPortalCards,
+  type HotspotLoyaltyCardSettings,
+  type HotspotPortalCardVisibility,
+} from "@/lib/hotspot-portal-cards";
+import {
+  accountCredentialsPayload,
+  forgetHotspotLoyaltyDeviceAuthorization,
+  isVerificationRequired,
+  loyaltyDeviceAuthorizationPayload,
+  readStoredHotspotLoyaltyDeviceAuthorization,
+  readStoredHotspotCredentials,
+  redeemOutcomeIsUncertain,
+  storeHotspotLoyaltyDeviceAuthorization,
+} from "@/lib/hotspot-loyalty-credentials";
+import {
+  HOSTED_PORTAL_LAYOUT_CSS,
+  normalizeHotspotPortalLayout,
+  type HotspotPortalLayout,
+} from "@/lib/hotspot-layouts";
+
+interface Plan {
+  id: number; name: string; price: number;
+  validity: number; validity_unit: string; validity_days: number;
+  speed_down: number; speed_up: number;
+  data_limit_mb?: number | null;
+  /** What the router should do after the data allowance is exhausted. */
+  fup_policy?: "hard_disconnect" | "throttle";
+  data_cap_mode?: "disconnect" | "throttle";
+  /** Reduced speeds used only when fup_policy is throttle. */
+  fup_speed_down?: number | null;
+  fup_speed_up?: number | null;
+  shared_users?: number;
+  description: string | null; type?: string;
+  router_id?: number | null; port_id?: number | null;
+}
+interface LoyaltyQuote {
+  ok: true;
+  balance: number;
+  pointsRequired: number | null;
+  pointsAwarded: number;
+  canRedeem: boolean;
+}
+
+interface HotspotRuntimeConfig {
+  apiBase: string;
+  adminId: number | null;
+  routerId: number | null;
+  portId: number | null;
+  resellerId: number | null;
+  portalContextToken: string;
+  previewOnly: boolean;
+  portalLayout: HotspotPortalLayout;
+  loyaltyCard: HotspotLoyaltyCardSettings;
+  plans: Plan[];
+}
+interface HotspotCredentials {
+  username: string;
+  password: string;
+}
+interface HotspotSession {
+  status: "active" | "depleted" | "expired" | "not_found" | "unavailable";
+  connected: boolean;
+  expiresAt: string | null;
+  found?: boolean;
+  planName?: string | null;
+  username?: string | null;
+}
+interface ConnectedDevice {
+  name: string;
+  macAddress: string;
+  address: string;
+  routerId: number;
+  routerName: string;
+}
+type TvPackageDiagnosticStatus =
+  | "payment_pending"
+  | "payment_failed"
+  | "package_unavailable"
+  | "account_pending"
+  | "package_depleted"
+  | "package_expired"
+  | "package_inactive"
+  | "router_unavailable"
+  | "connected"
+  | "login_needed"
+  | "device_not_seen"
+  | "router_check_partial"
+  | "check_unavailable";
+interface TvPackageDiagnostic {
+  status: TvPackageDiagnosticStatus;
+  paymentStatus: "paid" | "pending" | "failed" | "unknown";
+  packageStatus: "active" | "pending" | "depleted" | "expired" | "inactive" | "unavailable" | "unknown";
+  connected: boolean;
+  deviceVisible: boolean | null;
+  routerReachable: boolean | null;
+  planName?: string | null;
+  expiresAt?: string | null;
+  retryAvailable: boolean;
+  message: string;
+}
+type Tab = "plans" | "tv" | "voucher";
+
+function tvPackageDiagnosticTitle(status: TvPackageDiagnosticStatus): string {
+  switch (status) {
+    case "payment_pending": return "Payment still pending";
+    case "payment_failed": return "Payment not completed";
+    case "package_unavailable": return "Package details unavailable";
+    case "account_pending": return "TV setup is still in progress";
+    case "package_depleted": return "Package data used";
+    case "package_expired": return "Package expired";
+    case "package_inactive": return "Package inactive";
+    case "router_unavailable": return "Router check unavailable";
+    case "connected": return "TV connected";
+    case "login_needed": return "TV needs hotspot sign-in";
+    case "device_not_seen": return "TV not visible to hotspot";
+    case "router_check_partial": return "TV check incomplete";
+    case "check_unavailable": return "Could not check TV status";
+  }
+}
+
+function positivePortalId(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function formatLoyaltyPoints(value: number): string {
+  return new Intl.NumberFormat("en-KE", { maximumFractionDigits: 2 }).format(value);
+}
+
+function normalizeRuntimePlan(value: unknown): Plan | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  const id = positivePortalId(row.id);
+  const name = typeof row.name === "string" ? row.name.trim() : "";
+  if (!id || !name) return null;
+  const dataLimitMb = row.data_limit_mb === null || row.data_limit_mb === undefined
+    ? null
+    : Number(row.data_limit_mb);
+  const rawPolicy = String(
+    row.data_cap_mode ?? row.dataCapMode ?? row.fup_policy ?? row.fup_mode
+      ?? row.data_cap_policy ?? row.exhaustion_policy ?? row.quota_policy ?? "",
+  ).trim().toLowerCase();
+  const fupPolicy: Plan["fup_policy"] = [
+    "throttle",
+    "reduced_speed",
+    "reduced-speed",
+    "safaricom",
+    "fair_use",
+    "fair-use",
+  ].includes(rawPolicy)
+    ? "throttle"
+    : "hard_disconnect";
+  const throttleDown = Number(
+    row.fup_speed_down ?? row.throttle_speed_down ?? row.speed_after_limit_down ?? row.reduced_speed_down,
+  );
+  const throttleUp = Number(
+    row.fup_speed_up ?? row.throttle_speed_up ?? row.speed_after_limit_up ?? row.reduced_speed_up,
+  );
+  const rawSharedUsers = Number(row.shared_users ?? row.sharedUsers);
+  return {
+    id,
+    name,
+    price: Number(row.price) || 0,
+    validity: Number(row.validity) || 0,
+    validity_unit: typeof row.validity_unit === "string" ? row.validity_unit : "days",
+    validity_days: Number(row.validity_days ?? row.validity) || 0,
+    speed_down: Number(row.speed_down) || 0,
+    speed_up: Number(row.speed_up) || 0,
+    data_limit_mb: dataLimitMb !== null && Number.isFinite(dataLimitMb) && dataLimitMb > 0
+      ? dataLimitMb
+      : null,
+    fup_policy: fupPolicy,
+    data_cap_mode: fupPolicy === "throttle" ? "throttle" : "disconnect",
+    fup_speed_down: Number.isFinite(throttleDown) && throttleDown > 0 ? throttleDown : null,
+    fup_speed_up: Number.isFinite(throttleUp) && throttleUp > 0 ? throttleUp : null,
+    shared_users: Number.isFinite(rawSharedUsers) && rawSharedUsers >= 1 ? Math.floor(rawSharedUsers) : 1,
+    description: typeof row.description === "string" ? row.description : null,
+    type: typeof row.type === "string" ? row.type : undefined,
+    router_id: positivePortalId(row.router_id),
+    port_id: positivePortalId(row.port_id),
+  };
+}
+
+function readHotspotRuntimeConfig(): HotspotRuntimeConfig {
+  const raw = typeof window !== "undefined"
+    ? (window as Window & { __HOTSPOT_CONFIG__?: Record<string, unknown> }).__HOTSPOT_CONFIG__
+    : undefined;
+  const apiBase = typeof raw?.apiBase === "string" && /^https?:\/\//i.test(raw.apiBase.trim())
+    ? raw.apiBase.trim().replace(/\/+$/, "")
+    : "";
+  return {
+    apiBase,
+    adminId: positivePortalId(raw?.adminId),
+    routerId: positivePortalId(raw?.routerId),
+    portId: positivePortalId(raw?.portId),
+    resellerId: positivePortalId(raw?.resellerId),
+    portalContextToken: typeof raw?.portalContextToken === "string" ? raw.portalContextToken.trim() : "",
+    previewOnly: raw?.previewOnly === true,
+    portalLayout: normalizeHotspotPortalLayout(raw?.portalLayout),
+    loyaltyCard: normalizeHotspotLoyaltyCardSettings(raw?.loyaltyCard),
+    plans: Array.isArray(raw?.plans)
+      ? raw.plans.map(normalizeRuntimePlan).filter((plan): plan is Plan => Boolean(plan))
+      : [],
+  };
+}
+
+const HOTSPOT_RUNTIME_CONFIG = readHotspotRuntimeConfig();
+
+function portalRouterIdentifier(names: string[]): { value: string; supplied: boolean } {
+  if (typeof window === "undefined") return { value: "", supplied: false };
+  const query = new URLSearchParams(window.location.search);
+  const values = names.flatMap(name => query.getAll(name));
+  if (!values.length) return { value: "", supplied: false };
+  const distinct = [...new Set(values)];
+  const value = distinct.length === 1 && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(distinct[0])
+    ? distinct[0]
+    : "__invalid__";
+  return { value, supplied: true };
+}
+
+const HOTSPOT_NAS_IDENTIFIER = portalRouterIdentifier(["nasid", "nas-id", "nas_identifier"]);
+const HOTSPOT_SERVER_NAME = portalRouterIdentifier(["server", "server-name", "hotspot_server_name", "hotspotServerName"]);
+
+function hotspotApiUrl(path: string): string {
+  return `${HOTSPOT_RUNTIME_CONFIG.apiBase}${path}`;
+}
+
+function hotspotPortalFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const token = HOTSPOT_RUNTIME_CONFIG.portalContextToken;
+  const plainIspPortal = HOTSPOT_RUNTIME_CONFIG.adminId !== null
+    && HOTSPOT_RUNTIME_CONFIG.routerId !== null
+    && HOTSPOT_RUNTIME_CONFIG.portId === null
+    && HOTSPOT_RUNTIME_CONFIG.resellerId === null;
+  if (!token && plainIspPortal) return fetch(input, init);
+  if (!token && !HOTSPOT_NAS_IDENTIFIER.supplied && !HOTSPOT_SERVER_NAME.supplied) return fetch(input, init);
+  const headers = new Headers(input instanceof Request ? input.headers : undefined);
+  new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+  if (token) headers.set("X-Hotspot-Portal-Context", token);
+  if (token || HOTSPOT_NAS_IDENTIFIER.supplied || HOTSPOT_SERVER_NAME.supplied) {
+    headers.set("X-Hotspot-NAS-Identifier", HOTSPOT_NAS_IDENTIFIER.value);
+    headers.set("X-Hotspot-Server-Name", HOTSPOT_SERVER_NAME.value);
+  }
+  return fetch(input, { ...init, headers });
+}
+
+async function fetchActiveHotspotDevices(adminId: number | null, routerId: number | null): Promise<ConnectedDevice[]> {
+  const params = new URLSearchParams();
+  if (adminId) params.set("adminId", String(adminId));
+  if (routerId) params.set("routerId", String(routerId));
+  const query = params.toString();
+  const response = await hotspotPortalFetch(
+    hotspotApiUrl(`/api/mpesa/hotspot-devices${query ? `?${query}` : ""}`),
+  );
+  const data = await response.json() as { ok?: boolean; devices?: ConnectedDevice[]; error?: string };
+  if (!response.ok || !data.ok) throw new Error(data.error || "The active TV devices could not be detected.");
+  return Array.isArray(data.devices) ? data.devices : [];
+}
+
+type PortalBranding = {
+  ispName?: string;
+  tagline?: string;
+  logoUrl?: string;
+  supportPhone?: string;
+  supportEmail?: string;
+  portalHostname?: string;
+  portalCards?: HotspotPortalCardVisibility;
+  loyaltyCard?: HotspotLoyaltyCardSettings;
+  portalLayout?: HotspotPortalLayout;
+};
+
+function formatValidity(plan: Plan): string {
+  const days = plan.validity_days ?? plan.validity ?? 0;
+  const unit = (plan.validity_unit ?? "days").toLowerCase();
+  if (unit === "hours" || unit === "hour") {
+    const hours = Number(plan.validity) || 1;
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  if (days === 0) return `${plan.validity ?? 1} hours`;
+  if (days < 1) {
+    const hours = Math.round(days * 24);
+    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  if (days === 1) return "1 day";
+  if (days < 7) return `${days} days`;
+  if (days === 7) return "1 Week";
+  if (days === 30 || days === 31) return "1 Month";
+  if (days === 365) return "1 Year";
+  return `${days} days`;
+}
+
+function formatSpeed(mbps: number): string {
+  if (mbps >= 1000) return `${mbps / 1000} Gbps`;
+  return `${mbps} Mbps`;
+}
+
+function getPortalDnsHostname(): string {
+  if (typeof window === "undefined") return "";
+  const hostname = window.location.hostname.trim().toLowerCase().replace(/\.$/, "");
+  const labels = hostname.split(".");
+  const valid = labels.length >= 2
+    && labels.every(label => label.length > 0 && label.length <= 63
+      && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))
+    && !hostname.endsWith(".localhost")
+    && !hostname.endsWith(".local")
+    && !/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname);
+  return valid ? hostname : "";
+}
+
+function formatSessionExpiry(value: string | null): string {
+  if (!value) return "No expiry time recorded";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "Expiry time unavailable";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(timestamp);
+}
+
+function normalizeMacAddress(value: string): string {
+  const trimmed = value.trim();
+  if (!/^(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}$/i.test(trimmed) && !/^[0-9a-f]{12}$/i.test(trimmed)) return "";
+  const compact = trimmed.replace(/[:-]/g, "");
+  if (!/^[0-9a-f]{12}$/i.test(compact)) return "";
+  return compact.toUpperCase().match(/.{2}/g)?.join(":") ?? "";
+}
+
+function normalizeClientIp(value: string): string {
+  const trimmed = value.trim();
+  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(trimmed)) return "";
+  const octets = trimmed.split(".").map(Number);
+  return octets.every(octet => octet >= 0 && octet <= 255) ? trimmed : "";
+}
+
+function hotspotLoginStorageKey(adminId: number | null, mode: "data" | "tv" = "data"): string {
+  const host = typeof window !== "undefined" ? window.location.host : "portal";
+  return [
+    "ochola_hotspot_login_v1",
+    host,
+    adminId ? String(adminId) : "tenant",
+    mode,
+  ].map(value => encodeURIComponent(value)).join(":");
+}
+
+function hotspotLoyaltyDeviceAuthorizationStorageKey(
+  adminId: number | null,
+  routerId: number | null,
+  portId: number | null,
+  macAddress: string,
+): string {
+  const host = typeof window !== "undefined" ? window.location.host : "portal";
+  const mac = macAddress.replace(/[^0-9a-f]/gi, "").toUpperCase();
+  return [
+    "ochola_hotspot_loyalty_device_v1",
+    host,
+    adminId ? String(adminId) : "tenant",
+    routerId ? String(routerId) : "router",
+    portId ? String(portId) : "port",
+    mac || "unidentified",
+  ].map(value => encodeURIComponent(value)).join(":");
+}
+
+function storeHotspotCredentials(storageKey: string, credentials: HotspotCredentials): void {
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(credentials));
+  } catch {}
+}
+
+const PLAN_GRADIENTS = [
+  { bg: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)", light: "#667eea" },
+  { bg: "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)", light: "#f093fb" },
+  { bg: "linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)", light: "#4facfe" },
+  { bg: "linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)", light: "#43e97b" },
+  { bg: "linear-gradient(135deg, #fa709a 0%, #fee140 100%)", light: "#fa709a" },
+  { bg: "linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%)", light: "#a18cd1" },
+  { bg: "linear-gradient(135deg, #fccb90 0%, #d57eeb 100%)", light: "#fccb90" },
+  { bg: "linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%)", light: "#e0c3fc" },
+  { bg: "linear-gradient(135deg, #f5576c 0%, #ff6f61 100%)", light: "#f5576c" },
+  { bg: "linear-gradient(135deg, #0acffe 0%, #495aff 100%)", light: "#0acffe" },
+];
+
+const GUEST_PLAN_GRADIENTS = [
+  { bg: "linear-gradient(135deg, #285b50 0%, #438863 100%)", light: "#285b50" },
+  { bg: "linear-gradient(135deg, #d9684c 0%, #e99a70 100%)", light: "#bd573d" },
+  { bg: "linear-gradient(135deg, #718b77 0%, #abc3a5 100%)", light: "#52705b" },
+  { bg: "linear-gradient(135deg, #bd7658 0%, #e1b28c 100%)", light: "#a75e43" },
+];
+
+function isDarajaGateway(paymentGateway: string): boolean {
+  return paymentGateway === "mpesa_paybill"
+    || paymentGateway === "mpesa_till_push"
+    || paymentGateway === "bank_stk_push";
+}
+
+type CheckoutPaymentStatus = {
+  configured: boolean;
+  destinationConfigured: boolean;
+  paymentGateway: string;
+};
+
+function isPaymentMethodReady(status: CheckoutPaymentStatus | null): boolean {
+  return Boolean(
+    status?.configured
+    && status.destinationConfigured
+    && isDarajaGateway(status.paymentGateway),
+  );
+}
+
+function canAttemptHotspotCheckout(status: CheckoutPaymentStatus | null, previewOnly: boolean): boolean {
+  // A failed status lookup is not proof that payment is misconfigured. Let the
+  // payment endpoint make the authoritative decision when the user submits.
+  return !previewOnly && (status === null || isPaymentMethodReady(status));
+}
+
+function checkoutPaymentLabel(paymentGateway: string): string {
+  if (paymentGateway === "bank_stk_push") return "Bank STK Push";
+  if (paymentGateway === "mpesa_till_push") return "M-Pesa Till";
+  return "M-Pesa PayBill";
+}
+
+export function HotspotTroubleshootPage() {
+  return <HotspotLoginView initialTroubleshootOpen />;
+}
+
+export default function HotspotLogin() {
+  return <HotspotLoginView />;
+}
+
+function HotspotLoginView({
+  troubleshootingOnly = false,
+  initialTroubleshootOpen = false,
+}: {
+  troubleshootingOnly?: boolean;
+  initialTroubleshootOpen?: boolean;
+} = {}) {
+  const brand = useBrand();
+  const [portalBranding, setPortalBranding] = useState<PortalBranding>({
+    portalLayout: HOTSPOT_RUNTIME_CONFIG.portalLayout,
+    loyaltyCard: HOTSPOT_RUNTIME_CONFIG.loyaltyCard ?? DEFAULT_HOTSPOT_LOYALTY_CARD_SETTINGS,
+  });
+  useEffect(() => {
+    if (!HOTSPOT_RUNTIME_CONFIG.adminId) return;
+    let cancelled = false;
+    hotspotPortalFetch(hotspotApiUrl(`/api/public/hotspot-branding?adminId=${encodeURIComponent(String(HOTSPOT_RUNTIME_CONFIG.adminId))}`), {
+      cache: "no-store",
+    })
+      .then(response => response.ok ? response.json() as Promise<{ branding?: { portalHostname?: unknown; settings?: unknown } }> : null)
+      .then(payload => {
+        const settings = payload?.branding?.settings;
+        if (cancelled || !settings || typeof settings !== "object" || Array.isArray(settings)) return;
+        const row = settings as Record<string, unknown>;
+        setPortalBranding({
+          ispName: typeof row.ispName === "string" ? row.ispName : undefined,
+          tagline: typeof row.tagline === "string" ? row.tagline : undefined,
+          logoUrl: typeof row.logoUrl === "string" && row.logoUrl.length <= 2_000_000 ? row.logoUrl : undefined,
+          supportPhone: typeof row.supportPhone === "string" ? row.supportPhone : undefined,
+          supportEmail: typeof row.supportEmail === "string" ? row.supportEmail : undefined,
+          portalHostname: typeof payload?.branding?.portalHostname === "string" ? payload.branding.portalHostname : undefined,
+          portalCards: normalizeHotspotPortalCards(row.portalCards, row),
+          loyaltyCard: normalizeHotspotLoyaltyCardSettings(row.loyaltyCard ?? HOTSPOT_RUNTIME_CONFIG.loyaltyCard),
+          portalLayout: typeof row.portalLayout === "string"
+            ? normalizeHotspotPortalLayout(row.portalLayout)
+            : HOTSPOT_RUNTIME_CONFIG.portalLayout,
+        });
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+  const configuredPortalName = portalBranding.ispName?.trim() ?? "";
+  const portalDisplayName = configuredPortalName
+    && !isDefaultPlatformPortalName(configuredPortalName)
+    ? configuredPortalName
+    : "OcholaSupernet";
+  const configuredLogoUrl = portalBranding.logoUrl?.trim() ?? "";
+  const portalDnsHostname = getPortalDnsHostname();
+  const portalLogoUrl = configuredLogoUrl
+    && !/ocholasupernet-logo\.png(?:$|[?#])/i.test(configuredLogoUrl)
+    ? configuredLogoUrl
+    : "";
+  const portalBrand = {
+    ...brand,
+    ispName: portalDisplayName,
+    phone: portalBranding.supportPhone || brand.phone,
+    supportEmail: portalBranding.supportEmail || brand.supportEmail,
+    domain: "",
+  };
+  const portalCards = portalBranding.portalCards ?? DEFAULT_HOTSPOT_PORTAL_CARDS;
+  const [activeTab, setActiveTab] = useState<Tab>("plans");
+  useEffect(() => {
+    const availableTabs: Tab[] = [
+      ...(portalCards.packages ? ["plans", "tv"] as const : []),
+      ...(portalCards.voucher ? ["voucher"] as const : []),
+    ];
+    if (availableTabs.length && !availableTabs.includes(activeTab)) setActiveTab(availableTabs[0]);
+  }, [activeTab, portalCards.packages, portalCards.voucher]);
+
+  const portalContext = (() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return {
+        mac: normalizeMacAddress(params.get("mac") ?? params.get("mac-address") ?? ""),
+        ip: normalizeClientIp(params.get("ip") ?? params.get("ip-address") ?? ""),
+        linkLogin: params.get("link-login-only") ?? params.get("link-login") ?? "",
+        linkOrig: params.get("link-orig") ?? "",
+      };
+    } catch {
+      return { mac: "", ip: "", linkLogin: "", linkOrig: "" };
+    }
+  })();
+
+  const adminId: number | null = (() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const qId = params.get("adminId") ?? params.get("ispId");
+      return positivePortalId(qId) ?? HOTSPOT_RUNTIME_CONFIG.adminId;
+    } catch { return null; }
+  })();
+  const portalScope = (() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const routerId = Number(params.get("routerId") ?? "");
+      const portId = Number(params.get("portId") ?? "");
+      return {
+        routerId: positivePortalId(routerId) ?? HOTSPOT_RUNTIME_CONFIG.routerId,
+        portId: positivePortalId(portId) ?? HOTSPOT_RUNTIME_CONFIG.portId,
+      };
+    } catch {
+      return {
+        routerId: HOTSPOT_RUNTIME_CONFIG.routerId,
+        portId: HOTSPOT_RUNTIME_CONFIG.portId,
+      };
+    }
+  })();
+  const planScopeQuery = [
+    adminId ? `adminId=${encodeURIComponent(String(adminId))}` : "",
+    portalScope.routerId ? `routerId=${encodeURIComponent(String(portalScope.routerId))}` : "",
+    portalScope.portId ? `portId=${encodeURIComponent(String(portalScope.portId))}` : "",
+  ].filter(Boolean).map(value => `&${value}`).join("");
+  const savedTvDevicesStorageKey = hotspotSavedDevicesStorageKey(
+    typeof window !== "undefined" ? window.location.host : "portal",
+    adminId,
+    portalScope.routerId,
+    portalScope.portId,
+  );
+
+  const [plans, setPlans] = useState<Plan[]>(HOTSPOT_RUNTIME_CONFIG.plans);
+  const [plansLoading, setPlansLoading] = useState(
+    HOTSPOT_RUNTIME_CONFIG.previewOnly !== true && HOTSPOT_RUNTIME_CONFIG.plans.length === 0,
+  );
+  const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
+  const [danstedCheckoutOpen, setDanstedCheckoutOpen] = useState(false);
+  const [paymentMode, setPaymentMode] = useState<"data" | "tv">("data");
+  const danstedPhoneStorageKey = `hotspot-dansted-phone:${adminId}:${portalScope.routerId}:${portalScope.portId}`;
+  const [phone, setPhone] = useState(() => {
+    try { return typeof window !== "undefined" ? window.localStorage.getItem(danstedPhoneStorageKey) || "" : ""; } catch { return ""; }
+  });
+  const isDanstedLayout = (portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout) === "dansted-wifi";
+  const [deviceMacAddress, setDeviceMacAddress] = useState(portalContext.mac);
+  const [deviceName, setDeviceName] = useState("");
+  const [tvDialogOpen, setTvDialogOpen] = useState(false);
+  const [tvDevices, setTvDevices] = useState<ConnectedDevice[]>([]);
+  const [tvDevicesLoading, setTvDevicesLoading] = useState(false);
+  const [tvDeviceChoice, setTvDeviceChoice] = useState("");
+  const [tvMacAddress, setTvMacAddress] = useState(portalContext.mac);
+  const [tvDeviceName, setTvDeviceName] = useState("");
+  const [savedTvDevices, setSavedTvDevices] = useState<SavedHotspotDevice[]>(
+    () => readSavedHotspotDevices(savedTvDevicesStorageKey),
+  );
+  const [rememberTvDevice, setRememberTvDevice] = useState(false);
+  const [renamingTvDeviceMac, setRenamingTvDeviceMac] = useState("");
+  const [renamingTvDeviceName, setRenamingTvDeviceName] = useState("");
+  const [tvDeviceSaveNotice, setTvDeviceSaveNotice] = useState("");
+  const [showTvSuccess, setShowTvSuccess] = useState(false);
+  const [paidAccessExpiresAt, setPaidAccessExpiresAt] = useState<string | null>(null);
+  const [tvPlanId, setTvPlanId] = useState("");
+  const [tvPhone, setTvPhone] = useState("");
+  const [tvDialogError, setTvDialogError] = useState("");
+  const [payLoading, setPayLoading] = useState(false);
+  const [paymentElapsedSeconds, setPaymentElapsedSeconds] = useState(0);
+  const [payError, setPayError] = useState<string | null>(null);
+  const [stkSent, setStkSent] = useState(false);
+  const [checkoutId, setCheckoutId] = useState<string | null>(null);
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
+  const [accessReady, setAccessReady] = useState(false);
+  const [portalHandoffReady, setPortalHandoffReady] = useState(false);
+  const [accessRetrying, setAccessRetrying] = useState(false);
+  const [tvDiagnostic, setTvDiagnostic] = useState<TvPackageDiagnostic | null>(null);
+  const [tvDiagnosticLoading, setTvDiagnosticLoading] = useState(false);
+  const [paymentFailed, setPaymentFailed] = useState(false);
+  const [hotspotCredentials, setHotspotCredentials] = useState<HotspotCredentials | null>(
+    () => readStoredHotspotCredentials(
+      typeof window !== "undefined" ? window.localStorage : null,
+      hotspotLoginStorageKey(adminId, paymentMode),
+    ),
+  );
+  const paymentStartInFlight = useRef(false);
+  const paymentStartedAtRef = useRef<number | null>(null);
+  const bindingInFlight = useRef(false);
+  const statusPollInFlight = useRef(false);
+  const [mpesaStatus, setMpesaStatus] = useState<{
+    configured: boolean;
+    env: string;
+    shortcode: string;
+    hasTillNumber: boolean;
+    destinationConfigured: boolean;
+    paymentGateway: string;
+  } | null>(null);
+  const [paymentStatusLoaded, setPaymentStatusLoaded] = useState(false);
+  const [loyaltyQuote, setLoyaltyQuote] = useState<LoyaltyQuote | null>(null);
+  const [loyaltyQuoteLoading, setLoyaltyQuoteLoading] = useState(false);
+  const [loyaltyQuoteError, setLoyaltyQuoteError] = useState("");
+  const [loyaltyRefreshRevision, setLoyaltyRefreshRevision] = useState(0);
+  const [loyaltyPayment, setLoyaltyPayment] = useState<"mpesa" | "points">("mpesa");
+  const [loyaltyRedeemLoading, setLoyaltyRedeemLoading] = useState(false);
+  const [loyaltyPaidWithPoints, setLoyaltyPaidWithPoints] = useState(false);
+  const loyaltyRedeemInFlight = useRef(false);
+  const [loyaltyBalance, setLoyaltyBalance] = useState<{ key: string; balance: number; hasAccount: boolean } | null>(null);
+  const [loyaltyBalanceError, setLoyaltyBalanceError] = useState<{ key: string; message: string } | null>(null);
+  const loginCredentialsStorageKey = hotspotLoginStorageKey(adminId, paymentMode);
+  useEffect(() => {
+    if (!isDanstedLayout || !phone.trim()) return;
+    try { window.localStorage.setItem(danstedPhoneStorageKey, phone.trim()); } catch { /* storage is optional */ }
+  }, [danstedPhoneStorageKey, isDanstedLayout, phone]);
+  // Proof of account ownership for points: only credentials this portal saved or the user typed.
+  const [loyaltyCreds, setLoyaltyCreds] = useState<HotspotCredentials | null>(
+    () => readStoredHotspotCredentials(typeof window !== "undefined" ? window.localStorage : null, loginCredentialsStorageKey),
+  );
+  useEffect(() => {
+    const saved = readStoredHotspotCredentials(
+      typeof window !== "undefined" ? window.localStorage : null,
+      loginCredentialsStorageKey,
+    );
+    setHotspotCredentials(saved);
+    setLoyaltyCreds(saved);
+  }, [loginCredentialsStorageKey]);
+  const [loginSession, setLoginSession] = useState<HotspotSession | null>(null);
+  const [troubleshootLoading, setTroubleshootLoading] = useState(false);
+  const [troubleshootMessage, setTroubleshootMessage] = useState("");
+  const [troubleshootError, setTroubleshootError] = useState("");
+  const [troubleshootAction, setTroubleshootAction] = useState<"check" | "login" | null>(null);
+  const [autoReconnectInProgress, setAutoReconnectInProgress] = useState(false);
+  const troubleshootInFlight = useRef(false);
+  const autoTroubleshootKey = useRef("");
+  const [tvTroubleshootMode, setTvTroubleshootMode] = useState(false);
+  const [troubleshootMacAddress, setTroubleshootMacAddress] = useState(portalContext.mac);
+  const [tvReconnectMac, setTvReconnectMac] = useState("");
+  const [troubleshootDialogOpen, setTroubleshootDialogOpen] = useState(() => (
+    initialTroubleshootOpen
+    || (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("page") === "troubleshoot")
+  ));
+  const troubleshootTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const troubleshootDialogRef = useRef<HTMLDivElement | null>(null);
+  const [mpesaMessage, setMpesaMessage] = useState("");
+  const [mpesaReconnectLoading, setMpesaReconnectLoading] = useState(false);
+  const [mpesaReconnectError, setMpesaReconnectError] = useState("");
+
+  useEffect(() => {
+    if (!troubleshootDialogOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    document.body.style.overflow = "hidden";
+    const dialog = troubleshootDialogRef.current;
+    const closeButton = dialog?.querySelector<HTMLElement>(".hp-troubleshoot-close");
+    (closeButton ?? dialog)?.focus();
+
+    const handleDialogKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setTroubleshootDialogOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+      ));
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleDialogKeydown);
+    return () => {
+      document.removeEventListener("keydown", handleDialogKeydown);
+      document.body.style.overflow = previousOverflow;
+      const trigger = troubleshootTriggerRef.current;
+      if (trigger?.isConnected) trigger.focus();
+      else previousFocus?.focus();
+    };
+  }, [troubleshootDialogOpen]);
+
+  useEffect(() => {
+    setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
+  }, [savedTvDevicesStorageKey]);
+
+  useEffect(() => {
+    if ((!payLoading && !stkSent && !loyaltyRedeemLoading) || accessReady || paymentFailed) return;
+    const startedAt = paymentStartedAtRef.current ?? Date.now();
+    paymentStartedAtRef.current = startedAt;
+    setPaymentElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    const timer = window.setInterval(() => {
+      setPaymentElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [payLoading, stkSent, loyaltyRedeemLoading, accessReady, paymentFailed]);
+
+  useEffect(() => {
+    if (troubleshootingOnly) {
+      setPlansLoading(false);
+      setPaymentStatusLoaded(true);
+      return;
+    }
+    if (HOTSPOT_RUNTIME_CONFIG.previewOnly) {
+      setPlansLoading(false);
+      setPaymentStatusLoaded(true);
+      return;
+    }
+    setPaymentStatusLoaded(false);
+    (async () => {
+      try {
+        const [plansRes, mpesaRes] = await Promise.all([
+          hotspotPortalFetch(hotspotApiUrl(`/api/plans?type=hotspot&activeOnly=true&purchasableOnly=true${planScopeQuery}`)),
+          hotspotPortalFetch(hotspotApiUrl(`/api/settings/mpesa?${[
+            adminId ? `adminId=${encodeURIComponent(String(adminId))}` : "",
+            portalScope.routerId ? `routerId=${encodeURIComponent(String(portalScope.routerId))}` : "",
+            portalScope.portId ? `portId=${encodeURIComponent(String(portalScope.portId))}` : "",
+          ].filter(Boolean).join("&")}`)).catch(() => null),
+        ]);
+        if (plansRes.ok) {
+          const plansData = await plansRes.json() as unknown;
+          if (Array.isArray(plansData)) {
+            setPlans(plansData.map(normalizeRuntimePlan).filter((plan): plan is Plan => Boolean(plan)));
+          }
+        }
+
+        if (mpesaRes?.ok) {
+          const mpesaData = await mpesaRes.json();
+          setMpesaStatus({
+            configured: mpesaData.configured,
+            env: mpesaData.settings?.env ?? "sandbox",
+            shortcode: mpesaData.settings?.shortcode ?? "",
+            hasTillNumber: mpesaData.settings?.hasTillNumber === true,
+            destinationConfigured: mpesaData.settings?.destinationConfigured === true,
+            paymentGateway: typeof mpesaData.settings?.paymentGateway === "string" ? mpesaData.settings.paymentGateway : "mpesa_paybill",
+          });
+        }
+      } catch {
+        // Keep the package list embedded during deployment if the live API is
+        // temporarily unreachable from the RouterOS client network.
+      }
+      finally {
+        setPlansLoading(false);
+        setPaymentStatusLoaded(true);
+      }
+    })();
+  }, [adminId, planScopeQuery, troubleshootingOnly]);
+
+  const loyaltyDeviceMac = portalContext.mac;
+  // Use the runtime router; only fall back to the plans' router when every plan agrees on exactly one.
+  const loyaltyRouterId = (() => {
+    if (portalScope.routerId) return portalScope.routerId;
+    if (!plans.length) return null;
+    const ids = new Set(plans.map(plan => plan.router_id ?? 0));
+    const only = ids.size === 1 ? [...ids][0] : 0;
+    return only > 0 ? only : null;
+  })();
+  const loyaltyScopeKey = `${adminId ?? ""}|${loyaltyRouterId ?? ""}|${portalScope.portId ?? ""}|${loyaltyDeviceMac}`;
+  const loyaltyDeviceAuthorizationStorageKey = hotspotLoyaltyDeviceAuthorizationStorageKey(
+    adminId,
+    loyaltyRouterId,
+    portalScope.portId,
+    loyaltyDeviceMac,
+  );
+  const [loyaltyDeviceAuthorization, setLoyaltyDeviceAuthorization] = useState<string | null>(() => {
+    try {
+      return readStoredHotspotLoyaltyDeviceAuthorization(
+        typeof window !== "undefined" ? window.localStorage : null,
+        loyaltyDeviceAuthorizationStorageKey,
+      );
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    try {
+      setLoyaltyDeviceAuthorization(readStoredHotspotLoyaltyDeviceAuthorization(
+        typeof window !== "undefined" ? window.localStorage : null,
+        loyaltyDeviceAuthorizationStorageKey,
+      ));
+    } catch {
+      setLoyaltyDeviceAuthorization(null);
+    }
+  }, [loyaltyDeviceAuthorizationStorageKey]);
+  const [loyaltyQuoteRevision, setLoyaltyQuoteRevision] = useState(0);
+  const [loyaltyAttemptRevision, setLoyaltyAttemptRevision] = useState(0);
+  const lastLoyaltyBalanceRef = useRef<{ key: string; balance: number } | null>(null);
+  const selectedPlanIdRef = useRef<number | null>(null);
+  selectedPlanIdRef.current = selectedPlan?.id ?? null;
+  const loyaltyAttemptsRef = useRef<Map<string, { key: string; checkoutId?: string; uncertain?: boolean }>>(new Map());
+
+  // Automatic balance for the connected device MAC; bounded 30s refresh.
+  useEffect(() => {
+    if (!portalCards.loyalty || troubleshootingOnly || HOTSPOT_RUNTIME_CONFIG.previewOnly || !loyaltyDeviceMac) return;
+    let cancelled = false;
+    const key = loyaltyScopeKey;
+    let inFlight = false;
+    let controller = new AbortController();
+    const load = () => {
+      if (inFlight) return;
+      inFlight = true;
+      controller = new AbortController();
+      const abortTimer = window.setTimeout(() => controller.abort(), 10000);
+      void hotspotPortalFetch(hotspotApiUrl("/api/hotspot/loyalty/balance"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mac_address: loyaltyDeviceMac,
+          ...(adminId ? { adminId } : {}),
+          ...(loyaltyRouterId ? { router_id: loyaltyRouterId } : {}),
+          ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+        }),
+        signal: controller.signal,
+      }).then(async response => {
+        const data = await response.json() as { ok?: boolean; balance?: number; hasAccount?: boolean; error?: string };
+        if (!response.ok || data.ok !== true || typeof data.balance !== "number") {
+          throw new Error(data.error || "Your points balance could not be loaded.");
+        }
+        if (cancelled) return;
+        const nextBalance = data.hasAccount === false ? 0 : data.balance;
+        setLoyaltyBalance({ key, balance: nextBalance, hasAccount: data.hasAccount !== false });
+        setLoyaltyBalanceError(null);
+        const previous = lastLoyaltyBalanceRef.current;
+        lastLoyaltyBalanceRef.current = { key, balance: nextBalance };
+        if (previous && previous.key === key && previous.balance !== nextBalance && selectedPlanIdRef.current) {
+          setLoyaltyQuoteRevision(revision => revision + 1);
+        }
+      }).catch(error => {
+        if (!cancelled) setLoyaltyBalanceError({ key, message: error instanceof Error && error.name !== "AbortError" ? error.message : "Your points balance request timed out." });
+      }).finally(() => {
+        window.clearTimeout(abortTimer);
+        inFlight = false;
+      });
+    };
+    load();
+    const timer = window.setInterval(() => { if (!document.hidden) load(); }, 30000);
+    return () => { cancelled = true; controller.abort(); window.clearInterval(timer); };
+  }, [adminId, loyaltyDeviceMac, loyaltyRouterId, loyaltyScopeKey, portalCards.loyalty, portalScope.portId, portalScope.routerId, troubleshootingOnly, loyaltyRefreshRevision]);
+
+  // A new package or device is a new purchase attempt: new idempotency key, no stale eligibility.
+  useEffect(() => {
+    setLoyaltyPayment("mpesa");
+  }, [loyaltyScopeKey, selectedPlan?.id]);
+
+  const loyaltyQuoteKeyRef = useRef("");
+  useEffect(() => {
+    const mac = loyaltyDeviceMac;
+    const quoteAttemptId = `${loyaltyScopeKey}|${selectedPlan?.id ?? ""}`;
+    const quoteAttempt = loyaltyAttemptsRef.current.get(quoteAttemptId);
+    const quoteKey = `${loyaltyScopeKey}|${selectedPlan?.id ?? ""}|${paymentMode}`;
+    const sameTarget = loyaltyQuoteKeyRef.current === quoteKey;
+    loyaltyQuoteKeyRef.current = quoteKey;
+    if (!sameTarget) {
+      setLoyaltyQuote(null);
+      setLoyaltyQuoteError("");
+    }
+    if (!selectedPlan || !mac || paymentMode !== "data" || HOTSPOT_RUNTIME_CONFIG.previewOnly) {
+      setLoyaltyQuoteLoading(false);
+      return;
+    }
+    let cancelled = false;
+    if (!sameTarget) setLoyaltyQuoteLoading(true);
+    const controller = new AbortController();
+    const abortTimer = window.setTimeout(() => controller.abort(), 10000);
+    void hotspotPortalFetch(hotspotApiUrl("/api/hotspot/loyalty/quote"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        plan_id: selectedPlan.id,
+        mac_address: mac,
+        ...accountCredentialsPayload(loyaltyCreds),
+        ...loyaltyDeviceAuthorizationPayload(loyaltyDeviceAuthorization),
+        ...(quoteAttempt ? { idempotency_key: quoteAttempt.key } : {}),
+        ...(adminId ? { adminId } : {}),
+        ...(loyaltyRouterId ? { router_id: loyaltyRouterId } : {}),
+        ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+      }),
+    }).then(async response => {
+      const data = await response.json() as Partial<LoyaltyQuote> & {
+        error?: string;
+        pendingCheckoutId?: string | null;
+        device_authorization?: string;
+        device_authorization_expires_at?: number;
+      };
+      if (isVerificationRequired(response.status, data)) {
+        if (!cancelled) {
+          setLoyaltyCreds(null);
+          setLoyaltyDeviceAuthorization(null);
+          try {
+            forgetHotspotLoyaltyDeviceAuthorization(window.localStorage, loyaltyDeviceAuthorizationStorageKey);
+          } catch {}
+        }
+        throw new Error("The loyalty balance could not be confirmed.");
+      }
+      if (!response.ok || data.ok !== true || typeof data.balance !== "number" || typeof data.pointsAwarded !== "number") {
+        throw new Error(data.error || "Points could not be checked.");
+      }
+      // Record a completed-but-unbound redemption on its own attempt, whatever the current selection is.
+      if (quoteAttempt && typeof data.pendingCheckoutId === "string" && data.pendingCheckoutId
+        && loyaltyAttemptsRef.current.get(quoteAttemptId) === quoteAttempt && !quoteAttempt.checkoutId) {
+        quoteAttempt.checkoutId = data.pendingCheckoutId;
+        setLoyaltyAttemptRevision(revision => revision + 1);
+      }
+      if (typeof data.device_authorization === "string") {
+        try {
+          storeHotspotLoyaltyDeviceAuthorization(
+            window.localStorage,
+            loyaltyDeviceAuthorizationStorageKey,
+            data.device_authorization,
+            data.device_authorization_expires_at,
+          );
+        } catch {}
+        if (!cancelled) setLoyaltyDeviceAuthorization(data.device_authorization);
+      }
+      if (!cancelled) {
+        setLoyaltyQuoteError("");
+        setLoyaltyQuote({
+          ok: true,
+          balance: data.balance,
+          pointsRequired: typeof data.pointsRequired === "number" ? data.pointsRequired : null,
+          pointsAwarded: data.pointsAwarded,
+          canRedeem: data.canRedeem === true,
+        });
+      }
+    }).catch(error => {
+      if (cancelled) return;
+      setLoyaltyQuote(null);
+      setLoyaltyQuoteError(error instanceof Error && error.name !== "AbortError" ? error.message : "Points check timed out.");
+    }).finally(() => {
+      window.clearTimeout(abortTimer);
+      if (!cancelled) setLoyaltyQuoteLoading(false);
+    });
+    return () => { cancelled = true; controller.abort(); window.clearTimeout(abortTimer); };
+  }, [adminId, loyaltyDeviceMac, loyaltyDeviceAuthorization, loyaltyDeviceAuthorizationStorageKey, loyaltyRouterId, loyaltyScopeKey, paymentMode, portalScope.portId, selectedPlan?.id, loyaltyRefreshRevision, loyaltyQuoteRevision, loyaltyCreds?.username, loyaltyCreds?.password]);
+
+  useEffect(() => {
+    if (!tvDialogOpen) return;
+    setTvDevicesLoading(true);
+    setTvDialogError("");
+    const deviceQuery = [
+      adminId ? `adminId=${encodeURIComponent(String(adminId))}` : "",
+      portalScope.routerId ? `routerId=${encodeURIComponent(String(portalScope.routerId))}` : "",
+    ].filter(Boolean).join("&");
+    hotspotPortalFetch(hotspotApiUrl(`/api/mpesa/hotspot-devices${deviceQuery ? `?${deviceQuery}` : ""}`))
+      .then(async response => {
+        const data = await response.json() as { ok?: boolean; devices?: ConnectedDevice[]; error?: string };
+        if (!response.ok || !data.ok) throw new Error(data.error || "Connected devices could not be loaded.");
+        setTvDevices(Array.isArray(data.devices) ? data.devices : []);
+      })
+      .catch(error => {
+        setTvDevices([]);
+        setTvDialogError(error instanceof Error ? error.message : "Connected devices could not be loaded.");
+      })
+      .finally(() => setTvDevicesLoading(false));
+  }, [adminId, portalScope.routerId, tvDialogOpen]);
+
+  const [pollTimedOut, setPollTimedOut] = useState(false);
+
+  const bindPaidHotspotAccess = useCallback(async (
+    activeCheckoutId: string,
+    retryRouter = false,
+    targetMacAddress = deviceMacAddress,
+  ): Promise<boolean> => {
+    setAccessRetrying(true);
+    try {
+      const accessResponse = await hotspotPortalFetch(hotspotApiUrl("/api/mpesa/hotspot-mac-access"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          checkout_id: activeCheckoutId,
+          ...(retryRouter ? { retry: true } : {}),
+          ...(adminId ? { adminId } : {}),
+          ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
+          ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+          mac_address: targetMacAddress,
+          device_name: deviceName,
+          ...(!retryRouter && paymentMode !== "tv" && (portalContext.linkLogin || portalContext.linkOrig)
+            ? { portal_login_handoff: true }
+            : {}),
+          ...(paymentMode === "tv" ? { target_device: true } : portalContext.ip ? { client_ip: portalContext.ip } : {}),
+        }),
+      });
+      const accessData = await accessResponse.json() as {
+        ok?: boolean;
+        error?: string;
+        credentials?: HotspotCredentials;
+        connected?: boolean;
+        portal_login_handoff?: boolean;
+        expires_at?: string;
+        message?: string;
+        device_authorization?: string;
+        device_authorization_expires_at?: number;
+      };
+      if (!accessResponse.ok || !accessData.ok || !accessData.credentials?.username || !accessData.credentials.password) {
+        throw new Error(accessData.error || "Payment confirmed, but the hotspot router could not be updated yet.");
+      }
+      if (typeof accessData.device_authorization === "string") {
+        storeHotspotLoyaltyDeviceAuthorization(
+          window.localStorage,
+          loyaltyDeviceAuthorizationStorageKey,
+          accessData.device_authorization,
+          accessData.device_authorization_expires_at,
+        );
+        setLoyaltyDeviceAuthorization(accessData.device_authorization);
+      }
+      setHotspotCredentials(accessData.credentials);
+      storeHotspotCredentials(loginCredentialsStorageKey, accessData.credentials);
+      setLoyaltyCreds(accessData.credentials);
+      const connected = accessData.connected === true;
+      const portalHandoff = accessData.portal_login_handoff === true;
+      setAccessReady(connected);
+      setPortalHandoffReady(portalHandoff);
+      setPaidAccessExpiresAt(accessData.expires_at ?? null);
+      setShowTvSuccess(connected && paymentMode === "tv");
+      if (connected && paymentMode === "tv") {
+        const macAddress = normalizeMacAddress(deviceMacAddress);
+        const wasSaved = savedTvDevices.some(device => device.macAddress === macAddress);
+        let saved = wasSaved;
+        if (rememberTvDevice) {
+          saved = saveHotspotDevice(savedTvDevicesStorageKey, {
+            macAddress,
+            name: deviceName,
+          });
+          if (saved) setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
+        }
+        setTvDeviceSaveNotice(
+          saved
+            ? "This TV is saved in this browser for next time."
+            : rememberTvDevice
+              ? "The TV is connected, but this browser could not save it."
+              : "",
+        );
+      } else {
+        setTvDeviceSaveNotice("");
+      }
+      setPaymentConfirmed(true);
+      setPayError(connected
+        ? null
+        : portalHandoff
+          ? null
+          : accessData.message || "Payment is confirmed, but the router has not confirmed this device's login yet.");
+      return connected || portalHandoff;
+    } catch (error) {
+      setPaymentConfirmed(true);
+      setAccessReady(false);
+      setPortalHandoffReady(false);
+      setShowTvSuccess(false);
+      setPayError(error instanceof Error ? error.message : "The hotspot router could not be updated yet.");
+      return false;
+    } finally {
+      setAccessRetrying(false);
+      bindingInFlight.current = false;
+      if (paymentMode === "data") {
+        setLoyaltyRefreshRevision(revision => revision + 1);
+      }
+    }
+  }, [
+    adminId,
+    deviceMacAddress,
+    deviceName,
+    loyaltyDeviceAuthorizationStorageKey,
+    loginCredentialsStorageKey,
+    paymentMode,
+    portalContext.ip,
+    portalContext.linkLogin,
+    portalContext.linkOrig,
+    portalScope.portId,
+    portalScope.routerId,
+    rememberTvDevice,
+    savedTvDevices,
+    savedTvDevicesStorageKey,
+  ]);
+
+  const checkTvPackageStatus = useCallback(async (): Promise<TvPackageDiagnostic> => {
+    if (!checkoutId || !deviceMacAddress) {
+      const unavailable: TvPackageDiagnostic = {
+        status: "check_unavailable",
+        paymentStatus: "unknown",
+        packageStatus: "unknown",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        retryAvailable: false,
+        message: "This page no longer has the TV purchase details. Reopen the original purchase page to check its status.",
+      };
+      setTvDiagnostic(unavailable);
+      return unavailable;
+    }
+
+    setTvDiagnosticLoading(true);
+    try {
+      const response = await hotspotPortalFetch(hotspotApiUrl("/api/customers/hotspot-tv-status"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          checkout_id: checkoutId,
+          mac_address: normalizeMacAddress(deviceMacAddress),
+          ...(adminId ? { adminId } : {}),
+          ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
+          ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+        }),
+      });
+      const data = await response.json() as Partial<TvPackageDiagnostic> & {
+        ok?: boolean;
+        error?: string;
+      };
+      if (!response.ok || data.ok !== true || typeof data.status !== "string") {
+        throw new Error(data.error || "TV package status could not be checked.");
+      }
+
+      const result: TvPackageDiagnostic = {
+        status: data.status as TvPackageDiagnosticStatus,
+        paymentStatus: data.paymentStatus === "paid" || data.paymentStatus === "pending" || data.paymentStatus === "failed"
+          ? data.paymentStatus
+          : "unknown",
+        packageStatus: data.packageStatus === "active" || data.packageStatus === "pending"
+          || data.packageStatus === "depleted" || data.packageStatus === "expired"
+          || data.packageStatus === "inactive" || data.packageStatus === "unavailable"
+          ? data.packageStatus
+          : "unknown",
+        connected: data.connected === true,
+        deviceVisible: typeof data.deviceVisible === "boolean" ? data.deviceVisible : null,
+        routerReachable: typeof data.routerReachable === "boolean" ? data.routerReachable : null,
+        planName: typeof data.planName === "string" ? data.planName : null,
+        expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
+        retryAvailable: data.retryAvailable === true,
+        message: typeof data.message === "string" ? data.message : "TV package status checked.",
+      };
+      setTvDiagnostic(result);
+      return result;
+    } catch (error) {
+      const unavailable: TvPackageDiagnostic = {
+        status: "check_unavailable",
+        paymentStatus: "unknown",
+        packageStatus: "unknown",
+        connected: false,
+        deviceVisible: null,
+        routerReachable: null,
+        retryAvailable: false,
+        message: error instanceof Error ? error.message : "TV package status could not be checked. Please try again.",
+      };
+      setTvDiagnostic(unavailable);
+      return unavailable;
+    } finally {
+      setTvDiagnosticLoading(false);
+    }
+  }, [adminId, checkoutId, deviceMacAddress, portalScope.portId, portalScope.routerId]);
+
+  const retryExistingPaidAccess = useCallback(() => {
+    if (!checkoutId || bindingInFlight.current) return;
+    // Reuse the paid checkout and its existing account; the API revalidates entitlement.
+    bindingInFlight.current = true;
+    void bindPaidHotspotAccess(checkoutId, true);
+  }, [bindPaidHotspotAccess, checkoutId]);
+
+  useEffect(() => {
+    if (!checkoutId || paymentConfirmed || paymentFailed) return;
+    setPollTimedOut(false);
+    const start = Date.now();
+    const maxPollMs = 3 * 60 * 1000;
+    const interval = setInterval(async () => {
+      if (Date.now() - start > maxPollMs) {
+        setPollTimedOut(true);
+        clearInterval(interval);
+        return;
+      }
+      if (statusPollInFlight.current) return;
+      statusPollInFlight.current = true;
+      try {
+        const res = await hotspotPortalFetch(hotspotApiUrl(`/api/mpesa/status?checkout_id=${encodeURIComponent(checkoutId)}`));
+        const data = await res.json();
+        if (data.paid && !bindingInFlight.current) {
+          bindingInFlight.current = true;
+          setPaymentConfirmed(true);
+          clearInterval(interval);
+          await bindPaidHotspotAccess(checkoutId);
+        } else if (data.status === "failed") {
+          setPayError(data.failureReason || "M-Pesa cancelled or declined the payment prompt.");
+          setPaymentFailed(true);
+          clearInterval(interval);
+        }
+      } catch {
+        // Keep polling through brief network failures.
+      } finally {
+        statusPollInFlight.current = false;
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [checkoutId, paymentConfirmed, paymentFailed, adminId, bindPaidHotspotAccess]);
+
+  useEffect(() => {
+    if (!accessReady && !portalHandoffReady) return;
+    if (paymentMode === "tv") return;
+    const destination = portalContext.linkLogin || portalContext.linkOrig;
+    if (!/^https?:\/\//i.test(destination) || !hotspotCredentials) {
+      if (!troubleshootingOnly) {
+        setTroubleshootDialogOpen(true);
+      } else {
+        setTroubleshootMessage("Your account is ready. Return to the Wi-Fi sign-in page to finish connecting.");
+      }
+      return;
+    }
+    const destinationWithoutHash = destination.split("#", 1)[0];
+    const credentialHash = new URLSearchParams({
+      hotspot_username: hotspotCredentials.username,
+      hotspot_password: hotspotCredentials.password,
+    }).toString();
+    const redirectTimer = window.setTimeout(
+      () => window.location.assign(`${destinationWithoutHash}#${credentialHash}`),
+      portalHandoffReady ? 80 : 250,
+    );
+    return () => window.clearTimeout(redirectTimer);
+  }, [accessReady, portalHandoffReady, hotspotCredentials, paymentMode, troubleshootingOnly]);
+
+  const startPayment = async (options: {
+    plan: Plan;
+    phoneValue: string;
+    macValue: string;
+    deviceNameValue?: string;
+    deviceRouterId?: number;
+    targetDevice?: boolean;
+    rememberDevice?: boolean;
+  }) => {
+    if (paymentStartInFlight.current) return;
+    paymentStartInFlight.current = true;
+    const {
+      plan,
+      phoneValue,
+      macValue,
+      deviceNameValue = "",
+      deviceRouterId,
+      targetDevice = false,
+      rememberDevice = false,
+    } = options;
+    const macAddress = normalizeMacAddress(macValue);
+    const normalizedDeviceName = deviceNameValue.trim().replace(/\s+/g, " ").slice(0, 64);
+    setSelectedPlan(plan);
+    setLoyaltyPaidWithPoints(false);
+    setPaymentMode(targetDevice ? "tv" : "data");
+    setRememberTvDevice(rememberDevice);
+    setTvDeviceSaveNotice("");
+    setPhone(phoneValue);
+    paymentStartedAtRef.current = Date.now();
+    setPaymentElapsedSeconds(0);
+    setDeviceMacAddress(macAddress);
+    setDeviceName(normalizedDeviceName);
+    setPayLoading(true); setPayError(null); setPaymentFailed(false); setPaymentConfirmed(false); setLoyaltyPaidWithPoints(false); setAccessReady(false); setPortalHandoffReady(false); setShowTvSuccess(false); setPaidAccessExpiresAt(null); setHotspotCredentials(null); setPollTimedOut(false); setTvDiagnostic(null);
+    bindingInFlight.current = false;
+    try {
+      const intentResponse = await hotspotPortalFetch(hotspotApiUrl("/api/mpesa/intent"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: phoneValue.trim(),
+          plan_id: plan.id,
+          ...(adminId ? { adminId } : {}),
+          ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
+          ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+          ...(macAddress ? { mac_address: macAddress } : {}),
+          ...(normalizedDeviceName ? { device_name: normalizedDeviceName } : {}),
+          ...(deviceRouterId ? { device_router_id: deviceRouterId } : {}),
+          ...(!targetDevice && portalContext.ip ? { client_ip: portalContext.ip } : {}),
+        }),
+      });
+      const intentData = await intentResponse.json() as { ok?: boolean; error?: string; paymentIntent?: string; amount?: number; deviceMacAddress?: string };
+      if (!intentResponse.ok || !intentData.ok || !intentData.paymentIntent || !intentData.amount) {
+        setPayError(intentData.error ?? "Could not start a secure payment checkout. Please try again.");
+        return;
+      }
+      if (intentData.deviceMacAddress) setDeviceMacAddress(intentData.deviceMacAddress);
+      const res = await hotspotPortalFetch(hotspotApiUrl("/api/mpesa/stk"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: phoneValue.trim(),
+          amount: intentData.amount,
+          plan_id: plan.id,
+          ...(adminId ? { adminId } : {}),
+          ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
+          ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+          account_ref: portalBrand.ispName,
+          paymentIntent: intentData.paymentIntent,
+          ...(macAddress ? { mac_address: macAddress } : {}),
+          ...(normalizedDeviceName ? { device_name: normalizedDeviceName } : {}),
+        }),
+      });
+      const data = await res.json() as { ok: boolean; error?: string; CheckoutRequestID?: string };
+      if (!res.ok || !data.ok) setPayError(data.error ?? "Failed to send STK push. Please try again.");
+      else {
+        setStkSent(true);
+        if (data.CheckoutRequestID) setCheckoutId(data.CheckoutRequestID);
+      }
+    } catch { setPayError("Could not reach the payment server. Please try again."); }
+    finally {
+      paymentStartInFlight.current = false;
+      setPayLoading(false);
+    }
+  };
+
+  const mpesaCheckoutAvailable = canAttemptHotspotCheckout(mpesaStatus, HOTSPOT_RUNTIME_CONFIG.previewOnly);
+  const loyaltyRedeemable = Boolean(
+    loyaltyQuote?.canRedeem && loyaltyQuote.pointsRequired && loyaltyQuote.pointsRequired > 0
+    && paymentMode === "data" && !HOTSPOT_RUNTIME_CONFIG.previewOnly,
+  );
+  // An accepted redemption (checkout id known) is resumed directly, independent of the fresh quote.
+  const pendingLoyaltyCheckout = Boolean(
+    selectedPlan && paymentMode === "data" && loyaltyAttemptRevision >= 0
+    && (() => {
+      const attempt = loyaltyAttemptsRef.current.get(`${loyaltyScopeKey}|${selectedPlan.id}`);
+      // An uncertain debit also stays in points mode so we never fall back to M-Pesa and double charge.
+      return attempt?.checkoutId || attempt?.uncertain;
+    })(),
+  );
+  const effectiveLoyaltyPayment: "mpesa" | "points" = pendingLoyaltyCheckout
+    || (loyaltyRedeemable && (loyaltyPayment === "points" || !mpesaCheckoutAvailable)) ? "points" : "mpesa";
+
+  const handlePay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPlan) return;
+    if (effectiveLoyaltyPayment === "points") {
+      await handleLoyaltyRedeem();
+      return;
+    }
+    if (!phone.trim()) return;
+    await startPayment({
+      plan: selectedPlan,
+      phoneValue: phone.trim(),
+      macValue: deviceMacAddress,
+      deviceNameValue: deviceName,
+    });
+  };
+
+  const handleLoyaltyRedeem = async () => {
+    if (!selectedPlan || loyaltyRedeemLoading || loyaltyRedeemInFlight.current) return;
+    const plan = selectedPlan;
+    const macAddress = loyaltyDeviceMac;
+    if (!macAddress) { setPayError("This device could not be identified. Reconnect to the hotspot and try again."); return; }
+    const attemptId = `${loyaltyScopeKey}|${plan.id}`;
+    let attempt = loyaltyAttemptsRef.current.get(attemptId);
+    if (!attempt) {
+      attempt = {
+        key: typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, character => {
+            const value = Math.floor(Math.random() * 16);
+            return (character === "x" ? value : (value & 0x3) | 0x8).toString(16);
+          }),
+      };
+      loyaltyAttemptsRef.current.set(attemptId, attempt);
+    }
+    if (!attempt.checkoutId && !attempt.uncertain && !loyaltyRedeemable) return;
+    loyaltyRedeemInFlight.current = true;
+    paymentStartedAtRef.current = Date.now();
+    setPaymentElapsedSeconds(0);
+    setLoyaltyRedeemLoading(true);
+    setPayError(null);
+    try {
+      let checkout = attempt.checkoutId;
+      if (!checkout) {
+        const response = await hotspotPortalFetch(hotspotApiUrl("/api/hotspot/loyalty/redeem"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            plan_id: plan.id,
+            mac_address: macAddress,
+            idempotency_key: attempt.key,
+            ...(adminId ? { adminId } : {}),
+            ...(loyaltyRouterId ? { router_id: loyaltyRouterId } : {}),
+            ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+          }),
+        }).catch(() => null);
+        if (!response) {
+          attempt.uncertain = redeemOutcomeIsUncertain(null);
+          setLoyaltyAttemptRevision(revision => revision + 1);
+          throw new Error("Could not confirm the points redemption. Try again; your points will not be used twice.");
+        }
+        const result = await response.json().catch(() => ({})) as {
+          ok?: boolean;
+          checkout_id?: string;
+          error?: string;
+          device_authorization?: string;
+          device_authorization_expires_at?: number;
+        };
+        if (!response.ok || !result.ok || !result.checkout_id) {
+          if (redeemOutcomeIsUncertain(response.status)) {
+            attempt.uncertain = true;
+            setLoyaltyAttemptRevision(revision => revision + 1);
+          }
+          throw new Error(result.error || "Points redemption could not be completed.");
+        }
+        checkout = result.checkout_id;
+        attempt.checkoutId = checkout;
+        attempt.uncertain = false;
+        if (typeof result.device_authorization === "string") {
+          try {
+            storeHotspotLoyaltyDeviceAuthorization(
+              window.localStorage,
+              loyaltyDeviceAuthorizationStorageKey,
+              result.device_authorization,
+              result.device_authorization_expires_at,
+            );
+          } catch {}
+          setLoyaltyDeviceAuthorization(result.device_authorization);
+        }
+      }
+      setSelectedPlan(plan);
+      setLoyaltyPaidWithPoints(true);
+      setPaymentMode("data");
+      setDeviceMacAddress(macAddress);
+      setCheckoutId(checkout);
+      setStkSent(true);
+      setPaymentConfirmed(true);
+      setPaymentFailed(false);
+      setAccessReady(false);
+      setPortalHandoffReady(false);
+      bindingInFlight.current = true;
+      // Binding failure keeps the checkout on the attempt, so a retry binds it again and never debits twice.
+      const bound = await bindPaidHotspotAccess(checkout, false, macAddress);
+      if (bound) loyaltyAttemptsRef.current.delete(attemptId);
+    } catch (error) {
+      setPayError(error instanceof Error ? error.message : "Points redemption could not be completed.");
+      // The redeem response may have been lost: re-quote with the attempt key so the server can report it.
+      if (loyaltyAttemptsRef.current.has(attemptId)) setLoyaltyQuoteRevision(revision => revision + 1);
+    } finally {
+      loyaltyRedeemInFlight.current = false;
+      setLoyaltyRedeemLoading(false);
+    }
+  };
+
+  const openTvDialog = () => {
+    setTvDialogOpen(true);
+    setTvDialogError("");
+    const preferredDevice = savedTvDevices[0];
+    setTvDeviceChoice(preferredDevice?.macAddress ?? "");
+    setTvMacAddress(preferredDevice?.macAddress ?? "");
+    setTvDeviceName(preferredDevice?.name ?? "");
+    setRememberTvDevice(Boolean(preferredDevice));
+    setTvDeviceSaveNotice("");
+    setTvPlanId(selectedPlan ? String(selectedPlan.id) : plans[0] ? String(plans[0].id) : "");
+    setTvPhone("");
+  };
+
+  const handleTvDeviceChoice = (value: string) => {
+    setTvDeviceChoice(value);
+    const device = savedTvDevices.find(item => item.macAddress === value)
+      ?? tvDevices.find(item => item.macAddress === value);
+    if (device) {
+      setTvMacAddress(device.macAddress);
+      setTvDeviceName(device.name);
+      setRememberTvDevice(savedTvDevices.some(item => item.macAddress === value));
+    } else {
+      setTvMacAddress("");
+      setTvDeviceName("");
+      setRememberTvDevice(false);
+    }
+  };
+
+  const handleUseSavedTvDevice = (device: SavedHotspotDevice) => {
+    setTvDeviceChoice(device.macAddress);
+    setTvMacAddress(device.macAddress);
+    setTvDeviceName(device.name);
+    setRememberTvDevice(true);
+    setRenamingTvDeviceMac("");
+    setRenamingTvDeviceName("");
+    setTvDialogError("");
+  };
+
+  const handleStartRenameSavedTvDevice = (device: SavedHotspotDevice) => {
+    setRenamingTvDeviceMac(device.macAddress);
+    setRenamingTvDeviceName(device.name);
+    setTvDialogError("");
+  };
+
+  const handleSaveRenamedTvDevice = (device: SavedHotspotDevice) => {
+    const name = renamingTvDeviceName.trim().replace(/\s+/g, " ").slice(0, 64);
+    if (!name) {
+      setTvDialogError("Enter a name for this saved device.");
+      return;
+    }
+    if (!renameHotspotDevice(savedTvDevicesStorageKey, device.macAddress, name)) {
+      setTvDialogError("This browser could not rename the saved device. Check its storage settings and try again.");
+      return;
+    }
+    setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
+    if (normalizeMacAddress(tvMacAddress) === normalizeMacAddress(device.macAddress)) {
+      setTvDeviceName(name);
+    }
+    setRenamingTvDeviceMac("");
+    setRenamingTvDeviceName("");
+    setTvDialogError("");
+  };
+
+  const handleForgetSavedTvDevice = (device: SavedHotspotDevice) => {
+    if (!forgetHotspotDevice(savedTvDevicesStorageKey, device.macAddress)) {
+      setTvDialogError("This browser could not remove the saved TV. Check its storage settings and try again.");
+      return;
+    }
+    setSavedTvDevices(readSavedHotspotDevices(savedTvDevicesStorageKey));
+    if (renamingTvDeviceMac === device.macAddress) {
+      setRenamingTvDeviceMac("");
+      setRenamingTvDeviceName("");
+    }
+    if (normalizeMacAddress(tvMacAddress) === normalizeMacAddress(device.macAddress)) {
+      setTvDeviceChoice("");
+      setTvMacAddress("");
+      setTvDeviceName("");
+      setRememberTvDevice(false);
+    }
+  };
+
+  const handleTvBindPay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const plan = plans.find(item => String(item.id) === tvPlanId);
+    const macAddress = normalizeMacAddress(tvMacAddress);
+    if (!plan) {
+      setTvDialogError("Choose a package before continuing.");
+      return;
+    }
+    if (!macAddress) {
+      setTvDialogError("Enter a valid TV MAC address, for example AA:BB:CC:DD:EE:FF.");
+      return;
+    }
+    if (!tvDeviceName.trim()) {
+      setTvDialogError("Give the device a name so you can recognize it later.");
+      return;
+    }
+    if (!tvPhone.trim()) {
+      setTvDialogError("Enter the phone number that will receive the M-Pesa prompt.");
+      return;
+    }
+    setActiveTab("tv");
+    setPaymentMode("tv");
+    setTvDialogOpen(false);
+    await startPayment({
+      plan,
+      phoneValue: tvPhone.trim(),
+      macValue: macAddress,
+      deviceNameValue: tvDeviceName,
+      deviceRouterId: tvDevices.find(item => item.macAddress === macAddress)?.routerId,
+      targetDevice: true,
+      rememberDevice: rememberTvDevice,
+    });
+  };
+
+  const handleTabChange = (tab: Tab) => {
+    if (stkSent) return;
+    if (tab === "tv") {
+      openTvDialog();
+      return;
+    }
+    setActiveTab(tab);
+    setSelectedPlan(null);
+    setDanstedCheckoutOpen(false);
+    setPhone("");
+    setPayError(null);
+    if (tab === "plans") setPaymentMode("data");
+  };
+
+  const selectPlan = (plan: Plan) => {
+    setSelectedPlan(plan);
+    setLoyaltyPaidWithPoints(false);
+    setPaymentMode(activeTab === "tv" ? "tv" : "data");
+    setDanstedCheckoutOpen(isDanstedLayout && activeTab !== "tv");
+    if (isDanstedLayout) setLoyaltyPayment("mpesa");
+    if (!isDanstedLayout) setPhone("");
+    setPayError(null);
+  };
+
+  type TroubleshootResult = {
+    found: boolean;
+    status: "active" | "depleted" | "expired" | "not_found" | "unavailable";
+    connected: boolean;
+    retryable: boolean;
+    expiresAt: string | null;
+    planName: string | null;
+    username: string | null;
+    error?: string;
+  };
+
+  const requestHotspotTroubleshoot = useCallback(async (
+    action: "check" | "login",
+    expiryOnly = false,
+    deviceMacAddress = portalContext.mac,
+  ): Promise<TroubleshootResult | null> => {
+    const targetMac = normalizeMacAddress(deviceMacAddress);
+    if (!adminId || !targetMac) {
+      setTroubleshootError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
+      return null;
+    }
+    try {
+      const res = await hotspotPortalFetch(hotspotApiUrl("/api/customers/hotspot-troubleshoot"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adminId,
+          action,
+          ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
+          ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+          ...(expiryOnly ? { expiry_only: true } : {}),
+          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+          mac_address: targetMac,
+        }),
+      });
+      const data = await res.json() as {
+        ok?: boolean;
+        found?: boolean;
+        status?: "active" | "depleted" | "expired" | "not_found" | "unavailable";
+        connected?: boolean;
+        retryable?: boolean;
+        expiresAt?: string | null;
+        planName?: string | null;
+        username?: string | null;
+        error?: string;
+      };
+      if (!res.ok && !data.status) {
+        const error = data.error ?? "Could not verify the latest hotspot purchase.";
+        const retryable = res.status === 408 || res.status === 425 || res.status === 429 || res.status >= 500;
+        setTroubleshootError(error);
+        return {
+          found: false,
+          status: "unavailable",
+          connected: false,
+          retryable,
+          expiresAt: null,
+          planName: null,
+          username: null,
+          error,
+        };
+      }
+      const result: TroubleshootResult = {
+        found: data.found === true,
+        connected: data.connected === true,
+        retryable: data.retryable === true,
+        status: data.status === "active" || data.status === "depleted" || data.status === "expired" || data.status === "not_found"
+          ? data.status
+          : "unavailable",
+        expiresAt: typeof data.expiresAt === "string" ? data.expiresAt : null,
+        planName: typeof data.planName === "string" ? data.planName : null,
+        username: typeof data.username === "string" ? data.username : null,
+        error: data.error,
+      };
+      setLoginSession({
+        found: result.found,
+        status: result.status,
+        connected: result.connected,
+        expiresAt: result.expiresAt,
+        planName: result.planName,
+        username: result.username,
+      });
+      setTroubleshootError("");
+      setTroubleshootMessage(
+        result.status === "active" || result.status === "depleted" || result.status === "unavailable"
+          ? result.error ?? ""
+          : "",
+      );
+      if (action === "login" && result.connected) {
+        setTroubleshootMessage("");
+      }
+      return result;
+    } catch {
+      const error = "Could not reach the server. Automatic sign-in will keep trying.";
+      setTroubleshootError(error);
+      return {
+        found: false,
+        status: "unavailable",
+        connected: false,
+        retryable: true,
+        expiresAt: null,
+        planName: null,
+        username: null,
+        error,
+      };
+    }
+  }, [adminId, portalContext.ip, portalContext.mac]);
+
+  useEffect(() => {
+    if (!loginSession || loginSession.status !== "active" || !loginSession.expiresAt) return;
+    const expiry = Date.parse(loginSession.expiresAt);
+    if (!Number.isFinite(expiry)) return;
+    let timer = 0;
+    const expireWhenDue = () => {
+      const remaining = expiry - Date.now();
+      if (remaining > 0) {
+        timer = window.setTimeout(expireWhenDue, Math.min(remaining, 2_147_000_000));
+        return;
+      }
+      setLoginSession(current =>
+        current?.expiresAt === loginSession.expiresAt
+          ? { ...current, status: "expired", connected: false }
+          : current,
+      );
+    };
+    expireWhenDue();
+    return () => window.clearTimeout(timer);
+  }, [loginSession?.expiresAt, loginSession?.status]);
+
+  useEffect(() => {
+    if (!accessReady || !paidAccessExpiresAt) return;
+    const expiry = Date.parse(paidAccessExpiresAt);
+    if (!Number.isFinite(expiry)) return;
+    let timer = 0;
+    const expireWhenDue = () => {
+      const remaining = expiry - Date.now();
+      if (remaining > 0) {
+        timer = window.setTimeout(expireWhenDue, Math.min(remaining, 2_147_000_000));
+        return;
+      }
+      setShowTvSuccess(false);
+      setAccessReady(false);
+      setPortalHandoffReady(false);
+      setPaymentConfirmed(false);
+      setStkSent(false);
+      setCheckoutId(null);
+      setActiveTab("plans");
+      setLoginSession({
+        found: true,
+        status: "expired",
+        connected: false,
+        expiresAt: paidAccessExpiresAt,
+        planName: selectedPlan?.name ?? null,
+        username: hotspotCredentials?.username ?? null,
+      });
+    };
+    expireWhenDue();
+    return () => window.clearTimeout(timer);
+  }, [accessReady, hotspotCredentials?.username, paidAccessExpiresAt, selectedPlan?.name]);
+
+  const signInWithSavedCredentials = useCallback(async (): Promise<{
+    attempted: boolean;
+    signedIn: boolean;
+    activePlan?: boolean;
+    retryable?: boolean;
+    error?: string;
+  }> => {
+    const savedCredentials = paymentMode === "data" ? hotspotCredentials ?? loyaltyCreds : null;
+    if (!savedCredentials?.username || !savedCredentials.password || !adminId || !portalContext.mac) {
+      return { attempted: false, signedIn: false };
+    }
+    try {
+      const response = await hotspotPortalFetch(hotspotApiUrl("/api/customers/hotspot-login"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adminId,
+          username: savedCredentials.username,
+          password: savedCredentials.password,
+          mac_address: portalContext.mac,
+          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+        }),
+      });
+      const data = await response.json().catch(() => ({})) as {
+        ok?: boolean;
+        error?: string;
+        activePlan?: boolean;
+        planName?: string | null;
+        expiresAt?: string | null;
+        customer?: { expires_at?: string | null; username?: string | null };
+      };
+      if (!response.ok || !data.ok) {
+        if (data.activePlan) {
+          setLoginSession({
+            found: true,
+            status: "active",
+            connected: false,
+            expiresAt: data.expiresAt ?? null,
+            planName: data.planName ?? null,
+            username: savedCredentials.username,
+          });
+          setTroubleshootMessage(data.error || "Your package is active, but the router has not confirmed sign-in.");
+          setTroubleshootError("");
+          return {
+            attempted: true,
+            signedIn: false,
+            activePlan: true,
+            retryable: response.status === 408 || response.status === 425 || response.status === 429 || response.status >= 500,
+            error: data.error,
+          };
+        }
+        throw new Error(data.error || "The saved hotspot account could not sign in.");
+      }
+      storeHotspotCredentials(loginCredentialsStorageKey, savedCredentials);
+      setHotspotCredentials(savedCredentials);
+      setLoyaltyCreds(savedCredentials);
+      setLoginSession({
+        found: true,
+        status: "active",
+        connected: true,
+        expiresAt: data.customer?.expires_at ?? null,
+        planName: data.planName ?? null,
+        username: data.customer?.username ?? savedCredentials.username,
+      });
+      setTroubleshootMessage("Your saved package account is signed in.");
+      setTroubleshootError("");
+      return { attempted: true, signedIn: true };
+    } catch (error) {
+      return {
+        attempted: true,
+        signedIn: false,
+        error: error instanceof Error ? error.message : "Could not sign in with the saved hotspot account.",
+      };
+    }
+  }, [
+    adminId,
+    hotspotCredentials,
+    loginCredentialsStorageKey,
+    loyaltyCreds,
+    paymentMode,
+    portalContext.ip,
+    portalContext.mac,
+  ]);
+
+  const handleTroubleshoot = async () => {
+    if (troubleshootInFlight.current) return;
+    troubleshootInFlight.current = true;
+    setTroubleshootLoading(true);
+    setLoginSession(null);
+    setTroubleshootMessage("");
+    setTroubleshootError("");
+    setTroubleshootAction("login");
+    try {
+      const savedLogin = await signInWithSavedCredentials();
+      if (!savedLogin.signedIn && !savedLogin.activePlan) {
+        const result = await requestHotspotTroubleshoot("login");
+        if (!result && savedLogin.error) setTroubleshootError(savedLogin.error);
+      }
+    } finally {
+      troubleshootInFlight.current = false;
+      setTroubleshootLoading(false);
+      setTroubleshootAction(null);
+    }
+  };
+
+  const openAlreadyPaidReconnect = () => {
+    setTvTroubleshootMode(false);
+    setTvReconnectMac("");
+    setTroubleshootMacAddress(portalContext.mac);
+    setTroubleshootDialogOpen(true);
+    if (paymentMode === "data" && (hotspotCredentials || loyaltyCreds)) {
+      void handlePlanLogin();
+    } else {
+      void handleTroubleshoot();
+    }
+  };
+
+  const openTvTroubleshooting = async (macHint = "") => {
+    const hintedMac = normalizeMacAddress(macHint);
+    const savedMac = savedTvDevices[0]?.macAddress ?? "";
+    setTvTroubleshootMode(true);
+    setTvReconnectMac("");
+    setLoginSession(null);
+    setTroubleshootError("");
+    setTroubleshootMessage("Choose a saved TV, select an active device, or enter its MAC address to start troubleshooting.");
+    setTroubleshootMacAddress(hintedMac || savedMac);
+    setTroubleshootDialogOpen(true);
+    setTvDevicesLoading(true);
+    try {
+      const devices = await fetchActiveHotspotDevices(adminId, portalScope.routerId);
+      setTvDevices(devices);
+      const selectedMac = hintedMac || savedMac;
+      const detected = devices.find(device => normalizeMacAddress(device.macAddress) === selectedMac)
+        ?? (devices.length === 1 ? devices[0] : null);
+      if (detected) {
+        setTroubleshootMacAddress(current => normalizeMacAddress(current) || detected.macAddress);
+        setTroubleshootMessage(`Detected ${detected.name} (${detected.macAddress}) on ${detected.routerName}. Confirm the device, then start troubleshooting.`);
+      } else if (hintedMac || savedMac) {
+        setTroubleshootMessage("The selected MAC is not currently visible on the router. You can still try it, or choose another saved/active device.");
+      } else {
+        setTroubleshootMacAddress("");
+        setTroubleshootMessage("No active device was detected. Connect the TV to this Wi-Fi, choose a saved device, or enter its MAC address.");
+      }
+    } catch (error) {
+      setTroubleshootError(error instanceof Error ? error.message : "The active TV devices could not be detected.");
+    } finally {
+      setTvDevicesLoading(false);
+    }
+  };
+
+  const startSelectedTvTroubleshooting = () => {
+    const mac = normalizeMacAddress(troubleshootMacAddress);
+    if (!mac) {
+      setTroubleshootError("Select an active TV or enter a valid TV MAC address first.");
+      return;
+    }
+    setTroubleshootError("");
+    setLoginSession(null);
+    setTroubleshootMessage("Checking the TV package and asking the router to reconnect it. We’ll keep retrying while this window stays open.");
+    setTvReconnectMac(mac);
+  };
+
+  useEffect(() => {
+    if (HOTSPOT_RUNTIME_CONFIG.previewOnly || !adminId || !portalContext.mac) return;
+    const lookupKey = `${adminId}:${portalContext.mac}`;
+    if (autoTroubleshootKey.current === lookupKey) return;
+    autoTroubleshootKey.current = lookupKey;
+    let cancelled = false;
+    let retryTimer = 0;
+    let attempts = 0;
+    const runAutomaticReconnect = async () => {
+      if (cancelled) return;
+      if (troubleshootInFlight.current) {
+        retryTimer = window.setTimeout(() => void runAutomaticReconnect(), 150);
+        return;
+      }
+
+      troubleshootInFlight.current = true;
+      if (troubleshootingOnly) {
+        setTroubleshootLoading(true);
+        setTroubleshootAction("login");
+      }
+      let result: TroubleshootResult | null = null;
+      let shouldRetry = false;
+      try {
+        const savedLogin = await signInWithSavedCredentials();
+        if (savedLogin.signedIn) {
+          setAutoReconnectInProgress(false);
+        } else if (savedLogin.activePlan) {
+          shouldRetry = savedLogin.retryable === true;
+        } else {
+          result = await requestHotspotTroubleshoot("login");
+          shouldRetry = result?.retryable === true;
+        }
+      } finally {
+        troubleshootInFlight.current = false;
+        if (troubleshootingOnly) {
+          setTroubleshootLoading(false);
+          setTroubleshootAction(null);
+        }
+      }
+      if (cancelled) return;
+
+      if (shouldRetry) {
+        attempts += 1;
+        setAutoReconnectInProgress(true);
+        const delayMs = Math.min(1_000 * 2 ** Math.min(attempts - 1, 5), 30_000);
+        retryTimer = window.setTimeout(() => void runAutomaticReconnect(), delayMs);
+        return;
+      }
+
+      setAutoReconnectInProgress(false);
+    };
+
+    const startTimer = window.setTimeout(() => void runAutomaticReconnect(), 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(startTimer);
+      if (retryTimer) window.clearTimeout(retryTimer);
+      if (autoTroubleshootKey.current === lookupKey) autoTroubleshootKey.current = "";
+    };
+  }, [troubleshootingOnly, adminId, portalContext.mac, requestHotspotTroubleshoot, signInWithSavedCredentials]);
+
+  useEffect(() => {
+    if (!tvTroubleshootMode || !troubleshootDialogOpen || !tvReconnectMac) return;
+    let cancelled = false;
+    let retryTimer = 0;
+    let attempts = 0;
+    const retry = async () => {
+      if (cancelled) return;
+      if (troubleshootInFlight.current) {
+        retryTimer = window.setTimeout(() => void retry(), 200);
+        return;
+      }
+      troubleshootInFlight.current = true;
+      setTroubleshootLoading(true);
+      setTroubleshootAction("login");
+      let result: TroubleshootResult | null = null;
+      try {
+        result = await requestHotspotTroubleshoot("login", false, tvReconnectMac);
+      } finally {
+        troubleshootInFlight.current = false;
+        setTroubleshootLoading(false);
+        setTroubleshootAction(null);
+      }
+      if (cancelled) return;
+      if (result?.connected) {
+        setTroubleshootMessage("The TV is connected. Keep it on this Wi-Fi.");
+        setTvReconnectMac("");
+        return;
+      }
+      if (result?.retryable) {
+        attempts += 1;
+        setTroubleshootMessage("The TV package is being checked. Reconnecting automatically while this window stays open…");
+        retryTimer = window.setTimeout(() => void retry(), Math.min(2_000 * 2 ** Math.min(attempts - 1, 4), 30_000));
+        return;
+      }
+      setTvReconnectMac("");
+    };
+    void retry();
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, [tvTroubleshootMode, troubleshootDialogOpen, tvReconnectMac, requestHotspotTroubleshoot]);
+
+  useEffect(() => {
+    if (!tvTroubleshootMode || !troubleshootDialogOpen || !adminId) return;
+    let cancelled = false;
+    let timer = 0;
+    const refresh = async () => {
+      try {
+        const devices = await fetchActiveHotspotDevices(adminId, portalScope.routerId);
+        if (cancelled) return;
+        setTvDevices(devices);
+        if (!troubleshootMacAddress) {
+          const detected = devices.length === 1 ? devices[0] : null;
+          if (detected) {
+            setTroubleshootMacAddress(detected.macAddress);
+            setTroubleshootMessage(`Detected ${detected.name} (${detected.macAddress}) on ${detected.routerName}. Confirm the device, then start troubleshooting.`);
+          }
+        }
+      } catch (error) {
+        if (!cancelled && !tvReconnectMac) {
+          setTroubleshootError(error instanceof Error ? error.message : "Could not refresh active TV devices.");
+        }
+      } finally {
+        if (!cancelled) timer = window.setTimeout(() => void refresh(), 15_000);
+      }
+    };
+    timer = window.setTimeout(() => void refresh(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [tvTroubleshootMode, troubleshootDialogOpen, adminId, portalScope.routerId, troubleshootMacAddress, tvReconnectMac]);
+
+  useEffect(() => {
+    if (!troubleshootDialogOpen) return;
+    if (HOTSPOT_RUNTIME_CONFIG.previewOnly) {
+      setTroubleshootError("Connection checks are available when this page is opened from an active hotspot device.");
+    } else if (!adminId || !portalContext.mac) {
+      setTroubleshootError("This hotspot page did not provide a device MAC address. Reopen the Wi-Fi sign-in page and try again.");
+    }
+  }, [troubleshootDialogOpen, adminId, portalContext.mac]);
+
+  const handlePlanLogin = async () => {
+    if (troubleshootInFlight.current) return;
+    troubleshootInFlight.current = true;
+    setTroubleshootLoading(true);
+    setTroubleshootAction("login");
+    setTroubleshootError("");
+    try {
+      const savedLogin = await signInWithSavedCredentials();
+      if (savedLogin.signedIn) return;
+      if (savedLogin.activePlan) return;
+
+      // Reconcile against the purchase record, not the visible, purchasable
+      // plan cards. The server resolves the account's linked plan by ID.
+      const result = await requestHotspotTroubleshoot("login");
+      if (result && result.status === "active" && !result.connected) {
+        setTroubleshootMessage("Your package is active. Automatic sign-in will keep retrying while this device stays connected to Wi-Fi.");
+      } else if (result && savedLogin.error && result.status === "unavailable") {
+        setTroubleshootMessage(result.error || savedLogin.error);
+      }
+    } finally {
+      troubleshootInFlight.current = false;
+      setTroubleshootLoading(false);
+      setTroubleshootAction(null);
+    }
+  };
+
+  const handleMpesaReconnect = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const message = mpesaMessage.trim();
+    if (!message) return;
+    setMpesaReconnectError("");
+    setMpesaReconnectLoading(true);
+    try {
+      const res = await hotspotPortalFetch(hotspotApiUrl("/api/mpesa/verify"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message,
+          ...(adminId ? { adminId } : {}),
+          ...(deviceMacAddress ? { mac_address: deviceMacAddress } : {}),
+          ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+        }),
+      });
+      const data = await res.json() as {
+        ok?: boolean;
+        error?: string;
+        credentials?: HotspotCredentials;
+      };
+      if (!res.ok || !data.ok || !data.credentials?.username || !data.credentials.password) {
+        throw new Error(data.error || "That M-Pesa payment could not be matched to a hotspot account.");
+      }
+      setHotspotCredentials(data.credentials);
+      storeHotspotCredentials(loginCredentialsStorageKey, data.credentials);
+      setLoyaltyCreds(data.credentials);
+      setPortalHandoffReady(Boolean(portalContext.linkLogin || portalContext.linkOrig));
+      setAccessReady(!portalContext.linkLogin && !portalContext.linkOrig);
+      setTroubleshootMessage("Payment verified. Your hotspot sign-in is being restored.");
+      setMpesaMessage("");
+    } catch (error) {
+      setMpesaReconnectError(error instanceof Error ? error.message : "Could not reconnect this M-Pesa payment.");
+    } finally {
+      setMpesaReconnectLoading(false);
+    }
+  };
+
+  const mpesaReconnectCard = (
+    <div className="hp-glass" style={{ marginTop: 16 }}>
+      <div className="hp-glass-header">
+        <div className="hp-glass-icon" style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
+          <Shield size={16} color="var(--isp-accent)" />
+        </div>
+        <div>
+          <div className="hp-glass-title">Reconnect with M-Pesa</div>
+          <div className="hp-glass-desc">We look up completed payments on your account and only reconnect the device registered to that purchase while its package is active.</div>
+        </div>
+      </div>
+      <div className="hp-glass-body">
+        <form onSubmit={handleMpesaReconnect}>
+          <div className="hp-input-group">
+            <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation message</label>
+            <textarea
+              id="mpesa-reconnect-message"
+              className="hp-input hp-textarea"
+              rows={4}
+              maxLength={1000}
+              placeholder="Paste the full confirmation message"
+              value={mpesaMessage}
+              onChange={event => { setMpesaMessage(event.target.value); setMpesaReconnectError(""); }}
+              required
+            />
+          </div>
+          {mpesaReconnectError && (
+            <div className="hp-error" role="alert">
+              <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+              {mpesaReconnectError}
+            </div>
+          )}
+          <button type="submit" disabled={mpesaReconnectLoading} className="hp-btn hp-btn-ghost">
+            {mpesaReconnectLoading
+              ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Verifying payment...</>
+              : <><Shield size={16} /> Verify and reconnect</>}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+
+  const [voucherCode, setVoucherCode] = useState("");
+  const [voucherPhone, setVoucherPhone] = useState("");
+  const [voucherLoading, setVoucherLoading] = useState(false);
+  const [voucherError, setVoucherError] = useState("");
+  const [voucherSuccess, setVoucherSuccess] = useState(false);
+  const [voucherInfo, setVoucherInfo] = useState<Record<string, unknown> | null>(null);
+  const [voucherConnected, setVoucherConnected] = useState(false);
+  const [voucherCredentials, setVoucherCredentials] = useState<HotspotCredentials | null>(null);
+  const [voucherAccountAdminId, setVoucherAccountAdminId] = useState<number | null>(null);
+
+  const connectVoucherAccount = async (
+    credentials: HotspotCredentials,
+    accountAdminId: number,
+  ): Promise<void> => {
+    const macAddress = portalContext.mac || deviceMacAddress;
+    const response = await hotspotPortalFetch(hotspotApiUrl("/api/customers/hotspot-login"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        adminId: accountAdminId,
+        username: credentials.username,
+        password: credentials.password,
+        mac_address: macAddress,
+        ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
+      }),
+    });
+    const result = await response.json().catch(() => ({})) as { error?: string; ok?: boolean };
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || "The router has not confirmed this device's connection yet.");
+    }
+  };
+
+  const handleVoucher = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setVoucherError(""); setVoucherLoading(true);
+    try {
+      const macAddress = portalContext.mac || deviceMacAddress;
+      if (!macAddress) {
+        throw new Error("Reopen the Wi-Fi sign-in page on this device so we can identify it.");
+      }
+      const res = await hotspotPortalFetch(hotspotApiUrl("/api/vouchers/hotspot/redeem"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(adminId ? { adminId } : {}),
+          ...(portalScope.routerId ? { router_id: portalScope.routerId } : {}),
+          ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
+          code: voucherCode.trim().toUpperCase(),
+          contact: voucherPhone.trim(),
+          mac_address: macAddress,
+        }),
+      });
+      const data = await res.json() as {
+        error?: string;
+        ok?: boolean;
+        account_admin_id?: number;
+        credentials?: HotspotCredentials;
+        voucher?: Record<string, unknown>;
+      };
+      if (!res.ok || !data.ok || !data.credentials?.username || !data.credentials.password || !data.account_admin_id) {
+        throw new Error(data.error || "Voucher activation failed. Check the code and try again.");
+      }
+      setVoucherInfo(data.voucher ?? null);
+      setVoucherCredentials(data.credentials);
+      setVoucherAccountAdminId(data.account_admin_id);
+      storeHotspotCredentials(loginCredentialsStorageKey, data.credentials);
+      setVoucherSuccess(true);
+      setLoyaltyCreds(data.credentials);
+      try {
+        await connectVoucherAccount(data.credentials, data.account_admin_id);
+        setVoucherConnected(true);
+      } catch (error) {
+        setVoucherConnected(false);
+        setVoucherError(error instanceof Error
+          ? `Voucher activated, but connection is pending: ${error.message}`
+          : "Voucher activated, but the router has not confirmed the connection. Retry sign-in.");
+      }
+    } catch (error) {
+      setVoucherError(error instanceof Error ? error.message : "Could not reach the server. Please try again.");
+    }
+    finally { setVoucherLoading(false); }
+  };
+
+  const retryVoucherConnection = async () => {
+    if (!voucherCredentials || !voucherAccountAdminId || voucherLoading) return;
+    setVoucherLoading(true);
+    setVoucherError("");
+    try {
+      await connectVoucherAccount(voucherCredentials, voucherAccountAdminId);
+      setVoucherConnected(true);
+    } catch (error) {
+      setVoucherConnected(false);
+      setVoucherError(error instanceof Error
+        ? `Voucher is active, but connection is still pending: ${error.message}`
+        : "The router has not confirmed the connection yet. Keep the device on Wi-Fi and retry.");
+    } finally {
+      setVoucherLoading(false);
+    }
+  };
+
+  const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
+    { id: "plans", label: "Buy Data", icon: <CreditCard size={16} /> },
+    { id: "tv", label: "Buy for TV", icon: <Tv size={16} /> },
+    { id: "voucher", label: "Voucher", icon: <Ticket size={16} /> },
+  ];
+  const visibleTabs = TABS.filter(tab => tab.id === "voucher" ? portalCards.voucher : portalCards.packages);
+  const isTvMode = paymentMode === "tv";
+  const voucherPlanName = voucherInfo?.plan_name == null ? "" : String(voucherInfo.plan_name);
+  const voucherValidityMins = Number(voucherInfo?.validity_mins ?? 0);
+  const voucherDuration = voucherValidityMins > 0
+    ? voucherValidityMins < 60
+      ? `${voucherValidityMins} minutes`
+      : voucherValidityMins < 1440
+        ? `${Math.round(voucherValidityMins / 60)} hours`
+        : `${Math.round(voucherValidityMins / 1440)} days`
+    : "";
+  const troubleshootStatus = loginSession
+    ? {
+        active: {
+          label: loginSession.connected ? "Connected" : "Package active · sign-in pending",
+          detail: loginSession.connected
+            ? loginSession.expiresAt
+              ? `Your plan is active and expires ${formatSessionExpiry(loginSession.expiresAt)}.`
+              : "Your plan is active. No expiry time is recorded."
+            : autoReconnectInProgress
+              ? "Your package is active. We are retrying sign-in automatically while this page is open and the device stays connected to Wi-Fi."
+              : "Your package is active, but the router has not confirmed sign-in for this device. Keep it connected to Wi-Fi and retry sign-in.",
+        },
+        expired: {
+          label: "Plan expired",
+          detail: `Your plan expired${loginSession.expiresAt ? ` on ${formatSessionExpiry(loginSession.expiresAt)}` : ""}. Renew a package to reconnect.`,
+        },
+        depleted: {
+          label: "Data allowance used",
+          detail: "Your package data allowance has been used. Purchase a new package to reconnect.",
+        },
+        not_found: {
+          label: "No package found",
+          detail: "No successfully purchased hotspot package matches this device MAC address.",
+        },
+        unavailable: {
+          label: "Purchase needs help",
+          detail: "A purchase was found, but its hotspot account could not be confirmed. Contact support.",
+        },
+      }[loginSession.status]
+    : null;
+  const troubleshootStatusTone = loginSession?.status === "active" && loginSession.connected
+    ? "active"
+    : loginSession?.status === "active" || loginSession?.status === "expired" || loginSession?.status === "depleted"
+      ? "warning"
+      : "help";
+  const loyaltyCardSettings = normalizeHotspotLoyaltyCardSettings(portalBranding.loyaltyCard);
+  const loyaltyCardSize = {
+    compact: { maxWidth: 560, padding: 12, title: 16, body: 11 },
+    standard: { maxWidth: 840, padding: 16, title: 18, body: 12 },
+    large: { maxWidth: 1040, padding: 22, title: 22, body: 13 },
+  }[loyaltyCardSettings.size];
+  const loyaltyCardTreatment = {
+    filled: { background: "#16453d", border: "1px solid #85baa2" },
+    outlined: { background: "rgba(8,20,18,0.22)", border: "1px solid #85baa2" },
+    glass: { background: "rgba(22,69,61,0.34)", border: "1px solid rgba(133,186,162,0.5)", backdropFilter: "blur(12px)" },
+  }[loyaltyCardSettings.treatment];
+  const currentLoyaltyBalance = loyaltyBalance?.key === loyaltyScopeKey ? loyaltyBalance : null;
+  const currentLoyaltyError = loyaltyBalanceError?.key === loyaltyScopeKey ? loyaltyBalanceError.message : "";
+  const loyaltyBalanceCard = portalCards.loyalty && !troubleshootingOnly ? (
+    <section
+      aria-labelledby="hp-loyalty-balance-title"
+      aria-live="polite"
+      style={{
+        width: "100%",
+        maxWidth: loyaltyCardSize.maxWidth,
+        margin: "8px auto 18px",
+        padding: loyaltyCardSize.padding,
+        borderRadius: loyaltyCardSettings.shape === "pill" ? 28 : loyaltyCardSettings.shape === "square" ? 4 : 12,
+        ...loyaltyCardTreatment,
+        color: "#f4faf7",
+      }}
+    >
+      <div style={{ color: "#c3f0d8", fontSize: loyaltyCardSize.body, fontWeight: 800, letterSpacing: ".07em", textTransform: "uppercase" }}>
+        Your loyalty points
+      </div>
+      <h2 id="hp-loyalty-balance-title" style={{ margin: "6px 0", color: "#fff", fontSize: loyaltyCardSize.title }}>
+        {currentLoyaltyBalance
+          ? `${formatLoyaltyPoints(currentLoyaltyBalance.balance)} points`
+          : "Your loyalty points"}
+      </h2>
+      {!loyaltyDeviceMac ? (
+        <p role="status" style={{ margin: "6px 0 0", fontSize: loyaltyCardSize.body, lineHeight: 1.5 }}>
+          This device could not be identified, so its points cannot be shown. Reconnect to the hotspot Wi-Fi and reopen this page.
+        </p>
+      ) : currentLoyaltyBalance ? (
+        <>
+          <p style={{ margin: "6px 0 0", fontSize: loyaltyCardSize.body, lineHeight: 1.5 }}>
+            {!currentLoyaltyBalance.hasAccount
+              ? "No account is linked to this device yet, so it has 0 points. Points are earned after your first paid package."
+              : loyaltyPaidWithPoints || effectiveLoyaltyPayment === "points"
+              ? "Your balance is updated. Paying with loyalty points does not earn additional points."
+              : loyaltyQuote && loyaltyQuote.pointsAwarded > 0 && selectedPlan
+                ? `This KSh ${selectedPlan.price} purchase earns ${formatLoyaltyPoints(loyaltyQuote.pointsAwarded)} points after M-Pesa confirms payment and the account is saved.`
+                : selectedPlan && loyaltyQuote
+                  ? "This package does not currently award loyalty points."
+                  : "Points for this device are shown automatically."}
+          </p>
+          {currentLoyaltyBalance.balance % 1 !== 0 && (
+            <p style={{ margin: "5px 0 0", fontSize: Math.max(10, loyaltyCardSize.body - 1), lineHeight: 1.45, color: "#dbece4" }}>
+              Partial points stay in your balance; a package uses its configured whole-point redemption cost.
+            </p>
+          )}
+        </>
+      ) : currentLoyaltyError ? (
+        <p role="status" style={{ margin: "6px 0 0", fontSize: loyaltyCardSize.body, lineHeight: 1.5 }}>
+          {currentLoyaltyError} It will retry automatically.
+        </p>
+      ) : (
+        <p role="status" style={{ margin: "6px 0 0", fontSize: loyaltyCardSize.body, lineHeight: 1.5 }}>Checking your points balance…</p>
+      )}
+    </section>
+  ) : null;
+
+  return (
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&display=swap');
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+
+        .hp-root {
+          min-height: 100vh;
+          font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+           /* The portal uses a dark glass layout even when the admin app is
+              in its light theme. Keep its contrast self-contained so plan
+              names and prices do not render white-on-white. */
+           background:
+             radial-gradient(circle at 50% -10%, var(--isp-accent-glow), transparent 34%),
+             radial-gradient(circle at 100% 70%, rgba(14,165,233,0.09), transparent 28%),
+             #02090f;
+          color: #fff;
+          overflow-x: hidden;
+          position: relative;
+           isolation: isolate;
+        }
+
+         .hp-root::before {
+           content: "";
+           position: absolute; inset: 0; z-index: -1; pointer-events: none;
+           opacity: 0.35;
+           background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+             linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+           background-size: 42px 42px;
+           mask-image: linear-gradient(to bottom, black, transparent 80%);
+         }
+
+         .hp-bg-orb {
+           position: absolute; border-radius: 50%; filter: blur(2px);
+           opacity: 0.6; pointer-events: none; z-index: -1;
+           animation: float 7s ease-in-out infinite;
+         }
+
+        .hp-header {
+          position: sticky; top: 0; z-index: 50;
+          display: flex; align-items: center; justify-content: space-between;
+           padding: 0 max(20px, calc((100vw - 1120px) / 2)); height: 72px;
+           background: rgba(3,11,20,0.72);
+          backdrop-filter: blur(24px);
+           border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+
+         .hp-logo { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
+         .hp-logo-image { width: 128px; height: 54px; object-fit: contain; flex: 0 0 auto; display: block; }
+        .hp-logo-sub { font-size: 11px; color: rgba(255,255,255,0.4); font-weight: 500; }
+         .hp-brand-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 700; }
+
+         .hp-header-actions { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
+         .hp-header-reconnect {
+           display: inline-flex; align-items: center; min-height: 36px;
+           color: var(--isp-accent); font-size: 12px; font-weight: 700;
+           white-space: nowrap; text-decoration: none; border-radius: 5px;
+         }
+         .hp-header-reconnect:hover { color: #fff; text-decoration: underline; }
+         .hp-header-reconnect:focus-visible { outline: 2px solid var(--isp-accent); outline-offset: 3px; }
+        .hp-status {
+          display: flex; align-items: center; gap: 7px;
+          padding: 6px 14px; border-radius: 100px;
+          background: rgba(52,211,153,0.1);
+          border: 1px solid rgba(52,211,153,0.2);
+          font-size: 12px; font-weight: 700; color: #34d399;
+        }
+        .hp-status-dot {
+          width: 7px; height: 7px; border-radius: 50%;
+          background: #34d399;
+          box-shadow: 0 0 10px #34d399;
+        }
+
+         .hp-main {
+          position: relative; z-index: 1;
+           max-width: 720px; margin: 0 auto;
+           padding: 54px 20px 72px;
+        }
+
+         .hp-hero { text-align: center; margin-bottom: 32px; animation: fadeUp 0.5s ease-out; }
+
+        .hp-wifi-wrap {
+           position: relative; width: 104px; height: 104px;
+           margin: 0 auto 24px;
+        }
+         .hp-wifi-wrap::before, .hp-wifi-wrap::after {
+           content: ""; position: absolute; border: 1px solid var(--isp-accent-border);
+           border-radius: 50%; inset: -12px; opacity: 0.55;
+         }
+         .hp-wifi-wrap::after { inset: -24px; opacity: 0.18; }
+        .hp-wifi-box {
+           width: 104px; height: 104px; border-radius: 30px;
+           background: linear-gradient(145deg, var(--isp-accent-glow), rgba(14,165,233,0.12));
+          border: 1.5px solid var(--isp-accent-border);
+          display: flex; align-items: center; justify-content: center;
+          position: relative; z-index: 2;
+          animation: float 5s ease-in-out infinite;
+        }
+
+        .hp-title {
+           font-size: clamp(34px, 7vw, 48px); font-weight: 900; color: #fff;
+          letter-spacing: -0.03em; line-height: 1.1; margin-bottom: 8px;
+           background: linear-gradient(135deg, #fff 20%, #b9d9ff 80%);
+           -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+         .hp-subtitle { max-width: 440px; margin: 0 auto 18px; font-size: 15px; color: rgba(255,255,255,0.52); font-weight: 500; line-height: 1.6; }
+         .hp-dns-address { display:inline-flex; align-items:center; gap:7px; margin:0 auto 18px; padding:8px 12px; border-radius:999px; color:rgba(255,255,255,.62); background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.09); font-size:11px; }
+         .hp-dns-address svg { color:#70d9bd; }
+         .hp-dns-address strong { color:#fff; font-weight:800; }
+         .hp-checkout-progress { padding:20px 10px 12px; text-align:center; color:#173c38; }
+         .hp-checkout-orbit { width:76px; height:76px; display:grid; place-items:center; margin:0 auto 16px; border-radius:50%; color:#fff; background:conic-gradient(from 35deg,#38bdf8,#34d399,#a78bfa,#38bdf8); box-shadow:0 0 0 8px rgba(56,189,248,.08),0 12px 30px rgba(20,184,166,.22); animation:spin 2.4s linear infinite; }
+         .hp-checkout-orbit svg { animation:spin 2.4s linear infinite reverse; }
+         .hp-checkout-progress strong { display:block; font-size:16px; font-weight:850; }
+         .hp-checkout-progress p { margin:7px auto 10px; max-width:280px; color:#647a74; font-size:12px; line-height:1.5; }
+         .hp-checkout-progress span { color:#71827d; font-size:11px; }
+         .hp-checkout-progress b { color:#173c38; font-variant-numeric:tabular-nums; }
+         .hp-setup-steps { display:grid; gap:8px; max-width:340px; margin:0 auto 16px; text-align:left; }
+         .hp-setup-step { display:flex; align-items:center; gap:10px; padding:9px 11px; border-radius:11px; border:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.035); color:rgba(255,255,255,.6); font-size:11px; }
+         .hp-setup-step[data-state="done"] { border-color:rgba(52,211,153,.23); color:#a7f3d0; background:rgba(16,185,129,.08); }
+         .hp-setup-step[data-state="active"] { border-color:var(--isp-accent-border); color:#fff; background:var(--isp-accent-glow); }
+         .hp-setup-step-mark { display:grid; place-items:center; width:22px; height:22px; flex:0 0 22px; border-radius:50%; background:rgba(255,255,255,.08); }
+
+         .hp-badges { display: flex; justify-content: center; gap: 22px; flex-wrap: wrap; }
+        .hp-badge {
+          display: flex; align-items: center; gap: 5px;
+          font-size: 12px; color: rgba(255,255,255,0.35); font-weight: 600;
+        }
+
+        .hp-tabs {
+           display: flex; gap: 4px;
+           background: rgba(255,255,255,0.045);
+          border: 1px solid rgba(255,255,255,0.06);
+          border-radius: 14px; padding: 4px;
+           margin-bottom: 22px;
+          animation: fadeUp 0.5s 0.1s ease-out both;
+           box-shadow: 0 16px 40px rgba(0,0,0,0.18);
+        }
+        .hp-tab {
+          flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px;
+          padding: 11px 8px; border-radius: 10px;
+          border: none; cursor: pointer;
+           font-size: 12px; font-weight: 700;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          transition: all 0.25s ease;
+          background: transparent; color: rgba(255,255,255,0.35);
+        }
+        .hp-tab.active {
+          background: var(--isp-accent);
+          color: #fff;
+        }
+        .hp-tab:not(.active):hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.6); }
+         .hp-tab:disabled { cursor: not-allowed; opacity: 0.65; }
+
+        .hp-section { animation: fadeUp 0.4s ease-out; }
+
+        .hp-glass {
+           background: linear-gradient(145deg, rgba(255,255,255,0.065), rgba(255,255,255,0.025));
+          backdrop-filter: blur(24px);
+          border: 1px solid rgba(255,255,255,0.07);
+          border-radius: 20px;
+          overflow: hidden;
+           box-shadow: 0 24px 70px rgba(0,0,0,0.16);
+        }
+
+        .hp-glass-header {
+          padding: 16px 20px;
+          border-bottom: 1px solid rgba(255,255,255,0.05);
+          display: flex; align-items: center; gap: 12px;
+        }
+        .hp-glass-icon {
+          width: 36px; height: 36px; border-radius: 10px;
+          display: flex; align-items: center; justify-content: center;
+          flex-shrink: 0;
+        }
+        .hp-glass-title { font-size: 14px; font-weight: 700; color: #fff; }
+        .hp-glass-desc { font-size: 11px; color: rgba(255,255,255,0.4); font-weight: 500; margin-top: 1px; }
+        .hp-glass-body { padding: 20px; }
+
+         .hp-purchase-hero {
+           display: flex; align-items: center; justify-content: space-between; gap: 20px;
+           padding: 22px; margin-bottom: 14px; border-radius: 20px;
+           background: linear-gradient(135deg, var(--isp-accent-glow), rgba(14,165,233,0.05));
+           border: 1px solid var(--isp-accent-border);
+           color: #fff;
+         }
+         .hp-kicker {
+           color: var(--isp-accent); font-size: 10px; font-weight: 800;
+           text-transform: uppercase; letter-spacing: 0.14em; margin-bottom: 7px;
+         }
+         .hp-purchase-title { color: #fff; font-size: 22px; line-height: 1.2; font-weight: 850; margin-bottom: 7px; }
+         .hp-purchase-copy { color: rgba(255,255,255,0.5); font-size: 12px; line-height: 1.6; max-width: 480px; }
+         .hp-purchase-icon {
+           width: 58px; height: 58px; flex: 0 0 58px; border-radius: 18px;
+           display: flex; align-items: center; justify-content: center;
+           color: var(--isp-accent); background: rgba(255,255,255,0.1);
+           border: 1px solid rgba(255,255,255,0.12);
+         }
+         .hp-trust-row {
+           display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 18px;
+         }
+         .hp-trust-item {
+           display: flex; align-items: center; gap: 8px; min-width: 0;
+           padding: 10px 11px; border-radius: 12px;
+           color: rgba(255,255,255,0.48); background: rgba(255,255,255,0.03);
+           border: 1px solid rgba(255,255,255,0.05); font-size: 11px; font-weight: 700;
+         }
+         .hp-trust-item svg { color: #34d399; flex-shrink: 0; }
+
+         .hp-device-card {
+           display: flex; align-items: center; gap: 10px; min-width: 0;
+           padding: 11px 12px; margin-bottom: 14px; border-radius: 12px;
+           background: rgba(14,165,233,0.06);
+           border: 1px solid rgba(14,165,233,0.16);
+         }
+         .hp-device-icon {
+           width: 32px; height: 32px; flex: 0 0 32px; border-radius: 9px;
+           display: flex; align-items: center; justify-content: center;
+           color: #67e8f9; background: rgba(14,165,233,0.12);
+         }
+         .hp-device-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+         .hp-device-kicker {
+           color: rgba(255,255,255,0.38); font-size: 9px; font-weight: 800;
+           letter-spacing: 0.12em; text-transform: uppercase;
+         }
+         .hp-device-copy strong {
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+           color: #fff; font-family: 'JetBrains Mono', 'Fira Code', monospace;
+           font-size: 12px; letter-spacing: 0.04em;
+         }
+         .hp-device-copy small { color: rgba(255,255,255,0.34); font-size: 10px; }
+         .hp-device-state {
+           display: inline-flex; align-items: center; gap: 4px; margin-left: auto;
+           flex: 0 0 auto; color: #34d399; font-size: 10px; font-weight: 800;
+         }
+         .hp-tv-trigger {
+           display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+           margin-top: 14px; padding: 11px 16px; border-radius: 11px;
+           border: 1px solid var(--isp-accent-border); background: var(--isp-accent-glow);
+           color: #fff; font: 800 12px 'Plus Jakarta Sans', sans-serif; cursor: pointer;
+           transition: transform .2s ease, background .2s ease;
+         }
+         .hp-tv-trigger:hover { transform: translateY(-1px); background: var(--isp-accent-border); }
+         .hp-tv-paid-trigger {
+           display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+           min-height: 42px; margin-top: 14px; padding: 10px 15px; border-radius: 11px;
+           border: 1px solid #047857; background: #047857; color: #fff;
+           font: 800 12px 'Plus Jakarta Sans', sans-serif; cursor: pointer;
+           box-shadow: 0 4px 12px rgba(4,120,87,.22);
+         }
+         .hp-tv-paid-trigger:hover { background: #065f46; border-color: #065f46; }
+         .hp-tv-purchase-actions {
+           display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
+           gap: 8px; margin-bottom: 14px;
+         }
+         @media (max-width: 560px) {
+           .hp-tv-purchase-actions { justify-content: stretch; }
+           .hp-tv-purchase-actions button { flex: 1 1 100%; }
+         }
+         .hp-modal-backdrop {
+           position: fixed; inset: 0; z-index: 100; display: flex; align-items: center;
+           justify-content: center; padding: 18px; background: rgba(0,5,12,.78);
+           backdrop-filter: blur(12px);
+         }
+         .hp-tv-modal {
+           width: min(100%, 520px); max-height: min(760px, calc(100vh - 36px)); overflow: auto;
+           border: 1px solid rgba(255,255,255,.12); border-radius: 22px;
+           background: linear-gradient(145deg, #0b1a29, #07111d);
+           box-shadow: 0 30px 90px rgba(0,0,0,.5); color: #fff;
+         }
+          @keyframes hp-troubleshoot-drift {
+            0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+            50% { transform: translate3d(-10px, 12px, 0) scale(1.08); }
+          }
+          @keyframes hp-troubleshoot-sheen {
+            0%, 48%, 100% { transform: translateX(-180%) rotate(18deg); }
+            70% { transform: translateX(440%) rotate(18deg); }
+          }
+          @keyframes hp-troubleshoot-modal-in {
+            from { opacity: 0; transform: translate(-50%, -46%) scale(.96); }
+            to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+          }
+          @keyframes hp-troubleshoot-modal-out {
+            from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+            to { opacity: 0; transform: translate(-50%, -46%) scale(.96); }
+          }
+          @keyframes hp-troubleshoot-overlay-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+          }
+          .hp-troubleshoot-card {
+            position: relative; isolation: isolate; overflow: hidden;
+            display: flex; align-items: center; justify-content: space-between; gap: 18px;
+            padding: 20px; margin-top: 14px;
+            border: 1px solid var(--isp-accent-border);
+            border-radius: 28px 15px 28px 15px;
+            background: linear-gradient(125deg, rgba(9,31,48,.96), rgba(7,17,29,.96) 60%, rgba(9,29,34,.96));
+            box-shadow: 0 20px 48px rgba(0,0,0,.22), inset 0 1px rgba(255,255,255,.05);
+          }
+          .hp-troubleshoot-card::before {
+            content: ""; position: absolute; z-index: -1; inset: -55%;
+            pointer-events: none; opacity: .58;
+            background:
+              radial-gradient(ellipse at 25% 38%, var(--isp-accent-glow), transparent 42%),
+              radial-gradient(ellipse at 72% 65%, rgba(52,211,153,.13), transparent 38%);
+            animation: hp-troubleshoot-drift 9s ease-in-out infinite;
+          }
+          .hp-troubleshoot-card::after {
+            content: ""; position: absolute; z-index: 0; top: -70%; bottom: -70%; left: 0;
+            width: 28%; pointer-events: none;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent);
+            animation: hp-troubleshoot-sheen 9s ease-in-out infinite;
+          }
+          .hp-troubleshoot-card-copy {
+            position: relative; z-index: 1; display: flex; align-items: center; gap: 14px; min-width: 0;
+          }
+          .hp-troubleshoot-card-icon {
+            display: grid; place-items: center; flex: 0 0 46px; width: 46px; height: 46px;
+            border: 1px solid var(--isp-accent-border);
+            border-radius: 16px 9px 16px 9px;
+            color: var(--isp-accent); background: rgba(255,255,255,.07);
+            box-shadow: 0 8px 24px var(--isp-accent-glow);
+          }
+          .hp-troubleshoot-eyebrow {
+            margin-bottom: 4px; color: var(--isp-accent); font-size: 9px; font-weight: 900;
+            letter-spacing: .16em; text-transform: uppercase;
+          }
+          .hp-troubleshoot-card h3 { margin: 0 0 5px; color: #fff; font-size: 14px; font-weight: 800; }
+          .hp-troubleshoot-card p { max-width: 340px; margin: 0; color: rgba(255,255,255,.53); font-size: 11px; line-height: 1.55; }
+          .hp-troubleshoot-card-action {
+            position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center;
+            flex: 0 0 auto; gap: 8px; min-height: 42px; padding: 0 15px;
+            border: 1px solid rgba(255,255,255,.14); border-radius: 13px 8px 13px 8px;
+            color: #fff; background: linear-gradient(135deg, var(--isp-accent), rgba(14,165,233,.76));
+            box-shadow: 0 8px 22px var(--isp-accent-glow);
+            font: 800 11px 'Plus Jakarta Sans', sans-serif; cursor: pointer;
+            transition: transform .2s ease, filter .2s ease, box-shadow .2s ease;
+          }
+          .hp-troubleshoot-card-action:hover:not(:disabled) {
+            transform: translateY(-2px); filter: brightness(1.08);
+            box-shadow: 0 12px 26px var(--isp-accent-glow);
+          }
+          .hp-troubleshoot-card-action:focus-visible,
+          .hp-troubleshoot-modal-action:focus-visible,
+          .hp-troubleshoot-close:focus-visible {
+            outline: 2px solid #fff; outline-offset: 3px;
+          }
+          .hp-troubleshoot-card-action:disabled { opacity: .55; cursor: not-allowed; }
+          .hp-troubleshoot-overlay {
+            position: fixed; inset: 0; z-index: 200;
+            background: rgba(0,5,12,.76); backdrop-filter: blur(13px);
+            animation: hp-troubleshoot-overlay-in .22s ease-out both;
+          }
+          .hp-troubleshoot-dialog {
+            position: fixed; top: 50%; left: 50%; z-index: 201;
+            width: min(520px, calc(100vw - 32px)); max-height: min(780px, calc(100dvh - 32px));
+            overflow: hidden; outline: none; color: #fff;
+            border: 1px solid rgba(255,255,255,.13);
+            border-radius: 30px 17px 30px 17px;
+            background: linear-gradient(145deg, #0c1c2a 0%, #07111d 58%, #0a191b 100%);
+            box-shadow: 0 34px 110px rgba(0,0,0,.64), 0 0 50px var(--isp-accent-glow);
+            transform: translate(-50%, -50%);
+          }
+          .hp-troubleshoot-dialog[data-state="open"] { animation: hp-troubleshoot-modal-in .28s cubic-bezier(.2,.8,.2,1) both; }
+          .hp-troubleshoot-dialog[data-state="closed"] { animation: hp-troubleshoot-modal-out .18s ease-in both; }
+          .hp-troubleshoot-dialog-ambient {
+            position: absolute; z-index: 0; top: -110px; right: -95px; width: 290px; height: 290px;
+            border-radius: 42% 58% 63% 37% / 45% 42% 58% 55%;
+            background:
+              radial-gradient(ellipse at 35% 35%, var(--isp-accent-glow), transparent 66%),
+              radial-gradient(ellipse at 70% 70%, rgba(52,211,153,.15), transparent 54%);
+            filter: blur(5px); pointer-events: none;
+            animation: hp-troubleshoot-drift 8s ease-in-out infinite;
+          }
+          .hp-troubleshoot-dialog-inner {
+            position: relative; z-index: 1; max-height: min(780px, calc(100dvh - 32px));
+            overflow-y: auto; overscroll-behavior: contain; padding: 27px;
+          }
+          .hp-troubleshoot-dialog-head {
+            display: flex; align-items: flex-start; gap: 13px; padding-right: 36px; margin-bottom: 19px;
+          }
+          .hp-troubleshoot-dialog-icon {
+            display: grid; place-items: center; flex: 0 0 46px; width: 46px; height: 46px;
+            border: 1px solid var(--isp-accent-border); border-radius: 17px 10px 17px 10px;
+            color: var(--isp-accent); background: var(--isp-accent-glow);
+          }
+          .hp-troubleshoot-dialog-kicker {
+            margin: 1px 0 5px; color: var(--isp-accent); font-size: 9px; font-weight: 900;
+            letter-spacing: .17em; text-transform: uppercase;
+          }
+          .hp-troubleshoot-dialog-title { margin: 0 0 6px; color: #fff; font-size: 20px; font-weight: 850; letter-spacing: -.02em; }
+          .hp-troubleshoot-dialog-description { max-width: 380px; color: rgba(255,255,255,.5); font-size: 11px; line-height: 1.55; }
+          .hp-troubleshoot-close {
+            position: absolute; z-index: 2; top: 16px; right: 16px;
+            display: grid; place-items: center; width: 34px; height: 34px;
+            border: 1px solid rgba(255,255,255,.1); border-radius: 12px 7px 12px 7px;
+            color: rgba(255,255,255,.7); background: rgba(255,255,255,.055); cursor: pointer;
+            transition: color .2s ease, background .2s ease;
+          }
+          .hp-troubleshoot-close:hover { color: #fff; background: rgba(255,255,255,.12); }
+          .hp-troubleshoot-device {
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            padding: 10px 12px; margin-bottom: 14px;
+            border: 1px solid rgba(255,255,255,.075); border-radius: 12px 8px 12px 8px;
+            background: rgba(255,255,255,.035);
+          }
+          .hp-troubleshoot-device-label { color: rgba(255,255,255,.4); font-size: 9px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+          .hp-troubleshoot-device strong { overflow: hidden; color: rgba(255,255,255,.83); font: 700 11px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+          .hp-troubleshoot-status {
+            padding: 16px; border: 1px solid rgba(255,255,255,.1);
+            border-radius: 20px 11px 20px 11px; background: rgba(255,255,255,.035);
+          }
+          .hp-troubleshoot-status[data-tone="active"] { border-color: rgba(52,211,153,.24); background: linear-gradient(145deg, rgba(16,185,129,.1), rgba(255,255,255,.025)); }
+          .hp-troubleshoot-status[data-tone="warning"] { border-color: rgba(245,158,11,.22); background: linear-gradient(145deg, rgba(245,158,11,.09), rgba(255,255,255,.025)); }
+          .hp-troubleshoot-status[data-tone="help"] { border-color: rgba(248,113,113,.2); background: linear-gradient(145deg, rgba(239,68,68,.08), rgba(255,255,255,.025)); }
+          .hp-troubleshoot-status-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+          .hp-troubleshoot-status-heading strong { color: #fff; font-size: 13px; font-weight: 850; }
+          .hp-troubleshoot-status-mark {
+            display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px;
+            border-radius: 11px 7px 11px 7px; color: #fca5a5; background: rgba(239,68,68,.1);
+          }
+          .hp-troubleshoot-status[data-tone="active"] .hp-troubleshoot-status-mark { color: #6ee7b7; background: rgba(52,211,153,.11); }
+          .hp-troubleshoot-status[data-tone="warning"] .hp-troubleshoot-status-mark { color: #fcd34d; background: rgba(245,158,11,.11); }
+          .hp-troubleshoot-status-copy { margin: 0; color: rgba(255,255,255,.6); font-size: 11px; line-height: 1.6; }
+          .hp-troubleshoot-session-meta {
+            display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 13px;
+          }
+          .hp-troubleshoot-session-meta > div {
+            min-width: 0; padding: 10px 11px; border: 1px solid rgba(255,255,255,.07);
+            border-radius: 12px 8px 12px 8px; background: rgba(255,255,255,.035);
+          }
+          .hp-troubleshoot-session-meta span { display: block; margin-bottom: 5px; color: rgba(255,255,255,.35); font-size: 8px; font-weight: 900; letter-spacing: .11em; text-transform: uppercase; }
+          .hp-troubleshoot-session-meta strong { display: block; overflow: hidden; color: rgba(255,255,255,.8); font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+          .hp-troubleshoot-note {
+            padding: 10px 12px; margin-top: 10px; border: 1px solid rgba(255,255,255,.07);
+            border-radius: 11px 7px 11px 7px; color: rgba(255,255,255,.56);
+            background: rgba(255,255,255,.035); font-size: 10px; line-height: 1.55;
+          }
+          .hp-troubleshoot-error {
+            display: flex; align-items: flex-start; gap: 9px; padding: 13px;
+            border: 1px solid rgba(248,113,113,.2); border-radius: 14px 9px 14px 9px;
+            color: #fecaca; background: rgba(239,68,68,.08); font-size: 11px; line-height: 1.55;
+          }
+          .hp-troubleshoot-loading {
+            display: grid; justify-items: center; gap: 12px; padding: 27px 14px;
+            border: 1px solid rgba(255,255,255,.08); border-radius: 20px 11px 20px 11px;
+            color: rgba(255,255,255,.62); background: rgba(255,255,255,.035); font-size: 11px;
+          }
+          .hp-troubleshoot-loading-icon {
+            display: grid; place-items: center; width: 48px; height: 48px;
+            border: 1px solid var(--isp-accent-border); border-radius: 17px 10px 17px 10px;
+            color: var(--isp-accent); background: var(--isp-accent-glow);
+          }
+          .hp-troubleshoot-modal-actions { display: flex; gap: 9px; margin-top: 15px; }
+          .hp-troubleshoot-modal-action {
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+            min-height: 42px; padding: 0 14px; border: 1px solid rgba(255,255,255,.12);
+            border-radius: 13px 8px 13px 8px; color: #fff; background: rgba(255,255,255,.06);
+            font: 800 11px 'Plus Jakarta Sans', sans-serif; cursor: pointer; transition: transform .2s ease, background .2s ease;
+          }
+          .hp-troubleshoot-modal-action:hover:not(:disabled) { transform: translateY(-1px); background: rgba(255,255,255,.11); }
+          .hp-troubleshoot-modal-action:disabled { opacity: .55; cursor: not-allowed; }
+          .hp-troubleshoot-modal-action.primary {
+            flex: 1; border-color: var(--isp-accent-border);
+            background: linear-gradient(135deg, var(--isp-accent), rgba(14,165,233,.76));
+          }
+          .hp-troubleshoot-modal-footnote { margin-top: 13px; color: rgba(255,255,255,.34); font-size: 9px; line-height: 1.55; text-align: center; }
+         .hp-tv-modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:22px 22px 16px; border-bottom:1px solid rgba(255,255,255,.07); }
+         .hp-tv-modal-head h3 { font-size:18px; font-weight:850; margin-bottom:5px; }
+         .hp-tv-modal-head p { color:rgba(255,255,255,.46); font-size:12px; line-height:1.5; }
+         .hp-tv-modal-close { border:0; background:rgba(255,255,255,.06); color:rgba(255,255,255,.7); width:32px; height:32px; border-radius:9px; cursor:pointer; font-size:20px; line-height:1; }
+         .hp-tv-modal-body { padding:20px 22px 22px; }
+         .hp-tv-field { margin-bottom:15px; }
+         .hp-tv-label { display:block; margin-bottom:7px; color:rgba(255,255,255,.56); font-size:11px; font-weight:800; letter-spacing:.04em; }
+         .hp-tv-select, .hp-tv-input { width:100%; border:1px solid rgba(255,255,255,.1); border-radius:11px; padding:12px 13px; color:#fff; background:rgba(255,255,255,.055); font:600 13px 'Plus Jakarta Sans', sans-serif; outline:none; }
+         .hp-tv-select:focus, .hp-tv-input:focus { border-color:var(--isp-accent-border); box-shadow:0 0 0 3px var(--isp-accent-glow); }
+         .hp-tv-select option { color:#0b1420; background:#fff; }
+         .hp-tv-help { margin-top:6px; color:rgba(255,255,255,.3); font-size:10px; line-height:1.45; }
+         .hp-tv-device-list { display:grid; gap:7px; margin-top:9px; max-height:130px; overflow:auto; }
+         .hp-tv-device-row { display:flex; align-items:center; gap:10px; padding:9px 11px; border-radius:10px; background:rgba(52,211,153,.06); border:1px solid rgba(52,211,153,.14); }
+         .hp-tv-device-row strong { display:block; font-size:11px; color:#fff; }
+         .hp-tv-device-row span { display:block; margin-top:2px; color:rgba(255,255,255,.42); font:10px monospace; }
+         .hp-tv-device-actions { margin-left:auto; display:flex; gap:6px; }
+         .hp-tv-device-action { border:1px solid rgba(255,255,255,.14); border-radius:7px; padding:5px 8px; color:rgba(255,255,255,.76); background:rgba(255,255,255,.06); font:600 10px 'Plus Jakarta Sans',sans-serif; cursor:pointer; }
+         .hp-tv-device-action:hover { background:rgba(255,255,255,.12); }
+         .hp-tv-save-device { display:flex; align-items:flex-start; gap:9px; padding:11px 12px; border-radius:10px; background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.08); cursor:pointer; }
+         .hp-tv-save-device input { margin:2px 0 0; accent-color:#34d399; }
+         .hp-tv-save-device strong { display:block; color:rgba(255,255,255,.82); font-size:11px; }
+         .hp-tv-save-device span { color:rgba(255,255,255,.42); font-size:10px; line-height:1.45; }
+         .hp-tv-saved-notice { color:#a7f3d0 !important; font-size:12px !important; margin-top:10px !important; }
+         .hp-tv-actions { display:flex; gap:9px; margin-top:20px; }
+         .hp-tv-actions .hp-btn { flex:1; }
+         .hp-tv-cancel { background:rgba(255,255,255,.06); color:rgba(255,255,255,.65); border:1px solid rgba(255,255,255,.1); box-shadow:none; }
+         .hp-tv-reconnect { width:100%; margin-top:14px; background:rgba(52,211,153,.12); color:#6ee7b7; border:1px solid rgba(52,211,153,.35); box-shadow:none; }
+         .hp-tv-reconnect:hover { background:rgba(52,211,153,.2); color:#a7f3d0; }
+
+        .hp-plans-grid {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+          margin-bottom: 16px;
+        }
+        .hp-plans-grid.has-expanded {
+          grid-template-columns: 1fr;
+        }
+
+        .hp-plan {
+          position: relative; padding: 0; border: none; cursor: pointer;
+          border-radius: 16px; overflow: hidden;
+          text-align: left; font-family: 'Plus Jakarta Sans', sans-serif;
+          color: #fff; transition: all 0.3s ease;
+           background: rgba(255,255,255,0.045);
+          border: 1.5px solid rgba(255,255,255,0.07);
+           box-shadow: 0 10px 28px rgba(0,0,0,0.1);
+        }
+        .hp-plan:hover { transform: translateY(-3px); border-color: rgba(255,255,255,0.12); }
+        .hp-plan.expanded { grid-column: 1 / -1; cursor: default; }
+        .hp-plan.expanded:hover { transform: none; }
+        .hp-plan.collapsed { display: none; }
+
+        .hp-plan-accent { height: 4px; }
+        .hp-plan-top { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 0; cursor: pointer; }
+        .hp-plan-body { padding: 6px 16px 16px; }
+
+        .hp-plan-name {
+          font-size: 10px; font-weight: 800; text-transform: uppercase;
+          letter-spacing: 0.08em; margin-bottom: 6px; opacity: 0.9;
+        }
+        .hp-plan-price {
+          font-size: 30px; font-weight: 900; line-height: 1;
+          margin-bottom: 12px; color: #fff;
+        }
+        .hp-plan-price span { font-size: 12px; font-weight: 500; opacity: 0.5; }
+
+        .hp-plan-meta { display: flex; flex-direction: column; gap: 5px; }
+        .hp-plan-meta-row {
+          display: flex; align-items: center; gap: 5px;
+          font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.55);
+        }
+         .hp-plan-action {
+           display: flex; align-items: center; justify-content: space-between;
+           margin-top: 16px; padding-top: 12px;
+           border-top: 1px solid rgba(255,255,255,0.06);
+           color: rgba(255,255,255,0.35); font-size: 11px; font-weight: 700;
+         }
+         .hp-plan-action svg { color: rgba(255,255,255,0.55); transition: transform 0.2s ease; }
+         .hp-plan:hover .hp-plan-action svg { transform: translate(2px, -2px); color: #fff; }
+
+        .hp-plan-check {
+          width: 22px; height: 22px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          flex-shrink: 0;
+        }
+
+        .hp-plan-pay {
+          margin-top: 14px; padding-top: 14px;
+          border-top: 1px solid rgba(255,255,255,0.06);
+          animation: fadeUp 0.3s ease-out;
+        }
+        .hp-plan-pay .hp-input {
+          background: rgba(0,0,0,0.2);
+          border-color: rgba(255,255,255,0.1);
+        }
+        .hp-plan-change {
+          display: inline-flex; align-items: center; gap: 4px;
+          background: none; border: none; color: rgba(255,255,255,0.4);
+          font-size: 12px; font-weight: 600; cursor: pointer;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          padding: 0; margin-top: 10px;
+          transition: color 0.2s;
+        }
+        .hp-plan-change:hover { color: rgba(255,255,255,0.7); }
+
+        .hp-input-group { margin-bottom: 14px; }
+        .hp-label {
+          display: block; font-size: 12px; font-weight: 700;
+          color: rgba(255,255,255,0.5); margin-bottom: 7px;
+        }
+        .hp-input-wrap { position: relative; }
+        .hp-input-icon {
+          position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+          color: rgba(255,255,255,0.25); pointer-events: none;
+        }
+        .hp-input {
+          width: 100%; padding: 13px 16px;
+          background: rgba(255,255,255,0.05);
+          border: 1.5px solid rgba(255,255,255,0.08);
+          border-radius: 12px; color: #fff;
+          font-size: 14px; font-weight: 600;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          transition: border-color 0.2s, box-shadow 0.2s;
+          outline: none;
+        }
+        .hp-input:focus {
+          border-color: var(--isp-accent-border);
+          box-shadow: 0 0 0 4px var(--isp-accent-glow);
+        }
+        .hp-input::placeholder { color: rgba(255,255,255,0.2); font-weight: 500; }
+        .hp-input-left { padding-left: 42px; }
+        .hp-input-phone { padding-left: 14px; }
+        .hp-textarea { min-height: 104px; resize: vertical; line-height: 1.5; }
+
+        .hp-btn {
+          width: 100%; padding: 14px; border: none; border-radius: 12px;
+          font-size: 14px; font-weight: 800;
+          font-family: 'Plus Jakarta Sans', sans-serif;
+          cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
+          transition: all 0.25s ease;
+        }
+        .hp-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .hp-btn:not(:disabled):hover { transform: translateY(-1px); }
+
+        .hp-btn-mpesa {
+          background: linear-gradient(135deg, #16a34a, #22c55e);
+          color: #fff; box-shadow: 0 4px 24px rgba(22,163,74,0.35);
+        }
+        .hp-btn-primary {
+          background: var(--isp-accent);
+          color: #fff; box-shadow: 0 4px 24px var(--isp-accent-border);
+        }
+        .hp-btn-voucher {
+          background: linear-gradient(135deg, #f59e0b, #f97316);
+          color: #fff; box-shadow: 0 4px 24px rgba(245,158,11,0.3);
+        }
+        .hp-btn-ghost {
+          background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.6);
+          box-shadow: none; border: 1px solid rgba(255,255,255,0.08);
+        }
+        .hp-btn-disabled {
+          background: rgba(255,255,255,0.04); color: rgba(255,255,255,0.2);
+          cursor: not-allowed; box-shadow: none;
+        }
+
+        .hp-error {
+          display: flex; align-items: flex-start; gap: 8px;
+          padding: 11px 14px; border-radius: 12px;
+          background: rgba(239,68,68,0.08);
+          border: 1px solid rgba(239,68,68,0.15);
+          font-size: 13px; color: #fca5a5; font-weight: 500;
+          margin-bottom: 14px;
+        }
+
+        .hp-plan-inline-meta {
+          display: flex; align-items: center; gap: 14px;
+          flex-wrap: wrap;
+        }
+        .hp-plan-inline-meta .hp-plan-meta-row { flex-direction: row; }
+
+        .hp-success { text-align: center; padding: 32px 20px; animation: fadeUp 0.4s ease-out; }
+        .hp-success-icon {
+          width: 72px; height: 72px; border-radius: 50%;
+          background: rgba(52,211,153,0.1); border: 2px solid rgba(52,211,153,0.25);
+          display: flex; align-items: center; justify-content: center;
+          margin: 0 auto 20px;
+          box-shadow: 0 0 32px rgba(52,211,153,0.15);
+        }
+        .hp-success h3 { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
+        .hp-success p { color: rgba(255,255,255,0.45); font-size: 14px; margin-bottom: 6px; }
+
+        .hp-tv-success-screen {
+          position: fixed; inset: 0; z-index: 10000;
+          display: grid; place-items: center; padding: 24px;
+          background: radial-gradient(circle at 50% 35%, rgba(139,90,43,0.2), transparent 42%), #100d0a;
+          color: #fff; text-align: center;
+        }
+        .hp-tv-success-card {
+          width: min(100%, 460px); position: relative; overflow: hidden;
+          padding: 42px 28px 30px; border-radius: 24px;
+          background: linear-gradient(145deg, rgba(255,255,255,0.08), rgba(255,255,255,0.025));
+          border: 1px solid rgba(173,121,69,0.34);
+          box-shadow: 0 28px 90px rgba(0,0,0,0.5);
+        }
+        .hp-tv-watermark {
+          position: absolute; left: 50%; top: 24px; transform: translateX(-50%);
+          white-space: nowrap; color: rgba(167,112,59,0.16);
+          font-size: clamp(15px, 5vw, 25px); font-weight: 900; letter-spacing: 0.16em;
+          pointer-events: none;
+        }
+        .hp-tv-success-icon {
+          width: 76px; height: 76px; display: grid; place-items: center;
+          margin: 20px auto 22px; border-radius: 50%;
+          background: rgba(147,96,48,0.16); border: 1px solid rgba(182,127,72,0.48);
+          color: #c89057; box-shadow: 0 0 44px rgba(147,96,48,0.2);
+        }
+        .hp-tv-success-brand {
+          margin: 0 0 9px; color: #bd8957; font-size: 10px; font-weight: 900;
+          letter-spacing: 0.2em;
+        }
+        .hp-tv-success-card h1 { margin: 0 0 10px; font-size: clamp(28px, 7vw, 38px); font-weight: 850; }
+        .hp-tv-success-card p { color: rgba(255,255,255,0.62); font-size: 14px; line-height: 1.6; }
+        .hp-tv-success-card .hp-tv-expiry { margin: 8px 0 22px; color: rgba(255,255,255,0.42); font-size: 12px; }
+        .hp-tv-success-card .hp-tv-dismiss {
+          min-width: 130px; padding: 11px 20px; border-radius: 12px;
+          border: 1px solid rgba(182,127,72,0.45); background: rgba(147,96,48,0.2);
+          color: #f2d7b8; font: inherit; font-weight: 750; cursor: pointer;
+        }
+
+        .hp-secured {
+          display: flex; align-items: center; justify-content: center; gap: 5px;
+          margin-top: 14px; font-size: 11px; color: rgba(255,255,255,0.2); font-weight: 500;
+        }
+
+        .hp-footer {
+           text-align: center; margin-top: 38px;
+          font-size: 11px; color: rgba(255,255,255,0.15); font-weight: 500;
+        }
+
+        .hp-connected-badge {
+          display: inline-flex; align-items: center; gap: 6px;
+          background: rgba(52,211,153,0.08); border: 1px solid rgba(52,211,153,0.2);
+          border-radius: 100px; padding: 5px 14px; margin-bottom: 24px;
+          font-size: 12px; font-weight: 700; color: #34d399;
+        }
+
+        .hp-voucher-hint {
+          padding: 18px; border-radius: 14px;
+          background: rgba(245,158,11,0.05); border: 1px solid rgba(245,158,11,0.1);
+          text-align: center; margin-bottom: 16px;
+        }
+
+        .hp-voucher-input {
+          text-align: center; font-family: 'JetBrains Mono', 'Fira Code', monospace;
+          font-size: 20px; letter-spacing: 0.15em; font-weight: 700;
+          color: #fbbf24; padding: 16px;
+          border-color: rgba(245,158,11,0.15);
+        }
+        .hp-voucher-input:focus { border-color: rgba(245,158,11,0.4); box-shadow: 0 0 0 4px rgba(245,158,11,0.08); }
+
+        @media (max-width: 400px) {
+          .hp-plans-grid { grid-template-columns: 1fr; }
+          .hp-plan-price { font-size: 26px; }
+          .hp-title { font-size: 26px; }
+        }
+         @media (max-width: 560px) {
+           .hp-header { padding: 0 14px; }
+           .hp-logo-sub { display: none; }
+           .hp-header-actions { gap: 8px; }
+           .hp-header-reconnect { font-size: 11px; }
+           .hp-status { padding: 6px 10px; }
+           .hp-main { padding: 42px 14px 56px; }
+           .hp-tabs { gap: 2px; }
+           .hp-tab { padding: 10px 4px; font-size: 10px; gap: 4px; }
+           .hp-tab svg { width: 14px; height: 14px; }
+           .hp-purchase-hero { padding: 18px; }
+           .hp-purchase-title { font-size: 19px; }
+           .hp-purchase-icon { width: 48px; height: 48px; flex-basis: 48px; border-radius: 15px; }
+           .hp-trust-row { grid-template-columns: 1fr; }
+            .hp-device-state { display: none; }
+            .hp-troubleshoot-card { align-items: stretch; flex-direction: column; }
+            .hp-troubleshoot-card-action { width: 100%; }
+            .hp-troubleshoot-dialog-inner { padding: 23px 18px 20px; }
+            .hp-troubleshoot-modal-actions { flex-direction: column; }
+            .hp-troubleshoot-modal-action { width: 100%; }
+         }
+          @media (max-width: 400px) {
+            .hp-logo-image { width: 72px; height: 42px; }
+            .hp-brand-name { max-width: 92px; }
+            .hp-status { display: none; }
+          }
+          @media (prefers-reduced-motion: reduce) {
+            .hp-troubleshoot-card::before, .hp-troubleshoot-card::after,
+            .hp-troubleshoot-dialog-ambient { animation: none !important; }
+            .hp-troubleshoot-dialog[data-state="open"],
+            .hp-troubleshoot-dialog[data-state="closed"],
+            .hp-troubleshoot-overlay { animation: none !important; }
+            .hp-troubleshoot-card-action:hover:not(:disabled),
+            .hp-troubleshoot-modal-action:hover:not(:disabled) { transform: none; }
+          }
+      ${HOSTED_PORTAL_LAYOUT_CSS}
+      `}</style>
+
+      <div className="hp-root" data-portal-layout={portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout}>
+        {isDanstedLayout && danstedCheckoutOpen && selectedPlan && (
+          <div className="dansted-checkout-overlay" role="presentation">
+            <section className="dansted-checkout-modal" role="dialog" aria-modal="true" aria-labelledby="dansted-checkout-title">
+              {!payLoading && !stkSent && !paymentConfirmed && !paymentFailed && (
+                <form onSubmit={handlePay}>
+                  <h2 id="dansted-checkout-title">ENTER SAFARICOM PHONE NUMBER</h2>
+                  <p>You are about to pay KSH {selectedPlan.price}. Enter your phone number below and click PAY NOW.</p>
+                  <input type="tel" inputMode="tel" autoComplete="tel" placeholder="07XXXXXXXXX or 2547XXXXXXXXX"
+                    value={phone} onChange={event => setPhone(event.target.value)} required />
+                  {payError && <div className="dansted-checkout-error" role="alert">{payError}</div>}
+                  <button type="submit" disabled={!canAttemptHotspotCheckout(mpesaStatus, HOTSPOT_RUNTIME_CONFIG.previewOnly)}>PAY NOW</button>
+                </form>
+              )}
+              {!paymentFailed && (payLoading || (stkSent && !paymentConfirmed)) && (
+                <div className="dansted-checkout-progress" role="status" aria-live="polite">
+                  <div className="dansted-checkout-loader"><span>LOADING</span></div>
+                  <strong>Please wait...</strong>
+                  <p>We are validating your payment and connecting you. Enter your M-Pesa PIN; this may take up to 40 seconds.</p>
+                  <small>Time {String(Math.floor(paymentElapsedSeconds / 60)).padStart(2, "0")}:{String(paymentElapsedSeconds % 60).padStart(2, "0")}</small>
+                </div>
+              )}
+              {paymentConfirmed && !accessReady && !payError && (
+                <div className="dansted-checkout-progress" role="status" aria-live="polite">
+                  <div className="dansted-checkout-loader"><span>READY</span></div>
+                  <strong>Preparing your account...</strong>
+                  <p>Payment confirmed. Assigning your Hotspot access now.</p>
+                  <small>Time {String(Math.floor(paymentElapsedSeconds / 60)).padStart(2, "0")}:{String(paymentElapsedSeconds % 60).padStart(2, "0")}</small>
+                </div>
+              )}
+              {paymentConfirmed && !accessReady && Boolean(payError) && (
+                <div className="dansted-checkout-progress" role="alert">
+                  <strong>Payment received</strong>
+                  <p>{payError}</p>
+                  <button type="button" disabled={accessRetrying} onClick={retryExistingPaidAccess}>
+                    {accessRetrying ? "PREPARING ACCOUNT…" : "RETRY ACCOUNT SETUP"}
+                  </button>
+                </div>
+              )}
+              {accessReady && (
+                <div className="dansted-checkout-progress">
+                  <strong>Your account is ready</strong>
+                  <p>Finishing your Hotspot sign-in…</p>
+                  <button type="button" onClick={() => setDanstedCheckoutOpen(false)}>CONTINUE ONLINE</button>
+                </div>
+              )}
+              {paymentFailed && (
+                <div className="dansted-checkout-progress" role="alert">
+                  <strong>Payment not completed</strong>
+                  <p>{payError || "Please try again."}</p>
+                  <button type="button" onClick={() => { setPaymentFailed(false); setStkSent(false); setCheckoutId(null); setPayError(null); }}>TRY AGAIN</button>
+                </div>
+              )}
+              {!payLoading && !stkSent && !paymentConfirmed && !paymentFailed && (
+                <button className="dansted-checkout-close" type="button" aria-label="Close" onClick={() => { setDanstedCheckoutOpen(false); setSelectedPlan(null); }}>×</button>
+              )}
+            </section>
+          </div>
+        )}
+        {showTvSuccess && paymentMode === "tv" && accessReady && (
+          <div className="hp-tv-success-screen" role="status" aria-live="polite">
+            <div className="hp-tv-success-card">
+              <div className="hp-tv-watermark" aria-hidden="true">{portalDisplayName}</div>
+              <div className="hp-tv-success-icon"><CheckCircle2 size={38} strokeWidth={1.8} /></div>
+              <p className="hp-tv-success-brand">{portalDisplayName}</p>
+              <h1>You’re logged in.</h1>
+              <p>{deviceName || "Your TV"} is connected to the hotspot.</p>
+              {selectedPlan && <p>Package: <strong>{selectedPlan.name}</strong></p>}
+              {paidAccessExpiresAt && (
+                <p className="hp-tv-expiry">Access expires {formatSessionExpiry(paidAccessExpiresAt)}.</p>
+              )}
+              {tvDeviceSaveNotice && <p className="hp-tv-saved-notice">{tvDeviceSaveNotice}</p>}
+              <button
+                className="hp-tv-dismiss"
+                style={{ marginBottom: 8 }}
+                disabled={accessRetrying}
+                onClick={retryExistingPaidAccess}
+              >
+                {accessRetrying ? "Reconnecting…" : "Reconnect this TV"}
+              </button>
+              <p className="hp-tv-expiry">Reconnect uses the same paid package; no new purchase is made.</p>
+              <button
+                className="hp-tv-dismiss"
+                style={{ marginBottom: 8 }}
+                onClick={() => {
+                  setShowTvSuccess(false);
+                  void checkTvPackageStatus();
+                }}
+              >
+                Check TV package
+              </button>
+              <button className="hp-tv-dismiss" onClick={() => setShowTvSuccess(false)}>Done</button>
+            </div>
+          </div>
+        )}
+        {/* Ambient background orbs */}
+        <div className="hp-bg-orb" style={{ width: 400, height: 400, top: -100, left: -100, background: "var(--isp-accent-glow)" }} />
+        <div className="hp-bg-orb" style={{ width: 350, height: 350, bottom: -80, right: -80, background: "var(--isp-accent-glow)", animationDelay: "4s" }} />
+        <div className="hp-bg-orb" style={{ width: 250, height: 250, top: "40%", left: "60%", background: "rgba(236,72,153,0.06)", animationDelay: "2s" }} />
+
+        {/* Header */}
+        {portalCards.header && (
+          <header className="hp-header">
+            <div className="hp-logo">
+              {portalLogoUrl
+                ? <img className="hp-logo-image" src={portalLogoUrl} alt={`${portalDisplayName} logo`} />
+                : <div className="hp-brand-mark" aria-hidden="true"><Wifi size={21} strokeWidth={2.2} /></div>}
+              <div className="hp-brand-name" title={portalDisplayName}>{portalDisplayName}</div>
+            </div>
+            <div className="hp-header-actions">
+              <a
+                className="hp-header-reconnect"
+                href="#troubleshoot"
+                aria-label="Already paid? Sign in or reconnect this device"
+                aria-controls="hp-troubleshoot-dialog"
+                aria-haspopup="dialog"
+                onClick={event => {
+                  event.preventDefault();
+                  openAlreadyPaidReconnect();
+                }}
+              >
+                Already paid?
+              </a>
+              <a
+                className="hp-header-reconnect"
+                href="#troubleshoot-tv"
+                aria-label="Detect and troubleshoot a TV connection"
+                aria-controls="hp-troubleshoot-dialog"
+                aria-haspopup="dialog"
+                onClick={event => {
+                  event.preventDefault();
+                  void openTvTroubleshooting();
+                }}
+              >
+                Troubleshoot TV
+              </a>
+              <div className="hp-status">
+                <span className="hp-status-dot" />
+                Online
+              </div>
+            </div>
+          </header>
+        )}
+
+        {/* Main */}
+        <main className={`hp-main${portalCards.hero ? " has-hero" : ""}`}>
+          {/* Hero */}
+          {portalCards.hero && (
+            <div className="hp-hero">
+              <div className="hp-wifi-wrap">
+                <div className="hp-wifi-box">
+                  <Wifi size={36} color="var(--isp-accent)" strokeWidth={2} />
+                </div>
+              </div>
+              <h1 className="hp-title">{troubleshootingOnly ? "Connection help" : "Your world, connected."}</h1>
+              <p className="hp-subtitle">{troubleshootingOnly
+                 ? "We’ll check your package and try to reconnect this device automatically."
+                : portalBranding.tagline || "Fast, reliable Wi-Fi for the things you love."}</p>
+              {!troubleshootingOnly && portalDnsHostname && (
+                <div className="hp-dns-address" aria-label={`Hotspot address ${portalDnsHostname}`}>
+                  <Wifi size={13} /><span>Hotspot address</span><strong>{portalDnsHostname}</strong>
+                </div>
+              )}
+              <div className="hp-badges">
+                <span className="hp-badge"><Shield size={12} /> Secure</span>
+                <span className="hp-badge"><Zap size={12} /> Instant</span>
+                <span className="hp-badge"><Clock size={12} /> 24/7</span>
+              </div>
+            </div>
+          )}
+
+          {!troubleshootingOnly && autoReconnectInProgress && (
+            <div
+              role="status"
+              aria-live="polite"
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 12,
+                maxWidth: 840,
+                margin: "0 auto 20px",
+                padding: "14px 18px",
+                borderRadius: 14,
+                background: "rgba(59,130,246,0.12)",
+                border: "1px solid rgba(96,165,250,0.38)",
+                color: "rgba(255,255,255,0.92)",
+              }}
+            >
+              <Loader2 size={19} color="#93c5fd" style={{ flexShrink: 0, marginTop: 1, animation: "spin 1s linear infinite" }} />
+              <div>
+                <strong style={{ display: "block", color: "#bfdbfe", marginBottom: 4 }}>
+                  Connecting your active package
+                </strong>
+                <p style={{ color: "rgba(255,255,255,0.76)", fontSize: 13, lineHeight: 1.5 }}>
+                  Sign-in retries automatically while this page is open and the device stays on hotspot Wi-Fi. You do not need to tap reconnect.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {!troubleshootingOnly && portalCards.expiryNotice && (loginSession?.status === "expired" || loginSession?.status === "depleted") && (
+            <div
+              role="alert"
+              aria-live="assertive"
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 12,
+                maxWidth: 840,
+                margin: "0 auto 20px",
+                padding: "16px 18px",
+                borderRadius: 14,
+                background: "rgba(245,158,11,0.1)",
+                border: "1px solid rgba(245,158,11,0.32)",
+                color: "rgba(255,255,255,0.92)",
+              }}
+            >
+              <AlertCircle size={20} color="#fbbf24" style={{ flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <strong style={{ display: "block", color: "#fcd34d", marginBottom: 4 }}>
+                  {loginSession.status === "expired" ? "Your package has expired" : "Your package data allowance has been used"}
+                </strong>
+                <p style={{ color: "rgba(255,255,255,0.72)", fontSize: 13, lineHeight: 1.5 }}>
+                  {loginSession.status === "expired"
+                    ? `Your hotspot session has ended${loginSession.expiresAt ? ` on ${formatSessionExpiry(loginSession.expiresAt)}` : ""}. Choose a new package below to sign in again.`
+                    : "Your hotspot session has ended because the package data allowance was used. Choose a new package below to reconnect."}
+                </p>
+                <button
+                  type="button"
+                  className="hp-troubleshoot-modal-action primary"
+                  style={{ marginTop: 12 }}
+                  onClick={() => document.getElementById("hp-plan-tabs")?.scrollIntoView({ behavior: "smooth", block: "center" })}
+                >
+                  <CreditCard size={15} /> Sign in again with a package
+                </button>
+              </div>
+            </div>
+          )}
+
+          {troubleshootingOnly ? (
+            <section className="hp-section" style={{ maxWidth: 540, margin: "0 auto" }}>
+              <button
+                type="button"
+                className="hp-troubleshoot-modal-action"
+                style={{ marginBottom: 14 }}
+                onClick={() => window.location.assign(`/hotspot-login${window.location.search}`)}
+              >
+                <ArrowRight size={15} style={{ transform: "rotate(180deg)" }} /> Back to packages
+              </button>
+
+              <div className="hp-glass">
+                <div className="hp-glass-header">
+                  <div className="hp-troubleshoot-dialog-icon" aria-hidden="true"><Wifi size={21} /></div>
+                  <div>
+                    <div className="hp-glass-title">Connection check</div>
+                    <div className="hp-glass-desc">We’ll check this device’s latest package and router session.</div>
+                  </div>
+                </div>
+                <div className="hp-glass-body">
+                  <div className="hp-troubleshoot-device">
+                    <span className="hp-troubleshoot-device-label">{tvTroubleshootMode ? "Active TV device" : "Checking this device"}</span>
+                    {tvTroubleshootMode ? (
+                      <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+                        <select
+                          className="hp-tv-select"
+                          aria-label="Select an active TV device"
+                          value={troubleshootMacAddress}
+                          onChange={event => {
+                            setTroubleshootMacAddress(event.target.value);
+                            setTvReconnectMac("");
+                            setTroubleshootError("");
+                            setLoginSession(null);
+                          }}
+                        >
+                          <option value="">Choose a saved or active TV</option>
+                          {savedTvDevices.length > 0 && (
+                            <optgroup label="Saved TVs">
+                              {savedTvDevices.map(device => (
+                                <option key={`saved-${device.macAddress}`} value={device.macAddress}>
+                                  {device.name} · {device.macAddress} · saved
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
+                          {tvDevices.filter(device => !savedTvDevices.some(saved => saved.macAddress === device.macAddress)).map(device => (
+                            <option key={`${device.routerId}-${device.macAddress}`} value={device.macAddress}>
+                              {device.name} · {device.macAddress}{device.address ? ` · ${device.address}` : ""}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          className="hp-tv-input"
+                          aria-label="TV MAC address"
+                          value={troubleshootMacAddress}
+                          onChange={event => {
+                            setTroubleshootMacAddress(event.target.value.toUpperCase());
+                            setTvReconnectMac("");
+                            setTroubleshootError("");
+                            setLoginSession(null);
+                          }}
+                          placeholder="Or add a TV MAC: AA:BB:CC:DD:EE:FF"
+                          autoCapitalize="characters"
+                        />
+                        <small>{tvDevicesLoading ? "Detecting devices…" : `${tvDevices.length} active device${tvDevices.length === 1 ? "" : "s"} detected · refreshing every 15 seconds`}</small>
+                      </div>
+                    ) : (
+                      <strong>{portalContext.mac || "Device MAC unavailable"}</strong>
+                    )}
+                  </div>
+
+                  {troubleshootLoading ? (
+                    <div className="hp-troubleshoot-loading" role="status" aria-live="polite">
+                      <span className="hp-troubleshoot-loading-icon">
+                        <Loader2 size={21} style={{ animation: "spin 1s linear infinite" }} />
+                      </span>
+                      <span>{troubleshootAction === "login" ? "Asking the router to log in…" : "Checking your package and router…"}</span>
+                    </div>
+                  ) : troubleshootError ? (
+                    <div className="hp-troubleshoot-error" role="alert">
+                      <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                      <span>{troubleshootError}</span>
+                    </div>
+                  ) : troubleshootStatus && loginSession ? (
+                    <div className="hp-troubleshoot-result" role="status" aria-live="polite">
+                      <div className="hp-troubleshoot-status" data-tone={troubleshootStatusTone}>
+                        <div className="hp-troubleshoot-status-heading">
+                          <span className="hp-troubleshoot-status-mark" aria-hidden="true">
+                            {loginSession.status === "active" && loginSession.connected
+                              ? <CheckCircle2 size={17} />
+                              : <AlertCircle size={17} />}
+                          </span>
+                          <strong>{loginSession.connected ? "Connected" : troubleshootStatus.label}</strong>
+                        </div>
+                        {loginSession.planName && (
+                          <p className="hp-troubleshoot-status-copy" style={{ marginBottom: 4 }}>
+                            Package: <strong>{loginSession.planName}</strong>
+                          </p>
+                        )}
+                        <p className="hp-troubleshoot-status-copy">{troubleshootStatus.detail}</p>
+                        {loginSession.status === "active" && (
+                          <div className="hp-troubleshoot-session-meta">
+                            {loginSession.username && (
+                              <div><span>Hotspot account</span><strong>{loginSession.username}</strong></div>
+                            )}
+                            <div><span>Router session</span><strong>{loginSession.connected ? "Confirmed" : "Login required"}</strong></div>
+                          </div>
+                        )}
+                        {troubleshootMessage && <div className="hp-troubleshoot-note">{troubleshootMessage}</div>}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="hp-troubleshoot-note" role="status">
+                      The connection check result will appear here.
+                    </div>
+                  )}
+
+                  <div className="hp-troubleshoot-modal-actions">
+                    {tvTroubleshootMode && (
+                      <>
+                        <button
+                          type="button"
+                          className="hp-troubleshoot-modal-action primary"
+                          onClick={startSelectedTvTroubleshooting}
+                          disabled={troubleshootLoading || Boolean(tvReconnectMac) || !normalizeMacAddress(troubleshootMacAddress)}
+                        >
+                          {tvReconnectMac
+                            ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Troubleshooting TV…</>
+                            : <><Tv size={15} /> Troubleshoot / reconnect TV</>}
+                        </button>
+                        {tvReconnectMac && (
+                          <button type="button" className="hp-troubleshoot-modal-action" onClick={() => setTvReconnectMac("")}>
+                            Stop checking
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {loginSession?.status === "active" && !loginSession.connected && (
+                      <button
+                        type="button"
+                        className="hp-troubleshoot-modal-action primary"
+                        onClick={handlePlanLogin}
+                        disabled={troubleshootLoading}
+                      >
+                        {troubleshootLoading
+                          ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Logging in…</>
+                          : <><Wifi size={15} /> {troubleshootMessage ? "Retry sign-in" : "Sign in now"}</>}
+                      </button>
+                    )}
+                    {(loginSession?.status === "expired" || loginSession?.status === "depleted" || loginSession?.status === "not_found") && (
+                      <button
+                        type="button"
+                        className="hp-troubleshoot-modal-action primary"
+                        onClick={() => window.location.assign(`/hotspot-login${window.location.search}`)}
+                      >
+                        <CreditCard size={15} /> Browse packages
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="hp-troubleshoot-modal-action"
+                      onClick={handleTroubleshoot}
+                      disabled={troubleshootLoading}
+                    >
+                      {troubleshootLoading
+                        ? <><Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> Checking…</>
+                        : <><ArrowRight size={15} /> Check again</>}
+                    </button>
+                  </div>
+                  <p className="hp-troubleshoot-modal-footnote">Package details are matched to this device’s MAC address.</p>
+                </div>
+              </div>
+
+              {portalCards.paymentRecovery && mpesaReconnectCard}
+            </section>
+          ) : (
+            <>
+          {/* Tabs */}
+          {visibleTabs.length > 0 && (
+          <div className="hp-tabs" id="hp-plan-tabs">
+            {visibleTabs.map(tab => (
+               <button key={tab.id} onClick={() => handleTabChange(tab.id)} disabled={stkSent}
+                 className={`hp-tab${activeTab === tab.id ? " active" : ""}`} aria-pressed={activeTab === tab.id}>
+                {tab.icon} {tab.label}
+              </button>
+            ))}
+          </div>
+          )}
+
+          {loyaltyCardSettings.position === "top" && loyaltyBalanceCard}
+
+          {/* ── BUY DATA ── */}
+           {portalCards.packages && (activeTab === "plans" || activeTab === "tv") && (
+            <div className="hp-section">
+              {stkSent ? (
+                <div className="hp-glass">
+                  <div className="hp-success">
+                    {paymentConfirmed ? (
+                      <>
+                        <div className="hp-success-icon">
+                          <CheckCircle2 size={32} color="#34d399" strokeWidth={2} />
+                        </div>
+                          <h3>{accessReady ? (isTvMode ? "TV is ready to stream!" : "Device connected!") : portalHandoffReady ? "Connecting your device…" : loyaltyPaidWithPoints ? "Points Redeemed" : "Payment Confirmed"}</h3>
+                          <p>{loyaltyPaidWithPoints
+                            ? <>Your full plan redemption used <strong style={{ color: "#fff" }}>{loyaltyQuote?.pointsRequired ?? "—"} points</strong>.</>
+                            : <>Your payment of <strong style={{ color: "#fff" }}>{getCurrencySymbol()} {selectedPlan?.price}</strong> has been received.</>}</p>
+                          <p style={{ fontSize: 12, marginBottom: 8 }}>{accessReady ? (isTvMode ? "Your TV session was confirmed by the hotspot." : "Your device is authorized. The assigned username and password are shown below if you need them again.") : portalHandoffReady ? "Your package is ready. Finishing hotspot sign-in now." : loyaltyPaidWithPoints ? "Your points redemption is confirmed, but the hotspot still needs to be updated." : "Your payment is confirmed, but the hotspot still needs to be updated."}</p>
+                          {hotspotCredentials && (
+                            <div style={{ display: "grid", gap: 8, textAlign: "left", margin: "0 auto 16px", maxWidth: 320 }}>
+                              <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)" }}>
+                                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: ".08em" }}>Username</div>
+                                <strong style={{ color: "#fff", fontSize: 14 }}>{hotspotCredentials.username}</strong>
+                              </div>
+                              <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(255,255,255,0.05)" }}>
+                                <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", textTransform: "uppercase", letterSpacing: ".08em" }}>Password</div>
+                                <strong style={{ color: "#fff", fontSize: 14 }}>{hotspotCredentials.password}</strong>
                               </div>
                             </div>
                           )}

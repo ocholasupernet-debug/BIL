@@ -1,4 +1,204 @@
-rtal-layout="classic"] body > section:not(:first-of-type):not(#portalAnnouncement):not(#portalExpiryNotice):not(#plansSection) {
+export const HOTSPOT_PORTAL_LAYOUTS = [
+  {
+    value: "classic",
+    label: "Classic",
+    description: "A warm, light guest portal with clear plan cards and a welcoming feel.",
+    background: "#f3f4ec",
+    panel: "#ffffff",
+    accent: "#d56c4c",
+  },
+  {
+    value: "split-horizon",
+    label: "Split Horizon",
+    description: "Place the welcome message beside the plans and sign-in options.",
+    background: "#0b1623",
+    panel: "#16283b",
+    accent: "#38bdf8",
+  },
+  {
+    value: "coastal-light",
+    label: "Coastal Light",
+    description: "Use bright surfaces, clear text, and a calm, spacious layout.",
+    background: "#eaf4fa",
+    panel: "#ffffff",
+    accent: "#0284c7",
+  },
+  {
+    value: "signal-grid",
+    label: "Signal Grid",
+    description: "Use a compact, square-edged layout with crisp network accents.",
+    background: "#07191b",
+    panel: "#102a2b",
+    accent: "#2dd4bf",
+  },
+  {
+    value: "warm-studio",
+    label: "Warm Studio",
+    description: "Use soft warm surfaces and friendly, rounded plan cards.",
+    background: "#2a2019",
+    panel: "#413126",
+    accent: "#fb923c",
+  },
+  {
+    value: "forest-pulse",
+    label: "Forest Pulse",
+    description: "Use deep green surfaces, vivid highlights, and a bold hero.",
+    background: "#071910",
+    panel: "#102a1c",
+    accent: "#4ade80",
+  },
+  {
+    value: "dansted-wifi",
+    label: "Metallic Diamond",
+    description: "A compact metallic portal with a diamond texture, centered branding, and outlined package tiles.",
+    background: "#151617",
+    panel: "#363738",
+    accent: "#41d85f",
+  },
+] as const;
+
+export type HotspotPortalLayout = (typeof HOTSPOT_PORTAL_LAYOUTS)[number]["value"];
+
+const HOTSPOT_PORTAL_LAYOUT_KEYS = new Set<string>(
+  HOTSPOT_PORTAL_LAYOUTS.map(layout => layout.value),
+);
+
+export function normalizeHotspotPortalLayout(value: unknown): HotspotPortalLayout {
+  return typeof value === "string" && HOTSPOT_PORTAL_LAYOUT_KEYS.has(value)
+    ? value as HotspotPortalLayout
+    : "classic";
+}
+
+const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
+  classic: `
+    html[data-portal-layout="classic"] body {
+      display: grid;
+      grid-template-columns: minmax(16rem, .78fr) minmax(0, 1.22fr);
+      align-content: start;
+      align-items: start;
+      gap: 1rem clamp(1.25rem, 3vw, 3rem);
+      max-width: 1420px;
+      margin: 0 auto;
+      padding: 0 2rem 3rem;
+    }
+    html[data-portal-layout="classic"] .hdr {
+      position: sticky !important;
+      top: 0 !important;
+      left: auto !important;
+      grid-column: 1 / -1;
+      grid-row: 1;
+      width: auto !important;
+      margin: 0 -2rem;
+    }
+    html[data-portal-layout="classic"] body {
+      min-height: 100vh !important;
+      color: #183b39 !important;
+      background: #f4f4ed !important;
+      background-image: radial-gradient(ellipse at 50% 0%, #dcebe2 0%, transparent 52%) !important;
+      font-family: "DM Sans", "Trebuchet MS", sans-serif !important;
+    }
+    html[data-portal-layout="classic"] body > .hdr + section {
+      grid-column: 1;
+      grid-row: 2;
+      align-self: stretch;
+      min-height: 410px;
+      margin: 1.75rem 0 0 !important;
+      padding: 3rem 1.5rem !important;
+      border: 1px solid #dfe5dc;
+      border-radius: 1.5rem;
+      background: rgba(255,255,255,.64);
+      text-align: left !important;
+    }
+    html[data-portal-layout="classic"] #portalHero .fade-up {
+      max-width: none !important;
+      margin: 0 !important;
+    }
+    html[data-portal-layout="classic"] #portalHero .fade-up > div:nth-of-type(2),
+    html[data-portal-layout="classic"] #portalHero .fade-up > div:last-child {
+      justify-content: flex-start !important;
+    }
+    html[data-portal-layout="classic"] #portalHero .fade-up > div:first-child {
+      color: #367355 !important;
+      background: #edf3ed !important;
+      border-color: #d9e4d9 !important;
+    }
+    html[data-portal-layout="classic"] #portalHero .fade-up > div:last-child > div {
+      color: #647773 !important;
+      background: rgba(255,255,255,.7) !important;
+      border-color: #e1e8e0 !important;
+    }
+    html[data-portal-layout="classic"] #portalHero .fade-up > div:last-child svg {
+      stroke: #438863 !important;
+    }
+    html[data-portal-layout="classic"] #portalHeroTitle,
+    html[data-portal-layout="classic"] #portalTagline {
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+      text-align: left !important;
+    }
+    html[data-portal-layout="classic"] #portalHeroTitle {
+      font-family: Georgia, "Times New Roman", serif !important;
+      font-weight: 600 !important;
+    }
+    html[data-portal-layout="classic"] #portalTagline strong { color: #285b50 !important; }
+    html[data-portal-layout="classic"] .hdr {
+      background: rgba(248,249,243,.94) !important;
+      border-bottom: 1px solid #dce3db !important;
+      box-shadow: 0 5px 22px rgba(25,57,53,.06) !important;
+      backdrop-filter: blur(18px);
+    }
+    html[data-portal-layout="classic"] #portalLogoIcon {
+      background: #d9684c !important;
+      border-radius: 12px !important;
+      box-shadow: none !important;
+    }
+    html[data-portal-layout="classic"] #portalNameHeader,
+    html[data-portal-layout="classic"] #portalNameFooter,
+    html[data-portal-layout="classic"] #plansSection h2,
+    html[data-portal-layout="classic"] #portalHeroTitle {
+      color: #183b39 !important;
+      -webkit-text-fill-color: #183b39 !important;
+      background: none !important;
+    }
+    html[data-portal-layout="classic"] #portalHero {
+      padding-top: 2rem !important;
+      padding-bottom: 2.5rem !important;
+      background: radial-gradient(ellipse at 50% 20%, rgba(255,255,255,.82), transparent 68%);
+    }
+    html[data-portal-layout="classic"] #portalHero > div[style*="radial-gradient"],
+    html[data-portal-layout="classic"] #portalHero .grid-bg { display: none !important; }
+    html[data-portal-layout="classic"] #portalHeroTitle {
+      font-size: clamp(2.25rem, 5vw, 3.65rem) !important;
+      letter-spacing: -.055em !important;
+      line-height: 1.03 !important;
+    }
+    html[data-portal-layout="classic"] #portalTagline,
+    html[data-portal-layout="classic"] #portalHero > div > div:first-child,
+    html[data-portal-layout="classic"] #plansSection > div:first-child > p {
+      color: #647773 !important;
+    }
+    html[data-portal-layout="classic"] #portalHeroTitle span {
+      color: #d9684c !important;
+      -webkit-text-fill-color: #d9684c !important;
+      background: none !important;
+    }
+    html[data-portal-layout="classic"] #portalHero > div > div:nth-child(2) > div {
+      background: #d9684c !important;
+      box-shadow: 0 12px 34px rgba(217,104,76,.2) !important;
+    }
+    html[data-portal-layout="classic"] .dot-live {
+      background: #3f8a68 !important;
+      box-shadow: 0 0 0 3px rgba(63,138,104,.15) !important;
+    }
+    html[data-portal-layout="classic"] #plansSection {
+      grid-column: 2;
+      grid-row: 2;
+      width: 100%;
+      max-width: 1260px !important;
+      margin: 1.75rem 0 0 !important;
+      padding: 1rem 0 2rem !important;
+    }
+    html[data-portal-layout="classic"] body > section:not(:first-of-type):not(#portalAnnouncement):not(#portalExpiryNotice):not(#plansSection) {
       grid-column: 2;
       width: 100%;
       max-width: none !important;
