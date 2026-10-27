@@ -1,7 +1,7 @@
 {
-  "id": "ocholasupernet-dansted-layout-all-20261027",
+  "id": "ocholasupernet1-dansted-layout-refresh-20261027",
   "adminId": 33,
   "authVersion": 2,
   "tenantSubdomain": "ocholasupernet",
-  "allIspBridgeRouters": true
+  "ispBridgeRouterName": "ocholasupernet1"
 }

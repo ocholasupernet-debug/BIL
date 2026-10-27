@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildLivePresenceByRouter,
+  countLivePppoeUsers,
   customerIsOnline,
   type PrepaidOnlineCustomer,
 } from "./prepaid-live-presence";
@@ -39,6 +40,19 @@ test("online prepaid counts use the normalized live session from the shared rout
 
   assert.equal(customerIsOnline(hotspot, presence, {}, NOW), true);
   assert.equal(customerIsOnline(pppoe, presence, {}, NOW), true);
+});
+
+test("dashboard PPPoE totals use fresh live sessions and deduplicate usernames", () => {
+  const presence = buildLivePresenceByRouter(
+    [{ id: 7 }, { id: 8 }],
+    [
+      { data: { fetchedAt: "2026-10-07T11:59:55.000Z", pppoeUsers: [{ name: " BRIAN1 " }, { name: "second-user" }] } },
+      { data: { fetchedAt: "2026-10-07T11:59:55.000Z", pppoeUsers: [{ name: "brian1" }] } },
+    ],
+  );
+  assert.equal(countLivePppoeUsers(presence), 2);
+  const stale = buildLivePresenceByRouter([{ id: 7 }], [{ isError: true, data: { fetchedAt: "2026-10-07T11:59:55.000Z", pppoeUsers: [{ name: "stale-user" }] } }]);
+  assert.equal(countLivePppoeUsers(stale), 0);
 });
 
 test("expired access and suspended prepaid records never count as online", () => {

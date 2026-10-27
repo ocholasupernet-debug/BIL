@@ -3926,7 +3926,7 @@ function HotspotLoginView({
                                       </div>
                                     )}
 
-                                    <button type="submit" disabled={effectiveLoyaltyPayment === "points"
+                                    <button type="submit" aria-busy={payLoading} disabled={effectiveLoyaltyPayment === "points"
                                       ? loyaltyRedeemLoading || !(loyaltyRedeemable || pendingLoyaltyCheckout)
                                       : payLoading || !canAttemptHotspotCheckout(mpesaStatus, HOTSPOT_RUNTIME_CONFIG.previewOnly)} className="hp-btn hp-btn-mpesa">
                                       {effectiveLoyaltyPayment === "points" ? loyaltyRedeemLoading ? (
@@ -3934,9 +3934,9 @@ function HotspotLoginView({
                                       ) : (
                                         <><CheckCircle2 size={16} /> {pendingLoyaltyCheckout ? "Finish access setup" : `Redeem ${loyaltyQuote?.pointsRequired ?? 0} points`}</>
                                       ) : payLoading ? (
-                                        <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Sending STK Push...</>
+                                        <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> {isDanstedLayout ? "Connecting to M-Pesa…" : "Sending STK Push…"}</>
                                       ) : (
-                                        <><Phone size={16} /> Pay {getCurrencySymbol()} {plan.price}{isTvMode ? " for TV" : ""}</>
+                                        <><Phone size={16} /> {isDanstedLayout ? "Pay now" : `Pay ${getCurrencySymbol()} ${plan.price}${isTvMode ? " for TV" : ""}`}</>
                                       )}
                                     </button>
                                   </form>}

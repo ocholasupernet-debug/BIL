@@ -48,6 +48,7 @@ import { mergeCustomerServiceIdentities } from "@/lib/customer-identities";
 import { getCustomerServiceStatus } from "@/lib/customer-service-status";
 import {
   buildLivePresenceByRouter,
+  countLivePppoeUsers,
   customerIsOnline,
   prepaidServiceType,
 } from "@/lib/prepaid-live-presence";
@@ -408,6 +409,7 @@ export default function Dashboard() {
   const [selectedRouter, setSelectedRouter] = useState<number | "all">("all");
   const [selectedTelemetryPort, setSelectedTelemetryPort] = useState<number | "all">("all");
   const [selectedTelemetryReseller, setSelectedTelemetryReseller] = useState<number | "all">("all");
+  const [dashboardRefreshing, setDashboardRefreshing] = useState(false);
 
   const now = new Date();
 
@@ -415,6 +417,7 @@ export default function Dashboard() {
     data: gatewaySettings,
     isLoading: gatewayLoading,
     isError: gatewayError,
+    refetch: refetchGatewaySettings,
   } = useQuery({
     queryKey: ["isp_payment_gateway", ADMIN_ID],
     queryFn: fetchConfiguredGateway,
@@ -424,6 +427,7 @@ export default function Dashboard() {
     data: mpesaStkHealth,
     isLoading: mpesaStkHealthLoading,
     isError: mpesaStkHealthError,
+    refetch: refetchMpesaStkHealth,
   } = useQuery({
     queryKey: ["mpesa-stk-push-health", ADMIN_ID],
     queryFn: fetchMpesaStkPushHealth,
@@ -444,6 +448,7 @@ export default function Dashboard() {
     data: resellerSummary,
     isLoading: resellerSummaryLoading,
     isError: resellerSummaryError,
+    refetch: refetchResellerSummary,
   } = useQuery({
     queryKey: ["isp_reseller_summary", ADMIN_ID],
     queryFn: fetchResellerSummary,
@@ -571,11 +576,9 @@ export default function Dashboard() {
     ),
     [uniqueServiceCustomers, livePresenceByRouter, customerPlanScopeMap],
   );
+  const onlinePppoeUsers = countLivePppoeUsers(livePresenceByRouter);
   const onlineHotspotUsers = onlineServiceCustomers.filter(
     customer => prepaidServiceType(customer.type) === "hotspot",
-  ).length;
-  const onlinePppoeUsers = onlineServiceCustomers.filter(
-    customer => prepaidServiceType(customer.type) === "pppoe",
   ).length;
   const onlineVlanUsers = onlineServiceCustomers.filter(
     customer => prepaidServiceType(customer.type) === "vlan",
@@ -589,23 +592,26 @@ export default function Dashboard() {
   const serviceCountsUnavailable = (customersError && customers.length === 0)
     || (customerPlanScopesError && customerPlanScopes.plans.length === 0 && customerPlanScopes.ports.length === 0);
   const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredUsers}`;
-  const onlineCountValue = (count: number) => serviceCountsLoading
+  const onlineCountsLoading = serviceCountsLoading
+    || routersLoading
+    || routers.some((_, index) => !liveQueries[index]?.data && !liveQueries[index]?.isError);
+  const onlineCountValue = (count: number) => onlineCountsLoading
     ? "…"
     : serviceCountsUnavailable
       ? "—"
       : String(count);
-  const totalOnlineValue = onlineCountValue(onlineServiceCustomers.length);
+  const totalOnlineValue = onlineCountValue(
+    onlineServiceCustomers.filter(customer => prepaidServiceType(customer.type) !== "pppoe").length
+      + onlinePppoeUsers,
+  );
   const onlineHotspotValue = onlineCountValue(onlineHotspotUsers);
-  const onlinePppoeValue = onlineCountValue(onlinePppoeUsers);
+  const onlinePppoeUnavailable = routers.length > 0
+    && routers.every((_, index) => liveQueries[index]?.isError && !liveQueries[index]?.data);
+  const onlinePppoeValue = onlineCountsLoading
+    ? "…"
+    : onlinePppoeUnavailable ? "—" : String(onlinePppoeUsers);
   const onlineVlanValue = onlineCountValue(onlineVlanUsers);
   const onlineStaticValue = onlineCountValue(onlineStaticUsers);
-  const refreshOnlineUsers = async () => {
-    await Promise.all([
-      refetchRouters(),
-      ...liveQueries.map(result => result.refetch()),
-    ]);
-  };
-
   const monthlyData = useMemo(() => MONTHS.map((month, index) => ({
     month,
     count: filteredCustomers.filter((customer) => {
@@ -633,6 +639,23 @@ export default function Dashboard() {
     refetchInterval: 15_000,
     retry: false,
   });
+  const refreshDashboard = async () => {
+    if (dashboardRefreshing) return;
+    setDashboardRefreshing(true);
+    await Promise.allSettled([
+      refetchGatewaySettings(),
+      refetchMpesaStkHealth(),
+      refetchResellerSummary(),
+      refetchRouters(),
+      refetchCustomers(),
+      refetchCustomerPlanScopes(),
+      refetchTransactions(),
+      refetchRevenue(),
+      telemetryQuery.refetch(),
+      ...liveQueries.map(result => result.refetch()),
+    ]);
+    setDashboardRefreshing(false);
+  };
   const telemetry = telemetryQuery.data;
   const telemetryPorts = telemetry?.filters.ports.filter((port) => selectedRouter === "all" || port.routerId === selectedRouter) ?? [];
   const filteredCustomerIds = useMemo(() => new Set(filteredCustomers.map(customer => customer.id)), [filteredCustomers]);
@@ -674,13 +697,13 @@ export default function Dashboard() {
             <button
               type="button"
               className="dashboard-refresh-button"
-              onClick={() => void refreshOnlineUsers()}
-              disabled={liveCountRefreshing || routersFetching}
-              aria-label="Refresh online user counts"
-              title="Refresh router list and online session counts now"
+              onClick={() => void refreshDashboard()}
+              disabled={dashboardRefreshing || liveCountRefreshing || routersFetching}
+              aria-label="Refresh dashboard data"
+              title="Refresh dashboard data and online session counts now"
             >
-              <RefreshCw size={13} className={liveCountRefreshing || routersFetching ? "animate-spin" : ""} />
-              Refresh online users
+              <RefreshCw size={13} className={dashboardRefreshing || liveCountRefreshing || routersFetching ? "animate-spin" : ""} />
+              Refresh dashboard
             </button>
             <div className="dashboard-date">
               <CalendarDays size={15} />

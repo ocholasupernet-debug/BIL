@@ -23,6 +23,7 @@ export interface LiveRouterPresence {
   hotspotUsersAvailable: boolean;
   pppoeUsersAvailable: boolean;
   onlineUsers: Set<string>;
+  onlinePppoeUsers: Set<string>;
 }
 
 export interface PrepaidOnlineCustomer {
@@ -52,22 +53,36 @@ export function buildLivePresenceByRouter(
     const query = liveQueries[index];
     const live = query?.data;
     const onlineUsers = new Set<string>();
+    const onlinePppoeUsers = new Set<string>();
     live?.hotspotUsers?.forEach(user => {
       const username = normalizeLiveIdentity(user.user);
       if (username) onlineUsers.add(username);
     });
     live?.pppoeUsers?.forEach(user => {
       const username = normalizeLiveIdentity(user.name);
-      if (username) onlineUsers.add(username);
+      if (username) {
+        onlineUsers.add(username);
+        onlinePppoeUsers.add(username);
+      }
     });
     presence.set(router.id, {
       authoritative: Boolean(live?.fetchedAt && !query?.isError),
       hotspotUsersAvailable: live?.hotspotUsersAvailable !== false,
       pppoeUsersAvailable: live?.pppoeUsersAvailable !== false,
       onlineUsers,
+      onlinePppoeUsers,
     });
   });
   return presence;
+}
+
+export function countLivePppoeUsers(presenceByRouter: ReadonlyMap<number, LiveRouterPresence>) {
+  const users = new Set<string>();
+  presenceByRouter.forEach(presence => {
+    if (!presence.authoritative || !presence.pppoeUsersAvailable) return;
+    presence.onlinePppoeUsers.forEach(username => users.add(username));
+  });
+  return users.size;
 }
 
 export function normalizeLiveIdentity(value?: string | null) {

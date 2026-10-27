@@ -25,8 +25,8 @@ if grep -Fq '"allIspBridgeRouters": true' "$SCRIPT_DIR/portal-refresh-once.json"
   ! grep -Fq '"ispBridgeRouterName"' "$SCRIPT_DIR/portal-refresh-once.json"
   ! grep -Fq '"ispBridgeName"' "$SCRIPT_DIR/portal-refresh-once.json"
 else
-  grep -Fq '"ispBridgeRouterName": "ocholasupernet2"' "$SCRIPT_DIR/portal-refresh-once.json"
-  grep -Fq '"ispBridgeName": "hotspot-bridge"' "$SCRIPT_DIR/portal-refresh-once.json"
+  grep -Fq '"ispBridgeRouterName": "ocholasupernet1"' "$SCRIPT_DIR/portal-refresh-once.json"
+  ! grep -Fq '"ispBridgeName"' "$SCRIPT_DIR/portal-refresh-once.json"
 fi
 grep -Fq 'createAdminSessionToken' "$SCRIPT_DIR/refresh-hotspot-portals-once.mjs"
 ! grep -Fq '"ispBridgeRouterId"' "$SCRIPT_DIR/portal-refresh-once.json"

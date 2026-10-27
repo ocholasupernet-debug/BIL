@@ -1572,6 +1572,20 @@ export const HOSTED_PORTAL_LAYOUT_CSS = `
     background:linear-gradient(100deg,#f04432,#b8f64a);
     border-color:#39c955;
   }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-pay .hp-btn-mpesa {
+    color:#fff;
+    background:linear-gradient(135deg,#16a34a,#0f766e);
+    border-color:rgba(255,255,255,.28);
+    box-shadow:0 8px 20px rgba(15,118,110,.3);
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-pay .hp-btn-mpesa:hover:not(:disabled) {
+    filter:brightness(1.08);
+    transform:translateY(-1px);
+  }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-pay .hp-btn-mpesa[aria-busy="true"] {
+    opacity:1;
+    filter:saturate(1);
+  }
   .hp-root[data-portal-layout="dansted-wifi"] .hp-glass,
   .hp-root[data-portal-layout="dansted-wifi"] .hp-plan-card,
   .hp-root[data-portal-layout="dansted-wifi"] [aria-labelledby="hp-loyalty-balance-title"] {
