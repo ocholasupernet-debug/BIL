@@ -51,6 +51,8 @@ test("dashboard PPPoE totals use fresh live sessions and deduplicate usernames",
     ],
   );
   assert.equal(countLivePppoeUsers(presence), 2);
+  assert.equal(countLivePppoeUsers(presence, 7), 2);
+  assert.equal(countLivePppoeUsers(presence, 8), 1);
   const stale = buildLivePresenceByRouter([{ id: 7 }], [{ isError: true, data: { fetchedAt: "2026-10-07T11:59:55.000Z", pppoeUsers: [{ name: "stale-user" }] } }]);
   assert.equal(countLivePppoeUsers(stale), 0);
 });

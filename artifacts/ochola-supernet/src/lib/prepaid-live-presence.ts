@@ -76,9 +76,13 @@ export function buildLivePresenceByRouter(
   return presence;
 }
 
-export function countLivePppoeUsers(presenceByRouter: ReadonlyMap<number, LiveRouterPresence>) {
+export function countLivePppoeUsers(
+  presenceByRouter: ReadonlyMap<number, LiveRouterPresence>,
+  routerId?: number | null,
+) {
   const users = new Set<string>();
-  presenceByRouter.forEach(presence => {
+  presenceByRouter.forEach((presence, currentRouterId) => {
+    if (routerId != null && currentRouterId !== routerId) return;
     if (!presence.authoritative || !presence.pppoeUsersAvailable) return;
     presence.onlinePppoeUsers.forEach(username => users.add(username));
   });

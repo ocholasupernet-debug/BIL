@@ -576,7 +576,10 @@ export default function Dashboard() {
     ),
     [uniqueServiceCustomers, livePresenceByRouter, customerPlanScopeMap],
   );
-  const onlinePppoeUsers = countLivePppoeUsers(livePresenceByRouter);
+  const onlinePppoeUsers = countLivePppoeUsers(
+    livePresenceByRouter,
+    selectedRouter === "all" ? null : selectedRouter,
+  );
   const onlineHotspotUsers = onlineServiceCustomers.filter(
     customer => prepaidServiceType(customer.type) === "hotspot",
   ).length;
