@@ -60,6 +60,7 @@ import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
 import { routerManagementOvpnCredentials, routerManagementVpnContract } from "../lib/router-management-vpn";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
+import { routerHealthApiAccountOrder } from "../lib/router-health-api-account-order.js";
 import { buildRouterFileImportCommand } from "../lib/self-install-step-command.js";
 import {
   provisionRouterManagementOpenVpn,
@@ -680,11 +681,8 @@ function rowToCreds(row: SbRouter): RouterCredentials {
   return {
     host:     primaryHost,
     port,
-    username: row.router_username || "admin",
+    ...routerHealthApiAccountOrder(row.router_username, vpnFallback),
     password: row.router_secret   || "",
-    alternateUsernames: vpnFallback && row.router_username !== ROUTER_MANAGEMENT_API_USERNAME
-      ? [ROUTER_MANAGEMENT_API_USERNAME]
-      : undefined,
     useSSL,
     bridgeIp: vpnFallback,
   };

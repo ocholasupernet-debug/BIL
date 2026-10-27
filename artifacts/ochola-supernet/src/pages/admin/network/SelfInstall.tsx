@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import {
   AlertCircle,
@@ -319,6 +319,7 @@ function CheckLine({
 
 export default function SelfInstall() {
   const [, navigate] = useLocation();
+  const statusCheckInFlight = useRef(false);
   const [mode, setMode] = useState<InstallMode>("greenfield");
   const [routerName, setRouterName] = useState("");
   const [bridgeInterface, setBridgeInterface] = useState("bridge");
@@ -467,7 +468,8 @@ export default function SelfInstall() {
   }, [mode, takeoverSourceRouterId, takeoverSourceFileName]);
 
   const refreshStatus = useCallback(async () => {
-    if (!router) return;
+    if (!router || statusCheckInFlight.current) return;
+    statusCheckInFlight.current = true;
     try {
       const result = await readJson<InstallStatus>(
         `/api/admin/router/install-status/${router.id}?adminId=${ADMIN_ID}&mode=${backendMode(mode)}`,
@@ -491,6 +493,8 @@ export default function SelfInstall() {
         vpnConnected: false,
         error: cause instanceof Error ? cause.message : "Readiness check failed.",
       });
+    } finally {
+      statusCheckInFlight.current = false;
     }
   }, [mode, router, vpnInfo]);
 

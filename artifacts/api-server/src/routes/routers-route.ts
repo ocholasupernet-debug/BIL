@@ -33,15 +33,6 @@ function cleanRouterHost(value: string | null | undefined): string {
     .replace(/\s+\((?:VPN tunnel|⚠ LAN IP — only reachable on local network)\)\s*$/u, "");
 }
 
-function managementApiAlternateUsernames(
-  username: string | null | undefined,
-  vpnIp: string | null | undefined,
-): string[] | undefined {
-  return isRouterManagementVpnIp(vpnIp ?? "") && username !== ROUTER_MANAGEMENT_API_USERNAME
-    ? [ROUTER_MANAGEMENT_API_USERNAME]
-    : undefined;
-}
-
 function discoverVpnIp(
   name: string,
   host: string,
@@ -188,9 +179,8 @@ async function probeInstallRouter(row: InstallRouter): Promise<{
     const probe = await pingRouter({
       host: vpnIp,
       port: 8728,
-      username: row.router_username || "admin",
+      ...routerHealthApiAccountOrder(row.router_username, vpnIp),
       password: row.router_secret || "",
-      alternateUsernames: managementApiAlternateUsernames(row.router_username, vpnIp),
       bridgeIp: vpnIp,
       connectTimeoutMs: 8_000,
       requestTimeoutMs: 8_000,
@@ -312,9 +302,8 @@ router.post("/admin/router/install-complete", requireAdmin(), async (req, res): 
       const layout = await fetchBridgePortLayout({
         host: result.vpnIp!,
         port: 8728,
-        username: row.router_username || "admin",
+        ...routerHealthApiAccountOrder(row.router_username, result.vpnIp),
         password: row.router_secret || "",
-        alternateUsernames: managementApiAlternateUsernames(row.router_username, result.vpnIp),
         bridgeIp: result.vpnIp!,
         connectTimeoutMs: 8_000,
         requestTimeoutMs: 8_000,
@@ -615,9 +604,8 @@ router.post("/routers/:id/ping", async (req: Request, res: Response): Promise<vo
   const creds = {
     host:     host || discoveredVpnIp || "",
     port:     8728,
-    username: row.router_username   || "admin",
+      ...routerHealthApiAccountOrder(row.router_username, discoveredVpnIp),
     password: row.router_secret     || "",
-    alternateUsernames: managementApiAlternateUsernames(row.router_username, discoveredVpnIp),
     useSSL:   false,
     bridgeIp: discoveredVpnIp,
     connectTimeoutMs:  8000,
@@ -671,9 +659,8 @@ router.post("/routers/ping-all", async (req: Request, res: Response): Promise<vo
       const creds = {
         host:     host || discoveredVpnIp || "",
         port:     8728,
-        username: row.router_username   || "admin",
+        ...routerHealthApiAccountOrder(row.router_username, discoveredVpnIp),
         password: row.router_secret     || "",
-        alternateUsernames: managementApiAlternateUsernames(row.router_username, discoveredVpnIp),
         useSSL:   false,
         bridgeIp: discoveredVpnIp,
         connectTimeoutMs: 8000,
@@ -729,7 +716,7 @@ router.get("/routers/:id/detect-bridge", async (req: Request, res: Response): Pr
   const creds = {
     host:     row.vpn_ip?.trim()    || row.host?.trim() || "",
     port:     8728,
-    username: row.router_username   || "admin",
+    ...routerHealthApiAccountOrder(row.router_username, row.vpn_ip),
     password: row.router_secret     || "",
     useSSL:   false,
     bridgeIp: row.vpn_ip?.trim()   || row.bridge_ip?.trim() || undefined,
