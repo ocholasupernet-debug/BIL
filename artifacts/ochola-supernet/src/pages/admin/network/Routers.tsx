@@ -245,6 +245,108 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
+type RouterCopyPreview = {
+  sourceRouter: { id: number; name: string };
+  targetRouter: { id: number; name: string };
+  counts: { plans: number; ipPools: number; pppoe: number; users: number };
+  canCopy: boolean;
+  blockers: string[];
+};
+
+function RouterDataCopyModal({ routers, onClose, onCopied }: {
+  routers: DbRouter[];
+  onClose: () => void;
+  onCopied: () => void;
+}) {
+  const [sourceId, setSourceId] = useState("");
+  const [targetId, setTargetId] = useState("");
+  const [preview, setPreview] = useState<RouterCopyPreview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState("");
+
+  async function loadPreview() {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await adminApiFetch("/api/admin/router/sync-copy/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminId: ADMIN_ID, sourceRouterId: Number(sourceId), targetRouterId: Number(targetId) }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Could not prepare the copy preview.");
+      setPreview(data as RouterCopyPreview);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not prepare the copy preview.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function copyData() {
+    if (!preview?.canCopy) return;
+    if (!window.confirm(`Copy service data from ${preview.sourceRouter.name} to ${preview.targetRouter.name}?`)) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await adminApiFetch("/api/admin/router/sync-copy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adminId: ADMIN_ID,
+          sourceRouterId: preview.sourceRouter.id,
+          targetRouterId: preview.targetRouter.id,
+          categories: ["plans", "ipPools", "pppoe", "users"],
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || "Copy did not complete.");
+      setResult(`Copied service configuration to ${preview.targetRouter.name}.`);
+      onCopied();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Copy did not complete.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Modal title="Copy router data" onClose={onClose}>
+      <div style={{ display: "grid", gap: "0.8rem" }}>
+        <p style={{ margin: 0, color: "var(--isp-text-muted)", fontSize: "0.78rem", lineHeight: 1.5 }}>
+          Copies plan profiles, IP pools, PPPoE settings, and Hotspot/PPPoE users onto the destination MikroTik. It does not duplicate dashboard customer records, change the source, or copy payment history.
+        </p>
+        {[
+          { label: "Source router", value: sourceId, set: setSourceId, options: routers },
+          { label: "Destination router", value: targetId, set: setTargetId, options: routers.filter(router => String(router.id) !== sourceId) },
+        ].map(field => (
+          <label key={field.label} style={{ display: "grid", gap: 5, color: "var(--isp-text)", fontSize: "0.78rem" }}>
+            {field.label}
+            <select value={field.value} onChange={event => { field.set(event.target.value); setPreview(null); setResult(""); }} style={{ padding: 8, borderRadius: 6, background: "var(--isp-input-bg)", color: "var(--isp-text)", border: "1px solid var(--isp-border)" }}>
+              <option value="">Choose a router</option>
+              {field.options.map(router => <option key={router.id} value={router.id}>{router.name}</option>)}
+            </select>
+          </label>
+        ))}
+        {preview && <div style={{ padding: 10, border: "1px solid var(--isp-border)", borderRadius: 7, color: "var(--isp-text)", fontSize: "0.78rem" }}>
+          <strong>{preview.sourceRouter.name} → {preview.targetRouter.name}</strong>
+          <div style={{ marginTop: 5 }}>Plans {preview.counts.plans} · Pools {preview.counts.ipPools} · PPPoE {preview.counts.pppoe} · Users {preview.counts.users}</div>
+          {preview.blockers.map(blocker => <div key={blocker} style={{ marginTop: 5, color: "#f87171" }}>{blocker}</div>)}
+        </div>}
+        {error && <p role="alert" style={{ color: "#f87171", margin: 0, fontSize: "0.78rem" }}>{error}</p>}
+        {result && <p role="status" style={{ color: "#34d399", margin: 0, fontSize: "0.78rem" }}>{result}</p>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={onClose} style={{ padding: "0.5rem 0.8rem", borderRadius: 6, background: "transparent", border: "1px solid var(--isp-border)", color: "var(--isp-text-muted)", cursor: "pointer" }}>Close</button>
+          {!preview
+            ? <button disabled={loading || !sourceId || !targetId} onClick={loadPreview} style={{ padding: "0.5rem 0.9rem", borderRadius: 6, background: "var(--isp-accent)", border: 0, color: "#fff", fontWeight: 700, cursor: "pointer", opacity: loading || !sourceId || !targetId ? 0.6 : 1 }}>{loading ? "Checking…" : "Preview copy"}</button>
+            : <button disabled={loading || !preview.canCopy || !!result} onClick={copyData} style={{ padding: "0.5rem 0.9rem", borderRadius: 6, background: "var(--isp-accent)", border: 0, color: "#fff", fontWeight: 700, cursor: "pointer", opacity: loading || !preview.canCopy || !!result ? 0.6 : 1 }}>{loading ? "Copying…" : "Copy data"}</button>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 /* ══════════════════════════════════════════════════════════════
    Main page
 ══════════════════════════════════════════════════════════════ */
@@ -789,6 +891,7 @@ export default function Routers() {
   const [installHistoryModal, setInstallHistoryModal] = useState<DbRouter | null>(null);
   const [autoRebootModal, setAutoRebootModal] = useState<DbRouter | null>(null);
   const [managedResetOpen, setManagedResetOpen] = useState(false);
+  const [copyRouterDataOpen, setCopyRouterDataOpen] = useState(false);
 
   /* ── Edit router modal ── */
   const [editRouter, setEditRouter] = useState<DbRouter | null>(null);
@@ -1174,6 +1277,13 @@ export default function Routers() {
               : <><Wrench size={12} /> Auto-fix IPs</>}
           </button>
           <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            onClick={() => setCopyRouterDataOpen(true)}
+            style={{ display: "flex", alignItems: "center", gap: "0.35rem", padding: "0.45rem 0.85rem", background: "rgba(20,184,166,.08)", border: "1px solid rgba(20,184,166,.4)", borderRadius: 7, color: "var(--isp-accent)", fontWeight: 700, fontSize: "0.8rem", cursor: "pointer", fontFamily: "inherit" }}
+          >
+            <Copy size={13} /> Copy router data
+          </button>
           <button
             onClick={() => navigate("/admin/network/self-install")}
             style={{
@@ -2058,6 +2168,7 @@ export default function Routers() {
       )}
 
       {managedResetOpen && <ManagedResetModal routers={routers} onClose={() => setManagedResetOpen(false)} />}
+      {copyRouterDataOpen && <RouterDataCopyModal routers={routers} onClose={() => setCopyRouterDataOpen(false)} onCopied={() => void refetch()} />}
       {userSnapshotRouter && (
         <RouterUserSnapshotModal
           routerId={userSnapshotRouter.id}

@@ -23,7 +23,7 @@ import {
 import { routerManagementVpnIpFor } from "../lib/router-payment-credentials.js";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import { hotspotPlanProfileName } from "../lib/prepaid-identifiers.js";
-import { authenticatedAccount, requireAdmin } from "../lib/api-auth.js";
+import { authenticatedAccount, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import {
   managedPppoePlanAddresses,
   managedPppoeProfileName,
@@ -2149,8 +2149,53 @@ router.post("/admin/sync/voucher-restore", requireAdmin(), async (req, res): Pro
    Body: { adminId, sourceRouterId, targetRouterId,
            categories: ["plans","ipPools","pppoe","users"] }
 ═══════════════════════════════════════════════════════════════ */
-router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
-  const adminId = Number(req.body?.adminId);
+router.post("/admin/router/sync-copy/preview", requireAdmin(), async (req, res): Promise<void> => {
+  const account = await authenticatedAccount(req);
+  const adminId = await authenticatedTenantAdminId(req);
+  const sourceRouterId = Number(req.body?.sourceRouterId);
+  const targetRouterId = Number(req.body?.targetRouterId);
+  if (!account || account.role === "reseller" || !Number.isSafeInteger(adminId) ||
+      !Number.isSafeInteger(sourceRouterId) || !Number.isSafeInteger(targetRouterId) ||
+      sourceRouterId <= 0 || targetRouterId <= 0 || sourceRouterId === targetRouterId) {
+    res.status(400).json({ ok: false, error: "Choose two different routers in your ISP account." });
+    return;
+  }
+  try {
+    const [source, target, plans, pools, secrets, allCustomers] = await Promise.all([
+      sbSelectStrict<{ id: number; name: string }>("isp_routers", `id=eq.${sourceRouterId}&admin_id=eq.${adminId}&select=id,name&limit=1`),
+      sbSelectStrict<{ id: number; name: string }>("isp_routers", `id=eq.${targetRouterId}&admin_id=eq.${adminId}&select=id,name&limit=1`),
+      sbSelectStrict<{ id: number; port_id: number | null }>("isp_plans", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=id,port_id&limit=1000`),
+      sbSelectStrict<{ id: number; port_id: number | null }>("isp_ip_pools", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=id,port_id&limit=1000`),
+      sbSelectStrict<{ id: number; port_id: number | null }>("isp_ppp_secrets", `admin_id=eq.${adminId}&router_id=eq.${sourceRouterId}&select=id,port_id&limit=5000`),
+      sbSelectStrict<{ id: number; type: string; router_id: number | null; plan_id: number | null; port_id: number | null }>("isp_customers", `admin_id=eq.${adminId}&select=id,type,router_id,plan_id,port_id&limit=10000`),
+    ]);
+    if (!source[0] || !target[0]) {
+      res.status(404).json({ ok: false, error: "A selected router is not in this ISP account." });
+      return;
+    }
+    const planIds = new Set(plans.map(row => Number(row.id)));
+    const customers = allCustomers.filter(row =>
+      Number(row.router_id) === sourceRouterId || (row.plan_id != null && planIds.has(Number(row.plan_id))),
+    );
+    const portScoped = [...plans, ...pools, ...secrets, ...customers].some(row => row.port_id != null);
+    res.json({
+      ok: true,
+      sourceRouter: source[0],
+      targetRouter: target[0],
+      counts: { plans: plans.length, ipPools: pools.length, pppoe: secrets.length, users: customers.length },
+      canCopy: !portScoped,
+      blockers: portScoped ? ["Port-specific services need a verified port mapping before they can be copied."] : [],
+      billingHistoryCopied: false,
+    });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: error instanceof Error ? error.message : "Preview could not be loaded." });
+  }
+});
+
+router.post("/admin/router/sync-copy", requireAdmin(), async (req, res): Promise<void> => {
+  const account = await authenticatedAccount(req);
+  const adminId = await authenticatedTenantAdminId(req);
+  const requestedAdminId = req.body?.adminId === undefined ? adminId : Number(req.body.adminId);
   const sourceRouterId = Number(req.body?.sourceRouterId);
   const targetRouterId = Number(req.body?.targetRouterId);
   const requested = Array.isArray(req.body?.categories) ? req.body.categories : [];
@@ -2158,7 +2203,8 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
   type CopyCategory = typeof validCategories[number];
   const categories = validCategories.filter((category) => requested.includes(category)) as CopyCategory[];
 
-  if (!Number.isInteger(adminId) || adminId <= 0 ||
+  if (!account || account.role === "reseller" || !Number.isSafeInteger(adminId) || adminId <= 0 ||
+      requestedAdminId !== adminId ||
       !Number.isInteger(sourceRouterId) || sourceRouterId <= 0 ||
       !Number.isInteger(targetRouterId) || targetRouterId <= 0 ||
       sourceRouterId === targetRouterId || categories.length === 0) {
@@ -2249,8 +2295,47 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
     ]));
     const planNames = new Map(plans.map(plan => [
       Number(plan.id),
-      hotspotPlanProfileName(String(plan.name ?? "default"), plan.router_id, plan.port_id),
+      hotspotPlanProfileName(String(plan.name ?? "default"), targetRouterId, plan.port_id),
     ]));
+    if ([...plans, ...pools, ...pppoe, ...sourceCustomers].some(row => row.port_id != null)) {
+      try { conn.close(); } catch { /* ignore */ }
+      res.status(409).json({ ok: false, error: "Port-specific services need a verified port mapping before they can be copied." });
+      return;
+    }
+    const existingNames = async (path: string): Promise<Set<string>> => {
+      const rows = await conn!.write([path, "=.proplist=name"]);
+      return new Set((Array.isArray(rows) ? rows : [])
+        .map(row => String((row as Record<string, unknown>).name ?? "").trim())
+        .filter(Boolean));
+    };
+    const [existingPools, existingPppProfiles, existingHotspotProfiles, existingPppUsers, existingHotspotUsers] = await Promise.all([
+      existingNames("/ip/pool/print"),
+      existingNames("/ppp/profile/print"),
+      existingNames("/ip/hotspot/user/profile/print"),
+      existingNames("/ppp/secret/print"),
+      existingNames("/ip/hotspot/user/print"),
+    ]);
+    const conflicts = [
+      ...pools.map(row => String(row.name ?? "").trim()).filter(name => name && existingPools.has(name)),
+      ...plans.filter(row => String(row.type ?? "hotspot").toLowerCase() === "pppoe")
+        .map(row => planNames.get(Number(row.id)) ?? "").filter(name => name && existingPppProfiles.has(name)),
+      ...plans.filter(row => String(row.type ?? "hotspot").toLowerCase() !== "pppoe")
+        .map(row => planNames.get(Number(row.id)) ?? "").filter(name => name && existingHotspotProfiles.has(name)),
+      ...pppoe.map(row => String(row.username ?? "").trim()).filter(name => name && existingPppUsers.has(name)),
+      ...sourceCustomers.filter(row => String(row.type ?? "hotspot").toLowerCase() === "pppoe")
+        .map(row => String(row.pppoe_username ?? row.username ?? "").trim()).filter(name => name && existingPppUsers.has(name)),
+      ...sourceCustomers.filter(row => String(row.type ?? "hotspot").toLowerCase() === "hotspot")
+        .map(row => String(row.username ?? "").trim()).filter(name => name && existingHotspotUsers.has(name)),
+    ];
+    if (conflicts.length) {
+      try { conn.close(); } catch { /* ignore */ }
+      res.status(409).json({
+        ok: false,
+        error: "Copy stopped: matching names already exist on the destination. Nothing was overwritten.",
+        conflicts: [...new Set(conflicts)],
+      });
+      return;
+    }
 
     const runCategory = async (
       category: CopyCategory,
@@ -2272,7 +2357,7 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
       for (const plan of plans) {
         const name = String(plan.name ?? "").trim();
         if (!name) continue;
-        const profileName = hotspotPlanProfileName(name, plan.router_id, plan.port_id);
+        const profileName = hotspotPlanProfileName(name, targetRouterId, plan.port_id);
         const down = Number(plan.speed_down ?? 10);
         const up = Number(plan.speed_up ?? 10);
         const unit = String(plan.speed_down_unit ?? "Mbps");
@@ -2333,6 +2418,7 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
           password: String(secret.password ?? ""),
           service: String(secret.service ?? "pppoe"),
           profile: String(secret.profile ?? "default"),
+          disabled: secret.is_active === false ? "yes" : "no",
           ...(secret.ip_address ? { "remote-address": String(secret.ip_address) } : {}),
           ...(secret.comment ? { comment: String(secret.comment) } : {}),
         });
@@ -2355,6 +2441,7 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
             password: String(customer.password ?? ""),
             service: "pppoe",
             profile: planNames.get(Number(customer.plan_id))?.replace(/\s+/g, "-").toLowerCase() || "default",
+            disabled: ["active", "payment_cleared_router_pending"].includes(String(customer.status ?? "").toLowerCase()) ? "no" : "yes",
             ...(customer.ip_address ? { "remote-address": String(customer.ip_address) } : {}),
           });
         } else if (type === "hotspot") {
@@ -2362,6 +2449,7 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
             name,
             password: String(customer.password ?? ""),
             profile: planNames.get(Number(customer.plan_id))?.replace(/\s+/g, "-").toLowerCase() || "default",
+            disabled: ["active", "payment_cleared_router_pending"].includes(String(customer.status ?? "").toLowerCase()) ? "no" : "yes",
             ...(customer.mac_address ? { "mac-address": String(customer.mac_address) } : {}),
           });
         } else {
@@ -2373,8 +2461,30 @@ router.post("/admin/router/sync-copy", async (req, res): Promise<void> => {
       return { count, logs: categoryLogs };
     });
 
-    try { conn.close(); } catch { /* ignore */ }
     const failed = categories.filter(category => !results[category]?.ok);
+    if (failed.length) {
+      const cleanup: Array<{ path: string; names: string[] }> = [
+        { path: "/ip/pool", names: pools.map(row => String(row.name ?? "").trim()) },
+        { path: "/ppp/profile", names: plans.filter(row => String(row.type ?? "hotspot").toLowerCase() === "pppoe").map(row => planNames.get(Number(row.id)) ?? "") },
+        { path: "/ip/hotspot/user/profile", names: plans.filter(row => String(row.type ?? "hotspot").toLowerCase() !== "pppoe").map(row => planNames.get(Number(row.id)) ?? "") },
+        { path: "/ppp/secret", names: [...pppoe.map(row => String(row.username ?? "").trim()), ...sourceCustomers.filter(row => String(row.type ?? "hotspot").toLowerCase() === "pppoe").map(row => String(row.pppoe_username ?? row.username ?? "").trim())] },
+        { path: "/ip/hotspot/user", names: sourceCustomers.filter(row => String(row.type ?? "hotspot").toLowerCase() === "hotspot").map(row => String(row.username ?? "").trim()) },
+      ];
+      for (const entry of cleanup) {
+        for (const name of new Set(entry.names.filter(Boolean))) {
+          try {
+            const rows = await conn.write([`${entry.path}/print`, `?name=${name}`, "=.proplist=.id"]);
+            for (const row of Array.isArray(rows) ? rows : []) {
+              const id = String((row as Record<string, unknown>)[".id"] ?? "");
+              if (id) await conn.write([`${entry.path}/remove`, `=.id=${id}`]);
+            }
+          } catch {
+            logs.push(`Could not fully undo a partial write for ${name}.`);
+          }
+        }
+      }
+    }
+    try { conn.close(); } catch { /* ignore */ }
     res.status(failed.length ? 207 : 200).json({
       ok: failed.length === 0,
       sourceRouter: { id: source.id, name: source.name },
