@@ -42,6 +42,64 @@ test("online prepaid counts use the normalized live session from the shared rout
   assert.equal(customerIsOnline(pppoe, presence, {}, NOW), true);
 });
 
+test("Hotspot session MAC matches the prepaid account when RouterOS usernames differ", () => {
+  const presence = buildLivePresenceByRouter(
+    [{ id: 7 }],
+    [{
+      data: {
+        fetchedAt: "2026-10-07T11:59:55.000Z",
+        hotspotUsers: [{ user: "router-generated-name", macAddress: "AA:BB:CC:DD:EE:FF" }],
+      },
+    }],
+  );
+  const user: PrepaidOnlineCustomer = {
+    id: 3,
+    type: "hotspot",
+    username: "saved-prepaid-name",
+    mac_address: "aa-bb-cc-dd-ee-ff",
+    router_id: 7,
+    status: "active",
+    expires_at: "2026-10-08T00:00:00.000Z",
+  };
+
+  assert.equal(getCustomerLiveState(user, presence, {}, NOW), "online");
+});
+
+test("Hotspot MAC fallback stays on the assigned router and does not apply to PPPoE", () => {
+  const presence = buildLivePresenceByRouter(
+    [{ id: 7 }, { id: 8 }],
+    [{
+      data: {
+        fetchedAt: "2026-10-07T11:59:55.000Z",
+        hotspotUsers: [{ user: "different-name", macAddress: "AA:BB:CC:DD:EE:FF" }],
+      },
+    }, {
+      data: {
+        fetchedAt: "2026-10-07T11:59:55.000Z",
+        hotspotUsers: [],
+        pppoeUsers: [],
+      },
+    }],
+  );
+  const wrongRouter: PrepaidOnlineCustomer = {
+    id: 4,
+    type: "hotspot",
+    username: "saved-prepaid-name",
+    mac_address: "AA:BB:CC:DD:EE:FF",
+    router_id: 8,
+    status: "active",
+    expires_at: "2026-10-08T00:00:00.000Z",
+  };
+  const pppoe: PrepaidOnlineCustomer = {
+    ...wrongRouter,
+    type: "pppoe",
+    pppoe_username: "another-pppoe-user",
+  };
+
+  assert.equal(getCustomerLiveState(wrongRouter, presence, {}, NOW), "offline");
+  assert.equal(getCustomerLiveState(pppoe, presence, {}, NOW), "offline");
+});
+
 test("expired access and suspended prepaid records never count as online", () => {
   const presence = buildLivePresenceByRouter(
     [{ id: 7 }],

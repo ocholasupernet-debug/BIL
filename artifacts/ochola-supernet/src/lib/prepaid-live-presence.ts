@@ -23,6 +23,7 @@ export interface LiveRouterPresence {
   hotspotUsersAvailable: boolean;
   pppoeUsersAvailable: boolean;
   onlineUsers: Set<string>;
+  hotspotMacAddresses: Set<string>;
 }
 
 export interface PrepaidOnlineCustomer {
@@ -36,6 +37,7 @@ export interface PrepaidOnlineCustomer {
   username?: string | null;
   pppoe_username?: string | null;
   ip_address?: string | null;
+  mac_address?: string | null;
   service_online?: boolean | null;
 }
 
@@ -52,9 +54,12 @@ export function buildLivePresenceByRouter(
     const query = liveQueries[index];
     const live = query?.data;
     const onlineUsers = new Set<string>();
+    const hotspotMacAddresses = new Set<string>();
     live?.hotspotUsers?.forEach(user => {
       const username = normalizeLiveIdentity(user.user);
       if (username) onlineUsers.add(username);
+      const macAddress = normalizeLiveMac(user.macAddress);
+      if (macAddress) hotspotMacAddresses.add(macAddress);
     });
     live?.pppoeUsers?.forEach(user => {
       const username = normalizeLiveIdentity(user.name);
@@ -65,6 +70,7 @@ export function buildLivePresenceByRouter(
       hotspotUsersAvailable: live?.hotspotUsersAvailable !== false,
       pppoeUsersAvailable: live?.pppoeUsersAvailable !== false,
       onlineUsers,
+      hotspotMacAddresses,
     });
   });
   return presence;
@@ -72,6 +78,11 @@ export function buildLivePresenceByRouter(
 
 export function normalizeLiveIdentity(value?: string | null) {
   return String(value ?? "").trim().toLowerCase();
+}
+
+export function normalizeLiveMac(value?: string | null) {
+  const mac = String(value ?? "").replace(/[^a-f0-9]/gi, "").toUpperCase();
+  return /^[A-F0-9]{12}$/.test(mac) ? mac : "";
 }
 
 export function prepaidServiceType(value?: string | null) {
@@ -116,12 +127,17 @@ export function getCustomerLiveState(
     : serviceType === "pppoe"
       ? [user.pppoe_username, user.username, purchaseUsername(user)]
       : [user.username, user.pppoe_username, purchaseUsername(user)];
-  return identities
+  const usernameMatch = identities
     .map(normalizeLiveIdentity)
     .filter(Boolean)
-    .some(value => routerPresence.onlineUsers.has(value))
-    ? "online"
-    : "offline";
+    .some(value => routerPresence.onlineUsers.has(value));
+  if (usernameMatch) return "online";
+  if (
+    serviceType === "hotspot"
+    && normalizeLiveMac(user.mac_address)
+    && routerPresence.hotspotMacAddresses.has(normalizeLiveMac(user.mac_address))
+  ) return "online";
+  return "offline";
 }
 
 export function customerIsOnline(
