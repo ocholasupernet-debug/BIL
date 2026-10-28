@@ -1,6 +1,9 @@
+import { getCustomerServiceStatus } from "./customer-service-status";
+
 export interface ServiceIdentityCustomer {
   id: number;
   type?: string | null;
+  status?: unknown;
   plan_id?: number | null;
   router_id?: number | null;
   port_id?: number | null;
@@ -10,6 +13,7 @@ export interface ServiceIdentityCustomer {
   username?: string | null;
   ip_address?: string | null;
   expires_at?: string | null;
+  depletion_reason?: unknown;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -65,6 +69,7 @@ function isMissingCustomerValue(value: unknown) {
 export function mergeCustomerServiceIdentities<T extends ServiceIdentityCustomer>(
   customers: T[],
   plans: Record<number, ServiceIdentityPlan>,
+  now = Date.now(),
 ): MergedServiceIdentity<T>[] {
   const groups = new Map<string, T[]>();
   for (const customer of customers) {
@@ -82,6 +87,20 @@ export function mergeCustomerServiceIdentities<T extends ServiceIdentityCustomer
 
   return Array.from(groups.values(), group => {
     group.sort((a, b) => customerRecordTime(b) - customerRecordTime(a) || b.id - a.id);
+    const newest = group[0];
+    const newestIsSuspended = getCustomerServiceStatus(newest, now) === "suspended";
+    if (
+      !newestIsSuspended
+      && ["hotspot", "trial", "trials"].includes(String(newest.type ?? "").toLowerCase())
+    ) {
+      const activeIndex = group.findIndex(customer =>
+        getCustomerServiceStatus(customer, now) === "active",
+      );
+      if (activeIndex > 0) {
+        const [activeCustomer] = group.splice(activeIndex, 1);
+        group.unshift(activeCustomer);
+      }
+    }
     const [primary, ...related] = group;
     const merged = { ...primary } as MergedServiceIdentity<T>;
     const mergedFields = merged as unknown as Record<string, unknown>;

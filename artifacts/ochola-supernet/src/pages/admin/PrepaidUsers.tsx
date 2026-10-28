@@ -1044,7 +1044,7 @@ export default function PrepaidUsers() {
 
   async function handleDelete(user: DisplayCustomer) {
     const groupedRecordNote = user.mergedCustomerIds.length > 1
-      ? ` This row groups ${user.mergedCustomerIds.length} matching records; only the newest will be deleted, and the remaining records may appear afterward.`
+      ? ` This row groups ${user.mergedCustomerIds.length} matching records; only this selected record will be deleted, and another record may appear afterward.`
       : "";
     if (!window.confirm(`Delete ${purchaseUsername(user)}?${groupedRecordNote} This cannot be undone.`)) return;
     try {

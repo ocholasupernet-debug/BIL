@@ -5,7 +5,7 @@ import { getCustomerServiceStatus } from "./customer-service-status";
 
 const NOW = Date.parse("2026-10-07T12:00:00.000Z");
 
-test("one hotspot identity uses the newest matching record for its active count", () => {
+test("a still-entitled Hotspot purchase stays visible over a newer expired record", () => {
   const customers = [
     {
       id: 1,
@@ -31,14 +31,45 @@ test("one hotspot identity uses the newest matching record for its active count"
     },
   ];
 
-  const uniqueCustomers = mergeCustomerServiceIdentities(customers, {});
+  const uniqueCustomers = mergeCustomerServiceIdentities(customers, {}, NOW);
   const activeCount = uniqueCustomers.filter(
     customer => getCustomerServiceStatus(customer, NOW) === "active",
   ).length;
 
   assert.equal(uniqueCustomers.length, 1);
+  assert.equal(uniqueCustomers[0].id, 1);
+  assert.equal(activeCount, 1);
+});
+
+test("a newest Hotspot suspension remains primary over an older active purchase", () => {
+  const customers = [
+    {
+      id: 1,
+      type: "hotspot",
+      router_id: 7,
+      mac_address: "FE:9F:05:D6:CF:DE",
+      phone: "254700123456",
+      status: "active",
+      expires_at: "2026-10-10T00:00:00.000Z",
+      created_at: "2026-10-06T10:00:00.000Z",
+    },
+    {
+      id: 2,
+      type: "hotspot",
+      router_id: 7,
+      mac_address: "fe-9f-05-d6-cf-de",
+      phone: "+254 700 123 456",
+      status: "suspended",
+      expires_at: "2026-10-10T00:00:00.000Z",
+      created_at: "2026-10-07T10:00:00.000Z",
+    },
+  ];
+
+  const uniqueCustomers = mergeCustomerServiceIdentities(customers, {}, NOW);
+
+  assert.equal(uniqueCustomers.length, 1);
   assert.equal(uniqueCustomers[0].id, 2);
-  assert.equal(activeCount, 0);
+  assert.equal(uniqueCustomers[0].status, "suspended");
 });
 
 test("hotspot identities remain separate across phone numbers and port scopes", () => {
