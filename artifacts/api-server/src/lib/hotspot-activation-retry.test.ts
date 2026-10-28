@@ -42,6 +42,8 @@ test("paid pending Hotspot purchases retry by verified linked records without a 
 });
 
 test("expired, depleted, mis-scoped, or mismatched purchase records never retry", () => {
+  assert.equal(isRetryablePaidHotspotAccount({ ...customer, status: "active" }, transaction, plan, NOW), false);
+  assert.equal(isRetryablePaidHotspotAccount({ ...customer, status: "active" }, transaction, plan, NOW, true), true);
   assert.equal(isRetryablePaidHotspotAccount({ ...customer, expires_at: "2026-10-28T05:59:59.000Z" }, transaction, plan, NOW), false);
   assert.equal(isRetryablePaidHotspotAccount({ ...customer, depletion_reason: "data_limit" }, transaction, plan, NOW), false);
   assert.equal(isRetryablePaidHotspotAccount(customer, transaction, { ...plan, router_id: 248 }, NOW), false);

@@ -3118,7 +3118,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     type: "hotspot",
     mac_address: mac,
     ip_address: null,
-    status: "active",
+    status: "payment_cleared_router_pending",
     depletion_reason: null,
     archived_at: null,
     expires_at: expiresAt.toISOString(),
@@ -3478,6 +3478,19 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
       );
     });
     timing("routerActivationReady");
+    const activatedCustomerRows = await sbUpdateStrict(
+      "isp_customers",
+      `id=eq.${customer.id}&admin_id=eq.${customerAdminId}&status=eq.payment_cleared_router_pending`,
+      {
+        status: "active",
+        archived_at: null,
+        depletion_reason: null,
+        updated_at: new Date().toISOString(),
+      },
+    );
+    if (!activatedCustomerRows.length) {
+      throw new Error("The RouterOS account was configured but the prepaid customer could not be activated.");
+    }
     const loyaltyDeviceAuthorization = customer?.id
       ? issueHotspotLoyaltyDeviceAuthorization({
           tenantAdminId: adminId,

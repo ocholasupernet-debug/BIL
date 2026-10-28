@@ -38,12 +38,14 @@ export function isRetryablePaidHotspotAccount(
   transaction: PaidHotspotTransactionForRetry,
   plan: HotspotPlanRetryScope,
   now = Date.now(),
+  allowLegacyActive = false,
 ) {
   const mac = normalizedMac(customer.mac_address);
   const transactionMac = normalizedMac(transaction.mac_address);
   const expiry = customer.expires_at ? Date.parse(customer.expires_at) : NaN;
+  const customerStatus = customer.status.toLowerCase();
   return customer.type.toLowerCase() === "hotspot"
-    && customer.status.toLowerCase() === "payment_cleared_router_pending"
+    && (customerStatus === "payment_cleared_router_pending" || (allowLegacyActive && customerStatus === "active"))
     && !String(customer.depletion_reason ?? "").trim()
     && Number.isFinite(expiry)
     && expiry > now
