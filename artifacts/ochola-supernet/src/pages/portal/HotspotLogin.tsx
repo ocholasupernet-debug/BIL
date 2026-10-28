@@ -662,6 +662,7 @@ function HotspotLoginView({
   const [troubleshootError, setTroubleshootError] = useState("");
   const [troubleshootAction, setTroubleshootAction] = useState<"check" | "login" | null>(null);
   const [autoReconnectInProgress, setAutoReconnectInProgress] = useState(false);
+  const [manualReconnectRetryCycle, setManualReconnectRetryCycle] = useState(0);
   const troubleshootInFlight = useRef(false);
   const autoTroubleshootKey = useRef("");
   const [tvTroubleshootMode, setTvTroubleshootMode] = useState(false);
@@ -1760,6 +1761,11 @@ function HotspotLoginView({
     }
   }, [adminId, portalContext.ip, portalContext.mac]);
 
+  const restartAutomaticReconnect = () => {
+    setAutoReconnectInProgress(true);
+    setManualReconnectRetryCycle(cycle => cycle + 1);
+  };
+
   useEffect(() => {
     if (!loginSession || loginSession.status !== "active" || !loginSession.expiresAt) return;
     const expiry = Date.parse(loginSession.expiresAt);
@@ -1909,9 +1915,17 @@ function HotspotLoginView({
     setTroubleshootAction("login");
     try {
       const savedLogin = await signInWithSavedCredentials();
-      if (!savedLogin.signedIn && !savedLogin.activePlan) {
+      if (savedLogin.activePlan && savedLogin.retryable) {
+        setTroubleshootMessage("Your package is active. Reconnecting automatically while this device stays connected to Wi-Fi…");
+        restartAutomaticReconnect();
+      } else if (!savedLogin.signedIn && !savedLogin.activePlan) {
         const result = await requestHotspotTroubleshoot("login");
-        if (!result && savedLogin.error) setTroubleshootError(savedLogin.error);
+        if (result?.status === "active" && !result.connected && result.retryable) {
+          setTroubleshootMessage("Your package is active. Reconnecting automatically while this device stays connected to Wi-Fi…");
+          restartAutomaticReconnect();
+        } else if (!result && savedLogin.error) {
+          setTroubleshootError(savedLogin.error);
+        }
       }
     } finally {
       troubleshootInFlight.current = false;
@@ -1979,7 +1993,7 @@ function HotspotLoginView({
 
   useEffect(() => {
     if (HOTSPOT_RUNTIME_CONFIG.previewOnly || !adminId || !portalContext.mac) return;
-    const lookupKey = `${adminId}:${portalContext.mac}`;
+    const lookupKey = `${adminId}:${portalContext.mac}:${manualReconnectRetryCycle}`;
     if (autoTroubleshootKey.current === lookupKey) return;
     autoTroubleshootKey.current = lookupKey;
     let cancelled = false;
@@ -2036,7 +2050,14 @@ function HotspotLoginView({
       if (retryTimer) window.clearTimeout(retryTimer);
       if (autoTroubleshootKey.current === lookupKey) autoTroubleshootKey.current = "";
     };
-  }, [troubleshootingOnly, adminId, portalContext.mac, requestHotspotTroubleshoot, signInWithSavedCredentials]);
+  }, [
+    troubleshootingOnly,
+    adminId,
+    portalContext.mac,
+    manualReconnectRetryCycle,
+    requestHotspotTroubleshoot,
+    signInWithSavedCredentials,
+  ]);
 
   useEffect(() => {
     if (!tvTroubleshootMode || !troubleshootDialogOpen || !tvReconnectMac) return;
@@ -2130,13 +2151,19 @@ function HotspotLoginView({
     try {
       const savedLogin = await signInWithSavedCredentials();
       if (savedLogin.signedIn) return;
-      if (savedLogin.activePlan) return;
+      if (savedLogin.activePlan) {
+        if (savedLogin.retryable) restartAutomaticReconnect();
+        return;
+      }
 
       // Reconcile against the purchase record, not the visible, purchasable
       // plan cards. The server resolves the account's linked plan by ID.
       const result = await requestHotspotTroubleshoot("login");
       if (result && result.status === "active" && !result.connected) {
-        setTroubleshootMessage("Your package is active. Automatic sign-in will keep retrying while this device stays connected to Wi-Fi.");
+        if (result.retryable) {
+          setTroubleshootMessage("Your package is active. Reconnecting automatically while this device stays connected to Wi-Fi…");
+          restartAutomaticReconnect();
+        }
       } else if (result && savedLogin.error && result.status === "unavailable") {
         setTroubleshootMessage(result.error || savedLogin.error);
       }

@@ -88,8 +88,18 @@ assert.match(
 );
 assert.match(
   reactSource,
-  /const handleTroubleshoot\s*=\s*async\s*\(\)\s*=>\s*\{[\s\S]*?const savedLogin = await signInWithSavedCredentials\(\);\s*if \(!savedLogin\.signedIn && !savedLogin\.activePlan\) \{\s*const result = await requestHotspotTroubleshoot\("login"\)/,
-  "connection help must try saved credentials first and only fall back to purchase lookup when no active account was confirmed",
+  /const handleTroubleshoot\s*=\s*async\s*\(\)\s*=>\s*\{[\s\S]*?const savedLogin = await signInWithSavedCredentials\(\);\s*if \(savedLogin\.activePlan && savedLogin\.retryable\) \{[\s\S]*?restartAutomaticReconnect\(\);[\s\S]*?\} else if \(!savedLogin\.signedIn && !savedLogin\.activePlan\) \{\s*const result = await requestHotspotTroubleshoot\("login"\)/,
+  "connection help must retry active accounts and only fall back to purchase lookup when no active account was confirmed",
+);
+assert.match(
+  reactSource,
+  /const restartAutomaticReconnect = \(\) => \{\s*setAutoReconnectInProgress\(true\);\s*setManualReconnectRetryCycle\(cycle => cycle \+ 1\);\s*\};/,
+  "a manual retry must restart the automatic reconnect loop",
+);
+assert.match(
+  reactSource,
+  /const lookupKey = `\$\{adminId\}:\$\{portalContext\.mac\}:\$\{manualReconnectRetryCycle\}`/,
+  "a manual retry must create a new reconnect cycle for the current device",
 );
 assert.match(
   reactSource,
