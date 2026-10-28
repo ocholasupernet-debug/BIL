@@ -18,6 +18,8 @@ export interface PrepaidLiveData {
   fetchedAt?: string;
 }
 
+export const LIVE_SESSION_FRESHNESS_MS = 60_000;
+
 export interface LiveRouterPresence {
   authoritative: boolean;
   hotspotUsersAvailable: boolean;
@@ -39,6 +41,7 @@ export interface PrepaidOnlineCustomer {
   ip_address?: string | null;
   mac_address?: string | null;
   service_online?: boolean | null;
+  last_seen?: string | null;
 }
 
 export interface PrepaidOnlinePlan {
@@ -48,6 +51,7 @@ export interface PrepaidOnlinePlan {
 export function buildLivePresenceByRouter(
   routers: readonly { id: number }[],
   liveQueries: readonly { data?: PrepaidLiveData; isError?: boolean }[],
+  now = Date.now(),
 ): Map<number, LiveRouterPresence> {
   const presence = new Map<number, LiveRouterPresence>();
   routers.forEach((router, index) => {
@@ -65,8 +69,15 @@ export function buildLivePresenceByRouter(
       const username = normalizeLiveIdentity(user.name);
       if (username) onlineUsers.add(username);
     });
+    const fetchedAt = Date.parse(live?.fetchedAt ?? "");
+    const snapshotAge = now - fetchedAt;
     presence.set(router.id, {
-      authoritative: Boolean(live?.fetchedAt && !query?.isError),
+      // React Query retains the last successful data when a background
+      // refresh errors. Keep that verified session list briefly rather than
+      // immediately turning connected customers into Unknown.
+      authoritative: Number.isFinite(fetchedAt)
+        && snapshotAge >= 0
+        && snapshotAge <= LIVE_SESSION_FRESHNESS_MS,
       hotspotUsersAvailable: live?.hotspotUsersAvailable !== false,
       pppoeUsersAvailable: live?.pppoeUsersAvailable !== false,
       onlineUsers,
@@ -120,7 +131,14 @@ export function getCustomerLiveState(
     : serviceType === "pppoe"
       ? Boolean(routerPresence?.authoritative && routerPresence.pppoeUsersAvailable)
       : Boolean(routerPresence?.authoritative);
-  if (!sessionListAvailable || !routerPresence) return "unknown";
+  if (!sessionListAvailable || !routerPresence) {
+    // The saved flag is written only from a successful RouterOS observation.
+    // Use it when a live query is unavailable instead of discarding the last
+    // confirmed state; the dashboard warning explains that it may be stale.
+    if (user.service_online === true) return "online";
+    if (user.service_online === false) return "offline";
+    return "unknown";
+  }
 
   const identities = serviceType === "hotspot"
     ? [user.username, purchaseUsername(user)]

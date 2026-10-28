@@ -591,6 +591,9 @@ export default function Dashboard() {
   const onlineStaticUsers = onlineServiceCustomers.filter(
     customer => prepaidServiceType(customer.type) === "static",
   ).length;
+  const hasOnlinePresenceEvidence = [...livePresenceByRouter.values()].some(
+    presence => presence.authoritative,
+  ) || uniqueServiceCustomers.some(customer => typeof customer.service_online === "boolean");
   const activeUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "active").length;
   const expiredUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "expired").length;
   const serviceCountsLoading = customersLoading || customerPlanScopesLoading;
@@ -599,7 +602,7 @@ export default function Dashboard() {
   const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredUsers}`;
   const onlineCountValue = (count: number) => serviceCountsLoading || liveCountPending
     ? "…"
-    : serviceCountsUnavailable || liveCountUnavailable
+    : serviceCountsUnavailable || (liveCountUnavailable && !hasOnlinePresenceEvidence)
       ? "—"
       : String(count);
   const totalOnlineValue = onlineCountValue(onlineServiceCustomers.length);
@@ -701,7 +704,7 @@ export default function Dashboard() {
           <div className="dashboard-error" role="alert">
             <CircleAlert size={17} />
             <span>{liveCountUnavailable
-              ? "MikroTik session data is unavailable for one or more routers. Online totals are hidden until verified."
+              ? "MikroTik session data is unavailable for one or more routers. Counts use the latest available session or saved status and may be incomplete."
               : "Some live data could not be loaded. Your last available figures remain visible."}</span>
             <button
               type="button"

@@ -20,6 +20,7 @@ test("online prepaid counts use the normalized live session from the shared rout
         pppoeUsers: [{ name: "HomeUser" }],
       },
     }],
+    NOW,
   );
   const hotspot: PrepaidOnlineCustomer = {
     id: 1,
@@ -51,6 +52,7 @@ test("Hotspot session MAC matches the prepaid account when RouterOS usernames di
         hotspotUsers: [{ user: "router-generated-name", macAddress: "AA:BB:CC:DD:EE:FF" }],
       },
     }],
+    NOW,
   );
   const user: PrepaidOnlineCustomer = {
     id: 3,
@@ -80,6 +82,7 @@ test("Hotspot MAC fallback stays on the assigned router and does not apply to PP
         pppoeUsers: [],
       },
     }],
+    NOW,
   );
   const wrongRouter: PrepaidOnlineCustomer = {
     id: 4,
@@ -104,6 +107,7 @@ test("expired access and suspended prepaid records never count as online", () =>
   const presence = buildLivePresenceByRouter(
     [{ id: 7 }],
     [{ data: { fetchedAt: "2026-10-07T11:59:55.000Z", hotspotUsers: [{ user: "paid-user" }] } }],
+    NOW,
   );
   const base: PrepaidOnlineCustomer = {
     id: 1,
@@ -122,7 +126,7 @@ test("expired access and suspended prepaid records never count as online", () =>
   assert.equal(customerIsOnline({ ...base, status: "expired" }, presence, {}, NOW), true);
 });
 
-test("a failed router query reports unknown rather than a stale saved status", () => {
+test("a failed router query falls back to the last confirmed saved presence", () => {
   const presence = buildLivePresenceByRouter([{ id: 7 }], [{ isError: true }]);
   const user: PrepaidOnlineCustomer = {
     id: 1,
@@ -134,15 +138,65 @@ test("a failed router query reports unknown rather than a stale saved status", (
     service_online: true,
   };
 
-  assert.equal(getCustomerLiveState(user, presence, {}, NOW), "unknown");
-  assert.equal(getCustomerLiveState({ ...user, service_online: false }, presence, {}, NOW), "unknown");
-  assert.equal(customerIsOnline(user, presence, {}, NOW), false);
+  assert.equal(getCustomerLiveState(user, presence, {}, NOW), "online");
+  assert.equal(getCustomerLiveState({ ...user, service_online: false }, presence, {}, NOW), "offline");
+  assert.equal(customerIsOnline(user, presence, {}, NOW), true);
+});
+
+test("a recent successful session snapshot remains authoritative during a refresh error", () => {
+  const presence = buildLivePresenceByRouter(
+    [{ id: 7 }],
+    [{
+      isError: true,
+      data: {
+        fetchedAt: new Date(NOW - 30_000).toISOString(),
+        hotspotUsers: [{ user: "session-user" }],
+      },
+    }],
+    NOW,
+  );
+  const user: PrepaidOnlineCustomer = {
+    id: 1,
+    type: "hotspot",
+    username: "session-user",
+    router_id: 7,
+    status: "active",
+    expires_at: "2026-10-08T00:00:00.000Z",
+  };
+
+  assert.equal(getCustomerLiveState(user, presence, {}, NOW), "online");
+});
+
+test("an expired cached session list falls back to the saved presence flag", () => {
+  const presence = buildLivePresenceByRouter(
+    [{ id: 7 }],
+    [{
+      isError: true,
+      data: {
+        fetchedAt: new Date(NOW - 90_000).toISOString(),
+        hotspotUsers: [],
+      },
+    }],
+    NOW,
+  );
+  const user: PrepaidOnlineCustomer = {
+    id: 1,
+    type: "hotspot",
+    username: "saved-online-user",
+    router_id: 7,
+    status: "active",
+    expires_at: "2026-10-08T00:00:00.000Z",
+    service_online: true,
+  };
+
+  assert.equal(getCustomerLiveState(user, presence, {}, NOW), "online");
 });
 
 test("a successful empty active-session list reports offline", () => {
   const presence = buildLivePresenceByRouter(
     [{ id: 7 }],
     [{ data: { fetchedAt: "2026-10-07T11:59:55.000Z", hotspotUsers: [] } }],
+    NOW,
   );
   const user: PrepaidOnlineCustomer = {
     id: 1,
@@ -161,6 +215,7 @@ test("loading or unavailable Hotspot session lists report unknown", () => {
   const unavailable = buildLivePresenceByRouter(
     [{ id: 7 }],
     [{ data: { fetchedAt: "2026-10-07T11:59:55.000Z", hotspotUsersAvailable: false } }],
+    NOW,
   );
   const user: PrepaidOnlineCustomer = {
     id: 1,
@@ -169,7 +224,6 @@ test("loading or unavailable Hotspot session lists report unknown", () => {
     router_id: 7,
     status: "active",
     expires_at: "2026-10-08T00:00:00.000Z",
-    service_online: false,
   };
 
   assert.equal(getCustomerLiveState(user, loading, {}, NOW), "unknown");

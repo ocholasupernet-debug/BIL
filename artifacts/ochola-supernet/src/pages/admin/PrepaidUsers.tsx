@@ -2033,7 +2033,7 @@ export default function PrepaidUsers() {
                           className={`prepaid-plain-status prepaid-plain-status--${liveState}`}
                           title={liveState === "unknown"
                             ? "MikroTik Active Users could not be verified. This account is not being classified as offline."
-                            : "Based on the latest MikroTik Active Users session list."}
+                            : "Based on the latest available MikroTik session list or last confirmed saved status."}
                         >
                           {liveState === "online" ? "Online" : liveState === "offline" ? "Offline" : "Unknown"}
                         </span>
