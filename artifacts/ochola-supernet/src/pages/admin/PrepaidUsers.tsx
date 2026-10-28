@@ -23,7 +23,11 @@ import {
 } from "@/lib/prepaid-live-presence";
 import { usePrepaidLiveQueries } from "@/lib/prepaid-live-queries";
 import { PrepaidSyncReport, type PrepaidSyncResult } from "@/components/ui/PrepaidSyncReport";
-import { syncActiveAccountsToRouter } from "@/lib/prepaid-sync";
+import {
+  getActivePrepaidSyncTargets,
+  syncActiveAccountsAcrossRouters,
+  syncActiveAccountsToRouter,
+} from "@/lib/prepaid-sync";
 import { transactionDisplayId } from "@/lib/transaction-reference";
 import { PrepaidHotspotAdminGrantDialog } from "./PrepaidHotspotAdminGrantDialog";
 
@@ -805,6 +809,14 @@ export default function PrepaidUsers() {
     });
     return grouped;
   }, [paymentsByCustomerId, displayCustomers]);
+  const syncUsers = useMemo(() => displayCustomers.map(customer => ({
+    ...customer,
+    plan_id: customerPackageId(customer, paymentMap) ?? customer.plan_id,
+  })), [displayCustomers, paymentMap]);
+  const allSyncTargets = useMemo(
+    () => getActivePrepaidSyncTargets({ routers, users: syncUsers, plans }),
+    [routers, syncUsers, plans],
+  );
   const packageOptions = useMemo(() => {
     const ids = new Set<number>(plans.map(plan => plan.id));
     displayCustomers.forEach(customer => {
@@ -1009,6 +1021,7 @@ export default function PrepaidUsers() {
   /* Sync state */
   const [showSyncPicker,  setShowSyncPicker]  = useState(false);
   const [pickedRouter,    setPickedRouter]     = useState("");
+  const [confirmAllSync, setConfirmAllSync] = useState(false);
   const [syncing,         setSyncing]         = useState(false);
   const syncBusyRef = useRef(false);
   const [syncLogs,        setSyncLogs]        = useState<string[] | null>(null);
@@ -1250,10 +1263,7 @@ export default function PrepaidUsers() {
     try {
       const result = await syncActiveAccountsToRouter({
         router,
-        users: displayCustomers.map(customer => ({
-          ...customer,
-          plan_id: customerPackageId(customer, paymentMap) ?? customer.plan_id,
-        })),
+        users: syncUsers,
         plans,
         endpoint: apiUrl("/api/admin/sync/users"),
         adminId: ADMIN_ID,
@@ -1267,6 +1277,57 @@ export default function PrepaidUsers() {
       void qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
       const routerIndex = routers.findIndex(item => item.id === router.id);
       if (routerIndex >= 0) void liveQueries[routerIndex]?.refetch();
+    } catch (error) {
+      setSyncReport(previous => previous ? {
+        ...previous,
+        error: error instanceof Error ? error.message : "Sync could not be completed.",
+      } : null);
+    } finally {
+      syncBusyRef.current = false;
+      setSyncing(false);
+    }
+  }
+
+  async function handleSyncAll() {
+    if (syncBusyRef.current || allSyncTargets.length === 0) return;
+    syncBusyRef.current = true;
+    setSyncing(true);
+    setSyncLogs([]);
+    setConfirmAllSync(false);
+    setShowSyncPicker(false);
+    setSyncReport({
+      total: allSyncTargets.reduce((sum, target) => sum + target.activeCount, 0),
+      processed: 0,
+      users: [],
+      routerName: "All assigned routers",
+    });
+    const logs: string[] = [];
+    const log = (message: string) => {
+      logs.push(message);
+      setSyncLogs([...logs]);
+    };
+    try {
+      const result = await syncActiveAccountsAcrossRouters({
+        routers: allSyncTargets.map(target => target.router),
+        users: syncUsers,
+        plans,
+        endpoint: apiUrl("/api/admin/sync/users"),
+        adminId: ADMIN_ID,
+        token: getAdminApiToken() || "",
+        onLog: log,
+        onProgress: (total, processed, users) => setSyncReport({
+          total,
+          processed,
+          users,
+          routerName: "All assigned routers",
+        }),
+      });
+      setSyncReport({ ...result, routerName: "All assigned routers" });
+      void qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
+      for (const { router } of allSyncTargets) {
+        const routerIndex = routers.findIndex(item => item.id === router.id);
+        if (routerIndex >= 0) void liveQueries[routerIndex]?.refetch();
+      }
     } catch (error) {
       setSyncReport(previous => previous ? {
         ...previous,
@@ -1560,6 +1621,47 @@ export default function PrepaidUsers() {
                   {syncing ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <RefreshCw size={12} />}
                   Sync active accounts
                 </button>
+                <div style={{ borderTop: "1px solid var(--isp-border)", marginTop: 12, paddingTop: 10 }}>
+                  {!confirmAllSync ? (
+                    <>
+                      <p style={{ margin: "0 0 8px", fontSize: "0.72rem", lineHeight: 1.5, color: "var(--isp-text-muted)" }}>
+                        Sync {allSyncTargets.reduce((sum, target) => sum + target.activeCount, 0)} eligible accounts across {allSyncTargets.length} assigned routers.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmAllSync(true)}
+                        disabled={syncing || allSyncTargets.length === 0}
+                        style={{ ...BTN(allSyncTargets.length ? "#b45309" : "rgba(255,255,255,0.06)"), width: "100%", justifyContent: "center" }}
+                      >
+                        Sync all routers
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p role="alert" style={{ margin: "0 0 8px", fontSize: "0.72rem", lineHeight: 1.5, color: "var(--isp-text-muted)" }}>
+                        Confirm sync of currently entitled accounts only. Existing online sessions are preserved; expired, suspended, and data-depleted accounts are excluded.
+                      </p>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          type="button"
+                          onClick={() => void handleSyncAll()}
+                          disabled={syncing || allSyncTargets.length === 0}
+                          style={{ ...BTN("#b45309"), flex: 1, justifyContent: "center" }}
+                        >
+                          Confirm sync
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmAllSync(false)}
+                          disabled={syncing}
+                          style={{ ...BTN("var(--isp-text-muted)"), justifyContent: "center" }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             )}
           </div>

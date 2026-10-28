@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { syncActiveAccountsToRouter } from "./prepaid-sync";
+import {
+  getActivePrepaidSyncTargets,
+  syncActiveAccountsAcrossRouters,
+  syncActiveAccountsToRouter,
+} from "./prepaid-sync";
 
 const router = { id: 7, name: "Test router" };
 const plans = [{ id: 2, name: "3 hours", router_id: 7 }];
@@ -112,6 +116,78 @@ test("no active accounts produces an empty report without calling MikroTik", asy
   });
   assert.equal(result.total, 0);
   assert.deepEqual(result.users, []);
+});
+
+test("all-router sync targets only assigned active accounts and aggregates router results", async () => {
+  const routers = [router, { id: 9, name: "Second router" }];
+  const users = [
+    account(1),
+    { ...account(2), router_id: 9, plan_id: 3 },
+    { ...account(3), status: "suspended", router_id: 9, plan_id: 3 },
+  ];
+  const allPlans = [...plans, { id: 3, name: "Second plan", router_id: 9 }];
+  const targets = getActivePrepaidSyncTargets({ routers, users, plans: allPlans });
+  assert.deepEqual(targets.map(target => [target.router.id, target.activeCount]), [[7, 1], [9, 1]]);
+
+  const requestedRouters: number[] = [];
+  const progress: Array<[number, number]> = [];
+  const result = await syncActiveAccountsAcrossRouters({
+    routers, users, plans: allPlans, endpoint: "/test-sync", adminId: 8, token: "",
+    onProgress: (total, processed) => progress.push([total, processed]),
+    request: async (_url, init) => {
+      const payload = JSON.parse(String(init?.body));
+      requestedRouters.push(payload.routerId);
+      return Response.json({
+        ok: true,
+        syncResults: payload.users.map((user: { customer_id: number; username: string; type: string }) => ({
+          customerId: user.customer_id,
+          username: user.username,
+          planName: "verified plan",
+          serviceType: user.type,
+          routerName: routers.find(item => item.id === payload.routerId)?.name,
+          outcome: "synced",
+        })),
+      });
+    },
+  });
+
+  assert.deepEqual(requestedRouters, [7, 9]);
+  assert.equal(result.ok, true);
+  assert.equal(result.total, 2);
+  assert.equal(result.processed, 2);
+  assert.deepEqual(result.users.map(user => user.routerName), ["Test router", "Second router"]);
+  assert.ok(progress.every(([total]) => total === 2));
+});
+
+test("an unavailable router is reported while later assigned routers still sync", async () => {
+  const routers = [router, { id: 9, name: "Second router" }];
+  const users = [account(1), { ...account(2), router_id: 9, plan_id: 3 }];
+  const allPlans = [...plans, { id: 3, name: "Second plan", router_id: 9 }];
+  const requestedRouters: number[] = [];
+  const result = await syncActiveAccountsAcrossRouters({
+    routers, users, plans: allPlans, endpoint: "/test-sync", adminId: 8, token: "",
+    request: async (_url, init) => {
+      const payload = JSON.parse(String(init?.body));
+      requestedRouters.push(payload.routerId);
+      if (payload.routerId === 7) return Response.json({ ok: false, error: "Router unavailable" }, { status: 503 });
+      return Response.json({
+        ok: true,
+        syncResults: payload.users.map((user: { customer_id: number; username: string; type: string }) => ({
+          customerId: user.customer_id,
+          username: user.username,
+          planName: "verified plan",
+          serviceType: user.type,
+          routerName: "Second router",
+          outcome: "synced",
+        })),
+      });
+    },
+  });
+
+  assert.deepEqual(requestedRouters, [7, 9]);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.users.map(user => user.outcome), ["unknown", "synced"]);
+  assert.match(result.error || "", /Test router: Router unavailable/);
 });
 
 test("the API gates active-only sync before inactive router mutations and reports account confirmation", () => {
