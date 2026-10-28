@@ -6,6 +6,10 @@ const migration = readFileSync(
   new URL("../migrations/2026_prepaid_transaction_account_claim.sql", import.meta.url),
   "utf8",
 );
+const route = readFileSync(
+  new URL("../src/routes/mpesa-route.ts", import.meta.url),
+  "utf8",
+);
 
 test("qualifies the transaction customer_id predicate to avoid the output-name collision", () => {
   const update = migration.match(
@@ -15,4 +19,16 @@ test("qualifies the transaction customer_id predicate to avoid the output-name c
   assert.ok(update, "the account claim migration must link the payment transaction");
   assert.match(update, /payment\.customer_id\s+is\s+null/i);
   assert.doesNotMatch(update, /(?<![\w.])customer_id\s+is\s+null/i);
+});
+
+test("the account claim accepts the retryable paid state sent by Hotspot activation", () => {
+  assert.match(route, /status:\s*"payment_cleared_router_pending"/);
+  assert.match(
+    migration,
+    /p_customer_fields\s*->>\s*'status'\s+is\s+distinct\s+from\s+'payment_cleared_router_pending'/i,
+  );
+  assert.match(
+    migration,
+    /p_customer_fields\s*->>\s*'status'\s*,\s*\(p_customer_fields\s*->>\s*'expires_at'\)/i,
+  );
 });

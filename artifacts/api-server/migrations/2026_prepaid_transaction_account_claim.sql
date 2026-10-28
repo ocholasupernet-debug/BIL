@@ -64,7 +64,7 @@ begin
      or nullif(btrim(p_customer_fields ->> 'phone'), '') is null
      or nullif(btrim(p_customer_fields ->> 'password'), '') is null
      or nullif(p_customer_fields ->> 'expires_at', '') is null
-     or p_customer_fields ->> 'status' is distinct from 'active' then
+     or p_customer_fields ->> 'status' is distinct from 'payment_cleared_router_pending' then
     raise exception 'The requested Hotspot account details do not match the paid service.';
   end if;
 
@@ -155,7 +155,7 @@ begin
     'hotspot',
     nullif(p_customer_fields ->> 'ip_address', ''),
     p_customer_fields ->> 'mac_address',
-    'active',
+    p_customer_fields ->> 'status',
     (p_customer_fields ->> 'expires_at')::timestamptz,
     nullif(p_customer_fields ->> 'depletion_reason', ''),
     coalesce(nullif(p_customer_fields ->> 'created_at', '')::timestamptz, now()),
