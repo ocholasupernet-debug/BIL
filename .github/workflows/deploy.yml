@@ -67,6 +67,9 @@ jobs:
           node-version: 20
           cache: pnpm
 
+      - name: Test paid Hotspot account claim status contract
+        run: node --test artifacts/api-server/tests/prepaid-transaction-account-claim.test.mjs
+
       - name: Test WhatsApp environment sync
         run: node --test deploy/tests/sync-whatsapp-env.test.mjs
 
