@@ -3020,7 +3020,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   const plan = customerRow.plan_id
     ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
-        `id=eq.${customerRow.plan_id}&admin_id=eq.${planAdminId}&select=id,name,router_id,port_id,owner_reseller_id,type,plan_type,shared_users&limit=1`,
+        `id=eq.${customerRow.plan_id}&admin_id=eq.${planAdminId}&select=id,name,router_id,port_id,owner_reseller_id,type,plan_type,shared_users,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up&limit=1`,
       ))[0]
     : undefined;
   if (
@@ -3137,6 +3137,94 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   const maxSharedUsers = Math.max(1, Math.floor(Number(plan?.shared_users ?? 1)));
 
   try {
+    // A paid Hotspot purchase can be left in router-pending state when account
+    // provisioning failed after payment. Repair only ordinary tenant-owned,
+    // uncapped Hotspot accounts, and preserve counters and any live session.
+    const eligibleForPaidRecovery = customerRow.status === "payment_cleared_router_pending"
+      && customerRow.type === "hotspot"
+      && customerRow.admin_id === planAdminId
+      && customerRow.port_id == null
+      && customerRow.depletion_reason == null
+      && plan?.type === "hotspot"
+      && plan.router_id === routerId
+      && plan.port_id == null
+      && plan.owner_reseller_id == null
+      && Number(plan.data_limit_mb ?? 0) <= 0
+      && customerRow.expires_at != null
+      && Date.parse(customerRow.expires_at) > Date.now();
+    if (eligibleForPaidRecovery && plan) {
+      const purchases = await sbSelectStrict<{ id: number; mac_address: string | null }>(
+        "isp_transactions",
+        `admin_id=eq.${planAdminId}&customer_id=eq.${customerRow.id}&plan_id=eq.${plan.id}&status=in.(completed,paid,success)&select=id,mac_address&order=created_at.desc.nullslast,id.desc&limit=25`,
+      );
+      const hasVerifiedPaidPurchase = purchases.some(purchase =>
+        !purchase.mac_address
+        || !customerMac
+        || normalisePortalMac(purchase.mac_address) === customerMac,
+      );
+      if (hasVerifiedPaidPurchase) {
+        const restored = await prepaidHotspotReconnectOperations.withCustomerEditLock(
+          planAdminId,
+          Number(customerRow.id),
+          async assertLock => {
+            await assertLock();
+            const current = (await sbSelectStrict<CustomerRow>(
+              "isp_customers",
+              `id=eq.${customerRow.id}&admin_id=eq.${planAdminId}&status=eq.payment_cleared_router_pending&select=id,admin_id,status,type,plan_id,router_id,port_id,expires_at,depletion_reason&limit=1`,
+            ))[0];
+            if (
+              !current
+              || current.type !== "hotspot"
+              || current.plan_id !== plan.id
+              || current.router_id !== routerId
+              || current.port_id != null
+              || current.depletion_reason != null
+              || !current.expires_at
+              || Date.parse(current.expires_at) <= Date.now()
+            ) return false;
+
+            await assertLock();
+            await prepaidHotspotReconnectOperations.reconcileHotspotUserAccess(creds, {
+              name: username,
+              password,
+              profile: hotspotPlanProfileName(plan.name, routerId),
+              comment: username,
+              expiresAt: current.expires_at,
+              enabled: true,
+              limitBytesTotal: "0",
+              rateLimit: routerRateLimit(
+                plan.speed_down,
+                plan.speed_up,
+                plan.speed_down_unit,
+                plan.speed_up_unit,
+              ),
+              sharedUsers: Math.max(1, Math.floor(Number(plan.shared_users ?? 1))),
+              resetCounters: false,
+              preserveActiveSession: true,
+              beforeMutation: assertLock,
+            });
+            await assertLock();
+            const [updated] = await sbUpdateStrict<CustomerRow>(
+              "isp_customers",
+              `id=eq.${current.id}&admin_id=eq.${planAdminId}&status=eq.payment_cleared_router_pending`,
+              { status: "active" },
+            );
+            if (!updated || updated.status !== "active") {
+              throw new Error("The recovered Hotspot account status was not confirmed.");
+            }
+            customer.status = "active";
+            return true;
+          },
+        );
+        if (restored) {
+          logger.info(
+            { adminId: planAdminId, routerId, customerId: customerRow.id, planId: plan.id },
+            "[customers/hotspot-login] recovered paid pending Hotspot account",
+          );
+        }
+      }
+    }
+
     // Keep the common login/reconnect path on one RouterOS API connection.
     // The helper reads active sessions, discovers the device IP, logs in, and
     // confirms the session without opening separate API connections per step.
