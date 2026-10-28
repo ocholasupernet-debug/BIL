@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, Package, CreditCard,
   Network, Settings, Bell, Wifi, Shield, FolderOpen,
   Sliders, BookOpen, LogOut, Webhook, ChevronRight,
-  CheckSquare, Search, Sun, Moon, Menu, KeyRound, X, ShieldAlert,
+  CheckSquare, Search, Sun, Moon, Menu, KeyRound, X, ShieldAlert, Sparkles,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useBrand } from "@/context/BrandContext";
@@ -132,6 +132,7 @@ const navSections: NavSection[] = [
     visibilityKey: "overview",
     items: [
       { name: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
+      { name: "OCHOLASUPERNET Co-Pilot", href: "/admin/copilot", icon: Sparkles },
     ],
   },
   {

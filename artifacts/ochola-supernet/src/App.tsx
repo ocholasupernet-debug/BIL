@@ -14,6 +14,7 @@ import { getAdminApiToken, getAdminRole, isImpersonating } from "@/lib/supabase"
 import LandingPage from "./pages/LandingPage";
 import AdminLogin from "./pages/admin/AdminLogin";
 import AdminDashboard from "./pages/admin/Dashboard";
+import Copilot from "./pages/admin/Copilot";
 import AdminCustomers from "./pages/admin/Customers";
 import NetworkRouters from "./pages/admin/network/Routers";
 import NetworkQueues from "./pages/admin/network/Queues";
@@ -204,6 +205,7 @@ function Router() {
       <Route path="/" component={SubdomainGuard} />
       <Route path="/admin/login" component={AdminLogin} />
       <Route path="/admin/dashboard" component={RoleAwareDashboard} />
+      <Route path="/admin/copilot" component={Copilot} />
       <Route path="/admin/reseller" component={ResellerWorkspace} />
       <Route path="/admin/resellers" component={ResellerWorkspace} />
       <Route path="/admin/network/resellers" component={ResellerWorkspace} />

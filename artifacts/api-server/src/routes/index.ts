@@ -50,6 +50,7 @@ import superAdminAccountAccessRouter from "./super-admin-account-access-route.js
 import superAdminAdminsRouter from "./super-admin-admins-route.js";
 import adminDataRouter from "./admin-data-route.js";
 import superAdminDataRouter from "./super-admin-data-route.js";
+import copilotRouter from "./copilot-route.js";
 
 const router: IRouter = Router();
 
@@ -103,6 +104,7 @@ router.use(dashboardPreferencesRouter);
   router.use(superAdminAccountAccessRouter);
   router.use(superAdminAdminsRouter);
   router.use(superAdminDataRouter);
+router.use(copilotRouter);
   router.use(adminDataRouter);
 
 export default router;
