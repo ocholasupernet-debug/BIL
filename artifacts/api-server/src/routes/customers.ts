@@ -766,7 +766,40 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
     `admin_id=eq.${adminId}&select=*`,
   );
   const includeArchived = req.query.includeArchived === "true";
-  res.json(rows.filter(row => includeArchived ? Boolean(row.archived_at) : !row.archived_at));
+  const entitledArchivedRows = rows.filter(row =>
+    Boolean(row.archived_at)
+    && isPrepaidCustomerEntitled(row.status, row.expires_at, row.depletion_reason),
+  );
+  const restoredIds = new Set<number>();
+  for (let offset = 0; offset < entitledArchivedRows.length; offset += 100) {
+    const batch = entitledArchivedRows.slice(offset, offset + 100);
+    try {
+      const restored = await sbUpdateStrict<{ id: number }>(
+        "isp_customers",
+        `admin_id=eq.${adminId}&id=in.(${batch.map(row => Number(row.id)).join(",")})&archived_at=not.is.null&select=id`,
+        { archived_at: null },
+      );
+      restored.forEach(row => restoredIds.add(Number(row.id)));
+    } catch (error) {
+      logger.warn(
+        { adminId, count: batch.length, err: error },
+        "[customers] could not clear archive marker from currently entitled users",
+      );
+    }
+  }
+  for (const row of rows) {
+    if (restoredIds.has(Number(row.id))) row.archived_at = null;
+  }
+  res.json(rows.filter(row => {
+    const currentlyEntitled = isPrepaidCustomerEntitled(
+      row.status,
+      row.expires_at,
+      row.depletion_reason,
+    );
+    return includeArchived
+      ? Boolean(row.archived_at) && !currentlyEntitled
+      : !row.archived_at || currentlyEntitled;
+  }));
 });
 
 router.get("/customers/archive-preview", requireAdmin(), async (req, res): Promise<void> => {

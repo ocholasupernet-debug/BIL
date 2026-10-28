@@ -945,6 +945,7 @@ export async function autoProvision(opts: {
       router_id: plan.router_id,
       port_id: plan.port_id,
       expires_at: expiresAt,
+      archived_at: null,
       ...((planType !== "pppoe" && planType !== "vlan") ? { username } : {}),
       updated_at: new Date().toISOString(),
     });
@@ -997,6 +998,7 @@ async function activateCustomer(
   await sbUpdate("isp_customers", `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`, {
     status:     customer.status === "suspended" ? "suspended" : "active",
     depletion_reason: null,
+    archived_at: null,
     expires_at: expiresAt ?? calcExpiry(plan.validity, plan.validity_unit, plan.validity_days),
     router_id: plan.router_id,
     port_id: plan.port_id,

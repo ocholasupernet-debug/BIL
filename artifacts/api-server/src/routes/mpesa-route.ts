@@ -28,6 +28,12 @@ import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { hasGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
 import { planBelongsToOwner } from "../lib/plan-ownership.js";
 import { isPrepaidCustomerEntitled } from "../lib/prepaid-entitlement.js";
+import {
+  isRetryablePaidHotspotAccount,
+  type HotspotPlanRetryScope,
+  type PaidHotspotTransactionForRetry,
+  type PendingHotspotCustomerForRetry,
+} from "../lib/hotspot-activation-retry.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { latestMpesaStkPushHealth, withMpesaStkPushHealth, type MpesaStkPushStatus } from "../lib/mpesa-health.js";
 import { createDarajaTokenProvider } from "../lib/daraja-oauth-token.js";
@@ -318,6 +324,7 @@ async function markPaymentClearedRouterPending(opts: {
       `id=eq.${opts.customerId}&admin_id=eq.${opts.customerAdminId ?? opts.adminId}`,
       {
         status: "payment_cleared_router_pending",
+        archived_at: null,
         updated_at: new Date().toISOString(),
       },
     ),
@@ -3112,7 +3119,8 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     mac_address: mac,
     ip_address: null,
     status: "active",
-     depletion_reason: null,
+    depletion_reason: null,
+    archived_at: null,
     expires_at: expiresAt.toISOString(),
     updated_at: new Date().toISOString(),
   };
@@ -3567,16 +3575,9 @@ async function runAutomaticHotspotActivationSweep(): Promise<void> {
       `status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&customer_id=is.null&plan_id=not.is.null&mac_address=not.is.null&notes=ilike.*automatic%20account%20activation%20is%20pending*&select=id,admin_id,plan_id,reference,mac_address&order=created_at.asc,id.asc&limit=${AUTOMATIC_HOTSPOT_ACTIVATION_BATCH}`,
     );
 
-    const routerPending = await sbSelectStrict<{
-      id: number;
-      admin_id: number;
-      plan_id: number;
-      reference: string | null;
-      mac_address: string | null;
-      notes: string | null;
-    }>(
-      "isp_transactions",
-      `status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&customer_id=not.is.null&plan_id=not.is.null&mac_address=not.is.null&notes=ilike.*RouterOS%20account%20activation%20is%20pending*&select=id,admin_id,plan_id,reference,mac_address,notes&order=created_at.asc,id.asc&limit=${AUTOMATIC_HOTSPOT_ACTIVATION_BATCH}`,
+    const pendingCustomers = await sbSelectStrict<PendingHotspotCustomerForRetry>(
+      "isp_customers",
+      `status=eq.payment_cleared_router_pending&type=eq.hotspot&expires_at=gt.${encodeURIComponent(new Date().toISOString())}&select=id,admin_id,plan_id,type,status,mac_address,router_id,port_id,expires_at,depletion_reason&order=updated_at.asc,id.asc&limit=50`,
     );
 
     const work: Array<{
@@ -3586,18 +3587,26 @@ async function runAutomaticHotspotActivationSweep(): Promise<void> {
       macAddress: string;
       retry: boolean;
     }> = [];
-    const verifiedHotspotPlans = new Set<string>();
-    const isHotspotPlan = async (adminId: number, planId: number): Promise<boolean> => {
+    const verifiedHotspotPlans = new Map<string, HotspotPlanRetryScope | null>();
+    const getHotspotPlan = async (adminId: number, planId: number) => {
       const key = `${adminId}:${planId}`;
-      if (verifiedHotspotPlans.has(key)) return true;
-      const plans = await sbSelectStrict<{ type: string }>(
+      if (verifiedHotspotPlans.has(key)) return verifiedHotspotPlans.get(key);
+      const plans = await sbSelectStrict<{
+        type: string;
+        router_id: number | null;
+        port_id: number | null;
+      }>(
         "isp_plans",
-        `id=eq.${planId}&admin_id=eq.${adminId}&select=type&limit=1`,
+        `id=eq.${planId}&admin_id=eq.${adminId}&select=type,router_id,port_id&limit=1`,
       );
-      const valid = normalizePlanServiceType(plans[0]?.type) === "hotspot";
-      if (valid) verifiedHotspotPlans.add(key);
-      return valid;
+      const plan = plans[0] && normalizePlanServiceType(plans[0].type) === "hotspot"
+        ? { type: plans[0].type, router_id: plans[0].router_id, port_id: plans[0].port_id }
+        : null;
+      verifiedHotspotPlans.set(key, plan);
+      return plan;
     };
+    const isHotspotPlan = async (adminId: number, planId: number): Promise<boolean> =>
+      Boolean(await getHotspotPlan(adminId, planId));
     for (const transaction of unlinked) {
       if (
         transaction.admin_id > 0
@@ -3614,19 +3623,27 @@ async function runAutomaticHotspotActivationSweep(): Promise<void> {
         });
       }
     }
+    const pendingCustomerIds = pendingCustomers.map(customer => Number(customer.id)).filter(id => id > 0);
+    const routerPending = pendingCustomerIds.length
+      ? await sbSelectStrict<PaidHotspotTransactionForRetry>(
+          "isp_transactions",
+          `customer_id=in.(${pendingCustomerIds.join(",")})&status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&plan_id=not.is.null&mac_address=not.is.null&select=id,admin_id,customer_id,plan_id,status,payment_method,payment_intent_id,reference,mac_address&order=created_at.desc,id.desc&limit=100`,
+        )
+      : [];
+    const pendingCustomerById = new Map(pendingCustomers.map(customer => [Number(customer.id), customer]));
+    const selectedPendingCustomers = new Set<number>();
     for (const transaction of routerPending) {
-      if (work.length >= AUTOMATIC_HOTSPOT_ACTIVATION_BATCH || transaction.admin_id < 1) break;
-      if (
-        !transaction.reference
-        || !transaction.mac_address
-        || !transaction.notes?.includes("RouterOS account activation is pending")
-        || !await isHotspotPlan(transaction.admin_id, transaction.plan_id)
-      ) continue;
+      if (work.length >= AUTOMATIC_HOTSPOT_ACTIVATION_BATCH) break;
+      const customer = pendingCustomerById.get(Number(transaction.customer_id));
+      if (!customer || selectedPendingCustomers.has(customer.id)) continue;
+      const plan = await getHotspotPlan(transaction.admin_id, transaction.plan_id);
+      if (!plan || !isRetryablePaidHotspotAccount(customer, transaction, plan)) continue;
+      selectedPendingCustomers.add(customer.id);
       work.push({
         transactionId: transaction.id,
         adminId: transaction.admin_id,
-        checkoutId: transaction.reference,
-        macAddress: transaction.mac_address,
+        checkoutId: transaction.reference!,
+        macAddress: transaction.mac_address!,
         retry: true,
       });
     }

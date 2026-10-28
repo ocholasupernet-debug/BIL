@@ -85,7 +85,7 @@
 - [Prepaid session enforcement](prepaid-session-enforcement.md) — Preserve entitled live sessions during renewal and routine sync; disconnect only for expiry, depleted quota, or suspension.
 - [Prepaid user time adjustment](prepaid-user-time-adjustment.md) — Adjust existing expiry per user and reconcile live access; do not bulk-change unverified affected accounts.
 - [Prepaid user display identity](prepaid-user-display-identity.md) — Show one scoped row per verified prepaid identity without deleting linked customer records.
-- [Prepaid customer archive](prepaid-customer-archive.md) — Hide expired accounts reversibly; preserve every transaction row and field.
+- [Prepaid customer archive](prepaid-customer-archive.md) — Hide only expired accounts reversibly; never let an entitled user disappear from Prepaid Users.
 - [Hotspot FUP enforcement](hotspot-fup-enforcement.md) — Throttle policies must suppress hard byte caps and RADIUS Max-Data, while keeping router-local FUP enforcement and expiry separate.
 - [Multi-port service isolation](multi-port-service-isolation.md) — Keep the main portal in `hotspot/`; isolate each extra port/reseller in its own `flash/hotspot/<service>` folder and switch only one verified main profile.
 - [ISP-owned port services](isp-owned-port-services.md) — Legacy port rows require reseller_id; ISP-owned multiport rows use the tenant owner while assigned_reseller_id stays empty.

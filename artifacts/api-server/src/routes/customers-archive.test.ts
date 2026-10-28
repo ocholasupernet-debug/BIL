@@ -45,6 +45,7 @@ test("expired customer archive preserves every transaction field and can be rest
   const customers: FixtureRow[] = [
     { id: 801, admin_id: 7, status: "expired", expires_at: "2020-01-01T00:00:00Z", depletion_reason: null, archived_at: null },
     { id: 802, admin_id: 7, status: "active", expires_at: "2099-01-01T00:00:00Z", depletion_reason: null, archived_at: null },
+    { id: 803, admin_id: 7, status: "active", expires_at: "2099-01-01T00:00:00Z", depletion_reason: null, archived_at: "2026-10-01T00:00:00Z" },
   ];
   const transactions: FixtureRow[] = [
     { id: 9001, admin_id: 7, customer_id: 801, amount: 100, status: "completed", notes: "paid receipt" },
@@ -83,6 +84,15 @@ test("expired customer archive preserves every transaction field and can be rest
   const token = generateAdminSessionToken("7", 1);
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
   const beforeTransactions = structuredClone(transactions);
+  const customerList = await originalFetch(`${origin}/api/customers`, { headers });
+  assert.equal(customerList.status, 200, await customerList.clone().text());
+  const visibleCustomers = await customerList.json() as FixtureRow[];
+  assert.ok(visibleCustomers.some(row => row.id === 803));
+  assert.equal(customers.find(row => row.id === 803)?.archived_at, null);
+  const archivedList = await originalFetch(`${origin}/api/customers?includeArchived=true`, { headers });
+  assert.equal(archivedList.status, 200, await archivedList.clone().text());
+  assert.ok(!(await archivedList.json() as FixtureRow[]).some(row => row.id === 803));
+
   const preview = await originalFetch(`${origin}/api/customers/archive-preview?customerIds=801`, { headers });
   assert.equal(preview.status, 200, await preview.clone().text());
   assert.equal((await preview.json() as { transactionCount: number }).transactionCount, 2);
