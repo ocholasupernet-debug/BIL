@@ -645,6 +645,27 @@ export default function Dashboard() {
     retry: false,
   });
   const telemetry = telemetryQuery.data;
+  const telemetryUsesLastKnownPresence = liveCountUnavailable
+    || Boolean(telemetry?.rows.some(row => !row.routerAvailable));
+  const resolvedOnlineTelemetryTotals = [
+    {
+      label: telemetryUsesLastKnownPresence
+        ? "Last known online users"
+        : selectedRouterObj ? `${selectedRouterObj.name} online users` : "System-wide online users",
+      value: onlineServiceCustomers.length,
+      tone: "green",
+    },
+    {
+      label: telemetryUsesLastKnownPresence ? "Last known PPPoE" : "PPPoE online",
+      value: onlinePppoeUsers,
+      tone: "accent",
+    },
+    {
+      label: telemetryUsesLastKnownPresence ? "Last known Hotspot" : "Hotspot online",
+      value: onlineHotspotUsers,
+      tone: "teal",
+    },
+  ] as const;
   const telemetryPorts = telemetry?.filters.ports.filter((port) => selectedRouter === "all" || port.routerId === selectedRouter) ?? [];
   const filteredCustomerIds = useMemo(() => new Set(filteredCustomers.map(customer => customer.id)), [filteredCustomers]);
   const filteredTransactions = useMemo(
@@ -891,15 +912,21 @@ export default function Dashboard() {
           {telemetryQuery.isLoading ? (
             <div className="dashboard-loading"><Loader2 size={16} className="animate-spin" /> Reading active sessions…</div>
           ) : telemetryQuery.error ? (
-            <div className="dashboard-empty"><CircleAlert size={17} /><span>{(telemetryQuery.error as Error).message}</span></div>
+            <>
+              <div className="dashboard-empty"><CircleAlert size={17} /><span>{(telemetryQuery.error as Error).message}</span></div>
+              <div className="dashboard-telemetry-totals">
+                {resolvedOnlineTelemetryTotals.map(({ label, value, tone }) => (
+                  <div key={label} className={`dashboard-telemetry-total dashboard-telemetry-total--${tone}`}>
+                    <span>{label}</span>
+                    <strong>{String(value)}</strong>
+                  </div>
+                ))}
+              </div>
+            </>
           ) : telemetry ? (
             <>
               <div className="dashboard-telemetry-totals">
-                {[
-                  { label: selectedRouterObj ? `${selectedRouterObj.name} online users` : "System-wide online users", value: telemetry.totals.onlineUsers, tone: "green" },
-                  { label: "Active PPPoE sessions", value: telemetry.totals.pppoeActive, tone: "accent" },
-                  { label: "Active Hotspot leases", value: telemetry.totals.hotspotActive, tone: "teal" },
-                ].map(({ label, value, tone }) => (
+                {resolvedOnlineTelemetryTotals.map(({ label, value, tone }) => (
                   <div key={label} className={`dashboard-telemetry-total dashboard-telemetry-total--${tone}`}>
                     <span>{label}</span>
                     <strong>{String(value)}</strong>
