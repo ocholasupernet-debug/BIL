@@ -2869,7 +2869,8 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     return;
   }
 
-  const transactions = await sbSelect<{
+  const adminActivePromise = isActiveIspAdmin(adminId);
+  const transactionsPromise = sbSelect<{
     id: number;
     admin_id: number;
     customer_id: number | null;
@@ -2882,6 +2883,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     "isp_transactions",
     `${Number.isSafeInteger(Number(req.body?.recovery_transaction_id)) && Number(req.body?.recovery_transaction_id) > 0 ? `id=eq.${Number(req.body.recovery_transaction_id)}&` : ""}reference=eq.${encodeURIComponent(checkoutId)}&admin_id=eq.${adminId}&status=in.(completed,paid,success)&payment_method=in.(mpesa,loyalty_points)&select=id,admin_id,customer_id,plan_id,payment_phone,mac_address,status,payment_method&limit=1`,
   );
+  const [transactions, adminActive] = await Promise.all([transactionsPromise, adminActivePromise]);
   const transaction = transactions[0];
 
   if (!transaction) {
@@ -2895,7 +2897,7 @@ async function handleHotspotMacAccess(req: Request, res: Response): Promise<void
     res.status(400).json({ ok: false, error: "This device MAC address does not match the paid checkout." });
     return;
   }
-  if (!await isActiveIspAdmin(adminId)) {
+  if (!adminActive) {
     res.status(404).json({ ok: false, error: "This ISP account is not active." });
     return;
   }
