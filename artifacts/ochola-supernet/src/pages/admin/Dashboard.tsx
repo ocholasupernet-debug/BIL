@@ -559,7 +559,15 @@ export default function Dashboard() {
     () => buildLivePresenceByRouter(routers, liveQueries),
     [routers, liveQueries],
   );
-  const liveCountUnavailable = liveQueries.some(result => result.isError);
+  const liveCountUnavailable = liveQueries.some(result =>
+    result.isError
+    || Boolean(result.data?.fetchedAt && (
+      result.data.hotspotUsersAvailable === false
+      || result.data.pppoeUsersAvailable === false
+    )),
+  );
+  const liveCountPending = routers.length > 0
+    && liveQueries.some(result => !result.data && result.isFetching && !result.isError);
   const liveCountRefreshing = liveQueries.some(result => result.isFetching);
   const uniqueServiceCustomers = useMemo(
     () => mergeCustomerServiceIdentities(filteredCustomers, customerPlanScopeMap),
@@ -589,9 +597,9 @@ export default function Dashboard() {
   const serviceCountsUnavailable = (customersError && customers.length === 0)
     || (customerPlanScopesError && customerPlanScopes.plans.length === 0 && customerPlanScopes.ports.length === 0);
   const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredUsers}`;
-  const onlineCountValue = (count: number) => serviceCountsLoading
+  const onlineCountValue = (count: number) => serviceCountsLoading || liveCountPending
     ? "…"
-    : serviceCountsUnavailable
+    : serviceCountsUnavailable || liveCountUnavailable
       ? "—"
       : String(count);
   const totalOnlineValue = onlineCountValue(onlineServiceCustomers.length);
@@ -692,7 +700,9 @@ export default function Dashboard() {
         {hasError && (
           <div className="dashboard-error" role="alert">
             <CircleAlert size={17} />
-            <span>Some live data could not be loaded. Your last available figures remain visible.</span>
+            <span>{liveCountUnavailable
+              ? "MikroTik session data is unavailable for one or more routers. Online totals are hidden until verified."
+              : "Some live data could not be loaded. Your last available figures remain visible."}</span>
             <button
               type="button"
               className="dashboard-error-retry"

@@ -16,6 +16,7 @@ import { getCustomerServiceStatus } from "@/lib/customer-service-status";
 import {
   buildLivePresenceByRouter,
   customerIsOnline,
+  getCustomerLiveState,
   normalizeLiveIdentity,
   prepaidServiceType,
   purchaseUsername,
@@ -852,7 +853,7 @@ export default function PrepaidUsers() {
     const normalizedMac = String(user.mac_address ?? "").toLowerCase().replace(/[^a-f0-9]/g, "");
     return prepaidServiceType(user.type) === "hotspot"
       && hasUnexpiredPaidAccess(user)
-      && !customerIsOnline(user, livePresenceByRouter, planMap)
+      && getCustomerLiveState(user, livePresenceByRouter, planMap) === "offline"
       && Boolean(user.plan_id && plan && routerId && routerMap[routerId])
       && normalizedMac.length === 12;
   }), [displayCustomers, planMap, routerMap, livePresenceByRouter]);
@@ -1392,6 +1393,7 @@ export default function PrepaidUsers() {
         .prepaid-plain-status::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;background:var(--isp-text-sub)}
         .prepaid-plain-status--online::before{background:var(--isp-green)}
         .prepaid-plain-status--offline::before{background:#c66b5f}
+        .prepaid-plain-status--unknown::before{background:#d39b42}
         .prepaid-table-shell tbody tr.prepaid-row-expired .prepaid-plain-status{color:#ef4444}
         .prepaid-table-shell tbody tr.prepaid-row-expired .prepaid-plain-status::before{background:#ef4444}
         .prepaid-table-shell th,.prepaid-table-shell td{border-right:1px solid var(--isp-border)}
@@ -1873,7 +1875,8 @@ export default function PrepaidUsers() {
                   const payment = paymentMap[user.id];
                   const displayedPlan = plan;
                   const username = purchaseUsername(user);
-                  const online = customerIsOnline(user, livePresenceByRouter, planMap);
+                  const liveState = getCustomerLiveState(user, livePresenceByRouter, planMap);
+                  const online = liveState === "online";
                   const fup = user.fup_limit_mb ?? plan?.data_limit_mb ?? null;
                   const expired  = isCustomerExpired(user);
                   const planStatus = expired
@@ -1925,13 +1928,15 @@ export default function PrepaidUsers() {
                       <td style={TD}><span className="prepaid-plain-status">{planStatus}</span></td>
                       <td style={TD}>
                         <span
-                          className={`prepaid-plain-status ${online ? "prepaid-plain-status--online" : "prepaid-plain-status--offline"}`}
-                          title="Based on the latest RouterOS session; the last saved status is kept while the router is loading or unavailable."
+                          className={`prepaid-plain-status prepaid-plain-status--${liveState}`}
+                          title={liveState === "unknown"
+                            ? "MikroTik Active Users could not be verified. This account is not being classified as offline."
+                            : "Based on the latest MikroTik Active Users session list."}
                         >
-                          {online ? "Online" : "Offline"}
+                          {liveState === "online" ? "Online" : liveState === "offline" ? "Offline" : "Unknown"}
                         </span>
                       </td>
-                      <td className="prepaid-col-optional" style={{ ...TD, fontSize: "0.68rem", fontVariantNumeric: "tabular-nums" }}>{online ? "Online" : fmtTableDateTime(user.last_seen ?? (expired ? user.expires_at : null))}</td>
+                      <td className="prepaid-col-optional" style={{ ...TD, fontSize: "0.68rem", fontVariantNumeric: "tabular-nums" }}>{online ? "Online" : liveState === "unknown" ? "—" : fmtTableDateTime(user.last_seen ?? (expired ? user.expires_at : null))}</td>
                       <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap" }}>
                          <span className="prepaid-plain-muted" title={usageBytes === null ? undefined : `${Math.floor(usageBytes).toLocaleString("en-US")} bytes`}>
                            {formatUsageBytes(usageBytes)}

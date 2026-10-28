@@ -22,7 +22,7 @@ async function fetchPrepaidRouterLive(router: PrepaidLiveRouter): Promise<Prepai
  */
 export function usePrepaidLiveQueries(
   routers: readonly PrepaidLiveRouter[],
-  refetchInterval = 15_000,
+  refetchInterval = 10_000,
 ) {
   return useQueries({
     queries: routers.map(router => ({

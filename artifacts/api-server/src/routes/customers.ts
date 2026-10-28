@@ -2382,6 +2382,7 @@ router.get("/customers/hotspot-connected-devices", requireAdmin(), async (req, r
     const plansById = new Map(plans.map(plan => [Number(plan.id), plan]));
     const output: Array<Record<string, unknown>> = [];
     const seenCustomers = new Set<number>();
+    const successfullyScannedRouterIds = new Set<number>();
     const routerErrors: Array<{ routerId: number; routerName: string; error: string }> = [];
     const queueStatsByRouter = new Map<number, Record<string, {
       bytesIn: number; bytesOut: number; totalBytes: number; rate: string; maxLimit: string;
@@ -2392,6 +2393,7 @@ router.get("/customers/hotspot-connected-devices", requireAdmin(), async (req, r
       const creds = routerCredentials(routerRow);
       try {
         liveDevices = await fetchHotspotConnectedDevices(creds);
+        successfullyScannedRouterIds.add(Number(routerRow.id));
       } catch (error) {
         logger.warn({ err: error, adminId, routerId: routerRow.id }, "[customers/hotspot-connected-devices] router query failed");
         routerErrors.push({
@@ -2468,7 +2470,11 @@ router.get("/customers/hotspot-connected-devices", requireAdmin(), async (req, r
     for (const customer of customers) {
       const plan = customer.plan_id ? plansById.get(Number(customer.plan_id)) : undefined;
       const routerId = Number(customer.router_id ?? plan?.router_id ?? 0);
-      if (!customer.mac_address || seenCustomers.has(Number(customer.id)) || !routers.some(row => Number(row.id) === routerId)) continue;
+      if (
+        !customer.mac_address
+        || seenCustomers.has(Number(customer.id))
+        || !successfullyScannedRouterIds.has(routerId)
+      ) continue;
       const queueStats = customer.username ? queueStatsByRouter.get(routerId)?.[customer.username] : undefined;
       await sbUpdate(
         "isp_customers",

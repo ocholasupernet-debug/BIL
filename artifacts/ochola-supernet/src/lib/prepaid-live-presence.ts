@@ -87,15 +87,19 @@ export function purchaseUsername(user: PrepaidOnlineCustomer) {
   return `prepaid-${user.id}`;
 }
 
-export function customerIsOnline(
+export type CustomerLiveState = "online" | "offline" | "unknown";
+
+export function getCustomerLiveState(
   user: PrepaidOnlineCustomer,
   livePresenceByRouter: Map<number, LiveRouterPresence>,
   planMap: Record<number, PrepaidOnlinePlan>,
   now = Date.now(),
-) {
-  if (getCustomerServiceStatus(user, now) !== "active") return false;
+): CustomerLiveState {
+  if (getCustomerServiceStatus(user, now) !== "active") return "offline";
   if (String(user.type ?? "").toLowerCase() === "vlan") {
-    return user.status === "active" && user.service_online === true;
+    if (user.status !== "active") return "offline";
+    if (user.service_online === true) return "online";
+    return user.service_online === false ? "offline" : "unknown";
   }
   const routerId = user.router_id ?? (user.plan_id != null ? planMap[user.plan_id]?.router_id : null);
   const routerPresence = routerId == null ? undefined : livePresenceByRouter.get(routerId);
@@ -105,18 +109,26 @@ export function customerIsOnline(
     : serviceType === "pppoe"
       ? Boolean(routerPresence?.authoritative && routerPresence.pppoeUsersAvailable)
       : Boolean(routerPresence?.authoritative);
-  if (sessionListAvailable && routerPresence) {
-    const identities = serviceType === "hotspot"
-      ? [user.username, purchaseUsername(user)]
-      : serviceType === "pppoe"
-        ? [user.pppoe_username, user.username, purchaseUsername(user)]
-        : [user.username, user.pppoe_username, purchaseUsername(user)];
-    return identities
-      .map(normalizeLiveIdentity)
-      .filter(Boolean)
-      .some(value => routerPresence.onlineUsers.has(value));
-  }
-  // Keep the last saved online state visible while live router data is loading
-  // or unavailable instead of turning every account into a false disconnect.
-  return user.service_online === true;
+  if (!sessionListAvailable || !routerPresence) return "unknown";
+
+  const identities = serviceType === "hotspot"
+    ? [user.username, purchaseUsername(user)]
+    : serviceType === "pppoe"
+      ? [user.pppoe_username, user.username, purchaseUsername(user)]
+      : [user.username, user.pppoe_username, purchaseUsername(user)];
+  return identities
+    .map(normalizeLiveIdentity)
+    .filter(Boolean)
+    .some(value => routerPresence.onlineUsers.has(value))
+    ? "online"
+    : "offline";
+}
+
+export function customerIsOnline(
+  user: PrepaidOnlineCustomer,
+  livePresenceByRouter: Map<number, LiveRouterPresence>,
+  planMap: Record<number, PrepaidOnlinePlan>,
+  now = Date.now(),
+) {
+  return getCustomerLiveState(user, livePresenceByRouter, planMap, now) === "online";
 }
