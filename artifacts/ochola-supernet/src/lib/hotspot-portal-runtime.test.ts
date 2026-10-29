@@ -58,7 +58,13 @@ test("Dansted keeps purchase guidance, reconnect, and voucher modules available"
   assert.match(portalTemplate, /How To Purchase/);
   assert.match(portalTemplate, /hero:true,packages:true,connectionSupport:true,voucher:true,paymentRecovery:true/);
   assert.match(portalTemplate, /data\.vouchersEnabled===false&&!isDanstedPortal\(\)/);
+  assert.match(portalTemplate, /setPortalText\("portalHeroTitle",isDanstedPortal\(\)\?name:"Connect with "\+name\)/);
+  assert.match(portalTemplate, /Enter Mpesa Code you paid with/);
+  assert.match(portalTemplate, /mpesaButton\.textContent="Reconnect"/);
   assert.match(reactPortal, /const portalCards = isDanstedLayout\s*\?/);
+  assert.match(reactPortal, /isDanstedLayout \? portalDisplayName : "Your world, connected\."/);
+  assert.match(reactPortal, /Enter M-Pesa code below from the payment you made/);
+  assert.match(reactPortal, /Enter M-Pesa code you paid with/);
   assert.match(reactPortal, /Customer care: \{portalBranding\.supportPhone\}/);
 });
 

@@ -118,7 +118,7 @@
       </div>
       <div>
         <p id="portalNameHeader" style="font-size:.9375rem;font-weight:800;letter-spacing:-.02em;color:white;line-height:1.1">OcholaSupernet</p>
-        <p style="font-size:.6875rem;color:rgba(216,180,254,.55);font-weight:500;letter-spacing:.04em">Hotspot Portal</p>
+        <p id="portalHeaderSubtitle" style="font-size:.6875rem;color:rgba(216,180,254,.55);font-weight:500;letter-spacing:.04em">Hotspot Portal</p>
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:.75rem">
@@ -138,12 +138,12 @@
   <div class="anim-pulse" style="position:absolute;bottom:0;right:10%;width:20rem;height:16rem;border-radius:50%;background:radial-gradient(ellipse,rgba(192,38,211,.15),transparent);filter:blur(48px);pointer-events:none;animation-delay:1.5s"></div>
 
   <div style="max-width:44rem;margin:0 auto;position:relative" class="fade-up">
-    <div style="display:inline-flex;align-items:center;gap:.5rem;border-radius:9999px;padding:.375rem 1rem;font-size:.75rem;font-weight:600;color:rgba(216,180,254,.8);margin-bottom:2rem;background:rgba(147,51,234,.12);border:1px solid rgba(147,51,234,.25)">
+    <div id="portalPaymentBadge" style="display:inline-flex;align-items:center;gap:.5rem;border-radius:9999px;padding:.375rem 1rem;font-size:.75rem;font-weight:600;color:rgba(216,180,254,.8);margin-bottom:2rem;background:rgba(147,51,234,.12);border:1px solid rgba(147,51,234,.25)">
       <span class="dot-live dot-live-anim"></span>
       <span id="portalPaymentBadgeText" role="status" aria-live="polite">Checking online payment availability…</span>
     </div>
 
-    <div style="display:flex;justify-content:center;margin-bottom:2rem">
+    <div id="portalHeroIcon" style="display:flex;justify-content:center;margin-bottom:2rem">
       <div style="position:relative" class="anim-float">
         <div class="anim-ping" style="position:absolute;inset:0;border-radius:50%;background:rgba(147,51,234,.3);transform:scale(1.6)"></div>
         <div class="anim-ping" style="position:absolute;inset:0;border-radius:50%;background:rgba(147,51,234,.15);transform:scale(2.2);animation-delay:.5s"></div>
@@ -414,17 +414,17 @@
 <section id="mpesaReconnectSection" hidden style="max-width:840px;margin:1rem auto 0;padding:0">
   <div class="sec-card" style="background:rgba(255,255,255,.035)">
     <div class="sec-head" style="background:linear-gradient(135deg,rgba(6,95,70,.3),rgba(7,89,133,.3))">
-      <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(110,231,183,.65);margin-bottom:.625rem">
+      <div id="mpesaReconnectEyebrow" style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(110,231,183,.65);margin-bottom:.625rem">
         <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/></svg>
         M-Pesa Verification
       </div>
-      <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Verify Your M-Pesa Payment</h3>
-      <p style="color:rgba(110,231,183,.5);font-size:.875rem;margin-top:.375rem">Enter the transaction code from your M-Pesa message, or paste the full SMS. We connect only when the saved payment and the router both confirm this device's MAC; unfinished paid setup is completed automatically.</p>
+      <h3 id="mpesaReconnectTitle" style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Verify Your M-Pesa Payment</h3>
+      <p id="mpesaReconnectDescription" style="color:rgba(110,231,183,.5);font-size:.875rem;margin-top:.375rem">Enter the transaction code from your M-Pesa message, or paste the full SMS. We connect only when the saved payment and the router both confirm this device's MAC; unfinished paid setup is completed automatically.</p>
     </div>
     <div class="sec-body" id="mpesaMsgWrap">
       <div style="display:flex;flex-direction:column;gap:1.125rem">
         <div>
-          <label class="lbl" style="color:rgba(52,211,153,.8)">M-Pesa receipt / transaction ID</label>
+          <label id="mpesaCodeLabel" class="lbl" style="color:rgba(52,211,153,.8)">M-Pesa receipt / transaction ID</label>
           <textarea id="mpesaMsg" rows="3" autocomplete="off" placeholder="Type the receipt code (for example ABC1234567) or paste the full confirmation SMS" class="inp inp-green"></textarea>
           <div id="mpesaMsgError" style="display:none;margin-top:.625rem;padding:.7rem .85rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>
         </div>
@@ -1293,14 +1293,51 @@ function applyPortalConfig(data){
    var isPlatformName=configuredName.toLowerCase().replace(/[^a-z0-9]/g,"")==="ocholasupernet";
     var name=configuredName&&!isPlatformName?configuredName:"OcholaSupernet";
   setPortalText("portalNameHeader",name);setPortalText("portalNameFooter",name);
-  setPortalText("portalHeroTitle","Connect with "+name);
+   setPortalText("portalHeroTitle",isDanstedPortal()?name:"Connect with "+name);
   setPortalText("portalTagline",typeof data.tagline==="string"?data.tagline:"");
-  document.title=name+" — Hotspot Portal";
+   document.title=isDanstedPortal()?name:name+" — Hotspot Portal";
+   if(isDanstedPortal()){
+     var portalHeader=document.getElementById("portalHeader");
+     var portalHeaderSubtitle=document.getElementById("portalHeaderSubtitle");
+     var portalPaymentBadge=document.getElementById("portalPaymentBadge");
+     var portalHeroIcon=document.getElementById("portalHeroIcon");
+     var portalHero=document.getElementById("portalHero");
+     var portalHeroTitle=document.getElementById("portalHeroTitle");
+     var portalTagline=document.getElementById("portalTagline");
+     if(portalHeader)portalHeader.style.display="none";
+     if(portalHeaderSubtitle)portalHeaderSubtitle.style.display="none";
+     if(portalPaymentBadge)portalPaymentBadge.style.display="none";
+     if(portalHeroIcon)portalHeroIcon.style.display="none";
+     if(portalTagline)portalTagline.style.display="none";
+     if(portalHero)portalHero.style.cssText="padding:1rem 1rem .5rem;position:relative;overflow:hidden;text-align:center";
+     if(portalHeroTitle)portalHeroTitle.style.cssText="display:block;width:min(100%,360px);margin:0 auto 9px;padding:4px 8px;border:1px solid rgba(255,255,255,.16);border-radius:7px;background:rgba(77,78,79,.82);box-shadow:0 5px 18px rgba(0,0,0,.16);color:#38d856;-webkit-text-fill-color:#38d856;font-size:clamp(1rem,4vw,1.5rem);font-weight:800;letter-spacing:-.035em;line-height:1.2;text-transform:uppercase;overflow-wrap:anywhere";
+     var mpesaSection=document.getElementById("mpesaReconnectSection");
+     var mpesaCard=mpesaSection&&mpesaSection.querySelector(".sec-card");
+     var mpesaHead=mpesaSection&&mpesaSection.querySelector(".sec-head");
+     var mpesaBody=document.getElementById("mpesaMsgWrap");
+     var mpesaEyebrow=document.getElementById("mpesaReconnectEyebrow");
+     var mpesaTitle=document.getElementById("mpesaReconnectTitle");
+     var mpesaDescription=document.getElementById("mpesaReconnectDescription");
+     var mpesaLabel=document.getElementById("mpesaCodeLabel");
+     var mpesaInput=document.getElementById("mpesaMsg");
+     var mpesaButton=document.getElementById("mpesaVerifyBtn");
+     if(mpesaSection){mpesaSection.style.width="min(calc(100% - 20px),720px)";mpesaSection.style.maxWidth="720px";mpesaSection.style.margin="14px auto 0";mpesaSection.style.padding="0";}
+     if(mpesaCard){mpesaCard.style.background="rgba(77,78,79,.82)";mpesaCard.style.border="1px solid rgba(255,255,255,.16)";mpesaCard.style.borderRadius="10px";mpesaCard.style.boxShadow="0 8px 20px rgba(0,0,0,.2)";}
+     if(mpesaHead){mpesaHead.style.display="block";mpesaHead.style.textAlign="center";mpesaHead.style.padding="10px 14px 4px";mpesaHead.style.background="transparent";}
+     if(mpesaEyebrow)mpesaEyebrow.style.display="none";
+     if(mpesaTitle){mpesaTitle.textContent="Reconnect account";mpesaTitle.style.fontSize=".86rem";mpesaTitle.style.letterSpacing="0";mpesaTitle.style.textAlign="center";}
+     if(mpesaDescription){mpesaDescription.textContent="(Enter mpesa code below from the payment you made eg: QAH9QWZRR)";mpesaDescription.style.color="rgba(255,255,255,.78)";mpesaDescription.style.fontSize=".75rem";mpesaDescription.style.marginTop=".35rem";}
+     if(mpesaBody)mpesaBody.style.padding="6px 14px 14px";
+     if(mpesaLabel)mpesaLabel.style.display="none";
+     if(mpesaInput){mpesaInput.rows=1;mpesaInput.placeholder="Enter Mpesa Code you paid with";mpesaInput.setAttribute("aria-label","Enter Mpesa Code you paid with");mpesaInput.style.minHeight="40px";mpesaInput.style.height="40px";mpesaInput.style.resize="none";mpesaInput.style.background="#fff";mpesaInput.style.color="#222";mpesaInput.style.border="2px solid #ee4444";mpesaInput.style.borderRadius="4px";mpesaInput.style.fontSize=".8rem";mpesaInput.style.padding="8px 10px";}
+     if(mpesaButton){mpesaButton.textContent="Reconnect";mpesaButton.style.width="100%";mpesaButton.style.borderRadius="8px";mpesaButton.style.background="linear-gradient(90deg,#f43f2f,#8de34f)";mpesaButton.style.color="#262626";mpesaButton.style.letterSpacing=".08em";mpesaButton.style.fontWeight="700";}
+   }
   var supportPhone=typeof data.supportPhone==="string"?data.supportPhone.trim():"";
    var danstedInstructions=document.getElementById("danstedPurchaseInstructions");
    var danstedSupportContact=document.getElementById("danstedSupportContact");
    var danstedSupportPhone=document.getElementById("danstedSupportPhone");
    if(isDanstedPortal()&&danstedInstructions){
+       danstedInstructions.style.width="min(100%,360px)";
      danstedInstructions.hidden=false;
      danstedInstructions.style.display="block";
    }

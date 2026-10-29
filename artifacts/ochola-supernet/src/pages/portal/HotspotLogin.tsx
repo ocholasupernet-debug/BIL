@@ -2224,26 +2224,34 @@ function HotspotLoginView({
   };
 
   const mpesaReconnectCard = (
-    <div className="hp-glass" style={{ marginTop: 16 }}>
-      <div className="hp-glass-header">
-        <div className="hp-glass-icon" style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
+    <div className={`hp-glass${isDanstedLayout ? " hp-dansted-reconnect" : ""}`} style={isDanstedLayout
+      ? { width: "min(100%, 720px)", margin: "16px auto 0", borderRadius: 10, background: "rgba(77,78,79,.82)", border: "1px solid rgba(255,255,255,.16)", boxShadow: "0 8px 20px rgba(0,0,0,.2)" }
+      : { marginTop: 16 }}>
+      <div className="hp-glass-header" style={isDanstedLayout ? { justifyContent: "center", padding: "10px 14px 4px", borderBottom: 0 } : undefined}>
+        <div className="hp-glass-icon" style={{ display: isDanstedLayout ? "none" : undefined, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
           <Shield size={16} color="var(--isp-accent)" />
         </div>
-        <div>
-          <div className="hp-glass-title">Reconnect with M-Pesa</div>
-          <div className="hp-glass-desc">We look up completed payments on your account and only reconnect the device registered to that purchase while its package is active.</div>
+        <div style={isDanstedLayout ? { textAlign: "center", width: "100%" } : undefined}>
+          <div className="hp-glass-title">{isDanstedLayout ? "Reconnect account" : "Reconnect with M-Pesa"}</div>
+          <div className="hp-glass-desc" style={isDanstedLayout ? { color: "rgba(255,255,255,.76)", fontSize: ".76rem", marginTop: 5 } : undefined}>
+            {isDanstedLayout
+              ? "Enter M-Pesa code below from the payment you made, e.g. QAH9QWZRR."
+              : "We look up completed payments on your account and only reconnect the device registered to that purchase while its package is active."}
+          </div>
         </div>
       </div>
-      <div className="hp-glass-body">
+      <div className="hp-glass-body" style={isDanstedLayout ? { padding: "6px 14px 14px" } : undefined}>
         <form onSubmit={handleMpesaReconnect}>
           <div className="hp-input-group">
-            <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation message</label>
+            {!isDanstedLayout && <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation message</label>}
             <textarea
               id="mpesa-reconnect-message"
               className="hp-input hp-textarea"
-              rows={4}
+              rows={isDanstedLayout ? 1 : 4}
               maxLength={1000}
-              placeholder="Paste the full confirmation message"
+              placeholder={isDanstedLayout ? "Enter M-Pesa code you paid with" : "Paste the full confirmation message"}
+              aria-label={isDanstedLayout ? "Enter M-Pesa code you paid with" : undefined}
+              style={isDanstedLayout ? { minHeight: 40, height: 40, resize: "none", background: "#fff", color: "#222", border: "2px solid #ee4444", borderRadius: 4, fontSize: ".8rem", padding: "8px 10px" } : undefined}
               value={mpesaMessage}
               onChange={event => { setMpesaMessage(event.target.value); setMpesaReconnectError(""); }}
               required
@@ -2255,10 +2263,10 @@ function HotspotLoginView({
               {mpesaReconnectError}
             </div>
           )}
-          <button type="submit" disabled={mpesaReconnectLoading} className="hp-btn hp-btn-ghost">
+          <button type="submit" disabled={mpesaReconnectLoading} className={`hp-btn ${isDanstedLayout ? "hp-btn-mpesa" : "hp-btn-ghost"}`} style={isDanstedLayout ? { width: "100%", borderRadius: 8, background: "linear-gradient(90deg,#f43f2f,#8de34f)", color: "#262626", letterSpacing: ".08em", fontWeight: 700 } : undefined}>
             {mpesaReconnectLoading
               ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Verifying payment...</>
-              : <><Shield size={16} /> Verify and reconnect</>}
+              : isDanstedLayout ? "Reconnect" : <><Shield size={16} /> Verify and reconnect</>}
           </button>
         </form>
       </div>
@@ -3417,11 +3425,11 @@ function HotspotLoginView({
                   <Wifi size={36} color="var(--isp-accent)" strokeWidth={2} />
                 </div>
               </div>
-              <h1 className="hp-title">{troubleshootingOnly ? "Connection help" : "Your world, connected."}</h1>
-              <p className="hp-subtitle">{troubleshootingOnly
+              <h1 className="hp-title">{troubleshootingOnly ? "Connection help" : isDanstedLayout ? portalDisplayName : "Your world, connected."}</h1>
+              {!isDanstedLayout && <p className="hp-subtitle">{troubleshootingOnly
                  ? "We’ll check your package and try to reconnect this device automatically."
-                : portalBranding.tagline || "Fast, reliable Wi-Fi for the things you love."}</p>
-              {!troubleshootingOnly && portalDnsHostname && (
+                : portalBranding.tagline || "Fast, reliable Wi-Fi for the things you love."}</p>}
+              {!troubleshootingOnly && !isDanstedLayout && portalDnsHostname && (
                 <div className="hp-dns-address" aria-label={`Hotspot address ${portalDnsHostname}`}>
                   <Wifi size={13} /><span>Hotspot address</span><strong>{portalDnsHostname}</strong>
                 </div>
@@ -3430,7 +3438,7 @@ function HotspotLoginView({
                 <section
                   aria-labelledby="dansted-purchase-guide-title"
                   style={{
-                    width: "min(100%, 720px)",
+                    width: "min(100%, 360px)",
                     margin: "14px auto 16px",
                     padding: "12px 14px",
                     border: "1px solid rgba(255,255,255,.18)",
