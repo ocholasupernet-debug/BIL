@@ -196,7 +196,7 @@ jobs:
                 { file: app?.pm2_env?.pm_out_log_path, kind: "output" },
               ].filter(item => item.file);
               if (logFiles.length === 0) console.log("No PM2 API log paths were available.");
-              const timeWindow = "2026-10-29T03:(2[5-9]|3[0-9]|40):";
+              const timeWindow = "2026-10-29T04:0[0-5]:";
               for (const { file, kind } of logFiles) {
                 if (!fs.existsSync(file)) {
                   console.log(JSON.stringify({ file, exists: false }));
