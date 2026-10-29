@@ -45,6 +45,11 @@ on:
         description: "Current auth version for that administrator"
         required: false
         type: string
+      inspect_api_errors:
+        description: "Read recent API exception logs without deploying or syncing routers"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: vps-deploy
@@ -161,11 +166,43 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,SYNC_ROUTER_CONFIGURATION_IDS,SYNC_ROUTER_ADMIN_ID,SYNC_ROUTER_AUTH_VERSION,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,SYNC_ROUTER_CONFIGURATION_IDS,SYNC_ROUTER_ADMIN_ID,SYNC_ROUTER_AUTH_VERSION,INSPECT_API_ERRORS,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
             cd /var/www/ocholasupernet
+
+            if [ "${INSPECT_API_ERRORS:-false}" = "true" ]; then
+              rm -f /tmp/ocholasupernet-release.tgz
+              node --input-type=module <<'NODE'
+              import fs from "node:fs";
+              import path from "node:path";
+
+              const logDir = "/root/.pm2/logs";
+              const names = fs.existsSync(logDir)
+                ? fs.readdirSync(logDir).filter(name => /^ocholanet-api.*-error\.log$/.test(name))
+                : [];
+              if (names.length === 0) {
+                console.log("No PM2 API error log file was found.");
+              }
+              for (const name of names) {
+                const file = path.join(logDir, name);
+                const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
+                const blocks = [];
+                for (let i = 0; i < lines.length; i++) {
+                  if (/\b(?:Error|TypeError|RangeError|ReferenceError|SyntaxError):|uncaughtException|unhandledRejection|UND_ERR_SOCKET/i.test(lines[i])) {
+                    blocks.push(lines.slice(i, Math.min(lines.length, i + 12)));
+                  }
+                }
+                const output = blocks.flat().slice(-60).map(line => line
+                  .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
+                  .replace(/((?:password|secret|token)\s*[:=]\s*)[^,\s}]+/gi, "$1[REDACTED]")
+                  .slice(0, 700));
+                console.log(JSON.stringify({ file: name, matchingLines: output }, null, 2));
+              }
+            NODE
+              exit 0
+            fi
 
             # The GitHub runner has already checked out the exact release. The
             # VPS no longer needs to fetch GitHub over its unreliable outbound
@@ -422,6 +459,7 @@ jobs:
           SYNC_ROUTER_CONFIGURATION_IDS: ${{ inputs.sync_router_configuration_ids }}
           SYNC_ROUTER_ADMIN_ID: ${{ inputs.sync_router_admin_id }}
           SYNC_ROUTER_AUTH_VERSION: ${{ inputs.sync_router_auth_version }}
+          INSPECT_API_ERRORS: ${{ inputs.inspect_api_errors }}
           DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup }}
           DEPLOY_SKIP_ROUTER_ONESHOTS: ${{ github.event_name == 'push' || inputs.skip_router_oneshots }}
           DEPLOY_PORTAL_REFRESH_ONLY: ${{ inputs.portal_refresh_only }}
