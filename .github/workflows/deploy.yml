@@ -33,6 +33,14 @@ on:
         required: false
         default: false
         type: boolean
+      sync_router_configuration_ids:
+        description: "Optional comma-separated router IDs for the confirmed queue and Hotspot TTL sync"
+        required: false
+        type: string
+      sync_router_admin_id:
+        description: "Tenant admin ID that owns the routers being synchronized"
+        required: false
+        type: string
 
 concurrency:
   group: vps-deploy
@@ -149,7 +157,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,SYNC_ROUTER_CONFIGURATION_IDS,SYNC_ROUTER_ADMIN_ID,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -252,6 +260,54 @@ jobs:
               exit 1
             fi
             echo "=== API health check passed ==="
+            if [ -n "${SYNC_ROUTER_CONFIGURATION_IDS:-}" ] || [ -n "${SYNC_ROUTER_ADMIN_ID:-}" ]; then
+              if [ -z "${SYNC_ROUTER_CONFIGURATION_IDS:-}" ] || [ -z "${SYNC_ROUTER_ADMIN_ID:-}" ]; then
+                echo "ERROR: router configuration sync requires both router IDs and the owning admin ID."
+                exit 1
+              fi
+              SYNC_ROUTER_CONFIGURATION_IDS="$SYNC_ROUTER_CONFIGURATION_IDS" \
+              SYNC_ROUTER_ADMIN_ID="$SYNC_ROUTER_ADMIN_ID" \
+                node --input-type=module <<'NODE'
+              import crypto from "node:crypto";
+              import fs from "node:fs";
+
+              const idsInput = process.env.SYNC_ROUTER_CONFIGURATION_IDS || "";
+              const adminId = process.env.SYNC_ROUTER_ADMIN_ID || "";
+              if (!/^[1-9][0-9]*$/.test(adminId) || !/^[1-9][0-9]*(,[1-9][0-9]*)*$/.test(idsInput)) {
+                throw new Error("Router sync IDs must be positive numeric IDs separated by commas.");
+              }
+              const routerIds = [...new Set(idsInput.split(","))];
+              const dotenv = fs.readFileSync("/var/www/ocholasupernet/.env", "utf8");
+              const dotenvValue = (name) => dotenv.match(new RegExp(`^${name}=(.*)$`, "m"))?.[1] ?? "";
+              const secret = dotenvValue("TOKEN_SIGNING_SECRET")
+                || process.env.TOKEN_SIGNING_SECRET
+                || dotenvValue("SESSION_SECRET")
+                || process.env.SESSION_SECRET;
+              if (!secret) throw new Error("Session signing secret is unavailable for approved router sync.");
+              const timestamp = Math.floor(Date.now() / 1000);
+              const payload = `a.${adminId}.${timestamp}`;
+              const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
+              const token = `${payload}.${signature}`;
+              const failures = [];
+              for (const routerId of routerIds) {
+                const response = await fetch(`http://127.0.0.1:8080/api/router/${routerId}/configuration-sync`, {
+                  method: "POST",
+                  headers: {
+                    authorization: `Bearer ${token}`,
+                    "content-type": "application/json",
+                  },
+                  body: JSON.stringify({ confirm: true }),
+                });
+                const text = await response.text();
+                let body;
+                try { body = JSON.parse(text); } catch { body = { error: text.slice(0, 500) }; }
+                console.log(JSON.stringify({ routerId: Number(routerId), status: response.status, ok: response.ok, body }));
+                if (!response.ok || body.ok !== true) failures.push(Number(routerId));
+              }
+              if (failures.length) throw new Error(`Router configuration sync failed for router IDs: ${failures.join(", ")}.`);
+              NODE
+              echo "=== Confirmed router configuration sync completed ==="
+            fi
             if [ -n "${RECONCILE_RESELLER_PORT:-}" ]; then
               case "$RECONCILE_RESELLER_PORT" in
                 ''|*[!0-9]*) echo "ERROR: reconcile_reseller_port must be a positive numeric port ID."; exit 1 ;;
@@ -352,6 +408,8 @@ jobs:
           RECONCILE_RESELLER_PORT: ${{ inputs.reconcile_reseller_port }}
           RECONCILE_RESELLER_INTERFACE: ${{ inputs.reconcile_reseller_interface }}
           INSPECT_RESELLER_PORT: ${{ inputs.inspect_reseller_port }}
+          SYNC_ROUTER_CONFIGURATION_IDS: ${{ inputs.sync_router_configuration_ids }}
+          SYNC_ROUTER_ADMIN_ID: ${{ inputs.sync_router_admin_id }}
           DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup }}
           DEPLOY_SKIP_ROUTER_ONESHOTS: ${{ github.event_name == 'push' || inputs.skip_router_oneshots }}
           DEPLOY_PORTAL_REFRESH_ONLY: ${{ inputs.portal_refresh_only }}
