@@ -5,6 +5,7 @@ import { RouterOSAPI } from "node-routeros";
 import {
   buildManagedResetPlan,
   connectHotspotUser,
+  fetchRouterLiveSessions,
   reconnectHotspotUserByMac,
   ensureHotspotServerAddressPool,
   ensureRouterFileDirectory,
@@ -93,6 +94,32 @@ function routerCredentials(port: number, alternateUsernames?: string[]) {
     requestTimeoutMs: 1_000,
   };
 }
+
+test("dashboard live-session read fetches only Hotspot and PPPoE sessions", async () => {
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/print") {
+      return [{ user: "hotspot-one", "mac-address": targetMac, address: "10.0.0.9" }];
+    }
+    if (command[0] === "/ppp/active/print") {
+      return [{ name: "pppoe-one", address: "10.0.0.10" }];
+    }
+    return [];
+  }, async ({ port, connectedUsers, commands }) => {
+    const result = await fetchRouterLiveSessions(routerCredentials(port));
+
+    assert.equal(connectedUsers.length, 1);
+    assert.equal(result.hotspotUsersAvailable, true);
+    assert.equal(result.pppoeUsersAvailable, true);
+    assert.equal(result.hotspotUsers[0]?.macAddress, targetMac);
+    assert.equal(result.pppoeUsers[0]?.name, "pppoe-one");
+    assert.ok(Number.isFinite(Date.parse(result.fetchedAt)));
+    assert.deepEqual(commands.map(({ command }) => command[0]), [
+      "/ip/hotspot/active/print",
+      "/ppp/active/print",
+    ]);
+  });
+});
 
 test("RouterOS read batches reuse one connection and run commands sequentially", async () => {
   let activeWrites = 0;

@@ -128,7 +128,7 @@ async function fetchNetworkTelemetry(routerId: number | "all", portId: number | 
   if (routerId !== "all") params.set("routerId", String(routerId));
   if (portId !== "all") params.set("portId", String(portId));
   if (resellerId !== "all") params.set("resellerId", String(resellerId));
-  const response = await fetch(`/api/admin/dashboard/telemetry?${params.toString()}`);
+  const response = await adminApiFetch(`/api/admin/dashboard/telemetry?${params.toString()}`, { cache: "no-store" });
   const data = await response.json() as Partial<TelemetryResponse> & { error?: string };
   if (!response.ok) throw new Error(data.error ?? "Could not load network telemetry.");
   return data as TelemetryResponse;
@@ -554,7 +554,7 @@ export default function Dashboard() {
   const incomeToday = revenueSummary?.incomeToday ?? 0;
   const incomeMonth = revenueSummary?.incomeMonth ?? 0;
 
-  const liveQueries = usePrepaidLiveQueries(routers);
+  const liveQueries = usePrepaidLiveQueries(routers, 10_000, true);
   const livePresenceByRouter = useMemo(
     () => buildLivePresenceByRouter(routers, liveQueries),
     [routers, liveQueries],

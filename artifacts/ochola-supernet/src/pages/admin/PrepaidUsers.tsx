@@ -833,11 +833,14 @@ export default function PrepaidUsers() {
     () => displayCustomers.some(customer => customerPackageId(customer, paymentMap) === null),
     [displayCustomers, paymentMap],
   );
-  const liveQueries = usePrepaidLiveQueries(routers);
+  // Share the same fast session snapshot with Dashboard for consistent online
+  // counts. The broader counters/queue snapshot is only needed here for usage.
+  const liveQueries = usePrepaidLiveQueries(routers, 10_000, true);
+  const liveMetricsQueries = usePrepaidLiveQueries(routers, 60_000);
   const livePresenceByRouter = useMemo(() => {
     return buildLivePresenceByRouter(routers, liveQueries);
   }, [routers, liveQueries]);
-  const liveSnapshotKey = liveQueries
+  const liveSnapshotKey = liveMetricsQueries
     .map(query => query.data?.fetchedAt ?? "")
     .filter(Boolean)
     .join("|");
@@ -855,12 +858,12 @@ export default function PrepaidUsers() {
       if (!key) return;
       usage.set(key, (usage.get(key) ?? 0) + Math.max(0, Number(bytesIn) || 0) + Math.max(0, Number(bytesOut) || 0));
     };
-    liveQueries.forEach(query => {
+    liveMetricsQueries.forEach(query => {
       query.data?.hotspotUsers?.forEach(user => add(user.user, user.bytesIn, user.bytesOut));
       query.data?.pppoeUsers?.forEach(user => add(user.name, user.bytesIn, user.bytesOut));
     });
     return usage;
-  }, [liveQueries]);
+  }, [liveMetricsQueries]);
   const reconnectEligibleUsers = useMemo(() => displayCustomers.filter(user => {
     const plan = user.plan_id ? planMap[user.plan_id] : null;
     const routerId = user.router_id ?? plan?.router_id ?? null;
@@ -1283,7 +1286,10 @@ export default function PrepaidUsers() {
       setSyncReport({ ...result, routerName: router.name });
       void qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
       const routerIndex = routers.findIndex(item => item.id === router.id);
-      if (routerIndex >= 0) void liveQueries[routerIndex]?.refetch();
+      if (routerIndex >= 0) {
+        void liveQueries[routerIndex]?.refetch();
+        void liveMetricsQueries[routerIndex]?.refetch();
+      }
     } catch (error) {
       setSyncReport(previous => previous ? {
         ...previous,
@@ -1333,7 +1339,10 @@ export default function PrepaidUsers() {
       void qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
       for (const { router } of allSyncTargets) {
         const routerIndex = routers.findIndex(item => item.id === router.id);
-        if (routerIndex >= 0) void liveQueries[routerIndex]?.refetch();
+        if (routerIndex >= 0) {
+          void liveQueries[routerIndex]?.refetch();
+          void liveMetricsQueries[routerIndex]?.refetch();
+        }
       }
     } catch (error) {
       setSyncReport(previous => previous ? {

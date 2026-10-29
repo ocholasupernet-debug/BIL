@@ -14,6 +14,7 @@ import {
   fetchInterfaces,
   fetchTraffic,
   fetchRouterLiveData,
+  fetchRouterLiveSessions,
   fetchWireless,
   createWirelessVirtualAp,
   patchWirelessInterface,
@@ -3765,6 +3766,11 @@ router.get("/router/:id/live", requireAdmin(), async (req, res): Promise<void> =
   const found = await getRouterCreds(id, tenantId);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {
+    if (req.query.sessionsOnly === "true") {
+      const sessions = await fetchRouterLiveSessions(found.creds);
+      res.json({ routerId: id, ...sessions });
+      return;
+    }
     const data = await fetchRouterLiveData(found.creds);
     let onlineVlanUsers: number | null = null;
     try {
