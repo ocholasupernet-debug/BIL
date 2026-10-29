@@ -550,6 +550,29 @@ function HotspotLoginView({
       return { mac: "", ip: "", linkLogin: "", linkOrig: "" };
     }
   })();
+  const redirectAfterConfirmedHotspotLogin = useCallback(() => {
+    if (HOTSPOT_RUNTIME_CONFIG.previewOnly) return;
+    let destination = "";
+    const originalDestination = portalContext.linkOrig.trim();
+    if (originalDestination) {
+      try {
+        const target = new URL(originalDestination, window.location.origin);
+        if (
+          (target.protocol === "http:" || target.protocol === "https:")
+          && !target.username
+          && !target.password
+        ) {
+          destination = target.href;
+        }
+      } catch {
+        // An invalid router destination falls back to the portal's own landing page.
+      }
+    }
+    if (!destination) destination = `${window.location.origin}/`;
+    const current = new URL(window.location.href);
+    if (destination === current.href || (destination === `${window.location.origin}/` && current.pathname === "/")) return;
+    window.location.replace(destination);
+  }, [portalContext.linkOrig]);
 
   const adminId: number | null = (() => {
     try {
@@ -1908,6 +1931,7 @@ function HotspotLoginView({
       });
       setTroubleshootMessage("Your saved package account is signed in.");
       setTroubleshootError("");
+      redirectAfterConfirmedHotspotLogin();
       return { attempted: true, signedIn: true };
     } catch (error) {
       return {
@@ -1924,6 +1948,7 @@ function HotspotLoginView({
     paymentMode,
     portalContext.ip,
     portalContext.mac,
+    redirectAfterConfirmedHotspotLogin,
   ]);
 
   const handleTroubleshoot = async () => {

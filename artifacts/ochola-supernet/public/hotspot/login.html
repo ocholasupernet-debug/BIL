@@ -2891,10 +2891,12 @@ function renderPortalDeviceMac(){
 }
 var cookieSessionReauthStarted=false;
 function attemptCookieSessionReauth(){
-  if(cookieSessionReauthStarted||PORTAL_QUERY.get("hosted")!=="1"||!DEVICE_MAC||PORTAL_ADMIN_ID<1)return false;
+  if(PORTAL_QUERY.get("hosted")!=="1"||!DEVICE_MAC||PORTAL_ADMIN_ID<1)return false;
+  if(cookieSessionReauthStarted)return true;
   cookieSessionReauthStarted=true;
   fetch(apiUrl("/api/customers/hotspot-session/check"),{
     method:"POST",
+    credentials:"include",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify({adminId:PORTAL_ADMIN_ID,routerId:PORTAL_ROUTER_ID,portId:PORTAL_PORT_ID||null})
   }).then(function(response){return response.ok?response.json():null;})
@@ -2905,6 +2907,7 @@ function attemptCookieSessionReauth(){
       }
       return fetch(apiUrl("/api/customers/hotspot-login"),{
         method:"POST",
+        credentials:"include",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify({
           adminId:PORTAL_ADMIN_ID,
@@ -2914,9 +2917,15 @@ function attemptCookieSessionReauth(){
       }).then(function(response){return response.json().then(function(body){return{ok:response.ok,body:body};});})
         .then(function(result){
           if(result.ok&&result.body&&result.body.connected===true){
+            portalAutoReconnectDone=true;
+            if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
+            portalAutoReconnectTimer=0;
             var badge=document.getElementById("portalPaymentBadgeText");
             if(badge)badge.textContent="Connected to the internet";
+            redirectAfterVerifiedPortalReconnect();
+            return;
           }
+          attemptPortalAutoReconnect();
         });
     }).catch(function(){attemptPortalAutoReconnect();});
   return true;

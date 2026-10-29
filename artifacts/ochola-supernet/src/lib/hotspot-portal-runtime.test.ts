@@ -132,11 +132,11 @@ test("the captive portal reconnects a valid device session and keeps payment han
   assert.match(portalTemplate, /router_id:PORTAL_ROUTER_ID/);
   assert.match(portalTemplate, /port_id:PORTAL_PORT_ID/);
   assert.match(portalTemplate, /data\.connected===true/);
-  assert.match(portalTemplate, /redirectAfterVerifiedPortalAutoReconnect\(\)/);
-  assert.match(portalTemplate, /function redirectAfterVerifiedPortalAutoReconnect\(\)/);
+  assert.match(portalTemplate, /redirectAfterVerifiedPortalReconnect\(\)/);
+  assert.match(portalTemplate, /function redirectAfterVerifiedPortalReconnect\(\)/);
   assert.match(portalTemplate, /window\.location\.replace\(target\.href\)/);
   assert.match(portalTemplate, /window\.addEventListener\("online",retryPortalAutoReconnectOnReturn\)/);
-  assert.match(portalTemplate, /if\(!portalPaidHandoffStarted\)attemptPortalAutoReconnect\(\)/);
+  assert.match(portalTemplate, /if\(!portalPaidHandoffStarted&&!attemptCookieSessionReauth\(\)\)attemptPortalAutoReconnect\(\)/);
   assert.match(portalTemplate, /data\.status==="expired"\|\|data\.status==="depleted"/);
 });
 
@@ -150,6 +150,24 @@ test("browser-session recovery uses the tenant HTTPS origin before sending its c
   assert.match(reactPortal, /hotspotPortalFetch/);
 });
 
+test("a confirmed browser-session reconnect redirects away from the captive portal", () => {
+  const cookieReauth = portalTemplate.match(/function attemptCookieSessionReauth\(\)\{([\s\S]*?)\n\}/)?.[1] ?? "";
+  assert.match(cookieReauth, /if\(cookieSessionReauthStarted\)return true/);
+  assert.match(cookieReauth, /credentials:"include"/);
+  assert.match(cookieReauth, /portalAutoReconnectDone=true/);
+  assert.match(cookieReauth, /redirectAfterVerifiedPortalReconnect\(\)/);
+  assert.match(cookieReauth, /attemptPortalAutoReconnect\(\)/);
+});
+
+test("a saved-account reconnect leaves the hosted portal after RouterOS confirms login", () => {
+  assert.match(reactPortal, /const redirectAfterConfirmedHotspotLogin = useCallback/);
+  assert.match(reactPortal, /window\.location\.replace\(destination\)/);
+  assert.match(
+    reactPortal,
+    /setTroubleshootMessage\("Your saved package account is signed in\."\);\s*setTroubleshootError\(""\);\s*redirectAfterConfirmedHotspotLogin\(\);/,
+  );
+});
+
 test("TV reconnect retries the existing paid checkout while package checking remains diagnostic-only", () => {
   assert.match(reactPortal, /const retryExistingPaidAccess = useCallback\(\(\) => \{\s*if \(!checkoutId \|\| bindingInFlight\.current\) return;[\s\S]*?bindPaidHotspotAccess\(checkoutId, true\);/);
   assert.match(reactPortal, /Reconnect this TV/);
@@ -160,14 +178,18 @@ test("TV reconnect retries the existing paid checkout while package checking rem
 });
 
 test("already-paid links open troubleshooting and immediately request the existing sign-in check", () => {
-  const staticTroubleshootOpener = portalTemplate.match(/function openTroubleshootModule\(\)\{([\s\S]*?)\n\}/)?.[1] ?? "";
+  const staticTroubleshootOpener = portalTemplate.match(/function openTroubleshootModule\(tvReconnect\)\{([\s\S]*?)\n\}/)?.[1] ?? "";
   assert.match(portalTemplate, /id="alreadyPaidReconnect"[^>]+onclick="openTroubleshootModule\(\);return false"/);
-  assert.match(portalTemplate, /id="tvAlreadyPaidReconnect"[^>]+onclick="openTroubleshootModule\(\)"/);
+  assert.match(portalTemplate, /id="tvAlreadyPaidReconnect"[^>]+onclick="openTroubleshootModule\(true\)"/);
   assert.match(portalTemplate, /Already paid\? Reconnect TV/);
   assert.match(staticTroubleshootOpener, /troubleshootConnection\(true\)/);
   assert.match(reactPortal, /className="hp-header-reconnect"/);
   assert.match(reactPortal, /Already paid\?/);
-  assert.match(reactPortal, /const openAlreadyPaidReconnect = \(\) => \{\s*setTroubleshootDialogOpen\(true\);\s*void handleTroubleshoot\(\);\s*\}/);
+  assert.match(
+    reactPortal,
+    /const openAlreadyPaidReconnect = \(\) => \{\s*setTvTroubleshootMode\(false\);\s*setTvReconnectMac\(""\);\s*setTroubleshootMacAddress\(portalContext\.mac\);\s*setTroubleshootDialogOpen\(true\);/,
+  );
+  assert.match(reactPortal, /if \(paymentMode === "data" && \(hotspotCredentials \|\| loyaltyCreds\)\) \{\s*void handlePlanLogin\(\);/);
   assert.match(reactPortal, /aria-controls="hp-troubleshoot-dialog"/);
   assert.match(reactPortal, /\{troubleshootDialogOpen && \(/);
   assert.match(reactPortal, /const runAutomaticReconnect = async \(\) =>/);
