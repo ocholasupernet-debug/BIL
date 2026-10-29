@@ -128,3 +128,4 @@
 - [New plan validity default](new-plan-validity-default.md) — Start newly created packages at Minutes while preserving the saved unit when editing existing plans.
 - [SSH key validation](ssh-key-validation.md) — Validate local key parsing before attributing SSH permission-denied errors to server authorization.
 - [Tenant renewal access gate](tenant-renewal-access-gate.md) — Overdue renewal blocks new purchases and limits tenant admins to Dashboard, where renewal remains available.
+- [Hotspot tethering TTL scope](hotspot-tethering-ttl-scope.md) — Set TTL=1 only on egress to enabled Hotspot interfaces; stop on unscoped global rules.
