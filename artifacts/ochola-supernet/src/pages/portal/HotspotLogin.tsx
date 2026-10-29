@@ -1063,7 +1063,7 @@ function HotspotLoginView({
           ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
           mac_address: targetMacAddress,
           device_name: deviceName,
-          ...(!retryRouter && paymentMode !== "tv" && (portalContext.linkLogin || portalContext.linkOrig)
+          ...(!retryRouter && paymentMode !== "tv" && portalContext.linkLogin.trim()
             ? { portal_login_handoff: true }
             : {}),
           ...(paymentMode === "tv" ? { target_device: true } : portalContext.ip ? { client_ip: portalContext.ip } : {}),
@@ -1323,7 +1323,9 @@ function HotspotLoginView({
   useEffect(() => {
     if (!accessReady && !portalHandoffReady) return;
     if (paymentMode === "tv") return;
-    const destination = portalContext.linkLogin || portalContext.linkOrig;
+    const destination = portalHandoffReady
+      ? portalContext.linkLogin
+      : portalContext.linkOrig || portalContext.linkLogin;
     if (!/^https?:\/\//i.test(destination) || !hotspotCredentials) {
       if (!troubleshootingOnly) {
         setTroubleshootDialogOpen(true);

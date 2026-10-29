@@ -173,6 +173,17 @@ test("a saved-account reconnect leaves the hosted portal after RouterOS confirms
   );
 });
 
+test("paid portal handoff requires the RouterOS login URL, not only the original destination", () => {
+  assert.match(
+    reactPortal,
+    /!\s*retryRouter\s*&&\s*paymentMode\s*!==\s*"tv"\s*&&\s*portalContext\.linkLogin\.trim\(\)/,
+  );
+  assert.match(
+    reactPortal,
+    /const destination = portalHandoffReady\s*\?\s*portalContext\.linkLogin\s*:\s*portalContext\.linkOrig \|\| portalContext\.linkLogin;/,
+  );
+});
+
 test("TV reconnect retries the existing paid checkout while package checking remains diagnostic-only", () => {
   assert.match(reactPortal, /const retryExistingPaidAccess = useCallback\(\(\) => \{\s*if \(!checkoutId \|\| bindingInFlight\.current\) return;[\s\S]*?bindPaidHotspotAccess\(checkoutId, true\);/);
   assert.match(reactPortal, /Reconnect this TV/);
