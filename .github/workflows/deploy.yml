@@ -176,17 +176,28 @@ jobs:
               rm -f /tmp/ocholasupernet-release.tgz
               node --input-type=module <<'NODE'
               import fs from "node:fs";
-              import path from "node:path";
+              import { execFileSync } from "node:child_process";
 
-              const logDir = "/root/.pm2/logs";
-              const names = fs.existsSync(logDir)
-                ? fs.readdirSync(logDir).filter(name => /^ocholanet-api.*-error\.log$/.test(name))
-                : [];
-              if (names.length === 0) {
-                console.log("No PM2 API error log file was found.");
+              let app;
+              try {
+                const processes = JSON.parse(execFileSync("pm2", ["jlist"], { encoding: "utf8" }));
+                app = processes.find(item => item.name === "ocholanet-api");
+              } catch {
+                console.log("PM2 process information could not be read.");
               }
-              for (const name of names) {
-                const file = path.join(logDir, name);
+              if (!app) console.log("The PM2 API process was not found.");
+              console.log(JSON.stringify({
+                process: app?.name ?? null,
+                status: app?.pm2_env?.status ?? null,
+                errorLog: app?.pm2_env?.pm_err_log_path ?? null,
+              }));
+              const logFiles = [app?.pm2_env?.pm_err_log_path, app?.pm2_env?.pm_out_log_path].filter(Boolean);
+              if (logFiles.length === 0) console.log("No PM2 API log paths were available.");
+              for (const file of logFiles) {
+                if (!fs.existsSync(file)) {
+                  console.log(JSON.stringify({ file, exists: false }));
+                  continue;
+                }
                 const lines = fs.readFileSync(file, "utf8").split(/\r?\n/);
                 const blocks = [];
                 for (let i = 0; i < lines.length; i++) {
@@ -198,7 +209,7 @@ jobs:
                   .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
                   .replace(/((?:password|secret|token)\s*[:=]\s*)[^,\s}]+/gi, "$1[REDACTED]")
                   .slice(0, 700));
-                console.log(JSON.stringify({ file: name, matchingLines: output }, null, 2));
+                console.log(JSON.stringify({ file, matchingLines: output }, null, 2));
               }
             NODE
               exit 0
