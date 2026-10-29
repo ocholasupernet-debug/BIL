@@ -136,12 +136,12 @@ export function PrepaidHotspotAdminGrantDialog({
       }
       return {
         connected: false,
-        message: String(payload?.message ?? "The account is active, but the router has not confirmed a live TV session yet."),
+        message: String(payload?.message ?? "The account is active, but the router has not confirmed this device's connection yet."),
       };
     } catch {
       return {
         connected: false,
-        message: "The account is active on MikroTik. The live TV connection could not be checked; use Reconnect on the account row when the TV is on Wi‑Fi.",
+        message: "The account is active on MikroTik. The device connection could not be checked; use Reconnect on the account row while it is on Wi‑Fi.",
       };
     }
   }
@@ -149,21 +149,31 @@ export function PrepaidHotspotAdminGrantDialog({
   async function finishGrant(grant: Omit<GrantResult, "connectionMessage" | "connected">) {
     setResult({
       ...grant,
-      connectionMessage: "MikroTik confirmed the grant. Checking the TV connection…",
+      connectionMessage: "MikroTik confirmed the grant. Connecting the device…",
       connected: false,
     });
-    let listRefreshWarning: string | undefined;
-    try {
-      await onCreated();
-    } catch {
-      listRefreshWarning = "The grant succeeded, but the Prepaid Users list could not refresh. Reload the page to see the updated account.";
-    }
-    const connection = await reconnect(grant.customerId);
+    // Start RouterOS reconnect before the Prepaid Users refetch. The list may
+    // contain thousands of rows, and waiting for it here delayed a device login
+    // that is already ready to happen.
+    const connectionPromise = reconnect(grant.customerId);
+    const listRefreshPromise = onCreated().then(
+      () => false,
+      () => true,
+    );
+    const connection = await connectionPromise;
     setResult({
       ...grant,
       connectionMessage: connection.message,
       connected: connection.connected,
-      ...(listRefreshWarning ? { listRefreshWarning } : {}),
+    });
+    void listRefreshPromise.then(refreshFailed => {
+      if (!refreshFailed) return;
+      setResult(current => current
+        ? {
+            ...current,
+            listRefreshWarning: "The grant succeeded, but the Prepaid Users list could not refresh. Reload the page to see the updated account.",
+          }
+        : current);
     });
   }
 
