@@ -284,8 +284,20 @@ jobs:
                 || dotenvValue("SESSION_SECRET")
                 || process.env.SESSION_SECRET;
               if (!secret) throw new Error("Session signing secret is unavailable for approved router sync.");
+              const supabaseUrl = (dotenvValue("VITE_SUPABASE_URL") || "").replace(/\/+$/, "");
+              const serviceKey = dotenvValue("SUPABASE_SERVICE_ROLE_KEY");
+              if (!supabaseUrl || !serviceKey) throw new Error("Administrator session status cannot be checked.");
+              const adminResponse = await fetch(`${supabaseUrl}/rest/v1/isp_admins?id=eq.${adminId}&select=auth_version,is_active&limit=1`, {
+                headers: { apikey: serviceKey, authorization: `Bearer ${serviceKey}` },
+              });
+              if (!adminResponse.ok) throw new Error("Administrator session status cannot be checked.");
+              const [admin] = await adminResponse.json();
+              if (!admin || admin.is_active !== true) throw new Error("The requested administrator is inactive or unavailable.");
+              const authVersion = Number(admin.auth_version ?? 1);
+              if (!Number.isSafeInteger(authVersion) || authVersion < 1) throw new Error("Administrator security version is invalid.");
               const timestamp = Math.floor(Date.now() / 1000);
-              const payload = `a.${adminId}.${timestamp}`;
+              const claims = Buffer.from(JSON.stringify({ authVersion }), "utf8").toString("base64url");
+              const payload = `a.${adminId}.${timestamp}.s${claims}`;
               const signature = crypto.createHmac("sha256", secret).update(payload).digest("hex");
               const token = `${payload}.${signature}`;
               const failures = [];
