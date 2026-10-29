@@ -40,6 +40,7 @@ import {
   resolveHotspotPortalLayout,
   type HotspotPortalLayout,
 } from "@/lib/hotspot-layouts";
+import { isResolvedHotspotLoginUrl } from "@/lib/hotspot-login-url";
 
 interface Plan {
   id: number; name: string; price: number;
@@ -1063,7 +1064,7 @@ function HotspotLoginView({
           ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
           mac_address: targetMacAddress,
           device_name: deviceName,
-          ...(!retryRouter && paymentMode !== "tv" && portalContext.linkLogin.trim()
+          ...(!retryRouter && paymentMode !== "tv" && isResolvedHotspotLoginUrl(portalContext.linkLogin)
             ? { portal_login_handoff: true }
             : {}),
           ...(paymentMode === "tv" ? { target_device: true } : portalContext.ip ? { client_ip: portalContext.ip } : {}),

@@ -5,6 +5,7 @@ import {
   renderStaticPortalLayoutCss,
   resolveHotspotPortalLayout,
 } from "./hotspot-layouts.js";
+import { isResolvedHotspotLoginUrl } from "./hotspot-login-url.js";
 
 const portalTemplate = readFileSync(
   new URL("../../public/hotspot/login.html", import.meta.url),
@@ -176,12 +177,15 @@ test("a saved-account reconnect leaves the hosted portal after RouterOS confirms
 test("paid portal handoff requires the RouterOS login URL, not only the original destination", () => {
   assert.match(
     reactPortal,
-    /!\s*retryRouter\s*&&\s*paymentMode\s*!==\s*"tv"\s*&&\s*portalContext\.linkLogin\.trim\(\)/,
+    /!\s*retryRouter\s*&&\s*paymentMode\s*!==\s*"tv"\s*&&\s*isResolvedHotspotLoginUrl\(portalContext\.linkLogin\)/,
   );
   assert.match(
     reactPortal,
     /const destination = portalHandoffReady\s*\?\s*portalContext\.linkLogin\s*:\s*portalContext\.linkOrig \|\| portalContext\.linkLogin;/,
   );
+  assert.equal(isResolvedHotspotLoginUrl("$(link-login-only)"), false);
+  assert.equal(isResolvedHotspotLoginUrl("https://portal.example/hotspot/(link-login-only)"), false);
+  assert.equal(isResolvedHotspotLoginUrl("http://192.168.88.1/login?dst=https%3A%2F%2Fexample.com"), true);
 });
 
 test("TV reconnect retries the existing paid checkout while package checking remains diagnostic-only", () => {
