@@ -37,6 +37,7 @@ import {
 import {
   HOSTED_PORTAL_LAYOUT_CSS,
   normalizeHotspotPortalLayout,
+  resolveHotspotPortalLayout,
   type HotspotPortalLayout,
 } from "@/lib/hotspot-layouts";
 
@@ -72,6 +73,7 @@ interface HotspotRuntimeConfig {
   portalContextToken: string;
   previewOnly: boolean;
   portalLayout: HotspotPortalLayout;
+  portalLayoutIsExplicit: boolean;
   loyaltyCard: HotspotLoyaltyCardSettings;
   plans: Plan[];
 }
@@ -210,6 +212,7 @@ function readHotspotRuntimeConfig(): HotspotRuntimeConfig {
   const apiBase = typeof raw?.apiBase === "string" && /^https?:\/\//i.test(raw.apiBase.trim())
     ? raw.apiBase.trim().replace(/\/+$/, "")
     : "";
+  const rawPortalLayout = typeof raw?.portalLayout === "string" ? raw.portalLayout : "";
   return {
     apiBase,
     adminId: positivePortalId(raw?.adminId),
@@ -218,7 +221,9 @@ function readHotspotRuntimeConfig(): HotspotRuntimeConfig {
     resellerId: positivePortalId(raw?.resellerId),
     portalContextToken: typeof raw?.portalContextToken === "string" ? raw.portalContextToken.trim() : "",
     previewOnly: raw?.previewOnly === true,
-    portalLayout: normalizeHotspotPortalLayout(raw?.portalLayout),
+    portalLayout: normalizeHotspotPortalLayout(rawPortalLayout),
+    portalLayoutIsExplicit: Boolean(rawPortalLayout)
+      && normalizeHotspotPortalLayout(rawPortalLayout) === rawPortalLayout,
     loyaltyCard: normalizeHotspotLoyaltyCardSettings(raw?.loyaltyCard),
     plans: Array.isArray(raw?.plans)
       ? raw.plans.map(normalizeRuntimePlan).filter((plan): plan is Plan => Boolean(plan))
@@ -479,9 +484,14 @@ function HotspotLoginView({
           portalHostname: typeof payload?.branding?.portalHostname === "string" ? payload.branding.portalHostname : undefined,
           portalCards: normalizeHotspotPortalCards(row.portalCards, row),
           loyaltyCard: normalizeHotspotLoyaltyCardSettings(row.loyaltyCard ?? HOTSPOT_RUNTIME_CONFIG.loyaltyCard),
-          portalLayout: typeof row.portalLayout === "string"
-            ? normalizeHotspotPortalLayout(row.portalLayout)
-            : HOTSPOT_RUNTIME_CONFIG.portalLayout,
+          // A generated portal's selected layout is authoritative. Public
+          // branding may be stale while a generated/exported page is being
+          // previewed, so it must not swap the layout after initial render.
+          portalLayout: resolveHotspotPortalLayout(
+            HOTSPOT_RUNTIME_CONFIG.portalLayout,
+            row.portalLayout,
+            HOTSPOT_RUNTIME_CONFIG.portalLayoutIsExplicit,
+          ),
         });
       })
       .catch(() => undefined);
@@ -505,7 +515,8 @@ function HotspotLoginView({
     supportEmail: portalBranding.supportEmail || brand.supportEmail,
     domain: "",
   };
-  const isDanstedLayout = (portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout) === "dansted-wifi";
+  const selectedPortalLayout = portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout;
+  const isDanstedLayout = selectedPortalLayout === "dansted-wifi";
   const configuredPortalCards = portalBranding.portalCards ?? DEFAULT_HOTSPOT_PORTAL_CARDS;
   const portalCards = isDanstedLayout
     ? {
@@ -3263,7 +3274,7 @@ function HotspotLoginView({
       ${HOSTED_PORTAL_LAYOUT_CSS}
       `}</style>
 
-      <div className="hp-root" data-portal-layout={portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout}>
+      <div className="hp-root" data-portal-layout={selectedPortalLayout}>
         {isDanstedLayout && danstedCheckoutOpen && selectedPlan && (
           <div className="dansted-checkout-overlay" role="presentation">
             <section className="dansted-checkout-modal" role="dialog" aria-modal="true" aria-labelledby="dansted-checkout-title">
@@ -3948,8 +3959,7 @@ function HotspotLoginView({
                   ) : (
                     <div className={`hp-plans-grid${selectedPlan ? " has-expanded" : ""}`}>
                       {plans.map((plan, i) => {
-                        const planGradients = portalBranding.portalLayout === "classic"
-                          || (!portalBranding.portalLayout && HOTSPOT_RUNTIME_CONFIG.portalLayout === "classic")
+                        const planGradients = selectedPortalLayout === "classic"
                           ? GUEST_PLAN_GRADIENTS
                           : PLAN_GRADIENTS;
                         const grad = planGradients[i % planGradients.length];

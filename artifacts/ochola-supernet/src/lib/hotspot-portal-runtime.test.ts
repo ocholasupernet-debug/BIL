@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import {
+  renderStaticPortalLayoutCss,
+  resolveHotspotPortalLayout,
+} from "./hotspot-layouts.js";
 
 const portalTemplate = readFileSync(
   new URL("../../public/hotspot/login.html", import.meta.url),
@@ -28,6 +32,27 @@ test("the generated standalone portal embeds its saved layout without a router-s
   assert.match(exporter, /<style id="hotspot-portal-layout">/);
   assert.match(exporter, /document\.documentElement\.setAttribute\("data-portal-layout",window\.__HOTSPOT_CONFIG__\.portalLayout\)/);
   assert.doesNotMatch(portalTemplate, /<link[^>]+portal-layouts\.css/);
+});
+
+test("Dansted and Classic remain independent across hosted hydration and static export", () => {
+  // The generated config is the selected layout and must win if public
+  // branding returns a stale value. Non-generated hosted pages may use branding.
+  assert.equal(resolveHotspotPortalLayout("dansted-wifi", "classic", true), "dansted-wifi");
+  assert.equal(resolveHotspotPortalLayout("classic", "dansted-wifi", true), "classic");
+  assert.equal(resolveHotspotPortalLayout("classic", "dansted-wifi", false), "dansted-wifi");
+
+  const danstedCss = renderStaticPortalLayoutCss("dansted-wifi");
+  const classicCss = renderStaticPortalLayoutCss("classic");
+  assert.match(danstedCss, /html\[data-portal-layout="dansted-wifi"\]/);
+  assert.doesNotMatch(danstedCss, /html\[data-portal-layout="classic"\]/);
+  assert.match(classicCss, /html\[data-portal-layout="classic"\]/);
+  assert.doesNotMatch(classicCss, /html\[data-portal-layout="dansted-wifi"\]/);
+
+  assert.match(reactPortal, /portalLayoutIsExplicit/);
+  assert.match(reactPortal, /resolveHotspotPortalLayout\(\s*HOTSPOT_RUNTIME_CONFIG\.portalLayout,\s*row\.portalLayout,\s*HOTSPOT_RUNTIME_CONFIG\.portalLayoutIsExplicit/);
+  assert.match(reactPortal, /const selectedPortalLayout = portalBranding\.portalLayout \?\? HOTSPOT_RUNTIME_CONFIG\.portalLayout/);
+  assert.match(reactPortal, /const isDanstedLayout = selectedPortalLayout === "dansted-wifi"/);
+  assert.match(reactPortal, /data-portal-layout=\{selectedPortalLayout\}/);
 });
 
 test("the standalone portal applies the saved ISP or reseller name as soon as branding loads", () => {
