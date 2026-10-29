@@ -15,6 +15,7 @@ import { sbDelete, sbInsert, sbInsertStrict, sbRpc, sbSelect, sbSelectStrict, sb
 import { billingSelect } from "../lib/platform-billing-store.js";
 import { platformBillingAccessRestricted } from "./billing-route.js";
 import { logger } from "../lib/logger.js";
+import { routerManagementVpnIpFor } from "../lib/router-payment-credentials.js";
 import { sendRegistrationConfirmationEmail } from "../lib/platform-email.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import {
@@ -73,7 +74,7 @@ import {
 } from "../lib/payment-routing.js";
 import { reactivatePppoeAccess, reactivateVlanAccess } from "../lib/auto-provision.js";
 import { syncRadiusCustomer } from "../lib/radius.js";
-import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
+import { readVpnClients } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
@@ -264,13 +265,10 @@ function hotspotRouterCredentials(
 ): RouterCredentials {
   const storedManagementIp = [row.vpn_ip, row.bridge_ip].find(isManagementVpnIp) ?? "";
   const vpnClients = options.forceManagementVpn || !storedManagementIp ? readVpnClients() : [];
-  const discoveredManagementIp = vpnIpFor(row.host ?? "", vpnClients)
-    ?? vpnIpFor(row.name ?? "", vpnClients)
-    ?? "";
-  if (options.forceManagementVpn && storedManagementIp && !discoveredManagementIp) {
+  const discoveredManagementIp = routerManagementVpnIpFor(row, vpnClients) ?? "";
+  if (options.forceManagementVpn && !discoveredManagementIp) {
     throw new Error(
-      `OpenVPN management tunnel is offline for ${row.name ?? "the router"}; ` +
-      "no active router-management VPN client was found.",
+      `No router-management VPN address is available for ${row.name ?? "the router"}.`,
     );
   }
   const managementIp = discoveredManagementIp || storedManagementIp;
