@@ -305,7 +305,7 @@ jobs:
                 if (!response.ok || body.ok !== true) failures.push(Number(routerId));
               }
               if (failures.length) throw new Error(`Router configuration sync failed for router IDs: ${failures.join(", ")}.`);
-              NODE
+            NODE
               echo "=== Confirmed router configuration sync completed ==="
             fi
             if [ -n "${RECONCILE_RESELLER_PORT:-}" ]; then
