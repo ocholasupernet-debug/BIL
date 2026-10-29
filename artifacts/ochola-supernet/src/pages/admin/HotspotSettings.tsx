@@ -1457,7 +1457,8 @@ export default function HotspotSettings() {
       const slug = safeText(settings.ispName, "hotspot-portal").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "hotspot-portal";
       anchor.href = url;
       const portSlug = selectedPortalPort?.interface_name.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-      anchor.download = `${slug}${portSlug ? `-${portSlug}` : ""}-hotspot-login.html`;
+      const layoutSlug = settings.portalLayout === "dansted-wifi" ? "dansted-wifi-hotspot-login" : "hotspot-login";
+      anchor.download = `${slug}${portSlug ? `-${portSlug}` : ""}-${layoutSlug}.html`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -1852,6 +1853,9 @@ export default function HotspotSettings() {
                           <label style={{ display: "grid", gap: 5, color: "var(--isp-text-muted)", fontSize: ".68rem" }}>
                             Portal DNS name
                             <input className="hs-input" value={draft.hotspotDnsName} onChange={event => updateAssignedPort(port.id, "hotspotDnsName", event.target.value)} placeholder="hotspot.example.com" />
+                            <span style={{ color: "var(--isp-text-sub)", fontSize: ".65rem", lineHeight: 1.4 }}>
+                              Saved service settings deploy this DNS name to the selected MikroTik. It must resolve to this service’s Hotspot gateway; the portal displays the active hostname.
+                            </span>
                           </label>
                           {port.handoff_mode === "vlan_services" && port.assigned_reseller_id && (
                             <>

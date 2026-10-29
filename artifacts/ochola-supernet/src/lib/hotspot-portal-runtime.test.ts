@@ -53,6 +53,15 @@ test("the standalone RouterOS portal shows a configurable loyalty balance card",
   assert.match(portalTemplate, /position:"bottom",treatment:"filled",shape:"rounded",size:"standard"/);
 });
 
+test("Dansted keeps purchase guidance, reconnect, and voucher modules available", () => {
+  assert.match(portalTemplate, /id="danstedPurchaseInstructions"/);
+  assert.match(portalTemplate, /How To Purchase/);
+  assert.match(portalTemplate, /hero:true,packages:true,connectionSupport:true,voucher:true,paymentRecovery:true/);
+  assert.match(portalTemplate, /data\.vouchersEnabled===false&&!isDanstedPortal\(\)/);
+  assert.match(reactPortal, /const portalCards = isDanstedLayout\s*\?/);
+  assert.match(reactPortal, /Customer care: \{portalBranding\.supportPhone\}/);
+});
+
 test("voucher redemption in the standalone portal records a prepaid account before router login", () => {
   assert.match(portalTemplate, /id="voucherPhone" type="tel"/);
   assert.match(portalTemplate, /contact:phone/);

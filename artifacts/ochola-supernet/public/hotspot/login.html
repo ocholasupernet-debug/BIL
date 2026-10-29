@@ -163,6 +163,16 @@
       Pick a plan below and connect in seconds — pay securely via <strong style="color:rgba(240,171,252,.85);font-weight:600">M-Pesa</strong>.
       No contracts. Instant activation.
     </p>
+    <section id="danstedPurchaseInstructions" hidden aria-labelledby="danstedPurchaseTitle" style="width:min(100%,720px);margin:14px auto 16px;padding:12px 14px;border:1px solid rgba(255,255,255,.18);border-radius:10px;background:rgba(77,78,79,.82);color:#f5f5f5;text-align:left;box-shadow:0 8px 20px rgba(0,0,0,.2)">
+      <strong id="danstedPurchaseTitle" style="display:block;margin-bottom:8px;text-align:center;font-size:.98rem">How To Purchase</strong>
+      <ol style="margin:0;padding-left:22px;font-size:.82rem;line-height:1.65">
+        <li>Tap your preferred package.</li>
+        <li>Enter your Safaricom phone number.</li>
+        <li>Tap Pay Now.</li>
+        <li>Approve the M-Pesa prompt and wait for confirmation (usually up to 30 seconds).</li>
+      </ol>
+      <p id="danstedSupportContact" hidden style="margin:8px 0 0;text-align:center;font-size:.76rem">Customer care: <span id="danstedSupportPhone"></span></p>
+    </section>
     <div id="portalHotspotAddress" style="display:none;align-items:center;justify-content:center;gap:.5rem;width:max-content;max-width:100%;margin:-1.5rem auto 1.5rem;padding:.5rem .85rem;border:1px solid rgba(255,255,255,.12);border-radius:999px;background:rgba(255,255,255,.05);color:rgba(255,255,255,.62);font-size:.75rem">
       <span aria-hidden="true" style="color:#70d9bd">●</span>
       <span>Hotspot address</span>
@@ -939,6 +949,11 @@ function updatePaymentAvailability(){
   if(plansInitialised)renderPlans();
 }
 function applyPortalCardVisibility(){
+  if(isDanstedPortal()){
+    PORTAL_CARD_VISIBILITY=Object.assign({},PORTAL_CARD_VISIBILITY,{
+      hero:true,packages:true,connectionSupport:true,voucher:true,paymentRecovery:true
+    });
+  }
   var targets=[
     ["header","portalHeader"],["hero","portalHero"],["announcement","portalAnnouncement"],
     ["expiryNotice","portalExpiryNotice"],["packages","plansSection"],["paymentStatus","mpesaBanner"],
@@ -1282,6 +1297,18 @@ function applyPortalConfig(data){
   setPortalText("portalTagline",typeof data.tagline==="string"?data.tagline:"");
   document.title=name+" — Hotspot Portal";
   var supportPhone=typeof data.supportPhone==="string"?data.supportPhone.trim():"";
+   var danstedInstructions=document.getElementById("danstedPurchaseInstructions");
+   var danstedSupportContact=document.getElementById("danstedSupportContact");
+   var danstedSupportPhone=document.getElementById("danstedSupportPhone");
+   if(isDanstedPortal()&&danstedInstructions){
+     danstedInstructions.hidden=false;
+     danstedInstructions.style.display="block";
+   }
+   if(danstedSupportContact&&danstedSupportPhone&&supportPhone){
+     danstedSupportPhone.textContent=supportPhone;
+     danstedSupportContact.hidden=false;
+     danstedSupportContact.style.display="";
+   }
   var phoneHref=supportPhone.replace(/[^\d+]/g,"");
   ["portalHeaderPhone","portalFooterPhone"].forEach(function(id){
     var element=document.getElementById(id);
@@ -1319,7 +1346,7 @@ function applyPortalConfig(data){
   var allowPackagesDuringMaintenance=Boolean(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.allowPackagesDuringMaintenance===true);
   if(plansSection)plansSection.style.display=shouldHidePackageSection(maintenance,allowPackagesDuringMaintenance)?"none":"";
   var voucherSection=document.getElementById("voucherSection");
-  if(voucherSection&&(data.vouchersEnabled===false||!portalCardEnabled("voucher")))voucherSection.style.display="none";
+   if(voucherSection&&((data.vouchersEnabled===false&&!isDanstedPortal())||!portalCardEnabled("voucher")))voucherSection.style.display="none";
   var paymentInstructions=typeof data.paymentInstructions==="string"?data.paymentInstructions.trim():"";
   PORTAL_PAYMENT_INSTRUCTIONS=paymentInstructions;
   var paymentMessage=document.getElementById("mpesaMessage");

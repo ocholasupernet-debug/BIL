@@ -505,7 +505,18 @@ function HotspotLoginView({
     supportEmail: portalBranding.supportEmail || brand.supportEmail,
     domain: "",
   };
-  const portalCards = portalBranding.portalCards ?? DEFAULT_HOTSPOT_PORTAL_CARDS;
+  const isDanstedLayout = (portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout) === "dansted-wifi";
+  const configuredPortalCards = portalBranding.portalCards ?? DEFAULT_HOTSPOT_PORTAL_CARDS;
+  const portalCards = isDanstedLayout
+    ? {
+        ...configuredPortalCards,
+        hero: true,
+        packages: true,
+        connectionSupport: true,
+        voucher: true,
+        paymentRecovery: true,
+      }
+    : configuredPortalCards;
   const [activeTab, setActiveTab] = useState<Tab>("plans");
   useEffect(() => {
     const availableTabs: Tab[] = [
@@ -575,7 +586,6 @@ function HotspotLoginView({
   const [phone, setPhone] = useState(() => {
     try { return typeof window !== "undefined" ? window.localStorage.getItem(danstedPhoneStorageKey) || "" : ""; } catch { return ""; }
   });
-  const isDanstedLayout = (portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout) === "dansted-wifi";
   const [deviceMacAddress, setDeviceMacAddress] = useState(portalContext.mac);
   const [deviceName, setDeviceName] = useState("");
   const [tvDialogOpen, setTvDialogOpen] = useState(false);
@@ -3415,6 +3425,37 @@ function HotspotLoginView({
                 <div className="hp-dns-address" aria-label={`Hotspot address ${portalDnsHostname}`}>
                   <Wifi size={13} /><span>Hotspot address</span><strong>{portalDnsHostname}</strong>
                 </div>
+              )}
+              {!troubleshootingOnly && isDanstedLayout && (
+                <section
+                  aria-labelledby="dansted-purchase-guide-title"
+                  style={{
+                    width: "min(100%, 720px)",
+                    margin: "14px auto 16px",
+                    padding: "12px 14px",
+                    border: "1px solid rgba(255,255,255,.18)",
+                    borderRadius: 10,
+                    background: "rgba(77,78,79,.82)",
+                    color: "#f5f5f5",
+                    textAlign: "left",
+                    boxShadow: "0 8px 20px rgba(0,0,0,.2)",
+                  }}
+                >
+                  <h2 id="dansted-purchase-guide-title" style={{ margin: "0 0 8px", textAlign: "center", fontSize: ".98rem", fontWeight: 800 }}>
+                    How To Purchase
+                  </h2>
+                  <ol style={{ margin: 0, paddingLeft: 22, fontSize: ".82rem", lineHeight: 1.65 }}>
+                    <li>Tap your preferred package.</li>
+                    <li>Enter your Safaricom phone number.</li>
+                    <li>Tap Pay Now.</li>
+                    <li>Approve the M-Pesa prompt and wait for confirmation (usually up to 30 seconds).</li>
+                  </ol>
+                  {portalBranding.supportPhone && (
+                    <p style={{ margin: "8px 0 0", textAlign: "center", fontSize: ".76rem" }}>
+                      Customer care: {portalBranding.supportPhone}
+                    </p>
+                  )}
+                </section>
               )}
               <div className="hp-badges">
                 <span className="hp-badge"><Shield size={12} /> Secure</span>
