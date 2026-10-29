@@ -1873,6 +1873,7 @@ function HotspotLoginView({
     if (!savedCredentials?.username || !savedCredentials.password || !adminId || !portalContext.mac) {
       return { attempted: false, signedIn: false };
     }
+    let responseStatus: number | null = null;
     try {
       const response = await hotspotPortalFetch(hotspotApiUrl("/api/customers/hotspot-login"), {
         method: "POST",
@@ -1885,6 +1886,7 @@ function HotspotLoginView({
           ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
         }),
       });
+      responseStatus = response.status;
       const data = await response.json().catch(() => ({})) as {
         ok?: boolean;
         error?: string;
@@ -1916,7 +1918,16 @@ function HotspotLoginView({
             error: data.error,
           };
         }
-        throw new Error(data.error || "The saved hotspot account could not sign in.");
+        return {
+          attempted: true,
+          signedIn: false,
+          retryable: response.status === 408
+            || response.status === 425
+            || response.status === 429
+            || response.status >= 500
+            || response.ok,
+          error: data.error || "The saved hotspot account could not sign in.",
+        };
       }
       storeHotspotCredentials(loginCredentialsStorageKey, savedCredentials);
       setHotspotCredentials(savedCredentials);
@@ -1937,6 +1948,11 @@ function HotspotLoginView({
       return {
         attempted: true,
         signedIn: false,
+        retryable: responseStatus === null
+          || responseStatus === 408
+          || responseStatus === 425
+          || responseStatus === 429
+          || responseStatus >= 500,
         error: error instanceof Error ? error.message : "Could not sign in with the saved hotspot account.",
       };
     }

@@ -126,7 +126,10 @@ test("the captive portal reconnects a valid device session and keeps payment han
   assert.match(portalTemplate, /PORTAL_AUTO_RECONNECT_MAX_ATTEMPTS=10/);
   assert.match(portalTemplate, /PORTAL_AUTO_RECONNECT_WINDOW_MS=120000/);
   assert.match(portalTemplate, /function portalAutoReconnectCanRetry\(\)/);
-  assert.match(portalTemplate, /Math\.min\(1000\*Math\.pow\(2,Math\.min\(Math\.max\(portalAutoReconnectAttempts-1,0\),4\)\),10000\)/);
+  assert.match(portalTemplate, /if\(portalAutoReconnectExpiry\)return Date\.now\(\)<portalAutoReconnectExpiry/);
+  assert.match(portalTemplate, /Math\.min\(1000\*Math\.pow\(2,Math\.min\(Math\.max\(portalAutoReconnectAttempts-1,0\),5\)\),30000\)/);
+  assert.match(portalTemplate, /Date\.parse\(data\.expiresAt\|\|""\)/);
+  assert.match(portalTemplate, /document\.visibilityState==="hidden"/);
   assert.match(portalTemplate, /function attemptPortalAutoReconnect\(\)/);
   assert.match(portalTemplate, /action:"login"/);
   assert.match(portalTemplate, /router_id:PORTAL_ROUTER_ID/);
@@ -162,6 +165,8 @@ test("a confirmed browser-session reconnect redirects away from the captive port
 test("a saved-account reconnect leaves the hosted portal after RouterOS confirms login", () => {
   assert.match(reactPortal, /const redirectAfterConfirmedHotspotLogin = useCallback/);
   assert.match(reactPortal, /window\.location\.replace\(destination\)/);
+  assert.match(reactPortal, /retryable: responseStatus === null/);
+  assert.match(reactPortal, /responseStatus >= 500/);
   assert.match(
     reactPortal,
     /setTroubleshootMessage\("Your saved package account is signed in\."\);\s*setTroubleshootError\(""\);\s*redirectAfterConfirmedHotspotLogin\(\);/,

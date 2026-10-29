@@ -551,7 +551,7 @@ var COLORS=[
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="";
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
-   var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalAutoReconnectStartedAt=0, portalPaidLoginHandoff=false;
+   var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalAutoReconnectStartedAt=0, portalAutoReconnectExpiry=0, portalPaidLoginHandoff=false;
    var portalMpesaVerifyBusy=false;
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var ROUTER_NAS_IDENTIFIER="$(identity)";
@@ -1086,14 +1086,15 @@ function checkPortalExpiryOnLanding(){
  var PORTAL_AUTO_RECONNECT_MAX_ATTEMPTS=10;
  var PORTAL_AUTO_RECONNECT_WINDOW_MS=120000;
  function portalAutoReconnectCanRetry(){
+   if(portalAutoReconnectExpiry)return Date.now()<portalAutoReconnectExpiry;
   return portalAutoReconnectAttempts<PORTAL_AUTO_RECONNECT_MAX_ATTEMPTS
     &&(!portalAutoReconnectStartedAt||Date.now()-portalAutoReconnectStartedAt<PORTAL_AUTO_RECONNECT_WINDOW_MS);
  }
  function portalAutoReconnectRetryDelay(){
-  return Math.min(1000*Math.pow(2,Math.min(Math.max(portalAutoReconnectAttempts-1,0),4)),10000);
+   return Math.min(1000*Math.pow(2,Math.min(Math.max(portalAutoReconnectAttempts-1,0),5)),30000);
  }
  function schedulePortalAutoReconnect(delay){
-  if(portalAutoReconnectDone||!portalAutoReconnectCanRetry())return;
+   if(portalAutoReconnectDone||!portalAutoReconnectCanRetry()||document.visibilityState==="hidden")return;
   if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
   portalAutoReconnectTimer=setTimeout(function(){
     portalAutoReconnectTimer=0;
@@ -1122,6 +1123,8 @@ function attemptPortalAutoReconnect(){
   }).then(function(result){
     portalAutoReconnectBusy=false;
     var data=result.data||{};
+     var expiry=Date.parse(data.expiresAt||"");
+     if(Number.isFinite(expiry)&&expiry>Date.now())portalAutoReconnectExpiry=expiry;
     if(data.connected===true){
       portalAutoReconnectDone=true;
       if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);

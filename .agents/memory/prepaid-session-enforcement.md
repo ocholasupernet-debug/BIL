@@ -19,6 +19,12 @@ Keep paid Hotspot accounts in `payment_cleared_router_pending` until RouterOS ac
 
 If payment, account/MAC setup, and entitlement are confirmed but the live RouterOS session is still pending, retry that specific transaction in the production activation sweep until expiry. Keep the existing latest-payment, tenant/router/plan/MAC, no-depletion, and expiry checks; do not sweep every active user.
 
+The user expects paid Hotspot access to avoid preventable reconnect blockers and activation delays. Preserve confirmed entitlement through transient failures, keep retrying within expiry, and report an internet session only after RouterOS confirms it.
+
+**Why:** the user explicitly wants to prevent paid users from facing reconnect problems or delayed access.
+
+**How to apply:** Retry transient portal/API failures while entitlement remains valid, retain payment-to-customer/router scope checks, and stop only for expiry, depletion, or a confirmed terminal error.
+
 **Why:** A valid paid period must survive temporary router outages, but globally logging in every active account could create unwanted sessions or disrupt shared-device limits.
 
 **How to apply:** Persist a clear session-pending marker, select only its matching paid transaction and customer, retry within the bounded worker batch, and never report connected until RouterOS confirms the session.
