@@ -31,6 +31,7 @@
 - [Hotspot chat setting](hotspot-chat-setting.md) — Control Tawk visibility from saved Hotspot Settings and sync through the normal portal flow, not a Multiport bulk action.
 - [Hotspot roaming allowance](hotspot-roaming-allowance.md) — Share one package data allowance across explicitly permitted routers and retain revoked destinations for historical accounting.
 - [Supabase function and migration safety](supabase-migration-runner.md) — Reapply idempotent DB changes, verify live function bodies, and qualify columns that collide with PL/pgSQL output names.
+- [Supabase REST tenant-list pagination](supabase-rest-pagination.md) — Use stable ID-keyset batches; PostgREST’s 1,000-row cap can silently hide newer purchases.
 - [RouterOS script compatibility](routeros-script-compatibility.md) — Unsupported RouterOS properties fail at import parse time, outside `on-error` handlers.
 - [RouterOS empty file queries](routeros-empty-file-queries.md) — Avoid filtered `/file/print` no-match queries; RouterOS may return `!empty` and node-routeros can crash.
 - [RouterOS HotSpot identity variables](routeros-hotspot-identity-macros.md) — Pair supported router-wide identity and per-service server-name macros; do not rely on nas-id.

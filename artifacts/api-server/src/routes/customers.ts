@@ -94,6 +94,7 @@ import { normalizePlanServiceType } from "../lib/plan-service-type.js";
 import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-queue.js";
 import { saveCustomerEditWithRouter } from "../lib/customer-edit-consistency.js";
 import { withCustomerEditLock } from "../lib/customer-edit-lock.js";
+import { collectIdPages } from "../lib/prepaid-customer-pages.js";
 import {
   calculateCustomerExtensionExpiry,
   customerStatusForExpiryEdit,
@@ -756,6 +757,21 @@ async function reconcileCustomerAccess(
  * Query param: adminId or ispId → filters by admin_id
  */
 
+const PREPAID_CUSTOMER_PAGE_SIZE = 1000;
+
+async function selectAllAdminCustomers(adminId: number) {
+  return collectIdPages(
+    (lastId, pageSize) => {
+      const cursor = lastId === null ? "" : `&id=gt.${lastId}`;
+      return sbSelectStrict<{ id: number; archived_at?: string | null } & Record<string, unknown>>(
+      "isp_customers",
+        `admin_id=eq.${adminId}${cursor}&select=*&order=id.asc&limit=${pageSize}`,
+      );
+    },
+    PREPAID_CUSTOMER_PAGE_SIZE,
+  );
+}
+
 router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
   const adminId = authenticatedAdminId(req, req.query.adminId ?? req.query.ispId);
   if (!adminId) {
@@ -763,8 +779,15 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
     return;
   }
   // Filter in application code so the ordinary customer list remains compatible
-  // until the staged archived_at migration is applied to the database.
-  const rows = await sbSelect<{ archived_at?: string | null } & Record<string, unknown>>(
+  //   let rows: ({ id: number; archived_at?: string | null } & Record<string, unknown>)[];
+  try {
+    rows = await selectAllAdminCustomers(adminId);
+  } catch (error) {
+    logger.error({ adminId, err: error }, "[customers] prepaid customer list query failed");
+    res.status(503).json({ error: "Prepaid users could not be loaded. Please retry shortly." });
+    return;
+  }
+(
     "isp_customers",
     `admin_id=eq.${adminId}&select=*`,
   );
