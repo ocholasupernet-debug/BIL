@@ -2629,7 +2629,75 @@ function configuredPostLoginDestination(){
     return destination.origin+"/";
   }catch(e){return "";}
 }
+function showHostedPortalLoginMessage(message,success){
+  var box=document.getElementById("hostedPortalLoginMessage");
+  if(!box){
+    box=document.createElement("div");
+    box.id="hostedPortalLoginMessage";
+    box.setAttribute("role","status");
+    box.setAttribute("aria-live","polite");
+    var wrap=document.getElementById("loginFormWrap");
+    if(wrap)wrap.insertBefore(box,wrap.firstChild);
+  }
+  if(!box)return;
+  box.textContent=message;
+  box.style.cssText="display:block;margin:0 1.5rem 1rem;padding:.8rem 1rem;border-radius:.75rem;font-size:.8rem;line-height:1.45;"+
+    (success
+      ?"color:#bbf7d0;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.35)"
+      :"color:#fecaca;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35)");
+}
+function loginHostedPortalAccount(form){
+  var user=document.getElementById("loginUser");
+  var pass=document.getElementById("loginPass");
+  var btn=document.getElementById("loginBtn");
+  var username=user?String(user.value||"").trim():"";
+  var password=pass?String(pass.value||""):"";
+  if(!PORTAL_ADMIN_ID||!username||!password||!DEVICE_MAC){
+    showHostedPortalLoginMessage(!DEVICE_MAC
+      ?"The router did not provide this device’s address. Reopen this page from the Hotspot Wi-Fi."
+      :"Wait for the Hotspot details to load, then try signing in again.",false);
+    return;
+  }
+  saveHotspotLoginCredentials({username:username,password:password});
+  if(btn){btn.disabled=true;btn.textContent="Connecting…";}
+  showHostedPortalLoginMessage("Checking your account and connecting through the Hotspot router…",true);
+  fetch(apiUrl("/api/customers/hotspot-login"),{
+    method:"POST",
+    credentials:"include",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      adminId:PORTAL_ADMIN_ID,
+      username:username,
+      password:password,
+      mac_address:DEVICE_MAC,
+      ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+    })
+  }).then(function(response){
+    return response.json().catch(function(){return{};}).then(function(data){return{ok:response.ok,data:data||{}};});
+  }).then(function(result){
+    if(!result.ok||result.data.ok!==true||result.data.connected!==true){
+      throw new Error(result.data.error||"The router has not confirmed this login yet.");
+    }
+    if(pass)pass.value="";
+    if(btn){btn.textContent="Connected";btn.disabled=true;}
+    showHostedPortalLoginMessage("Connected. You can now browse the internet; close this sign-in page to continue.",true);
+    var destination=configuredPostLoginDestination();
+    if(destination)window.setTimeout(function(){window.location.replace(destination);},1200);
+  }).catch(function(error){
+    if(btn){btn.disabled=false;btn.textContent="Click Here To Connect";}
+    showHostedPortalLoginMessage(error&&error.message?error.message:"Could not confirm the Hotspot login. Keep this device on Wi-Fi and retry.",false);
+  });
+}
 function doLogin(form){
+  var rawAction=form&&form.getAttribute?String(form.getAttribute("action")||""):"";
+  /* The VPS-hosted portal does not receive RouterOS macro substitution. Never
+     POST the literal $(link-login-only) path back to the website; use the
+     tenant-scoped credential-login API instead. Router-served pages still
+     have a resolved MikroTik login URL and keep the native form submission. */
+  if(/\$\([^)]*\)/.test(rawAction)){
+    loginHostedPortalAccount(form);
+    return false;
+  }
   var btn=document.getElementById("loginBtn");
   var pass=document.getElementById("loginPass");
   if(!pass||!pass.value)return false;

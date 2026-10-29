@@ -89,6 +89,11 @@ test("RouterOS login keeps its login action and uses the configured tenant hostn
   assert.match(exporter, /postLoginUrl: hotspotPostLoginDestination\(settings\.portalHostname, PUBLIC_BASE_DOMAIN\)/);
   assert.match(loginHandler, /configuredPostLoginDestination\(\)/);
   assert.match(loginHandler, /dstField\.value=postLoginDestination/);
+  assert.match(loginHandler, /rawAction/);
+  assert.match(loginHandler, /loginHostedPortalAccount\(form\)/);
+  assert.match(portalTemplate, /function loginHostedPortalAccount\(form\)/);
+  assert.match(portalTemplate, /apiUrl\("\/api\/customers\/hotspot-login"\)/);
+  assert.match(portalTemplate, /mac_address:DEVICE_MAC/);
   assert.match(portalTemplate, /if\(typeof doLogin==="function"&&doLogin\(form\)\)form\.submit\(\)/);
 });
 
