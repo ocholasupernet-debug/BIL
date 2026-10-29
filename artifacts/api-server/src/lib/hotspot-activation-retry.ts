@@ -29,6 +29,8 @@ export interface HotspotPlanRetryScope {
   port_id: number | null;
 }
 
+export const ACTIVE_HOTSPOT_SESSION_PENDING_NOTE = "session activation is pending";
+
 function normalizedMac(value: string | null) {
   return String(value ?? "").toLowerCase().replace(/[^a-f0-9]/g, "");
 }

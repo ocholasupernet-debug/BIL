@@ -17,6 +17,12 @@ Manual Prepaid Users sync must push only active prepaid identities and present o
 
 Keep paid Hotspot accounts in `payment_cleared_router_pending` until RouterOS account setup succeeds; pending remains entitled and visible. Retry pending purchases from verified customer, plan, MAC, router, and payment links, not from transaction-note text alone. Recheck legacy active rows when their latest payment note still signals incomplete router setup.
 
+If payment, account/MAC setup, and entitlement are confirmed but the live RouterOS session is still pending, retry that specific transaction in the production activation sweep until expiry. Keep the existing latest-payment, tenant/router/plan/MAC, no-depletion, and expiry checks; do not sweep every active user.
+
+**Why:** A valid paid period must survive temporary router outages, but globally logging in every active account could create unwanted sessions or disrupt shared-device limits.
+
+**How to apply:** Persist a clear session-pending marker, select only its matching paid transaction and customer, retry within the bounded worker batch, and never report connected until RouterOS confirms the session.
+
 **Why:** Prematurely marking a paid account active can stop recovery after RouterOS fails, while users must remain visible and automatically retryable.
 
 **How to apply:** Persist `active` only after the RouterOS provisioning calls succeed. On failure, retain the pending state and retry without resetting a same-checkout account's expiry or usage.

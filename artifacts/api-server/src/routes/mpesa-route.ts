@@ -29,6 +29,7 @@ import { hasGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-s
 import { planBelongsToOwner } from "../lib/plan-ownership.js";
 import { isPrepaidCustomerEntitled } from "../lib/prepaid-entitlement.js";
 import {
+  ACTIVE_HOTSPOT_SESSION_PENDING_NOTE,
   isRetryablePaidHotspotAccount,
   type HotspotPlanRetryScope,
   type PaidHotspotTransactionForRetry,
@@ -3656,6 +3657,10 @@ async function runAutomaticHotspotActivationSweep(): Promise<void> {
         sbSelectStrict<PaidHotspotTransactionForRetry & { notes: string | null }>(
           "isp_transactions",
           `status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&customer_id=not.is.null&plan_id=not.is.null&mac_address=not.is.null&notes=ilike.*RouterOS%20account%20activation%20is%20pending*&select=id,admin_id,customer_id,plan_id,status,payment_method,payment_intent_id,reference,mac_address,notes&order=created_at.desc,id.desc&limit=30`,
+        ),
+        sbSelectStrict<PaidHotspotTransactionForRetry & { notes: string | null }>(
+          "isp_transactions",
+          `status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&customer_id=not.is.null&plan_id=not.is.null&mac_address=not.is.null&notes=ilike.*${encodeURIComponent(ACTIVE_HOTSPOT_SESSION_PENDING_NOTE)}*&select=id,admin_id,customer_id,plan_id,status,payment_method,payment_intent_id,reference,mac_address,notes&order=created_at.desc,id.desc&limit=30`,
         ),
       ]);
       const legacyCandidates = [...new Map(
