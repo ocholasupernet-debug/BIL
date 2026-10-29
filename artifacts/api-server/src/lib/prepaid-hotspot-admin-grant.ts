@@ -108,6 +108,9 @@ export function hotspotAdminGrantUsername(routerId: number, macAddress: string):
   return `tv${routerId}${mac.replace(/:/g, "").toLowerCase()}`;
 }
 
-export function hotspotAdminGrantExpiry(now = Date.now()): string {
-  return new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
+export function hotspotAdminGrantExpiry(now = Date.now(), grantDays = 30): string {
+  if (!Number.isInteger(grantDays) || grantDays < 1 || grantDays > 30) {
+    throw new Error("Free Hotspot access must be between 1 and 30 days.");
+  }
+  return new Date(now + grantDays * 24 * 60 * 60 * 1000).toISOString();
 }

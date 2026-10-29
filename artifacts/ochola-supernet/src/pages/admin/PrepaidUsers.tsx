@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
@@ -699,6 +700,7 @@ function ExtendUserDialog({
 
 /* ══════════════════════════════ Page ══════════════════════════════ */
 export default function PrepaidUsers() {
+  const [location] = useLocation();
   const qc = useQueryClient();
   const [statusTab, setStatusTab] = useState<StatusFilter>("all");
   const [archivePreview, setArchivePreview] = useState<{
@@ -886,7 +888,12 @@ export default function PrepaidUsers() {
   const [adjustingExpiryUser, setAdjustingExpiryUser] = useState<Customer | null>(null);
   const [rechargePickerOpen, setRechargePickerOpen] = useState(false);
   const [addingVlanUser, setAddingVlanUser] = useState(false);
-  const [grantingHotspotUser, setGrantingHotspotUser] = useState(false);
+  const [grantingHotspotUser, setGrantingHotspotUser] = useState(
+    typeof window !== "undefined" && window.location.pathname === "/admin/free-access",
+  );
+  useEffect(() => {
+    setGrantingHotspotUser(location === "/admin/free-access");
+  }, [location]);
   const [rechargeTargetId, setRechargeTargetId] = useState("");
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
@@ -1525,7 +1532,7 @@ export default function PrepaidUsers() {
           onCreated={async () => {
             await qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
             setActionError("");
-            setActionNotice("The 30-day Hotspot admin grant was applied to MikroTik. No payment transaction was created.");
+            setActionNotice("The free Hotspot account was applied to MikroTik. No payment transaction was created.");
           }}
         />
       )}

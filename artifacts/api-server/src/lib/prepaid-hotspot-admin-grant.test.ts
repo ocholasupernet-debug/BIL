@@ -76,9 +76,15 @@ test("does not treat PPPoE or port-service accounts as eligible Hotspot targets"
   assert.ok(matches.some(match => /port service/.test(match.reason ?? "")));
 });
 
-test("sets a fixed 30-day admin-grant expiry", () => {
+test("sets the selected free-grant expiry and rejects unsafe durations", () => {
+  assert.equal(
+    hotspotAdminGrantExpiry(Date.parse("2026-10-09T00:00:00.000Z"), 7),
+    "2026-10-16T00:00:00.000Z",
+  );
   assert.equal(
     hotspotAdminGrantExpiry(Date.parse("2026-10-09T00:00:00.000Z")),
     "2026-11-08T00:00:00.000Z",
   );
+  assert.throws(() => hotspotAdminGrantExpiry(Date.now(), 0), /between 1 and 30 days/);
+  assert.throws(() => hotspotAdminGrantExpiry(Date.now(), 31), /between 1 and 30 days/);
 });

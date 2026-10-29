@@ -240,6 +240,7 @@ function Router() {
       <Route path="/admin/vouchers"         component={AdminVouchers}    />
       <Route path="/admin/hotspot-binding"  component={HotspotBinding}   />
       <Route path="/admin/activation/prepaid-users" component={PrepaidUsers} />
+      <Route path="/admin/free-access" component={PrepaidUsers} />
       <Route path="/admin/hotspot-settings" component={HotspotSettings} />
       <Route path="/admin/pppoe-settings"   component={PPPoESettings}   />
       <Route path="/admin/pppoe-settings/setup" component={PPPoESetup} />

@@ -73,6 +73,7 @@ export function PrepaidHotspotAdminGrantDialog({
   const [macAddress, setMacAddress] = useState("");
   const [routerId, setRouterId] = useState("");
   const [planId, setPlanId] = useState("");
+  const [grantDays, setGrantDays] = useState("30");
   const [matches, setMatches] = useState<ExistingHotspotMatch[]>([]);
   const [selectedMatchId, setSelectedMatchId] = useState("");
   const [result, setResult] = useState<GrantResult | null>(null);
@@ -131,7 +132,7 @@ export function PrepaidHotspotAdminGrantDialog({
       });
       const status = String(payload?.status ?? "");
       if (response.ok && (status === "connected" || status === "already_connected")) {
-        return { connected: true, message: "The router confirmed that the TV is connected." };
+        return { connected: true, message: "The router confirmed that the device is connected." };
       }
       return {
         connected: false,
@@ -182,6 +183,7 @@ export function PrepaidHotspotAdminGrantDialog({
           macAddress: macAddress.trim(),
           routerId: Number(routerId),
           planId: Number(planId),
+          grantDays: Number(grantDays),
         }),
       });
       if (
@@ -240,7 +242,7 @@ export function PrepaidHotspotAdminGrantDialog({
     setResult(null);
     setSaving(true);
     try {
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const expiresAt = new Date(Date.now() + Number(grantDays) * 24 * 60 * 60 * 1000).toISOString();
       const { response, payload } = await authenticatedFetch(`/api/customers/${selectedMatch.id}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -286,7 +288,7 @@ export function PrepaidHotspotAdminGrantDialog({
         <div className="prepaid-modal-heading">
           <div>
             <h2 id="hotspot-admin-grant-title">Grant Hotspot access</h2>
-            <p>30 days · applied to MikroTik · no payment transaction is created</p>
+            <p>{grantDays} days · applied to MikroTik · no payment transaction is created</p>
           </div>
           <button type="button" onClick={onClose} disabled={saving} aria-label="Close Hotspot grant" className="prepaid-icon-button">
             <X size={15} />
@@ -306,7 +308,7 @@ export function PrepaidHotspotAdminGrantDialog({
                   <input style={inputStyle} type="tel" value={phone} maxLength={40} onChange={event => setPhone(event.target.value)} />
                 </label>
                 <label style={{ gridColumn: "1 / -1" }}>
-                  TV device MAC address
+                   Device MAC address
                   <input
                     style={inputStyle}
                     autoCapitalize="characters"
@@ -315,7 +317,7 @@ export function PrepaidHotspotAdminGrantDialog({
                     value={macAddress}
                     onChange={event => { setMacAddress(event.target.value.toUpperCase()); setMatches([]); setSelectedMatchId(""); }}
                   />
-                  <span className="prepaid-help">This associates the prepaid record with the TV. Router login is still required for the device to authenticate.</span>
+                   <span className="prepaid-help">This creates a tracked Hotspot login for this device. The selected plan applies its speed cap.</span>
                 </label>
                 <label>
                   Router
@@ -338,9 +340,17 @@ export function PrepaidHotspotAdminGrantDialog({
                     <span className="prepaid-help">No active direct Hotspot plan is assigned to this router.</span>
                   )}
                 </label>
+                <label>
+                  Free access duration
+                  <select style={inputStyle} value={grantDays} onChange={event => setGrantDays(event.target.value)}>
+                    <option value="1">1 day</option>
+                    <option value="7">7 days</option>
+                    <option value="30">30 days</option>
+                  </select>
+                </label>
                 <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "flex-start", padding: "0.65rem 0.75rem", border: "1px solid var(--isp-border)", borderRadius: 8, color: "var(--isp-text-muted)", fontSize: "0.74rem" }}>
                   <Wifi size={15} style={{ flexShrink: 0, marginTop: 1, color: "var(--isp-accent)" }} />
-                  Grant length is fixed at 30 days. A matching account is selected for in-place update; duplicate records are never created automatically.
+                  Each device gets its own tracked account and selected plan speed cap. A matching account is updated in place; duplicate records are never created automatically.
                 </div>
               </div>
 

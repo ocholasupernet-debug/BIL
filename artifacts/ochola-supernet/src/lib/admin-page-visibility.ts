@@ -110,6 +110,7 @@ export function isAdminFeatureVisible(
 }
 
 const ROUTE_FEATURES: Array<{ prefix: string; featureKey: string }> = [
+  { prefix: "/admin/free-access", featureKey: "network.routers" },
   { prefix: "/admin/network/migration", featureKey: "network.migration" },
   { prefix: "/admin/network/replace-router", featureKey: "network.replace-router" },
   { prefix: "/admin/network/self-install", featureKey: "network.self-install" },

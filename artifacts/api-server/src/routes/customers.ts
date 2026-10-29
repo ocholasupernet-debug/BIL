@@ -779,7 +779,8 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
     return;
   }
   // Filter in application code so the ordinary customer list remains compatible
-  //   let rows: ({ id: number; archived_at?: string | null } & Record<string, unknown>)[];
+  // until the staged archived_at migration is applied to the database.
+  let rows: ({ id: number; archived_at?: string | null } & Record<string, unknown>)[];
   try {
     rows = await selectAllAdminCustomers(adminId);
   } catch (error) {
@@ -787,10 +788,6 @@ router.get("/customers", requireAdmin(), async (req, res): Promise<void> => {
     res.status(503).json({ error: "Prepaid users could not be loaded. Please retry shortly." });
     return;
   }
-(
-    "isp_customers",
-    `admin_id=eq.${adminId}&select=*`,
-  );
   const includeArchived = req.query.includeArchived === "true";
   const entitledArchivedRows = rows.filter(row =>
     Boolean(row.archived_at)
@@ -1246,6 +1243,7 @@ router.post("/customers/hotspot-admin-grant", requireAdmin(), async (req, res): 
   const phone = String(req.body?.phone ?? "").trim();
   const routerId = positivePortalId(req.body?.routerId);
   const planId = positivePortalId(req.body?.planId);
+  const grantDays = req.body?.grantDays === undefined ? 30 : Number(req.body.grantDays);
   const macAddress = normalizeHotspotGrantMac(req.body?.macAddress);
   if (!adminId || !account) {
     res.status(401).json({ error: "A valid signed-in administrator is required." });
@@ -1255,8 +1253,9 @@ router.post("/customers/hotspot-admin-grant", requireAdmin(), async (req, res): 
     res.status(403).json({ error: "This admin grant is available to the ISP account owner only." });
     return;
   }
-  if (!name || name.length > 100 || phone.length > 40 || !routerId || !planId || !macAddress) {
-    res.status(400).json({ error: "Enter a customer name, a valid device MAC, a router, and an active Hotspot plan." });
+  if (!name || name.length > 100 || phone.length > 40 || !routerId || !planId || !macAddress
+    || !Number.isInteger(grantDays) || grantDays < 1 || grantDays > 30) {
+    res.status(400).json({ error: "Enter a customer, device MAC, router, active Hotspot plan, and duration from 1 to 30 days." });
     return;
   }
 
@@ -1326,7 +1325,7 @@ router.post("/customers/hotspot-admin-grant", requireAdmin(), async (req, res): 
   let radiusMutationAttempted = false;
   let paidHotspotBindingSnapshot: PaidHotspotBindingSnapshot | null = null;
   const profile = hotspotPlanProfileName(plan.name, plan.router_id, plan.port_id);
-  const expiresAt = hotspotAdminGrantExpiry();
+  const expiresAt = hotspotAdminGrantExpiry(Date.now(), grantDays);
   const password = randomBytes(24).toString("base64url");
 
   try {
@@ -1478,7 +1477,7 @@ router.post("/customers/hotspot-admin-grant", requireAdmin(), async (req, res): 
         username,
         routerId,
         planId: plan.id,
-        grantDays: 30,
+        grantDays,
         expiresAt,
         macAddress,
         paymentCreated: false,
@@ -1494,7 +1493,7 @@ router.post("/customers/hotspot-admin-grant", requireAdmin(), async (req, res): 
       expiresAt,
       mikrotikSynced: saved.router.routerSynced,
       connectionStatus: "not_checked",
-      message: "The 30-day Hotspot admin grant was saved and confirmed on MikroTik. No payment transaction was created.",
+      message: `The ${grantDays}-day Hotspot admin grant was saved and confirmed on MikroTik. No payment transaction was created.`,
     });
   } catch (error) {
     logger.error(

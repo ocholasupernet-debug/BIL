@@ -153,6 +153,10 @@ const navSections: NavSection[] = [
         href: "/admin/activation/prepaid-users",
       },
       {
+        name: "Free Hotspot Access", icon: Wifi, visibilityKey: "customers.activation",
+        href: "/admin/free-access",
+      },
+      {
         name: "Hotspot Binding", icon: Wifi, visibilityKey: "customers.hotspot-binding",
         children: [
           { name: "Bindings",      href: "/admin/hotspot-binding" },
