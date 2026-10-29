@@ -196,6 +196,7 @@ jobs:
                 { file: app?.pm2_env?.pm_out_log_path, kind: "output" },
               ].filter(item => item.file);
               if (logFiles.length === 0) console.log("No PM2 API log paths were available.");
+              const timeWindow = "2026-10-29T03:(2[5-9]|3[0-9]|40):";
               for (const { file, kind } of logFiles) {
                 if (!fs.existsSync(file)) {
                   console.log(JSON.stringify({ file, exists: false }));
@@ -203,19 +204,34 @@ jobs:
                 }
                 let tail;
                 try {
-                  tail = execFileSync("tail", ["-c", "150000", file], { encoding: "utf8", maxBuffer: 300000 });
+                  tail = execFileSync("grep", ["-E", timeWindow, file], { encoding: "utf8", maxBuffer: 1000000 });
                 } catch {
-                  console.log(JSON.stringify({ file, error: "Could not read bounded log tail." }));
-                  continue;
+                  tail = "";
                 }
                 const lines = tail.split(/\r?\n/);
                 const relevant = kind === "error"
                   ? /\b(?:Error|TypeError|RangeError|ReferenceError|SyntaxError):|uncaughtException|unhandledRejection|UND_ERR_SOCKET/i
                   : /Router configuration sync failed|Router queue and Hotspot tethering configuration synchronized|RouterOS command .* failed|RouterOS API connect failed|management API forward failed/i;
-                const output = lines.filter(line => relevant.test(line)).slice(-30).map(line => line
-                  .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
-                  .replace(/((?:password|secret|token)\s*[:=]\s*)[^,\s}]+/gi, "$1[REDACTED]")
-                  .slice(0, 700));
+                const output = lines.filter(line => relevant.test(line)).slice(-60).map(line => {
+                  const splitAt = line.indexOf(": ");
+                  if (splitAt >= 0) {
+                    try {
+                      const event = JSON.parse(line.slice(splitAt + 2));
+                      return JSON.stringify({
+                        time: line.slice(0, splitAt),
+                        routerId: event.routerId,
+                        host: event.host,
+                        attempt: event.attempt,
+                        error: event.err,
+                        message: event.msg,
+                      });
+                    } catch {}
+                  }
+                  return line
+                    .replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]")
+                    .replace(/((?:password|secret|token)\s*[:=]\s*)[^,\s}]+/gi, "$1[REDACTED]")
+                    .slice(0, 700);
+                });
                 console.log(JSON.stringify({ file, kind, matchingLines: output }, null, 2));
               }
             NODE
