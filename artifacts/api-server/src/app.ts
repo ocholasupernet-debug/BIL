@@ -56,7 +56,10 @@ app.use(express.json({
   },
 }));
 app.use(express.urlencoded({ extended: true }));
-app.use(resolveVlanHotspotPortalRequest);
+// Scope verification applies to API calls from the captive portal. The
+// router-served HTML must load first so it can attach its embedded signed
+// context token to those API calls.
+app.use("/api", resolveVlanHotspotPortalRequest);
 
 app.use("/api", router);
 
