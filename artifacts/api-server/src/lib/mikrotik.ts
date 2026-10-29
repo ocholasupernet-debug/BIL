@@ -1,6 +1,7 @@
 import * as net from "net";
 import { randomBytes, X509Certificate } from "node:crypto";
 import { RouterOSAPI } from "node-routeros";
+import { guardRouterOSConnection } from "./routeros-connection.js";
 import { logger } from "./logger";
 import {
   ROUTER_MANAGEMENT_VPN,
@@ -150,7 +151,7 @@ export function getEnvCredentials(): RouterCredentials | null {
 function makeConn(host: string, creds: RouterCredentials): RouterOSAPI {
   const ssl = creds.useSSL ?? creds.port === 8729;
   const connectSec = Math.ceil((creds.connectTimeoutMs ?? DEFAULT_CONNECT_MS) / 1000);
-  return new RouterOSAPI({
+  return guardRouterOSConnection(new RouterOSAPI({
     host,
     port:      creds.port,
     user:      creds.username,
@@ -167,7 +168,7 @@ function makeConn(host: string, creds: RouterCredentials): RouterOSAPI {
           },
         }
       : {}),
-  });
+  }));
 }
 
 /* ─── Timeout helper ─────────────────────────────────────────────────────── */
