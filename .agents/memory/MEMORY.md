@@ -6,6 +6,7 @@
 - [GitHub connector commit flow](github-connector-commit.md) — Read files individually, compare the full remote tree with local tracked files, then use one non-forced tree/commit/ref update.
 - [GitHub connector blob encoding](github-connector-blob-encoding.md) — Use readFile UTF-8 for large blobs, upload sequentially, and verify each returned SHA.
 - [GitHub connector workflow writes](github-connector-workflow-writes.md) — Workflow Contents APIs can be filtered; inspect through Git tree/blob and verify refs after branch writes.
+- [GitHub release source fidelity](github-release-source-fidelity.md) — Build API commits from workspace `readFile` content; CodeExecution `shellExec` may read a stale checkout.
 - [GitHub workflow SSH heredocs](github-workflow-heredoc.md) — Heredoc terminators in Actions SSH scripts must align exactly with the YAML block indentation.
 - [Git tree shell transport](github-tree-shell-transport.md) — Shell output can lose tabs, NUL records, or truncate trees; compare compact paths and verify changed blobs individually.
 - [RouterOS collector transport](routeros-collector-transport.md) — RouterOS HTTP fetch cannot use file upload mode; send bounded POST bodies and reject truncated file reads.
@@ -25,6 +26,7 @@
 - [Hotspot credential login](hotspot-credential-login.md) — Credential login must use the submitted account and server-side RouterOS activation; MAC troubleshooting is a separate recovery path.
 - [Hotspot purchase login handoff](hotspot-purchase-login-handoff.md) — Provision verified purchases server-side, then let the RouterOS portal sign in normal devices; TV purchases and explicit retries stay direct.
 - [Hotspot private portal DNS](hotspot-private-dns.md) — Advertise only the MikroTik gateway DNS when the portal hostname is internal; public fallback causes NXDOMAIN before login.
+- [Hotspot browser sessions](hotspot-browser-session.md) — Use a first-party tenant HTTPS portal for secure cookies; keep purchase MAC history separate from the verified current device binding.
 - [Hotspot sharing enforcement](hotspot-sharing-enforcement.md) — Keep the plan device limit aligned across RouterOS profiles and RADIUS concurrency attributes.
 - [Hotspot chat setting](hotspot-chat-setting.md) — Control Tawk visibility from saved Hotspot Settings and sync through the normal portal flow, not a Multiport bulk action.
 - [Hotspot roaming allowance](hotspot-roaming-allowance.md) — Share one package data allowance across explicitly permitted routers and retain revoked destinations for historical accounting.
@@ -82,7 +84,7 @@
 - [Onboarding deployment modes](onboarding-deployment-modes.md) — Greenfield, Brownfield, and Zero-Touch need separate safety boundaries with legacy aliases normalized centrally.
 - [Unified script compiler migration](unified-script-compiler-migration.md) — Introduce a new RouterOS compiler behind existing installer boundaries; retire old families only after hardware validation.
 - [Self Install script scope](self-install-script-scope.md) — Use a one-time bootstrap to fetch/import mainhotspot.rsc; keep the management .ovpn recovery download separate.
-- [Prepaid session enforcement](prepaid-session-enforcement.md) — Preserve entitled live sessions during renewal and routine sync; disconnect only for expiry, depleted quota, or suspension.
+- [Prepaid session enforcement](prepaid-session-enforcement.md) — Preserve valid sessions, and keep paid Hotspot accounts pending until RouterOS setup is confirmed.
 - [Prepaid user time adjustment](prepaid-user-time-adjustment.md) — Adjust existing expiry per user and reconcile live access; do not bulk-change unverified affected accounts.
 - [Prepaid user display identity](prepaid-user-display-identity.md) — Show one scoped row per verified prepaid identity without deleting linked customer records.
 - [Prepaid customer archive](prepaid-customer-archive.md) — Hide only expired accounts reversibly; never let an entitled user disappear from Prepaid Users.

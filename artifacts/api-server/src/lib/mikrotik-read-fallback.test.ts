@@ -219,6 +219,36 @@ test("hotspot login uses the selected device IP and confirms its MAC session", a
   });
 });
 
+test("admin Hotspot reconnect waits for delayed session confirmation without repeating login", async () => {
+  let loginSeen = false;
+  let confirmationsAfterLogin = 0;
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/login") {
+      loginSeen = true;
+      return [];
+    }
+    if (command[0] === "/ip/hotspot/active/print") {
+      if (loginSeen && ++confirmationsAfterLogin >= 3) {
+        return [{ user: "admin-reconnect-user", address: "10.0.0.88", "mac-address": targetMac }];
+      }
+      return [];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    const connected = await connectHotspotUser(routerCredentials(port), {
+      user: "admin-reconnect-user",
+      password: "test-password",
+      ip: "10.0.0.88",
+      macAddress: targetMac,
+    });
+
+    assert.equal(connected, true);
+    assert.equal(commands.filter(({ command }) => command[0] === "/ip/hotspot/active/login").length, 1);
+    assert.equal(confirmationsAfterLogin, 3);
+  });
+});
+
 test("paid Hotspot reconnect discovers and confirms a device over one RouterOS connection", async () => {
   let loginSeen = false;
   const targetMac = "AA:BB:CC:DD:EE:FF";
@@ -263,6 +293,38 @@ test("paid Hotspot reconnect discovers and confirms a device over one RouterOS c
       "=ip=10.0.0.88",
       "=mac-address=" + targetMac,
     ]);
+  });
+});
+
+test("paid Hotspot reconnect allows RouterOS time to publish a new session without repeating login", async () => {
+  let loginSeen = false;
+  let confirmationsAfterLogin = 0;
+  const targetMac = "AA:BB:CC:DD:EE:FF";
+  await withMockRouterApi((_username, command) => {
+    if (command[0] === "/ip/hotspot/active/login") {
+      loginSeen = true;
+      return [];
+    }
+    if (command[0] === "/ip/hotspot/active/print" && command.some(value => String(value).startsWith("?user="))) {
+      if (loginSeen && ++confirmationsAfterLogin >= 3) {
+        return [{ user: "delayed-user", address: "10.0.0.88", "mac-address": targetMac }];
+      }
+      return [];
+    }
+    if (command[0] === "/ip/dhcp-server/lease/print") {
+      return [{ status: "bound", address: "10.0.0.88", "mac-address": targetMac }];
+    }
+    return [];
+  }, async ({ port, commands }) => {
+    const result = await reconnectHotspotUserByMac(routerCredentials(port), {
+      user: "delayed-user",
+      password: "test-password",
+      macAddress: targetMac,
+    });
+
+    assert.equal(result.kind, "connected");
+    assert.equal(commands.filter(({ command }) => command[0] === "/ip/hotspot/active/login").length, 1);
+    assert.equal(confirmationsAfterLogin, 3);
   });
 });
 
@@ -314,7 +376,7 @@ test("paid Hotspot reconnect moves a single-device session only after finding th
   });
 });
 
-test("paid Hotspot reconnect limits a pending login to two confirmation reads", async () => {
+test("paid Hotspot reconnect bounds pending-login confirmation polling", async () => {
   const targetMac = "AA:BB:CC:DD:EE:FF";
   await withMockRouterApi((_username, command) => {
     if (command[0] === "/ip/dhcp-server/lease/print") {
@@ -334,8 +396,8 @@ test("paid Hotspot reconnect limits a pending login to two confirmation reads", 
         command[0] === "/ip/hotspot/active/print"
         && command.some(value => String(value).startsWith("?user=")),
       ).length,
-      4,
-      "initial scoped read, pre-login check, and two confirmation reads",
+      7,
+      "initial scoped read, pre-login check, and five bounded confirmation reads",
     );
     assert.equal(typeof result.stageDurationsMs.routeros_active_login_command, "number");
     assert.equal(typeof result.stageDurationsMs.routeros_login_confirmation_1, "number");

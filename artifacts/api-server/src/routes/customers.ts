@@ -1,5 +1,5 @@
-import { Router, type IRouter } from "express";
-import { randomBytes } from "node:crypto";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   sbSelect,
   sbSelectStrict,
@@ -78,6 +78,7 @@ import {
   type VlanHotspotPortalContext,
 } from "../lib/api-auth.js";
 import { planOwnerFilter } from "../lib/plan-ownership.js";
+import { hotspotSessionExpiresAtMs } from "../lib/hotspot-session-lifetime.js";
 import { dataLimitMegabytesToBytes, validateFupPolicy } from "../lib/fup-policy.js";
 import {
   authorizedRoamingRouterIds,
@@ -156,6 +157,8 @@ type CustomerRow = {
 type PlanRow = {
   id: number;
   name: string;
+  validity?: number | null;
+  validity_unit?: string | null;
   is_active?: boolean;
   type: string | null;
   router_id: number | null;
@@ -1043,11 +1046,35 @@ router.post("/customers/:id/hotspot-reconnect", requireAdmin(), async (req, res)
 
       const activeUsers = await prepaidHotspotReconnectOperations.fetchHotspotUsers(creds);
       const userSessions = activeUsers.filter(user => user.user === username);
+      const persistVerifiedPresence = async (online: boolean, ipAddress?: string | null): Promise<void> => {
+        await assertLock();
+        try {
+          await sbUpdateStrict(
+            "isp_customers",
+            `id=eq.${customer.id}&admin_id=eq.${customer.admin_id}`,
+            {
+              service_online: online,
+              ...(online ? {
+                last_seen: new Date().toISOString(),
+                ...(ipAddress ? { ip_address: ipAddress } : {}),
+              } : {}),
+            },
+          );
+        } catch (error) {
+          logger.warn(
+            { err: error, adminId: customer.admin_id, customerId: customer.id, online },
+            "[customers/hotspot-reconnect] live session confirmed but presence could not be saved",
+          );
+        }
+      };
       if (userSessions.some(user => normalisePortalMac(user.macAddress) === macAddress)) {
+        const matchingSession = userSessions.find(user => normalisePortalMac(user.macAddress) === macAddress);
+        await persistVerifiedPresence(true, matchingSession?.address);
         return { status: "already_connected" as const, message: "This device already has an active Hotspot session." };
       }
       const maxSessions = Math.max(1, Math.floor(Number(plan.shared_users) || 1));
       if (userSessions.length >= maxSessions) {
+        await persistVerifiedPresence(true, userSessions[0]?.address);
         return {
           status: "session_limit" as const,
           message: `This account is already using its ${maxSessions}-device limit on another device.`,
@@ -1056,6 +1083,7 @@ router.post("/customers/:id/hotspot-reconnect", requireAdmin(), async (req, res)
 
       const clientIp = await prepaidHotspotReconnectOperations.resolveHotspotClientIpByMac(creds, macAddress);
       if (!clientIp || !isValidIpv4(clientIp)) {
+        await persistVerifiedPresence(false);
         return {
           status: "device_not_found" as const,
           message: "The router cannot see this device yet. Connect it to the Hotspot Wi-Fi, then retry.",
@@ -1169,6 +1197,7 @@ router.post("/customers/:id/hotspot-reconnect", requireAdmin(), async (req, res)
         macAddress,
         ...(hotspotServer ? { server: hotspotServer } : {}),
       });
+      await persistVerifiedPresence(connected, connected ? clientIp : undefined);
       return connected
         ? { status: "connected" as const, message: "The device reconnected to the Hotspot." }
         : {
@@ -2978,16 +3007,28 @@ router.post("/customers/hotspot-voucher-activate", async (req, res): Promise<voi
   }
 });
 
-router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
-  const adminId = Number(req.body?.adminId);
-  const username = String(req.body?.username ?? "").trim();
-  const password = String(req.body?.password ?? "");
+router.post("/customers/hotspot-login", hotspotBrowserSessionMiddleware, async (req, res): Promise<void> => {
+  const browserSession = res.locals.hotspotBrowserSession as HotspotBrowserSession | undefined;
+  const portalScope = req.hotspotPortalContext;
+  let adminId = Number(req.body?.adminId);
+  let username = String(req.body?.username ?? "").trim();
+  let password = String(req.body?.password ?? "");
+  if (browserSession && (!username || !password)) {
+    const sessionCustomer = (await sbSelectStrict<Record<string, unknown>>(
+      "isp_customers",
+      `id=eq.${browserSession.customer_id}&admin_id=eq.${browserSession.admin_id}&select=username,password&limit=1`,
+    ))[0];
+    if (sessionCustomer) {
+      username = String(sessionCustomer.username ?? "").trim();
+      password = String(sessionCustomer.password ?? "");
+      if (!Number.isSafeInteger(adminId) || adminId < 1) adminId = browserSession.admin_id;
+    }
+  }
   const requestedMac = normalisePortalMac(req.body?.mac_address);
   if (!Number.isSafeInteger(adminId) || adminId < 1 || !username || !password) {
     res.status(400).json({ error: "username and password are required" });
     return;
   }
-  const portalScope = req.hotspotPortalContext;
   let customer: Record<string, unknown> | undefined;
   if (portalScope) {
     const usernameFilter = `username=eq.${encodeURIComponent(username)}&select=*&limit=2`;
@@ -3059,7 +3100,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   const plan = customerRow.plan_id
     ? (await sbSelectStrict<PlanRow>(
         "isp_plans",
-        `id=eq.${customerRow.plan_id}&admin_id=eq.${planAdminId}&select=id,name,router_id,port_id,owner_reseller_id,type,plan_type,shared_users,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up&limit=1`,
+        `id=eq.${customerRow.plan_id}&admin_id=eq.${planAdminId}&select=id,name,validity,validity_unit,router_id,port_id,owner_reseller_id,type,plan_type,shared_users,speed_down,speed_up,speed_down_unit,speed_up_unit,data_limit_mb,data_cap_mode,fup_speed_down,fup_speed_up&limit=1`,
       ))[0]
     : undefined;
   if (
@@ -3137,7 +3178,14 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     res.status(409).json({ error: "These credentials are linked to a different device." });
     return;
   }
-  if (macChanged) {
+  const cookieAuthorizesMacMove = Boolean(
+    browserSession
+    && browserSession.customer_id === Number(customerRow.id)
+    && browserSession.admin_id === Number(customerRow.admin_id)
+    && browserSession.router_id === Number(routerId)
+    && browserSession.port_id === (customerRow.port_id ?? null),
+  );
+  if (macChanged && !cookieAuthorizesMacMove) {
     const purchaseAdminId = portalScope?.adminId ?? adminId;
     const paidPurchases = await sbSelectStrict<{
       id: number;
@@ -3175,6 +3223,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
   }
   const maxSharedUsers = Math.max(1, Math.floor(Number(plan?.shared_users ?? 1)));
 
+  let routerConfirmedIpAddress: string | undefined;
   try {
     // A paid Hotspot purchase can be left in router-pending state when account
     // provisioning failed after payment. Repair only ordinary tenant-owned,
@@ -3301,6 +3350,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
       });
       return;
     }
+    routerConfirmedIpAddress = reconnect.clientIpAddress;
   } catch (error) {
     logger.warn({ err: error, adminId, routerId, username }, "[customers/hotspot-login] router login attempt failed");
     res.status(503).json({
@@ -3310,6 +3360,61 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     });
     return;
   }
+  let sessionResumptionAvailable = false;
+  try {
+    const sessionToken = cookieAuthorizesMacMove
+      ? readHotspotSessionToken(req)
+      : randomUUID();
+    const tokenHash = hotspotSessionTokenHash(sessionToken);
+    const now = new Date();
+    const expiresAtMs = hotspotSessionExpiresAtMs({
+      nowMs: now.getTime(),
+      entitlementExpiresAt: customerRow.expires_at,
+      planValidity: plan?.validity,
+      planValidityUnit: plan?.validity_unit,
+    });
+    const cookieMaxAgeMs = Math.max(0, expiresAtMs - now.getTime());
+    if (cookieMaxAgeMs <= 0) {
+      throw new Error("The paid Hotspot entitlement expired before its browser session could be saved.");
+    }
+    const sessionRecord = {
+      token_hash: tokenHash,
+      customer_id: Number(customerRow.id),
+      admin_id: Number(customerRow.admin_id),
+      router_id: Number(routerId),
+      port_id: customerRow.port_id ?? null,
+      current_mac_address: targetMac,
+      current_ip_address: isValidIpv4(String(routerConfirmedIpAddress ?? "").trim())
+        ? String(routerConfirmedIpAddress).trim()
+        : null,
+      last_seen_at: now.toISOString(),
+      expires_at: new Date(expiresAtMs).toISOString(),
+    };
+    await sbDeleteStrict(
+      "isp_hotspot_browser_sessions",
+      `expires_at=lt.${encodeURIComponent(now.toISOString())}`,
+    );
+    if (cookieAuthorizesMacMove && browserSession) {
+      await sbUpdateStrict(
+        "isp_hotspot_browser_sessions",
+        `token_hash=eq.${browserSession.token_hash}&customer_id=eq.${Number(customerRow.id)}`,
+        sessionRecord,
+      );
+    } else {
+      await sbInsertStrict("isp_hotspot_browser_sessions", sessionRecord);
+    }
+    res.cookie(HOTSPOT_SESSION_COOKIE, sessionToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      maxAge: cookieMaxAgeMs,
+      path: "/api",
+    });
+    sessionResumptionAvailable = true;
+  } catch (error) {
+    logger.error({ err: error, customerId: customerRow.id }, "Hotspot is connected, but browser session could not be saved");
+    res.clearCookie(HOTSPOT_SESSION_COOKIE, { path: "/api", secure: true, httpOnly: true, sameSite: "lax" });
+  }
 
   // Return customer without exposing password.
   const { password: _pw, ...safe } = customer;
@@ -3318,6 +3423,7 @@ router.post("/customers/hotspot-login", async (req, res): Promise<void> => {
     customer: safe,
     planName: plan?.name ?? null,
     connected: true,
+    sessionResumptionAvailable,
     session: {
       status: "active",
       connected: true,
@@ -3330,6 +3436,80 @@ function normalisePortalMac(value: unknown): string {
   const raw = String(value ?? "").trim().replace(/[:-]/g, "").toUpperCase();
   return /^[0-9A-F]{12}$/.test(raw) ? raw.match(/.{2}/g)!.join(":") : "";
 }
+
+const HOTSPOT_SESSION_COOKIE = "ochola_hotspot_session";
+
+function readHotspotSessionToken(req: Request): string {
+  const cookieHeader = String(req.headers.cookie ?? "");
+  for (const part of cookieHeader.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0 || part.slice(0, separator).trim() !== HOTSPOT_SESSION_COOKIE) continue;
+    const value = part.slice(separator + 1).trim();
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+      ? value
+      : "";
+  }
+  return "";
+}
+
+function hotspotSessionTokenHash(token: string): string {
+  return createHash("sha256").update(token, "utf8").digest("hex");
+}
+
+type HotspotBrowserSession = {
+  token_hash: string;
+  customer_id: number;
+  admin_id: number;
+  router_id: number;
+  port_id: number | null;
+  expires_at: string;
+};
+
+async function hotspotBrowserSessionMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  const token = readHotspotSessionToken(req);
+  if (!token) {
+    next();
+    return;
+  }
+  try {
+    const tokenHash = hotspotSessionTokenHash(token);
+    const session = (await sbSelectStrict<HotspotBrowserSession>(
+      "isp_hotspot_browser_sessions",
+      `token_hash=eq.${tokenHash}&select=token_hash,customer_id,admin_id,router_id,port_id,expires_at&limit=1`,
+    ))[0];
+    if (session && Date.parse(session.expires_at) > Date.now()) {
+      res.locals.hotspotBrowserSession = session;
+    } else {
+      res.clearCookie(HOTSPOT_SESSION_COOKIE, { path: "/api", secure: true, httpOnly: true, sameSite: "lax" });
+    }
+    next();
+  } catch (error) {
+    logger.error({ err: error }, "Could not validate Hotspot browser session");
+    res.status(503).json({ error: "Hotspot session validation is temporarily unavailable." });
+  }
+}
+
+router.post("/customers/hotspot-session/check", hotspotBrowserSessionMiddleware, (req, res): void => {
+  const session = res.locals.hotspotBrowserSession as HotspotBrowserSession | undefined;
+  const adminId = Number(req.body?.adminId);
+  const routerId = Number(req.body?.routerId);
+  const portId = req.body?.portId == null || req.body?.portId === "" ? null : Number(req.body.portId);
+  const portalScope = req.hotspotPortalContext;
+  const allowedOwnerIds = portalScope
+    ? [portalScope.adminId, portalScope.resellerId]
+    : [adminId];
+  const valid = Boolean(
+    session
+    && allowedOwnerIds.includes(session.admin_id)
+    && session.router_id === (portalScope?.routerId ?? routerId)
+    && session.port_id === (portalScope?.portId ?? portId),
+  );
+  res.json({ ok: true, sessionValid: valid });
+});
 
 function positivePortalId(value: unknown): number | null {
   const parsed = Number(value);

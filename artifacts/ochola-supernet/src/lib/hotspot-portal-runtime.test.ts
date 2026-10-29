@@ -95,6 +95,16 @@ test("the captive portal reconnects a valid device session and keeps payment han
   assert.match(portalTemplate, /data\.status==="expired"\|\|data\.status==="depleted"/);
 });
 
+test("browser-session recovery uses the tenant HTTPS origin before sending its cookie", () => {
+  assert.match(portalTemplate, /function redirectToFirstPartyHotspotPortal\(\)/);
+  assert.match(portalTemplate, /new URL\("\/hotspot\/login\.html",apiOrigin\)/);
+  assert.match(portalTemplate, /target\.searchParams\.set\("hosted","1"\)/);
+  assert.match(portalTemplate, /customers\/hotspot-session\/check/);
+  assert.match(portalTemplate, /customers\/hotspot-login/);
+  assert.match(portalTemplate, /credentials:"include"/);
+  assert.match(reactPortal, /hotspotPortalFetch/);
+});
+
 test("TV reconnect retries the existing paid checkout while package checking remains diagnostic-only", () => {
   assert.match(reactPortal, /const retryExistingPaidAccess = useCallback\(\(\) => \{\s*if \(!checkoutId \|\| bindingInFlight\.current\) return;[\s\S]*?bindPaidHotspotAccess\(checkoutId, true\);/);
   assert.match(reactPortal, /Reconnect this TV/);

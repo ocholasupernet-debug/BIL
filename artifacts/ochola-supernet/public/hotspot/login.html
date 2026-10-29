@@ -574,6 +574,16 @@ var portalLoyaltyBusy=false, portalLoyaltyRequestId=0, voucherRedemptionBusy=fal
 var voucherRedeemedCredentials=null, voucherRedeemedAdminId=0;
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
 var PORTAL_QUERY=new URLSearchParams(window.location.search);
+if(!EMBEDDED_CONFIG&&PORTAL_QUERY.get("hosted")==="1"){
+  EMBEDDED_CONFIG={
+    apiBase:window.location.origin,
+    adminId:Number(PORTAL_QUERY.get("adminId"))||null,
+    routerId:Number(PORTAL_QUERY.get("routerId"))||null,
+    portId:Number(PORTAL_QUERY.get("portId"))||null,
+    resellerId:Number(PORTAL_QUERY.get("resellerId"))||null,
+    portalContextToken:PORTAL_QUERY.get("portalContextToken")||""
+  };
+}
 function normalisePortalCardVisibility(value,legacy){
   var input=value&&typeof value==="object"&&!Array.isArray(value)?value:{};
   var cards=Object.assign({},PORTAL_CARD_DEFAULTS);
@@ -1026,7 +1036,7 @@ window.fetch=function(input,init){
     headers.set("X-Hotspot-NAS-Identifier",PORTAL_NAS_IDENTIFIER);
     headers.set("X-Hotspot-Server-Name",PORTAL_HOTSPOT_SERVER_NAME);
   }
-  return originalPortalFetch(input,Object.assign({},init||{},{headers:headers}));
+  return originalPortalFetch(input,Object.assign({},init||{},{headers:headers,credentials:"include"}));
 };
 function setPortalText(id,value){
   var element=document.getElementById(id);
@@ -1392,6 +1402,7 @@ function loadPortalTypography(done){
       served by the public API; reseller bundles do not include a local
       typography.json file. */
    applyPortalConfig(EMBEDDED_CONFIG);
+   if(redirectToFirstPartyHotspotPortal())return;
    loadPaymentStatus();
    var adminQuery=PORTAL_ADMIN_ID>0?"?adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"";
    var brandingUrl=PORTAL_API_BASE?apiUrl("/api/public/hotspot-branding"+adminQuery):"";
@@ -1407,6 +1418,27 @@ function loadPortalTypography(done){
    var request=Promise.all([brandingRequest,typographyRequest]);
   var timeout=new Promise(function(resolve){setTimeout(function(){resolve(null);},5000);});
   Promise.race([request,timeout]).then(function(){if(typeof done==="function")done();});
+}
+
+function redirectToFirstPartyHotspotPortal(){
+  if(PORTAL_QUERY.get("hosted")==="1"||!PORTAL_API_BASE)return false;
+  var apiOrigin;
+  try{apiOrigin=new URL(PORTAL_API_BASE).origin;}catch(_error){return false;}
+  if(apiOrigin===window.location.origin)return false;
+  var target;
+  try{target=new URL("/hotspot/login.html",apiOrigin);}catch(_error){return false;}
+  target.searchParams.set("hosted","1");
+  target.searchParams.set("adminId",String(PORTAL_ADMIN_ID||""));
+  target.searchParams.set("routerId",String(PORTAL_ROUTER_ID||""));
+  if(PORTAL_PORT_ID>0)target.searchParams.set("portId",String(PORTAL_PORT_ID));
+  if(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.resellerId)target.searchParams.set("resellerId",String(EMBEDDED_CONFIG.resellerId));
+  if(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.portalContextToken)target.searchParams.set("portalContextToken",String(EMBEDDED_CONFIG.portalContextToken));
+  if(DEVICE_MAC)target.searchParams.set("mac",DEVICE_MAC);
+  if(DEVICE_IP)target.searchParams.set("ip",DEVICE_IP);
+  if(PORTAL_NAS_IDENTIFIER)target.searchParams.set("nasid",PORTAL_NAS_IDENTIFIER);
+  if(PORTAL_HOTSPOT_SERVER_NAME)target.searchParams.set("server",PORTAL_HOTSPOT_SERVER_NAME);
+  window.location.replace(target.toString());
+  return true;
 }
 
 function loadPaymentStatus(){
@@ -2725,24 +2757,59 @@ function renderPortalDeviceMac(){
     value.textContent=mac||"Resolved by router";
   }
 }
+var cookieSessionReauthStarted=false;
+function attemptCookieSessionReauth(){
+  if(cookieSessionReauthStarted||PORTAL_QUERY.get("hosted")!=="1"||!DEVICE_MAC||PORTAL_ADMIN_ID<1)return false;
+  cookieSessionReauthStarted=true;
+  fetch(apiUrl("/api/customers/hotspot-session/check"),{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({adminId:PORTAL_ADMIN_ID,routerId:PORTAL_ROUTER_ID,portId:PORTAL_PORT_ID||null})
+  }).then(function(response){return response.ok?response.json():null;})
+    .then(function(data){
+      if(!data||data.sessionValid!==true){
+        attemptPortalAutoReconnect();
+        return;
+      }
+      return fetch(apiUrl("/api/customers/hotspot-login"),{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          adminId:PORTAL_ADMIN_ID,
+          mac_address:DEVICE_MAC,
+          ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+        })
+      }).then(function(response){return response.json().then(function(body){return{ok:response.ok,body:body};});})
+        .then(function(result){
+          if(result.ok&&result.body&&result.body.connected===true){
+            var badge=document.getElementById("portalPaymentBadgeText");
+            if(badge)badge.textContent="Connected to the internet";
+          }
+        });
+    }).catch(function(){attemptPortalAutoReconnect();});
+  return true;
+}
 (function(){var base=applyPortalConfig;applyPortalConfig=function(data){var r=base(data);try{loadPortalLoyaltyBalance();}catch(e){}return r;};})();
 try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
   EMBEDDED_PLANS=normalisePlanList(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.plans);
 }
-loadPlans();
-bindPlanButtons();
-renderPortalDeviceMac();
-startPortalLoyaltyBalance();
-var portalPaidHandoffStarted=applyCredentialsFromHash();
-loadPortalTypography(function(){
+var portalFirstPartyRedirected=redirectToFirstPartyHotspotPortal();
+if(!portalFirstPartyRedirected){
   loadPlans();
-  checkPortalExpiryOnLanding();
-  if(!portalPaidHandoffStarted)attemptPortalAutoReconnect();
-});
-if(PORTAL_QUERY.get("page")==="troubleshoot")openTroubleshootModule();
-else{
-  checkPortalExpiryOnLanding();
-  if(!portalPaidHandoffStarted)attemptPortalAutoReconnect();
+  bindPlanButtons();
+  renderPortalDeviceMac();
+  startPortalLoyaltyBalance();
+  var portalPaidHandoffStarted=applyCredentialsFromHash();
+  loadPortalTypography(function(){
+    loadPlans();
+    checkPortalExpiryOnLanding();
+    if(!portalPaidHandoffStarted&&!attemptCookieSessionReauth())attemptPortalAutoReconnect();
+  });
+  if(PORTAL_QUERY.get("page")==="troubleshoot")openTroubleshootModule();
+  else{
+    checkPortalExpiryOnLanding();
+    if(!portalPaidHandoffStarted&&!attemptCookieSessionReauth())attemptPortalAutoReconnect();
+  }
 }
 </script>
 <div id="hotspot-chat-account" hidden style="position:fixed;right:16px;bottom:18px;z-index:9998;width:min(340px,calc(100vw - 32px));box-sizing:border-box;padding:16px;border:1px solid #d7e0ea;border-radius:14px;background:#fff;color:#172033;box-shadow:0 12px 36px #10243b30;font:14px system-ui,sans-serif">

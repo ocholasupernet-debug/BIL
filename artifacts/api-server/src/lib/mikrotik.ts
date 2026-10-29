@@ -3833,9 +3833,12 @@ export async function connectHotspotUser(
     // Do not serialize opts.server: /ip/hotspot/active/login does not accept it.
     await withTimeout(conn.write(command), ms);
 
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    const confirmationDelaysMs = [150, 300, 600, 900] as const;
+    for (let attempt = 0; attempt <= confirmationDelaysMs.length; attempt += 1) {
       if (isTargetSessionActive(await readActive())) return true;
-      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 120));
+      if (attempt < confirmationDelaysMs.length) {
+        await new Promise((resolve) => setTimeout(resolve, confirmationDelaysMs[attempt]));
+      }
     }
     return false;
   });
@@ -3917,6 +3920,7 @@ export type HotspotMacReconnectKind =
 export interface HotspotMacReconnectResult {
   kind: HotspotMacReconnectKind;
   stageDurationsMs: Record<string, number>;
+  clientIpAddress?: string;
 }
 
 /**
@@ -3938,7 +3942,11 @@ export async function reconnectHotspotUserByMac(
   },
 ): Promise<HotspotMacReconnectResult> {
   const stageDurationsMs: Record<string, number> = {};
-  const result = (kind: HotspotMacReconnectKind): HotspotMacReconnectResult => ({ kind, stageDurationsMs });
+  const result = (kind: HotspotMacReconnectKind, clientIpAddress?: string): HotspotMacReconnectResult => ({
+    kind,
+    stageDurationsMs,
+    ...(clientIpAddress ? { clientIpAddress } : {}),
+  });
   const targetMac = validRouterMac(opts.macAddress);
   if (!targetMac) return result("device-not-found");
 
@@ -3963,20 +3971,23 @@ export async function reconnectHotspotUserByMac(
       ]), ms);
       return Array.isArray(rows) ? rows as Record<string, string>[] : [];
     });
-    const sessionMatchesTarget = (rows: Record<string, string>[], ip?: string): boolean =>
-      rows.some(session =>
+    const matchingTargetSession = (rows: Record<string, string>[], ip?: string): Record<string, string> | undefined =>
+      rows.find(session =>
         hotspotActiveSessionMatchesDevice([session], { user: opts.user, macAddress: targetMac, ip })
         && (!opts.expectedServer || opts.expectedServer === "all" || session.server === opts.expectedServer),
       );
+    const sessionMatchesTarget = (rows: Record<string, string>[], ip?: string): boolean =>
+      Boolean(matchingTargetSession(rows, ip));
 
-    if (sessionMatchesTarget(activeRows, opts.expectedIp)) return result("connected");
+    const alreadyActiveSession = matchingTargetSession(activeRows, opts.expectedIp);
+    if (alreadyActiveSession) return result("connected", alreadyActiveSession.address);
 
     const discoveredIp = await measure("router_ip_discovery", () =>
       resolveHotspotClientIpByMacOnConnection(conn, creds, targetMac, activeRows),
     );
     if (!discoveredIp) return result("device-not-found");
     if (opts.expectedIp && discoveredIp !== opts.expectedIp) return result("ip-mismatch");
-    if (opts.verifyOnly) return result("device-ready");
+    if (opts.verifyOnly) return result("device-ready", discoveredIp);
 
     const loginIp = opts.loginIp?.trim() || discoveredIp;
     const loginAccepted = await measure("routeros_login_and_confirmation", async () => {
@@ -4012,20 +4023,23 @@ export async function reconnectHotspotUserByMac(
         "=mac-address=" + targetMac,
       ]), ms));
 
-      // Do not hold the portal request open for four serial RouterOS reads.
-      // If the session is not visible after two confirmations, the portal's
-      // existing retry loop will check again without risking a second purchase.
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      // RouterOS may add an accepted Hotspot login to /active asynchronously.
+      // Poll read-only for up to about two seconds; never repeat the login command
+      // on this connection because a timed-out write may already have taken effect.
+      const confirmationDelaysMs = [150, 300, 600, 900] as const;
+      for (let attempt = 0; attempt <= confirmationDelaysMs.length; attempt += 1) {
         const confirmed = await measure(
           `routeros_login_confirmation_${attempt + 1}`,
           async () => sessionMatchesTarget(await readActiveForUser(), loginIp),
         );
         if (confirmed) return true;
-        if (attempt < 1) await new Promise(resolve => setTimeout(resolve, 120));
+        if (attempt < confirmationDelaysMs.length) {
+          await new Promise(resolve => setTimeout(resolve, confirmationDelaysMs[attempt]));
+        }
       }
       return false;
     });
-    return result(loginAccepted ? "connected" : "login-pending");
+    return result(loginAccepted ? "connected" : "login-pending", loginAccepted ? loginIp : undefined);
   });
 }
 
