@@ -20,6 +20,8 @@ import {
   fetchBridgePortLayout,
   assignBridgePorts,
   createBridge,
+  mutateBridge,
+  mutateBridgePort,
   type RouterCredentials,
 } from "../lib/mikrotik.js";
 import { sbSelect } from "../lib/supabase-client.js";
@@ -27,6 +29,74 @@ import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 
 const router: IRouter = Router();
+
+function bridgeRouterId(value: unknown): number | null {
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+router.post("/router/:id/bridge-management/inventory", requireAdmin(), async (req, res): Promise<void> => {
+  const id = bridgeRouterId(req.params.id);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  if (!id || !Number.isSafeInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ ok: false, error: "A valid router and signed-in ISP account are required." });
+    return;
+  }
+  try {
+    const { router: stored, creds } = await storedRouterCredentials(id, adminId);
+    const layout = await fetchBridgePortLayout(creds);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, routerId: id, routerName: stored.name, ...layout });
+  } catch (error) {
+    res.status(503).json({ ok: false, error: error instanceof Error ? error.message : "Could not load router bridge data." });
+  }
+});
+
+router.post("/router/:id/bridge-management/bridges", requireAdmin(), async (req, res): Promise<void> => {
+  const id = bridgeRouterId(req.params.id);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const action = req.body?.action;
+  const name = String(req.body?.name ?? "").trim();
+  const newName = String(req.body?.newName ?? "").trim();
+  if (!id || !Number.isSafeInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ ok: false, error: "A valid router and signed-in ISP account are required." });
+    return;
+  }
+  if (!["create", "rename", "delete"].includes(action) || !name) {
+    res.status(400).json({ ok: false, error: "Choose create, rename, or delete and provide a bridge name." });
+    return;
+  }
+  try {
+    const { creds } = await storedRouterCredentials(id, adminId);
+    const message = await mutateBridge(creds, action, name, newName);
+    res.json({ ok: true, verified: true, message });
+  } catch (error) {
+    res.status(409).json({ ok: false, error: error instanceof Error ? error.message : "Bridge change failed." });
+  }
+});
+
+router.post("/router/:id/bridge-management/ports", requireAdmin(), async (req, res): Promise<void> => {
+  const id = bridgeRouterId(req.params.id);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const action = req.body?.action;
+  const bridge = String(req.body?.bridge ?? "").trim();
+  const interfaceName = String(req.body?.interfaceName ?? "").trim();
+  if (!id || !Number.isSafeInteger(adminId) || adminId <= 0) {
+    res.status(400).json({ ok: false, error: "A valid router and signed-in ISP account are required." });
+    return;
+  }
+  if (!["add", "remove", "move"].includes(action) || !bridge || !interfaceName) {
+    res.status(400).json({ ok: false, error: "Choose add, remove, or move and provide a bridge and physical port." });
+    return;
+  }
+  try {
+    const { creds } = await storedRouterCredentials(id, adminId);
+    const message = await mutateBridgePort(creds, action, bridge, interfaceName, String(req.body?.fromBridge ?? "").trim());
+    res.json({ ok: true, verified: true, message });
+  } catch (error) {
+    res.status(409).json({ ok: false, error: error instanceof Error ? error.message : "Bridge port change failed." });
+  }
+});
 
 type InstallMode = "direct" | "coexist" | "takeover";
 function normalizeInstallMode(value: unknown): InstallMode {

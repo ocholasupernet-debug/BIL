@@ -8829,3 +8829,142 @@ export async function createBridge(
     return { created: true, message: `Bridge "${bridgeName}" created successfully.` };
   });
 }
+
+const isSafeBridgeName = (value: string) => /^[A-Za-z0-9_.-]{1,64}$/.test(value);
+const protectedBridgeName = (value: string) =>
+  value.toLowerCase() === "bridge"
+  || value.toLowerCase() === "hotspot-bridge"
+  || value.toLowerCase().startsWith("co-hotspot")
+  || value.toLowerCase().includes("ocholasuper");
+
+/** Carefully manage empty, non-system bridges; live/service bridges are left untouched. */
+export async function mutateBridge(
+  creds: RouterCredentials,
+  action: "create" | "rename" | "delete",
+  name: string,
+  newName?: string,
+): Promise<string> {
+  if (!isSafeBridgeName(name) || (newName && !isSafeBridgeName(newName))) {
+    throw new Error("Bridge names may contain only letters, numbers, dots, underscores, and hyphens.");
+  }
+  return withConn(creds, async conn => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const read = async (path: string) => await withTimeout(conn.write([path]), ms) as Record<string, string>[];
+    const bridges = await read("/interface/bridge/print");
+    const exists = bridges.some(row => row.name === name);
+    if (action === "create") {
+      if (exists) throw new Error(`Bridge "${name}" already exists.`);
+      await withTimeout(conn.write(["/interface/bridge/add", `=name=${name}`]), ms);
+      const verify = await read("/interface/bridge/print");
+      if (!verify.some(row => row.name === name)) throw new Error("RouterOS did not confirm the new bridge.");
+      return `Created bridge "${name}".`;
+    }
+    if (!exists) throw new Error(`Bridge "${name}" no longer exists; reload the router.`);
+    if (protectedBridgeName(name)) throw new Error(`The managed bridge "${name}" is protected.`);
+    const [ports, addresses, hotspot, pppoe, dhcp, vlans, listMembers] = await Promise.all([
+      read("/interface/bridge/port/print"),
+      read("/ip/address/print"),
+      read("/ip/hotspot/print"),
+      read("/interface/pppoe-server/server/print"),
+      read("/ip/dhcp-client/print"),
+      read("/interface/vlan/print"),
+      read("/interface/list/member/print"),
+    ]);
+    const references = [
+      ...ports.filter(row => row.bridge === name).map(() => "bridge ports"),
+      ...addresses.filter(row => row.interface === name).map(() => "IP addresses"),
+      ...hotspot.filter(row => row.interface === name).map(() => "Hotspot servers"),
+      ...pppoe.filter(row => row.interface === name).map(() => "PPPoE servers"),
+      ...dhcp.filter(row => row.interface === name).map(() => "DHCP clients"),
+      ...vlans.filter(row => row.interface === name).map(() => "VLAN interfaces"),
+      ...listMembers.filter(row => row.interface === name).map(() => "interface lists"),
+    ];
+    if (references.length) {
+      throw new Error(`Bridge "${name}" is in use (${[...new Set(references)].join(", ")}). Remove or migrate those dependencies first.`);
+    }
+    if (action === "rename") {
+      const target = String(newName ?? "").trim();
+      if (!target || target === name) throw new Error("Enter a different valid bridge name.");
+      if (bridges.some(row => row.name === target)) throw new Error(`Bridge "${target}" already exists.`);
+      const match = bridges.find(row => row.name === name);
+      const id = match?.[".id"];
+      if (!id) throw new Error("RouterOS did not return the bridge identifier; reload and try again.");
+      await withTimeout(conn.write(["/interface/bridge/set", `=.id=${id}`, `=name=${target}`]), ms);
+      const verify = await read("/interface/bridge/print");
+      if (!verify.some(row => row.name === target) || verify.some(row => row.name === name)) {
+        throw new Error("Bridge rename could not be verified.");
+      }
+      return `Renamed bridge "${name}" to "${target}".`;
+    }
+    const match = bridges.find(row => row.name === name);
+    if (!match?.[".id"]) throw new Error("RouterOS did not return the bridge identifier; reload and try again.");
+    await withTimeout(conn.write(["/interface/bridge/remove", `=.id=${match[".id"]}`]), ms);
+    const verify = await read("/interface/bridge/print");
+    if (verify.some(row => row.name === name)) throw new Error("Bridge removal could not be verified.");
+    return `Deleted empty bridge "${name}".`;
+  });
+}
+
+/** Adds an unassigned physical Ethernet interface or removes only its bridge membership. */
+export async function mutateBridgePort(
+  creds: RouterCredentials,
+  action: "add" | "remove" | "move",
+  bridgeName: string,
+  interfaceName: string,
+  fromBridge?: string,
+): Promise<string> {
+  if (!isSafeBridgeName(bridgeName) || !/^(ether|sfp|combo)[A-Za-z0-9_.-]{0,60}$/i.test(interfaceName)
+    || interfaceName.toLowerCase() === "ether1") {
+    throw new Error("Choose a valid customer-facing physical port; WAN and management interfaces are protected.");
+  }
+  return withConn(creds, async conn => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const [interfaces, bridges, memberships, listMembers] = await Promise.all([
+      withTimeout(conn.write(["/interface/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/interface/bridge/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/interface/bridge/port/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/interface/list/member/print"]), ms) as Promise<Record<string, string>[]>,
+    ]);
+    if (!bridges.some(row => row.name === bridgeName)) throw new Error(`Bridge "${bridgeName}" does not exist.`);
+    const iface = interfaces.find(row => row.name === interfaceName);
+    if (!iface || !["ether", "sfp"].includes(String(iface.type ?? "").toLowerCase())) {
+      throw new Error("Only a live physical Ethernet/SFP interface can be managed here.");
+    }
+    if (listMembers.some(row => row.interface === interfaceName && row.list?.toLowerCase() === "wan")) {
+      throw new Error(`${interfaceName} is assigned to the WAN interface list; its bridge membership is protected.`);
+    }
+    const member = memberships.find(row => row.interface === interfaceName);
+    if (action === "add") {
+      if (member) throw new Error(`${interfaceName} already belongs to "${member.bridge}". Remove it there first; ports are never moved automatically.`);
+      await withTimeout(conn.write(["/interface/bridge/port/add", `=bridge=${bridgeName}`, `=interface=${interfaceName}`]), ms);
+    } else if (action === "remove") {
+      if (!member || member.bridge !== bridgeName || !member[".id"]) {
+        throw new Error(`${interfaceName} is not a member of "${bridgeName}".`);
+      }
+      await withTimeout(conn.write(["/interface/bridge/port/remove", `=.id=${member[".id"]}`]), ms);
+    } else {
+      if (!fromBridge || fromBridge === bridgeName || member?.bridge !== fromBridge || !member[".id"]) {
+        throw new Error("The port membership changed. Reload the router and try again.");
+      }
+      if (protectedBridgeName(fromBridge)) throw new Error(`Moving ports out of managed bridge "${fromBridge}" is blocked.`);
+      await withTimeout(conn.write(["/interface/bridge/port/remove", `=.id=${member[".id"]}`]), ms);
+      try {
+        await withTimeout(conn.write(["/interface/bridge/port/add", `=bridge=${bridgeName}`, `=interface=${interfaceName}`]), ms);
+      } catch (error) {
+        // Best-effort restore prevents leaving a port unassigned after a failed move.
+        const current = await withTimeout(conn.write(["/interface/bridge/port/print"]), ms) as Record<string, string>[];
+        if (!current.some(row => row.interface === interfaceName)) {
+          await withTimeout(conn.write(["/interface/bridge/port/add", `=bridge=${fromBridge}`, `=interface=${interfaceName}`]), ms);
+        }
+        throw error;
+      }
+    }
+    const verify = await withTimeout(conn.write(["/interface/bridge/port/print"]), ms) as Record<string, string>[];
+    const exists = verify.some(row => row.bridge === bridgeName && row.interface === interfaceName);
+    const remainsOld = action === "move" && verify.some(row => row.bridge === fromBridge && row.interface === interfaceName);
+    if ((action !== "remove") !== exists || remainsOld) throw new Error(`RouterOS did not verify the ${action} operation for ${interfaceName}.`);
+    if (action === "add") return `Added ${interfaceName} to "${bridgeName}".`;
+    if (action === "move") return `Moved ${interfaceName} from "${fromBridge}" to "${bridgeName}".`;
+    return `Removed ${interfaceName} from "${bridgeName}"; the physical interface was not deleted.`;
+  });
+}
