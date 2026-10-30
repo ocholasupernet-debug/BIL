@@ -23,7 +23,6 @@ import {
 } from "@/lib/hotspot-portal-cards";
 import {
   HOTSPOT_PORTAL_LAYOUTS,
-  normalizeHotspotPortalLayout,
   renderStaticPortalLayoutCss,
   type HotspotPortalLayout,
 } from "@/lib/hotspot-layouts";
@@ -48,11 +47,22 @@ import {
 } from "@/lib/hotspot-portal-origin";
 import {
   AlertCircle, ArrowDownToLine, Check, ChevronDown, CircleHelp, Eye, FolderOpen,
-  Image, Info, LayoutTemplate, Link2, Loader2, Mail, Palette, Phone,
+  Image, Info, LayoutTemplate, Link2, Loader2, Mail, Phone,
   Save, ShieldCheck, Smartphone, Sparkles, Trash2, Upload, Wifi, X,
 } from "lucide-react";
 
 const PUBLIC_BASE_DOMAIN = "isplatty.org";
+const HOTSPOT_SETTINGS_LAYOUTS = HOTSPOT_PORTAL_LAYOUTS.filter(
+  layout => layout.value === "classic" || layout.value === "dansted-wifi",
+);
+
+function normalizeHotspotSettingsLayout(value: unknown): HotspotPortalLayout {
+  return value === "dansted-wifi" ? "dansted-wifi" : "classic";
+}
+
+function hotspotSettingsLayoutLabel(layout: (typeof HOTSPOT_SETTINGS_LAYOUTS)[number]): string {
+  return layout.value === "dansted-wifi" ? "Dansted · Metallic Diamond" : layout.label;
+}
 
 const DEFAULT_COLORS = {
   bgColor: "#0d0415",
@@ -257,7 +267,7 @@ function loadSettings(storageKey: string): HSettings {
       ...parsed,
       portalCards: normalizeHotspotPortalCards(parsed.portalCards, { ...DEFAULT_SETTINGS, ...parsed }),
       loyaltyCard: normalizeHotspotLoyaltyCardSettings(parsed.loyaltyCard),
-      portalLayout: normalizeHotspotPortalLayout(parsed.portalLayout),
+      portalLayout: normalizeHotspotSettingsLayout(parsed.portalLayout),
       colors: { ...DEFAULT_COLORS, ...(parsed.colors ?? {}) },
     };
     settings.logoUrl = typeof parsed.logoUrl === "string" && parsed.logoUrl.trim()
@@ -469,7 +479,7 @@ function makeExportConfig(
     portalBackground: safePortalBackground(appearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearance.portalPackageShape),
     tawkEnabled: settings.tawkEnabled === true,
-    portalLayout: normalizeHotspotPortalLayout(appearance.portalLayout ?? settings.portalLayout),
+    portalLayout: normalizeHotspotSettingsLayout(appearance.portalLayout ?? settings.portalLayout),
   };
 }
 
@@ -528,7 +538,7 @@ export async function buildPortalHtml(
     postLoginUrl: hotspotPostLoginDestination(settings.portalHostname, PUBLIC_BASE_DOMAIN),
     portalBackground: safePortalBackground(appearanceOverride.portalBackground ?? resolvedAppearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearanceOverride.portalPackageShape ?? resolvedAppearance.portalPackageShape),
-    portalLayout: normalizeHotspotPortalLayout(
+    portalLayout: normalizeHotspotSettingsLayout(
       appearanceOverride.portalLayout ?? settings.portalLayout,
     ),
   };
@@ -655,6 +665,9 @@ const STYLES = `
   .hs-btn-quiet:hover:not(:disabled) { color:var(--isp-text); background:var(--isp-hover); }
   .hs-grid { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(280px,.75fr); gap:18px; align-items:start; }
   .hs-stack { display:flex; flex-direction:column; gap:18px; }
+  .hs-jump-nav { display:flex; gap:7px; overflow-x:auto; margin:-8px 0 18px; padding:2px 1px 8px; scrollbar-width:thin; }
+  .hs-jump-nav a { display:inline-flex; align-items:center; min-height:34px; padding:7px 11px; border:1px solid var(--isp-border); border-radius:999px; background:var(--isp-section); color:var(--isp-text-muted); font-size:.7rem; font-weight:700; text-decoration:none; white-space:nowrap; transition:color .15s,border-color .15s,background .15s; }
+  .hs-jump-nav a:hover, .hs-jump-nav a:focus-visible { color:var(--isp-text); border-color:var(--isp-accent-border); background:var(--isp-accent-glow); outline:none; }
   .hs-card { background:var(--isp-section); border:1px solid var(--isp-border); border-radius:15px; box-shadow:var(--shadow-card); overflow:hidden; }
   .hs-card-head { display:flex; align-items:flex-start; gap:12px; padding:17px 20px 15px; border-bottom:1px solid var(--isp-border-subtle); }
   .hs-card-icon { display:flex; align-items:center; justify-content:center; flex:0 0 32px; width:32px; height:32px; border-radius:9px; color:var(--isp-accent); background:var(--isp-accent-glow); border:1px solid var(--isp-accent-border); }
@@ -713,20 +726,22 @@ const STYLES = `
   .hs-visibility-card[aria-checked="true"] .hs-visibility-switch > span { transform:translateX(14px); }
   .hs-choice-preview { display:block; flex:0 0 46px; width:46px; height:34px; border-radius:7px; border:1px solid rgba(255,255,255,.18); }
   .hs-shape-preview { display:block; flex:0 0 auto; }
-  .hs-layout-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
-  .hs-layout-choice { display:flex; align-items:center; gap:10px; min-width:0; min-height:76px; padding:9px; border:1px solid var(--isp-border); border-radius:10px; background:var(--isp-input-bg); color:var(--isp-text-muted); text-align:left; cursor:pointer; transition:border-color .15s,background .15s,transform .15s; }
-  .hs-layout-choice:hover { border-color:var(--isp-accent-border); transform:translateY(-1px); }
-  .hs-layout-choice.active { border-color:var(--isp-accent); background:var(--isp-accent-glow); box-shadow:0 0 0 2px var(--isp-accent-glow); }
+  .hs-layout-picker { display:grid; grid-template-columns:minmax(190px,.75fr) minmax(0,1.25fr); gap:16px; align-items:stretch; }
+  .hs-layout-select { display:grid; align-content:start; gap:8px; }
+  .hs-layout-select label { color:var(--isp-text); font-size:.74rem; font-weight:750; }
+  .hs-layout-detail { display:flex; align-items:center; gap:14px; min-width:0; padding:14px; border:1px solid var(--isp-border); border-radius:12px; background:var(--isp-input-bg); }
   .hs-layout-copy { min-width:0; display:grid; gap:4px; }
-  .hs-layout-copy strong { color:var(--isp-text); font-size:.72rem; font-weight:800; }
-  .hs-layout-copy small { color:var(--isp-text-sub); font-size:.61rem; line-height:1.3; }
-  .hs-layout-thumb { display:grid; flex:0 0 62px; width:62px; height:48px; overflow:hidden; gap:3px; padding:4px; border:1px solid rgba(255,255,255,.14); border-radius:7px; background:var(--layout-preview-bg); }
+  .hs-layout-copy strong { color:var(--isp-text); font-size:.8rem; font-weight:800; }
+  .hs-layout-copy small { color:var(--isp-text-sub); font-size:.68rem; line-height:1.45; }
+  .hs-layout-thumb { display:grid; flex:0 0 92px; width:92px; height:68px; overflow:hidden; gap:4px; padding:6px; border:1px solid rgba(255,255,255,.18); border-radius:9px; background:var(--layout-preview-bg); }
   .hs-layout-thumb i { display:block; min-width:0; min-height:0; border-radius:2px; }
   .hs-layout-thumb-header { grid-column:1/-1; background:var(--layout-preview-accent); opacity:.9; }
   .hs-layout-thumb-hero { background:var(--layout-preview-panel); }
   .hs-layout-thumb-plans { background:linear-gradient(90deg,var(--layout-preview-accent) 0 22%,var(--layout-preview-panel) 22% 100%); }
-  .hs-layout-thumb-classic { grid-template-columns:1fr; grid-template-rows:5px 1fr 1fr; }
-  .hs-layout-thumb-classic .hs-layout-thumb-hero { width:45%; justify-self:center; }
+  .hs-layout-thumb-classic { grid-template-columns:.78fr 1.22fr; grid-template-rows:7px 1fr 1fr; background:#f4f4ed; }
+  .hs-layout-thumb-classic .hs-layout-thumb-header { background:#285b50; }
+  .hs-layout-thumb-classic .hs-layout-thumb-hero { grid-column:1; grid-row:2/4; border:1px solid #dfe5dc; }
+  .hs-layout-thumb-classic .hs-layout-thumb-plans { grid-column:2; grid-row:2/4; background:linear-gradient(90deg,#d56c4c 0 5px,transparent 5px),repeating-linear-gradient(0deg,#fff 0 7px,#e8eee8 7px 9px); border:1px solid #e5e7eb; }
   .hs-layout-thumb-split-horizon { grid-template-columns:.8fr 1.2fr; grid-template-rows:5px 1fr; }
   .hs-layout-thumb-split-horizon .hs-layout-thumb-header { grid-column:1/-1; }
   .hs-layout-thumb-split-horizon .hs-layout-thumb-hero { grid-column:1; grid-row:2; }
@@ -740,7 +755,11 @@ const STYLES = `
   .hs-layout-thumb-warm-studio .hs-layout-thumb-hero { width:56%; justify-self:center; }
   .hs-layout-thumb-forest-pulse { grid-template-columns:1fr; grid-template-rows:5px 1.2fr 1fr; }
   .hs-layout-thumb-forest-pulse .hs-layout-thumb-hero { width:74%; justify-self:center; }
-  @media (max-width: 760px) { .hs-layout-grid { grid-template-columns:1fr; } }
+  .hs-layout-thumb-dansted-wifi { grid-template-columns:1fr 1fr; grid-template-rows:7px 1fr 1fr; gap:4px; background-color:#252729; background-image:linear-gradient(45deg,rgba(255,255,255,.07) 25%,transparent 25%,transparent 75%,rgba(255,255,255,.07) 75%),linear-gradient(45deg,rgba(255,255,255,.07) 25%,transparent 25%,transparent 75%,rgba(255,255,255,.07) 75%); background-position:0 0,6px 6px; background-size:12px 12px; }
+  .hs-layout-thumb-dansted-wifi .hs-layout-thumb-header { background:#d7dadd; }
+  .hs-layout-thumb-dansted-wifi .hs-layout-thumb-hero { grid-column:1/-1; width:58%; justify-self:center; background:#4b4e50; border:1px solid #aeb2b5; }
+  .hs-layout-thumb-dansted-wifi .hs-layout-thumb-plans { grid-column:1/-1; background:linear-gradient(90deg,transparent 0 6%,#40c965 6% 10%,transparent 10% 47%,#40c965 47% 51%,transparent 51% 90%,#40c965 90% 94%,transparent 94%); border:1px solid #8e9598; }
+  @media (max-width: 760px) { .hs-layout-picker { grid-template-columns:1fr; } }
   .hs-side-card { background:linear-gradient(155deg,var(--isp-card),var(--isp-inner-card)); }
   .hs-side-body { padding:17px 18px 19px; }
   .hs-preview-screen { min-height:270px; overflow:hidden; border-radius:11px; border:1px solid var(--isp-border); background:linear-gradient(145deg,#081018,#122137); position:relative; }
@@ -768,20 +787,21 @@ const STYLES = `
   .hs-modal-close { display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:7px; border:1px solid rgba(248,113,113,.25); background:rgba(248,113,113,.08); color:#fca5a5; font:700 .68rem inherit; cursor:pointer; }
   .hs-modal-frame { flex:1; min-height:0; border:0; background:#02090f; }
   @media (max-width: 900px) { .hs-grid { grid-template-columns:1fr; } .hs-side { display:grid; grid-template-columns:1fr 1fr; gap:18px; } }
-  @media (max-width: 680px) { .hs-page { padding:22px 15px 42px; } .hs-hero { display:block; } .hs-actions { justify-content:flex-start; margin-top:18px; } .hs-field { grid-template-columns:1fr; gap:8px; } .hs-card-body { padding-inline:15px; } .hs-card-head { padding-inline:15px; } .hs-color-grid { grid-template-columns:repeat(4,1fr); gap:12px 7px; } .hs-choice-grid, .hs-visibility-grid { grid-template-columns:1fr; } .hs-side { display:flex; flex-direction:column; } .hs-foot-actions { justify-content:stretch; } .hs-foot-actions .hs-btn { flex:1; } }
+  @media (max-width: 680px) { .hs-page { padding:22px 15px 42px; } .hs-hero { display:block; } .hs-actions { justify-content:flex-start; margin-top:18px; } .hs-field { grid-template-columns:1fr; gap:8px; } .hs-card-body { padding-inline:15px; } .hs-card-head { padding-inline:15px; } .hs-color-grid { grid-template-columns:repeat(4,1fr); gap:12px 7px; } .hs-choice-grid, .hs-visibility-grid { grid-template-columns:1fr; } .hs-side { display:flex; flex-direction:column; } .hs-foot-actions { justify-content:stretch; } .hs-foot-actions .hs-btn { flex:1; } .hs-layout-detail { align-items:flex-start; } .hs-layout-thumb { flex-basis:78px; width:78px; height:60px; } }
 `;
 
 function Section({
-  icon, title, description, children, className = "",
+  icon, title, description, children, className = "", id,
 }: {
   icon: React.ReactNode;
   title: string;
   description: string;
   children: React.ReactNode;
   className?: string;
+  id?: string;
 }) {
   return (
-    <section className={`hs-card ${className}`}>
+    <section id={id} className={`hs-card ${className}`}>
       <div className="hs-card-head">
         <div className="hs-card-icon">{icon}</div>
         <div>
@@ -986,7 +1006,7 @@ export default function HotspotSettings() {
             colors: { ...DEFAULT_COLORS, ...(persisted.colors ?? {}) },
             portalCards: normalizeHotspotPortalCards(persisted.portalCards, { ...previous, ...persisted }),
             loyaltyCard: normalizeHotspotLoyaltyCardSettings(persisted.loyaltyCard),
-            portalLayout: normalizeHotspotPortalLayout(persisted.portalLayout ?? previous.portalLayout),
+            portalLayout: normalizeHotspotSettingsLayout(persisted.portalLayout ?? previous.portalLayout),
           };
           merged.logoUrl = typeof persisted.logoUrl === "string" && persisted.logoUrl.trim()
             ? persisted.logoUrl
@@ -1661,9 +1681,18 @@ export default function HotspotSettings() {
           </div>
         )}
 
+        <nav className="hs-jump-nav" aria-label="Hotspot settings sections">
+          <a href="#hotspot-identity">Portal basics</a>
+          {!isResellerAccount && <a href="#hotspot-ports">Assigned ports</a>}
+          <a href="#hotspot-appearance">Appearance</a>
+          <a href="#hotspot-content">Portal content</a>
+          <a href="#hotspot-checkout">Checkout & access</a>
+          <a href="#hotspot-support">Trust & support</a>
+        </nav>
+
         <div className="hs-grid">
           <main className="hs-stack">
-            <Section icon={<LayoutTemplate size={16} />} title="Portal identity" description="Set the first impression customers get when they join your hotspot.">
+            <Section id="hotspot-identity" icon={<LayoutTemplate size={16} />} title="Portal basics" description="Set your customer-facing identity and choose which router or assigned VLAN receives portal updates.">
               <Field label="ISP name" help="Used in the page title, header, footer, and downloaded filename.">
                 <input className="hs-input" value={settings.ispName} maxLength={80} onChange={event => update("ispName", event.target.value)} placeholder="Your ISP name" />
               </Field>
@@ -1815,7 +1844,7 @@ export default function HotspotSettings() {
               </Field>
             </Section>
 
-            <Section icon={<Wifi size={16} />} title={isResellerAccount ? "Your assigned VLAN hotspot" : "Assigned hotspot ports"} description={isResellerAccount ? "This is the only VLAN service and hotspot page this reseller account can edit. Save to create isolated login.html and rlogin.html files on the ISP MikroTik." : "View and edit the isolated services assigned to the selected router. New ports use separate /24 networks from 192.168.180.0/22."}>
+            <Section id="hotspot-ports" icon={<Wifi size={16} />} title={isResellerAccount ? "Your assigned VLAN hotspot" : "Assigned hotspot ports"} description={isResellerAccount ? "This is the only VLAN service and hotspot page this reseller account can edit. Save to create isolated login.html and rlogin.html files on the ISP MikroTik." : "View and edit the isolated services assigned to the selected router. New ports use separate /24 networks from 192.168.180.0/22."}>
                {!settings.routerId && !isResellerAccount ? (
                 <div className="hs-status hs-status-info"><Info size={15} /> Choose a linked router above to load its assigned physical ports.</div>
               ) : portsLoading ? (
@@ -1950,66 +1979,59 @@ export default function HotspotSettings() {
               )}
             </Section>
 
-            <Section icon={<Palette size={16} />} title="Visual system" description="Use a consistent palette across plans, checkout, forms, and support content.">
-              <div className="hs-color-grid">
-                <ColorPicker label="Top background" value={settings.colors.bgColor} onChange={value => updateColor("bgColor", value)} />
-                <ColorPicker label="Bottom background" value={settings.colors.bgColor2} onChange={value => updateColor("bgColor2", value)} />
-                <ColorPicker label="Primary" value={settings.colors.primaryColor} onChange={value => updateColor("primaryColor", value)} />
-                <ColorPicker label="Secondary" value={settings.colors.accentColor} onChange={value => updateColor("accentColor", value)} />
-                <ColorPicker label="Cards" value={settings.colors.cardColor} onChange={value => updateColor("cardColor", value)} />
-                <ColorPicker label="Action button" value={settings.colors.buttonColor} onChange={value => updateColor("buttonColor", value)} />
-                <ColorPicker label="Text" value={settings.colors.textColor} onChange={value => updateColor("textColor", value)} />
-                <ColorPicker label="Inputs" value={settings.colors.inputBgColor} onChange={value => updateColor("inputBgColor", value)} />
-              </div>
-              <div className="hs-presets">
-                {presets.map(preset => (
-                  <button key={preset.name} type="button" className="hs-preset" onClick={() => update("colors", { ...preset.colors })}>
-                    <span className="hs-swatches">
-                      {[preset.colors.bgColor, preset.colors.primaryColor, preset.colors.accentColor, preset.colors.buttonColor].map(color => <i key={color} style={{ background: color }} />)}
-                    </span>
-                    {preset.name}
-                  </button>
-                ))}
-              </div>
-            </Section>
-
-            <Section icon={<Sparkles size={16} />} title="Captive portal appearance" description="Choose a full-page layout, then set the background and package-card shape independently.">
+            <Section id="hotspot-appearance" icon={<Sparkles size={16} />} title="Portal appearance" description="Choose one of the two supported page layouts, then refine its background, package cards, and colors.">
               {appearanceLoading ? (
                 <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading portal appearance…</div>
               ) : (
                 <>
-                  <Field label="Full-page layout" help="This changes the customer page's overall composition and treatment. Your selected background and package-card shape remain independent.">
-                    <div className="hs-layout-grid" role="group" aria-label="Hotspot sign-in page layout">
-                      {HOTSPOT_PORTAL_LAYOUTS.map(option => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`hs-layout-choice ${normalizeHotspotPortalLayout(settings.portalLayout) === option.value ? "active" : ""}`}
-                          aria-pressed={normalizeHotspotPortalLayout(settings.portalLayout) === option.value}
-                          aria-label={`${option.label}. ${option.description}`}
-                          onClick={() => { update("portalLayout", option.value); setNotice(null); }}
-                        >
-                          <span
-                            className={`hs-layout-thumb hs-layout-thumb-${option.value}`}
-                            style={{
-                              "--layout-preview-bg": option.background,
-                              "--layout-preview-panel": option.panel,
-                              "--layout-preview-accent": option.accent,
-                            } as React.CSSProperties}
-                            aria-hidden="true"
-                          >
-                            <i className="hs-layout-thumb-header" />
-                            <i className="hs-layout-thumb-hero" />
-                            <i className="hs-layout-thumb-plans" />
-                          </span>
-                          <span className="hs-layout-copy">
-                            <strong>{option.label}</strong>
-                            <small>{option.description}</small>
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </Field>
+                  {(() => {
+                    const activeLayout = HOTSPOT_SETTINGS_LAYOUTS.find(option => option.value === settings.portalLayout)
+                      ?? HOTSPOT_SETTINGS_LAYOUTS[0];
+                    return (
+                      <Field label="Customer page layout" help="Classic keeps the original light portal. Dansted uses the metallic diamond design.">
+                        <div className="hs-layout-picker">
+                          <div className="hs-layout-select">
+                            <label htmlFor="hotspot-portal-layout">Layout</label>
+                            <div className="hs-select-wrap">
+                              <select
+                                id="hotspot-portal-layout"
+                                className="hs-select"
+                                value={activeLayout.value}
+                                onChange={event => {
+                                  const selected = HOTSPOT_SETTINGS_LAYOUTS.find(option => option.value === event.target.value);
+                                  if (selected) update("portalLayout", selected.value);
+                                }}
+                              >
+                                {HOTSPOT_SETTINGS_LAYOUTS.map(option => (
+                                  <option key={option.value} value={option.value}>{hotspotSettingsLayoutLabel(option)}</option>
+                                ))}
+                              </select>
+                              <ChevronDown size={14} />
+                            </div>
+                          </div>
+                          <div className="hs-layout-detail" aria-live="polite">
+                            <span
+                              className={`hs-layout-thumb hs-layout-thumb-${activeLayout.value}`}
+                              style={{
+                                "--layout-preview-bg": activeLayout.background,
+                                "--layout-preview-panel": activeLayout.panel,
+                                "--layout-preview-accent": activeLayout.accent,
+                              } as React.CSSProperties}
+                              aria-hidden="true"
+                            >
+                              <i className="hs-layout-thumb-header" />
+                              <i className="hs-layout-thumb-hero" />
+                              <i className="hs-layout-thumb-plans" />
+                            </span>
+                            <span className="hs-layout-copy">
+                              <strong>{hotspotSettingsLayoutLabel(activeLayout)}</strong>
+                              <small>{activeLayout.description}</small>
+                            </span>
+                          </div>
+                        </div>
+                      </Field>
+                    );
+                  })()}
                   <Field label="Portal background" help="This controls the main background of the generated hotspot page.">
                     <div className="hs-choice-grid">
                       {PORTAL_BACKGROUND_OPTIONS.map(option => (
@@ -2046,11 +2068,35 @@ export default function HotspotSettings() {
                       ))}
                     </div>
                   </Field>
+                  <Field label="Portal colors" help="Keep backgrounds, buttons, cards, and text aligned with your brand.">
+                    <div>
+                      <div className="hs-color-grid">
+                        <ColorPicker label="Top background" value={settings.colors.bgColor} onChange={value => updateColor("bgColor", value)} />
+                        <ColorPicker label="Bottom background" value={settings.colors.bgColor2} onChange={value => updateColor("bgColor2", value)} />
+                        <ColorPicker label="Primary" value={settings.colors.primaryColor} onChange={value => updateColor("primaryColor", value)} />
+                        <ColorPicker label="Secondary" value={settings.colors.accentColor} onChange={value => updateColor("accentColor", value)} />
+                        <ColorPicker label="Cards" value={settings.colors.cardColor} onChange={value => updateColor("cardColor", value)} />
+                        <ColorPicker label="Action button" value={settings.colors.buttonColor} onChange={value => updateColor("buttonColor", value)} />
+                        <ColorPicker label="Text" value={settings.colors.textColor} onChange={value => updateColor("textColor", value)} />
+                        <ColorPicker label="Inputs" value={settings.colors.inputBgColor} onChange={value => updateColor("inputBgColor", value)} />
+                      </div>
+                      <div className="hs-presets">
+                        {presets.map(preset => (
+                          <button key={preset.name} type="button" className="hs-preset" onClick={() => update("colors", { ...preset.colors })}>
+                            <span className="hs-swatches">
+                              {[preset.colors.bgColor, preset.colors.primaryColor, preset.colors.accentColor, preset.colors.buttonColor].map(color => <i key={color} style={{ background: color }} />)}
+                            </span>
+                            {preset.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </Field>
                 </>
               )}
             </Section>
 
-            <Section icon={<Eye size={16} />} title="Sign-in page cards" description="Show or hide each customer-facing card on the hotspot sign-in page.">
+            <Section id="hotspot-content" icon={<Eye size={16} />} title="Portal content" description="Choose which optional cards appear on the customer sign-in page.">
               <p style={{ margin: "12px 0 0", color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5 }}>
                 Hiding a card removes it from the customer page without deleting its content or changing router configuration.
               </p>
@@ -2113,7 +2159,7 @@ export default function HotspotSettings() {
               </div>
             </Section>
 
-            <Section icon={<Smartphone size={16} />} title="Checkout & access" description="Choose which access paths appear and make the payment step easy to understand.">
+            <Section id="hotspot-checkout" icon={<Smartphone size={16} />} title="Checkout & access" description="Choose which access paths appear and make the payment step easy to understand.">
               <Field label="M-Pesa STK prompt" help="Show the phone-number checkout that sends a PIN approval prompt to the customer's M-Pesa line.">
                 <SelectField value={settings.mpesaPrompt} onChange={value => update("mpesaPrompt", value)} options={["Enable", "Disable"]} />
               </Field>
@@ -2134,7 +2180,7 @@ export default function HotspotSettings() {
               </Field>
             </Section>
 
-            <Section icon={<CircleHelp size={16} />} title="Trust & support" description="Give customers a clear way to get help and understand your service.">
+            <Section id="hotspot-support" icon={<CircleHelp size={16} />} title="Trust & support" description="Give customers a clear way to get help and understand your service.">
               <Field label="Support phone" help="Shown as a call-to-action in the portal header and footer.">
                 <div style={{ position: "relative" }}><Phone size={14} style={{ position: "absolute", left: 11, top: 11, color: "var(--isp-text-sub)" }} /><input className="hs-input" style={{ paddingLeft: 32 }} value={settings.supportPhone} maxLength={30} onChange={event => update("supportPhone", event.target.value)} placeholder="07XX XXX XXX" /></div>
               </Field>
