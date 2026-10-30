@@ -600,7 +600,7 @@ export default function Dashboard() {
   const serviceCountsUnavailable = (customersError && customers.length === 0)
     || (customerPlanScopesError && customerPlanScopes.plans.length === 0 && customerPlanScopes.ports.length === 0);
   const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredUsers}`;
-  const onlineCountValue = (count: number) => serviceCountsLoading || liveCountPending
+  const onlineCountValue = (count: number) => serviceCountsLoading || (liveCountPending && !hasOnlinePresenceEvidence)
     ? "…"
     : serviceCountsUnavailable || (liveCountUnavailable && !hasOnlinePresenceEvidence)
       ? "—"
