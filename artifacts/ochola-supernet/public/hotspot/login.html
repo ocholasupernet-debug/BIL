@@ -13,13 +13,13 @@
       --accent:#c026d3; --accent2:#7c3aed;
       --portal-accent:#d96835; --portal-accent-dark:#9e3f1f;
        --portal-accent-soft:#d968351f; --portal-accent-border:#d9683555;
-       --portal-bg:#0d0415; --portal-bg2:#1a0735; --portal-card:#1a0f2e;
+        --portal-bg:#111827; --portal-bg2:#20263a; --portal-card:#1b2432;
        --portal-input:#000; --portal-text:#fff;
-      --bg:#0d0415; --surface:rgba(255,255,255,.04);
+       --bg:#111827; --surface:rgba(255,255,255,.04);
       --border:rgba(255,255,255,.08); --border-hover:rgba(255,255,255,.16);
     }
     html{scroll-behavior:smooth}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,ui-sans-serif,system-ui,sans-serif;background:radial-gradient(ellipse 120% 80% at 50% -10%,var(--portal-accent-dark) 0%,var(--portal-bg) 55%);min-height:100vh;color:var(--portal-text)}
+     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,ui-sans-serif,system-ui,sans-serif;background:radial-gradient(ellipse at 78% 12%,rgba(111,91,190,.42),transparent 48%),repeating-linear-gradient(0deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),repeating-linear-gradient(90deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),linear-gradient(145deg,#111827,#20263a 58%,#111827);min-height:100vh;color:var(--portal-text)}
     ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:var(--portal-bg)}::-webkit-scrollbar-thumb{background:var(--portal-accent-border);border-radius:3px}
 
     @keyframes ping{75%,100%{transform:scale(2);opacity:0}}
@@ -1186,12 +1186,12 @@ function normalisePortalPackageShape(value){
 }
 function applyPortalBackground(value){
   var backgrounds={
-    midnight:"radial-gradient(ellipse 120% 80% at 50% -10%,#37104d 0%,#0d0415 55%)",
-    ocean:"radial-gradient(ellipse 120% 80% at 50% -10%,#075985 0%,#031526 55%)",
-    aurora:"radial-gradient(ellipse 120% 80% at 50% -10%,#312e81 0%,#071827 58%)",
-    forest:"radial-gradient(ellipse 120% 80% at 50% -10%,#14532d 0%,#04150d 58%)",
-    sunset:"radial-gradient(ellipse 120% 80% at 50% -10%,#7f1d3b 0%,#210914 58%)",
-    sand:"radial-gradient(ellipse 120% 80% at 50% -10%,#713f12 0%,#21180d 58%)"
+    midnight:"radial-gradient(ellipse at 78% 12%,rgba(111,91,190,.42),transparent 48%),repeating-linear-gradient(0deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),repeating-linear-gradient(90deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),linear-gradient(145deg,#111827,#20263a 58%,#111827)",
+    ocean:"radial-gradient(ellipse at 75% 8%,rgba(58,150,191,.42),transparent 48%),repeating-linear-gradient(135deg,rgba(153,218,236,.075) 0 1px,transparent 1px 12px),linear-gradient(145deg,#102735,#153f52 55%,#102735)",
+    aurora:"radial-gradient(ellipse at 22% 15%,rgba(65,183,151,.42),transparent 48%),radial-gradient(ellipse at 82% 88%,rgba(106,91,190,.34),transparent 50%),repeating-linear-gradient(0deg,rgba(213,235,239,.055) 0 1px,transparent 1px 30px),repeating-linear-gradient(90deg,rgba(213,235,239,.055) 0 1px,transparent 1px 30px),linear-gradient(145deg,#14242c,#1b3440)",
+    forest:"radial-gradient(ellipse at 80% 12%,rgba(81,154,112,.34),transparent 48%),repeating-linear-gradient(0deg,rgba(193,222,201,.085) 0 1px,transparent 1px 28px),repeating-linear-gradient(90deg,rgba(193,222,201,.085) 0 1px,transparent 1px 28px),linear-gradient(145deg,#152821,#203b30 58%,#14241f)",
+    sunset:"radial-gradient(ellipse at 78% 15%,rgba(191,105,89,.4),transparent 48%),repeating-linear-gradient(45deg,rgba(232,186,167,.055) 0 1px,transparent 1px 14px),linear-gradient(145deg,#292027,#493039 58%,#211d27)",
+    sand:"radial-gradient(ellipse at 75% 10%,rgba(190,151,93,.4),transparent 48%),repeating-linear-gradient(45deg,rgba(239,221,184,.075) 0 1px,transparent 1px 11px),repeating-linear-gradient(-45deg,rgba(239,221,184,.06) 0 1px,transparent 1px 11px),linear-gradient(145deg,#292820,#464032 58%,#25251f)"
   };
   PORTAL_BACKGROUND=normalisePortalBackground(value);
   document.body.setAttribute("data-portal-background",PORTAL_BACKGROUND);
