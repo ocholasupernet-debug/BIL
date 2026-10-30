@@ -262,6 +262,9 @@ const API_REAUTH_PREFIXES: Array<[string, string]> = [
 
 export function getAdminApiReauthFeature(path: string): string | null {
   const pathname = path.split("?")[0].replace(/^\/api(?=\/)/, "");
+  if (/^\/router\/[^/]+\/bridge-management(?:\/|$)/.test(pathname)) {
+    return "network.bridges";
+  }
   if (/^\/router\/[^/]+\/files(?:\/|$)/.test(pathname)) {
     return "network.files";
   }

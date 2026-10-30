@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  ADMIN_PAGE_AUTH_CATALOG,
   getAdminApiReauthFeature,
+  isSupportedPasswordReauthFeature,
   normalizePlatformAuthPolicy,
   validatePlatformAuthPolicy,
 } from "./platform-auth-security.js";
@@ -101,6 +103,27 @@ test("router and file APIs use separate page verification features", () => {
   assert.equal(getAdminApiReauthFeature("/api/files/routers?adminId=7"), "network.files");
   assert.equal(getAdminApiReauthFeature("/api/router/7/files?adminId=7"), "network.files");
   assert.equal(getAdminApiReauthFeature("/api/router/7/files/deploy-bulk/job-1"), "network.files");
+});
+
+test("Bridges page policy covers its catalog key and live bridge-management APIs", () => {
+  const bridgePage = ADMIN_PAGE_AUTH_CATALOG
+    .flatMap(section => section.pages)
+    .find(page => page.key === "network.bridges");
+
+  assert.ok(bridgePage);
+  assert.equal(isSupportedPasswordReauthFeature("network.bridges"), true);
+  assert.equal(getAdminApiReauthFeature("/api/router/7/bridge-management/inventory"), "network.bridges");
+  assert.equal(getAdminApiReauthFeature("/api/router/7/bridge-management/bridges"), "network.bridges");
+  assert.equal(getAdminApiReauthFeature("/api/router/7/bridge-management/ports"), "network.bridges");
+
+  const policy = validatePlatformAuthPolicy({
+    otp: { allEnabled: false, channels: { whatsapp: false, sms: false, email: false } },
+    pageMethods: {
+      isp_admin: { "network.bridges": "password" },
+      reseller: {},
+    },
+  });
+  assert.equal(policy?.pageMethods.isp_admin["network.bridges"], "password");
 });
 
 test("page policy rejects unknown methods and page keys", () => {
