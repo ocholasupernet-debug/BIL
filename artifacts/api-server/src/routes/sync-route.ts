@@ -16,6 +16,7 @@ import {
   routerManagementBackupIp,
 } from "../lib/router-management-vpn.js";
 import { routerManagementApiAccountOrder } from "../lib/router-health-api-account-order.js";
+import { decryptRouterApiSecret, routerApiSecretLookupHash } from "../lib/router-api-secret.js";
 import {
   formatRouterConnectionError,
   isRouterApiTransportFailure,
@@ -280,7 +281,7 @@ function makeConn(
     host,
     port: 8728,
     user: username || "admin",
-    password: password || "",
+    password: decryptRouterApiSecret(password || ""),
     timeout: timeoutSeconds,
     keepalive: false,
   }));
@@ -449,7 +450,7 @@ async function bgAutoProbe(
     /* Persist only metadata. A probe must never activate a temporary
        self-install record before the sync and bridge gates have passed. */
     await fetch(
-      `${url}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
+      `${url}/rest/v1/isp_routers?or=(router_secret_lookup_hash.eq.${routerApiSecretLookupHash(token)},token.eq.${enc})`,
       {
         method: "PATCH",
         headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
@@ -3483,19 +3484,32 @@ async function handleInstallProgressUpdate(
   const url = hbUrl();
   const key = hbKey();
   if (!url || !key) { res.json({ ok: false, error: "auth backend unavailable" }); return; }
-  let routerRow: { id: number; admin_id: number; name: string; router_secret: string } | null = null;
+  type InstallCallbackRouter = {
+    id: number;
+    admin_id: number;
+    name: string;
+    token: string | null;
+    router_secret_lookup_hash: string | null;
+  };
+  let routerRow: InstallCallbackRouter | null = null;
   try {
     const r = await fetch(
-      `${url}/rest/v1/isp_routers?id=eq.${rid}&select=id,admin_id,name,router_secret`,
+      `${url}/rest/v1/isp_routers?id=eq.${rid}&select=id,admin_id,name,token,router_secret_lookup_hash`,
       { headers: { apikey: key, Authorization: `Bearer ${key}`, Accept: "application/json" } },
     );
     if (r.ok) {
-      const rows = await r.json() as Array<{ id: number; admin_id: number; name: string; router_secret: string }>;
+      const rows = await r.json() as InstallCallbackRouter[];
       routerRow = rows[0] ?? null;
     }
   } catch { /* ignore */ }
 
-  if (!routerRow || !routerRow.router_secret || routerRow.router_secret !== token) {
+  if (
+    !routerRow
+    || (
+      routerRow.router_secret_lookup_hash !== routerApiSecretLookupHash(token)
+      && routerRow.token !== token
+    )
+  ) {
     res.status(401).json({ ok: false, error: "invalid token" });
     return;
   }
@@ -3803,7 +3817,7 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
 
     /* Step 1 — always update last_seen (and retrieve the row for auto-discovery) */
     const patchRes = await fetch(
-      `${HB_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
+      `${HB_URL}/rest/v1/isp_routers?or=(router_secret_lookup_hash.eq.${routerApiSecretLookupHash(token)},token.eq.${enc})`,
       {
         method: "PATCH",
         headers: hbHeaders,
@@ -3829,7 +3843,7 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
        assignment have completed. A heartbeat is the final connection proof. */
     if (row?.status === "awaiting_connection") {
       fetch(
-        `${HB_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
+        `${HB_URL}/rest/v1/isp_routers?or=(router_secret_lookup_hash.eq.${routerApiSecretLookupHash(token)},token.eq.${enc})`,
         {
           method: "PATCH",
           headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
@@ -3838,7 +3852,7 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
       ).catch((e: unknown) => console.warn(`[heartbeat] setup promotion failed: ${e instanceof Error ? e.message : e}`));
     } else if (row && !isSetupStatus(row.status)) {
       fetch(
-        `${HB_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
+        `${HB_URL}/rest/v1/isp_routers?or=(router_secret_lookup_hash.eq.${routerApiSecretLookupHash(token)},token.eq.${enc})`,
         {
           method: "PATCH",
           headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
@@ -3873,7 +3887,7 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
         syncIppEntry(`router-${row.id}`, liveClient.vpnIp);
         if (liveClient.vpnIp !== row.vpn_ip) {
           fetch(
-            `${HB_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
+            `${HB_URL}/rest/v1/isp_routers?or=(router_secret_lookup_hash.eq.${routerApiSecretLookupHash(token)},token.eq.${enc})`,
             {
               method: "PATCH",
               headers: { apikey: HB_KEY, Authorization: `Bearer ${HB_KEY}`, "Content-Type": "application/json" },
@@ -3893,7 +3907,7 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
       if (HB_URL2 && HB_KEY2) {
         const enc2 = encodeURIComponent(token);
         fetch(
-          `${HB_URL2}/rest/v1/isp_routers?or=(router_secret.eq.${enc2},token.eq.${enc2})`,
+          `${HB_URL2}/rest/v1/isp_routers?or=(router_secret_lookup_hash.eq.${routerApiSecretLookupHash(token)},token.eq.${enc2})`,
           {
             method: "PATCH",
             headers: { apikey: HB_KEY2, Authorization: `Bearer ${HB_KEY2}`, "Content-Type": "application/json" },
@@ -3903,7 +3917,7 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
          .catch((e: unknown) => console.warn(`[heartbeat] failed to save WAN IP: ${e instanceof Error ? e.message : e}`));
       }
 
-      bgAutoProbe(row.router_secret ?? token, srcIp, row.router_username ?? "admin");
+      bgAutoProbe(decryptRouterApiSecret(row.router_secret ?? token), srcIp, row.router_username ?? "admin");
     }
 
     /* ── VPN IP auto-save ──────────────────────────────────────────
@@ -3923,7 +3937,7 @@ router.get("/isp/router/heartbeat/:token", async (req, res): Promise<void> => {
         if (HB_URL3 && HB_KEY3) {
           const enc3 = encodeURIComponent(token);
           fetch(
-            `${HB_URL3}/rest/v1/isp_routers?or=(router_secret.eq.${enc3},token.eq.${enc3})`,
+            `${HB_URL3}/rest/v1/isp_routers?or=(router_secret_lookup_hash.eq.${routerApiSecretLookupHash(token)},token.eq.${enc3})`,
             {
               method: "PATCH",
               headers: { apikey: HB_KEY3, Authorization: `Bearer ${HB_KEY3}`, "Content-Type": "application/json" },
@@ -4004,7 +4018,7 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
       router_secret?: string | null;
     } | null = null;
     const getRes = await fetch(
-      `${REG_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})&select=id,name,admin_id,router_username,router_secret`,
+      `${REG_URL}/rest/v1/isp_routers?or=(router_secret_lookup_hash.eq.${routerApiSecretLookupHash(token)},token.eq.${enc})&select=id,name,admin_id,router_username,router_secret`,
       {
         headers: {
           apikey: REG_KEY,
@@ -4041,13 +4055,13 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
       const apiCandidates = [
         {
           username: ROUTER_MANAGEMENT_API_USERNAME,
-          password: existingRouter.router_secret ?? "",
+          password: decryptRouterApiSecret(existingRouter.router_secret),
         },
         ...(existingRouter.router_username
           && existingRouter.router_username !== ROUTER_MANAGEMENT_API_USERNAME
           ? [{
               username: existingRouter.router_username,
-              password: existingRouter.router_secret ?? "",
+              password: decryptRouterApiSecret(existingRouter.router_secret),
             }]
           : []),
       ];
@@ -4077,7 +4091,7 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
 
     /* Apply the patch */
     const patchRes = await fetch(
-      `${REG_URL}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})`,
+      `${REG_URL}/rest/v1/isp_routers?or=(router_secret_lookup_hash.eq.${routerApiSecretLookupHash(token)},token.eq.${enc})`,
       {
         method: "PATCH",
         headers: {
@@ -4128,7 +4142,7 @@ router.get("/isp/router/register/:token", async (req, res): Promise<void> => {
     const probeIp = isVpnIp(srcIp) ? srcIp : bridgeIp;
     if (probeIp && probeIp !== row?.host) {
       console.log(`[register] scheduling auto-probe for ${routerName} @ ${probeIp}`);
-      bgAutoProbe(existingRouter.router_secret ?? token, probeIp, row?.router_username ?? "admin");
+      bgAutoProbe(decryptRouterApiSecret(existingRouter.router_secret ?? token), probeIp, row?.router_username ?? "admin");
     }
 
     /* ── Auto-create VPN user ──────────────────────────────────────

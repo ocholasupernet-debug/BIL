@@ -64,7 +64,14 @@ function toScriptString(value) {
 }
 
 function serveManifest(platform, res) {
-  const manifestPath = path.join(STATIC_ROOT, platform, 'manifest.json');
+  if (platform !== 'ios' && platform !== 'android') {
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Manifest not found' }));
+    return;
+  }
+
+  const platformDirectory = platform === 'ios' ? 'ios' : 'android';
+  const manifestPath = path.join(STATIC_ROOT, platformDirectory, 'manifest.json');
 
   if (!fs.existsSync(manifestPath)) {
     res.writeHead(404, { 'content-type': 'application/json' });
@@ -101,24 +108,59 @@ function serveLandingPage(req, res, landingPageTemplate, appName) {
 }
 
 function serveStaticFile(urlPath, res) {
-  const safePath = path.normalize(urlPath).replace(/^(\.\.(\/|\\|$))+/, '');
-  const filePath = path.join(STATIC_ROOT, safePath);
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(urlPath);
+  } catch {
+    res.writeHead(400);
+    res.end('Bad Request');
+    return;
+  }
 
-  if (!filePath.startsWith(STATIC_ROOT)) {
+  const relativePath = decodedPath.replace(/^[/\\]+/, '').replaceAll('\\', '/');
+  const filePath = path.resolve(STATIC_ROOT, relativePath);
+  const relativeToRoot = path.relative(STATIC_ROOT, filePath);
+  if (
+    relativeToRoot === '..'
+    || relativeToRoot.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativeToRoot)
+  ) {
     res.writeHead(403);
     res.end('Forbidden');
     return;
   }
 
-  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+  let resolvedRoot;
+  let resolvedFile;
+  try {
+    resolvedRoot = fs.realpathSync(STATIC_ROOT);
+    resolvedFile = fs.realpathSync(filePath);
+  } catch {
     res.writeHead(404);
     res.end('Not Found');
     return;
   }
 
-  const ext = path.extname(filePath).toLowerCase();
+  const resolvedRelativePath = path.relative(resolvedRoot, resolvedFile);
+  if (
+    resolvedRelativePath === '..'
+    || resolvedRelativePath.startsWith(`..${path.sep}`)
+    || path.isAbsolute(resolvedRelativePath)
+  ) {
+    res.writeHead(403);
+    res.end('Forbidden');
+    return;
+  }
+
+  if (fs.statSync(resolvedFile).isDirectory()) {
+    res.writeHead(404);
+    res.end('Not Found');
+    return;
+  }
+
+  const ext = path.extname(resolvedFile).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-  const content = fs.readFileSync(filePath);
+  const content = fs.readFileSync(resolvedFile);
   res.writeHead(200, { 'content-type': contentType });
   res.end(content);
 }

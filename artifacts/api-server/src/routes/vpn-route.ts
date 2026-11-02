@@ -7,6 +7,7 @@ import { readIppEntries, VPN_IPP_PATHS, VPN_STATUS_PATHS } from "../lib/vpn-stat
 import { logger } from "../lib/logger";
 import { requireAdmin } from "../lib/api-auth.js";
 import { createHash } from "crypto";
+import { routerApiSecretLookupHash } from "../lib/router-api-secret.js";
 
 const router: IRouter = Router();
 
@@ -74,7 +75,7 @@ async function slugBySecret(secret: string): Promise<string | null> {
   try {
     /* Query by router_secret OR token — covers both column aliases */
     const res = await fetch(
-      `${url}/rest/v1/isp_routers?or=(router_secret.eq.${enc},token.eq.${enc})&select=name&limit=1`,
+      `${url}/rest/v1/isp_routers?or=(router_secret_lookup_hash.eq.${routerApiSecretLookupHash(secret)},token.eq.${enc})&select=name&limit=1`,
       { headers: { apikey: key, Authorization: `Bearer ${key}` } }
     );
     if (!res.ok) {

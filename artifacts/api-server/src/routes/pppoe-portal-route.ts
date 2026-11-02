@@ -8,7 +8,7 @@ import {
   validatePppoePortalReference,
   type PppoePortalReferencePayload,
 } from "../lib/api-auth.js";
-import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
+import { getTenantSubdomainFromRequest, TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 
 const router: IRouter = Router();
 const PORTAL_PATH = "/pppoe-login";
@@ -180,11 +180,29 @@ async function findEligibleCustomer(payload: PppoePortalReferencePayload, req: R
 }
 
 function portalOrigin(req: Request): string {
+  const tenantSubdomain = getTenantSubdomainFromRequest(req);
+  if (tenantSubdomain) return `https://${tenantSubdomain}.${TENANT_BASE_DOMAIN}`;
+
+  if (process.env.NODE_ENV !== "production") {
+    const host = req.get("host") ?? "";
+    if (/^(localhost|127\.0\.0\.1)(:\d{1,5})?$/.test(host)) {
+      const forwardedProto = req.headers["x-forwarded-proto"];
+      const protocol = typeof forwardedProto === "string"
+        ? forwardedProto.split(",")[0]?.trim()
+        : req.protocol;
+      return `${protocol === "https" ? "https" : "http"}://${host}`;
+    }
+  }
+
+  return `https://${TENANT_BASE_DOMAIN}`;
+}
+
+function requestIsHttps(req: Request): boolean {
   const forwardedProto = req.headers["x-forwarded-proto"];
   const protocol = typeof forwardedProto === "string"
-    ? forwardedProto.split(",")[0]?.trim() || "https"
+    ? forwardedProto.split(",")[0]?.trim()
     : req.protocol;
-  return `${protocol}://${req.get("host")}`;
+  return protocol === "https";
 }
 
 function portalRedirect(req: Request, reference?: string): string {
@@ -252,7 +270,7 @@ router.get("/public/pppoe-portal/handoff/:routerId", async (req: Request, res: R
  */
 router.post("/public/pppoe-portal/sign-in", async (req: Request, res: Response): Promise<void> => {
   noStore(res);
-  if (process.env.NODE_ENV === "production" && !portalOrigin(req).startsWith("https://")) {
+  if (process.env.NODE_ENV === "production" && !requestIsHttps(req)) {
     renewalSignInError(res, 400);
     return;
   }

@@ -1,4 +1,4 @@
-import { getAdminApiToken } from "@/lib/supabase";
+import { clearAdminAuth, getAdminApiToken, isLoggedIn } from "@/lib/supabase";
 
 const API_BASE = String(import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
 
@@ -21,10 +21,17 @@ export function apiUrl(path: string): string {
 /** Authenticated tenant API call. Never send browser Supabase credentials for table access. */
 export async function adminApiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const token = getAdminApiToken();
-  return fetch(apiUrl(path), withHeaders(init, {
+  const response = await fetch(apiUrl(path), withHeaders(init, {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(init.body && typeof init.body === "string" ? { "Content-Type": "application/json" } : {}),
   }));
+  if (response.status === 401 && isLoggedIn()) {
+    clearAdminAuth();
+    if (typeof window !== "undefined" && window.location.pathname !== "/admin/login") {
+      window.location.replace("/admin/login?session=expired");
+    }
+  }
+  return response;
 }
 
 /** Authenticated Super Admin API call. */

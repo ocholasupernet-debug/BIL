@@ -14,6 +14,7 @@ import { getAdminApiToken, getAdminRole, isImpersonating } from "@/lib/supabase"
 import LandingPage from "./pages/LandingPage";
 import AdminLogin from "./pages/admin/AdminLogin";
 import AdminDashboard from "./pages/admin/Dashboard";
+import Copilot from "./pages/admin/Copilot";
 import AdminCustomers from "./pages/admin/Customers";
 import NetworkRouters from "./pages/admin/network/Routers";
 import NetworkQueues from "./pages/admin/network/Queues";
@@ -22,6 +23,7 @@ import NetworkReplaceRouter from "./pages/admin/network/ReplaceRouter";
 import NetworkSelfInstall from "./pages/admin/network/SelfInstall";
 import NetworkFiles from "./pages/admin/network/Files";
 import NetworkBridgePorts from "./pages/admin/network/BridgePorts";
+import NetworkBridges from "./pages/admin/network/Bridges";
 import NetworkWireless from "./pages/admin/network/Wireless";
 import NetworkPPP from "./pages/admin/network/PPP";
 import RouterAPIConfig from "./pages/admin/network/RouterAPIConfig";
@@ -204,6 +206,7 @@ function Router() {
       <Route path="/" component={SubdomainGuard} />
       <Route path="/admin/login" component={AdminLogin} />
       <Route path="/admin/dashboard" component={RoleAwareDashboard} />
+      <Route path="/admin/copilot" component={Copilot} />
       <Route path="/admin/reseller" component={ResellerWorkspace} />
       <Route path="/admin/resellers" component={ResellerWorkspace} />
       <Route path="/admin/network/resellers" component={ResellerWorkspace} />
@@ -217,6 +220,7 @@ function Router() {
       <Route path="/admin/network/queues"         component={NetworkQueues}        />
       <Route path="/admin/network/ip-pools"       component={NetworkIPPool}        />
       <Route path="/admin/network/bridge-ports"   component={NetworkBridgePorts}   />
+      <Route path="/admin/network/bridges"         component={NetworkBridges}      />
       <Route path="/admin/network/wireless"       component={NetworkWireless}      />
       <Route path="/admin/network/ppp"            component={NetworkPPP}           />
       <Route path="/admin/network/router-api-config" component={RouterAPIConfig}  />
@@ -238,6 +242,7 @@ function Router() {
       <Route path="/admin/vouchers"         component={AdminVouchers}    />
       <Route path="/admin/hotspot-binding"  component={HotspotBinding}   />
       <Route path="/admin/activation/prepaid-users" component={PrepaidUsers} />
+      <Route path="/admin/free-access" component={PrepaidUsers} />
       <Route path="/admin/hotspot-settings" component={HotspotSettings} />
       <Route path="/admin/pppoe-settings"   component={PPPoESettings}   />
       <Route path="/admin/pppoe-settings/setup" component={PPPoESetup} />

@@ -97,6 +97,16 @@ const otherRouterPortPlan = {
   router_id: 32,
   port_id: 46,
 };
+const tenantHotspotPlan = {
+  ...assignedPlan,
+  id: 505,
+  admin_id: 7,
+  name: "Weekly",
+  router_id: 31,
+  port_id: null,
+  owner_reseller_id: null,
+  data_limit_mb: null,
+};
 
 const siblingTransaction = {
   id: 601,
@@ -235,6 +245,7 @@ test("signed reseller portal requests stay within their assigned service", async
   let customers: Record<string, unknown>[] = [];
   let legacyCheckout = false;
   let includeRouterFixture = false;
+  let includeTenantRecoveryPlan = false;
   let failHotspotTransactionNoteWrites = false;
   let requireConcurrentAccountClaims = false;
   let concurrentAccountClaimCalls = 0;
@@ -406,7 +417,13 @@ test("signed reseller portal requests stay within their assigned service", async
         router_secret: "router-test-secret",
       }] : []).filter(row => matches(row, query));
     } else if (table === "isp_plans") {
-      rows = [assignedPlan, siblingPlan, ispOwnedPortPlan, otherRouterPortPlan].filter(row => matches(row, query));
+      rows = [
+        assignedPlan,
+        siblingPlan,
+        ispOwnedPortPlan,
+        otherRouterPortPlan,
+        ...(includeTenantRecoveryPlan ? [tenantHotspotPlan] : []),
+      ].filter(row => matches(row, query));
     } else if (table === "isp_transactions") {
       rows = (legacyCheckout ? [
         { id: 701, admin_id: 23, customer_id: null, plan_id: null, reference: "legacy-checkout", status: "paid", payment_method: "mpesa" },
@@ -1520,6 +1537,94 @@ test("signed reseller portal requests stay within their assigned service", async
       transactions = previousTransactions;
       includeRouterFixture = previousRouterFixture;
       assignedPlan.shared_users = previousSharedUsers;
+    }
+  });
+
+  await t.test("paid uncapped router-pending Hotspot login restores RouterOS access without resetting usage", async () => {
+    const previousCustomers = customers;
+    const previousTransactions = transactions;
+    const previousRouterFixture = includeRouterFixture;
+    const previousRecoveryPlanFixture = includeTenantRecoveryPlan;
+    const previousLock = prepaidHotspotReconnectOperations.withCustomerEditLock;
+    const previousReconcile = prepaidHotspotReconnectOperations.reconcileHotspotUserAccess;
+    const previousReconnect = prepaidHotspotReconnectOperations.reconnectHotspotUserByMac;
+    let recoveryOptions: Record<string, unknown> | undefined;
+    try {
+      const paidPendingCustomer = {
+        ...assignedCustomer,
+        id: 803,
+        admin_id: 7,
+        name: "Paid pending customer",
+        username: "paid-pending-account",
+        password: "paid-pending-password",
+        type: "hotspot",
+        plan_id: tenantHotspotPlan.id,
+        router_id: 31,
+        port_id: null,
+        status: "payment_cleared_router_pending",
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        depletion_reason: null,
+      };
+      customers = [paidPendingCustomer];
+      transactions = [{
+        ...assignedTransaction,
+        id: 603,
+        admin_id: 7,
+        customer_id: paidPendingCustomer.id,
+        plan_id: tenantHotspotPlan.id,
+        mac_address: paidPendingCustomer.mac_address,
+        status: "completed",
+      }];
+      includeRouterFixture = true;
+      includeTenantRecoveryPlan = true;
+      clearRequests();
+      routerOperations.length = 0;
+      prepaidHotspotReconnectOperations.withCustomerEditLock = async (_adminId, _customerId, operation) =>
+        operation(async () => {});
+      prepaidHotspotReconnectOperations.reconcileHotspotUserAccess = async (_credentials, options) => {
+        recoveryOptions = options;
+        recordRouterOperation("recoverPaidPendingUser", { username: options.name });
+      };
+      prepaidHotspotReconnectOperations.reconnectHotspotUserByMac = async (_credentials, options) => {
+        recordRouterOperation("savedLoginReconnect", { username: options.user });
+        return { kind: "connected", stageDurationsMs: {} };
+      };
+
+      const login = await request("/api/customers/hotspot-login", {
+        method: "POST",
+        token: null,
+        body: {
+          adminId: 7,
+          username: paidPendingCustomer.username,
+          password: paidPendingCustomer.password,
+          mac_address: paidPendingCustomer.mac_address,
+        },
+      });
+      assert.equal(login.status, 200, await login.clone().text());
+      assert.equal(customers[0].status, "active");
+      assert.equal(recoveryOptions?.resetCounters, false);
+      assert.equal(recoveryOptions?.preserveActiveSession, true);
+      assert.equal(recoveryOptions?.enabled, true);
+      assert.ok(dbRequests.some(row => row.table === "isp_transactions"
+        && row.rawQuery.includes(`customer_id=eq.${paidPendingCustomer.id}`)
+        && row.rawQuery.includes(`plan_id=eq.${tenantHotspotPlan.id}`)
+        && row.rawQuery.includes("status=in.(completed,paid,success)")));
+      assert.ok(dbRequests.some(row => row.table === "isp_customers"
+        && row.method === "PATCH"
+        && row.query.get("id") === `eq.${paidPendingCustomer.id}`
+        && row.body?.status === "active"));
+      assert.deepEqual(routerOperations.map(row => row.name), [
+        "recoverPaidPendingUser",
+        "savedLoginReconnect",
+      ]);
+    } finally {
+      customers = previousCustomers;
+      transactions = previousTransactions;
+      includeRouterFixture = previousRouterFixture;
+      includeTenantRecoveryPlan = previousRecoveryPlanFixture;
+      prepaidHotspotReconnectOperations.withCustomerEditLock = previousLock;
+      prepaidHotspotReconnectOperations.reconcileHotspotUserAccess = previousReconcile;
+      prepaidHotspotReconnectOperations.reconnectHotspotUserByMac = previousReconnect;
     }
   });
 

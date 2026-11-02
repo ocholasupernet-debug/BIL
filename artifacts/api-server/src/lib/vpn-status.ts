@@ -36,6 +36,48 @@ export interface VpnClient {
   realIp: string;
 }
 
+/** Parse both legacy OpenVPN status files and the v2 CSV routing table. */
+export function parseOpenVpnStatus(text: string): VpnClient[] {
+  const clients = new Map<string, VpnClient>();
+  let inRouting = false;
+
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    if (line.startsWith("ROUTING_TABLE,")) {
+      const parts = line.split(",");
+      const vpnIp = parts[1]?.trim() ?? "";
+      const cn = parts[2]?.trim() ?? "";
+      const realIp = (parts[3]?.trim() ?? "").split(":")[0];
+      if (/^10\./.test(vpnIp) && cn) clients.set(cn, { cn, vpnIp, realIp });
+      continue;
+    }
+
+    if (line.startsWith("ROUTING TABLE") || line.startsWith("HEADER,ROUTING TABLE")) {
+      inRouting = true;
+      continue;
+    }
+    if (
+      line.startsWith("GLOBAL STATS")
+      || line.startsWith("GLOBAL_STATS")
+      || line === "END"
+    ) {
+      inRouting = false;
+      continue;
+    }
+    if (!inRouting || line.startsWith("HEADER") || line.startsWith("Virtual")) continue;
+
+    const parts = line.split(",");
+    const vpnIp = parts[0]?.trim() ?? "";
+    const cn = parts[1]?.trim() ?? "";
+    const realIp = (parts[2]?.trim() ?? "").split(":")[0];
+    if (/^10\./.test(vpnIp) && cn) clients.set(cn, { cn, vpnIp, realIp });
+  }
+
+  return [...clients.values()];
+}
+
 /**
  * Reads the first accessible OpenVPN status file and returns
  * the list of currently connected clients.
@@ -46,30 +88,7 @@ export function readVpnClients(): VpnClient[] {
   for (const path of STATUS_PATHS) {
     try {
       const text = readFileSync(path, "utf-8");
-      const clients: VpnClient[] = [];
-      let inRouting = false;
-
-      for (const raw of text.split("\n")) {
-        const line = raw.trim();
-        if (!line || line.startsWith("END")) break;
-        if (line.startsWith("ROUTING TABLE")) { inRouting = true; continue; }
-        if (inRouting && line.startsWith("Virtual Address")) continue; /* header row */
-        if (!inRouting) continue;
-
-        /* Routing table row format: vpnIp,cn,realIp:port,lastRef */
-        const parts = line.split(",");
-        if (parts.length < 3) continue;
-        const vpnIp    = parts[0].trim();
-        const cn       = parts[1].trim();
-        const realFull = parts[2].trim();          /* e.g. 129.222.147.23:PORT */
-        const realIp   = realFull.split(":")[0];
-
-        if (vpnIp && cn && /^10\./.test(vpnIp)) {
-          clients.push({ cn, vpnIp, realIp });
-        }
-      }
-
-      for (const client of clients) clientsByName.set(client.cn, client);
+      for (const client of parseOpenVpnStatus(text)) clientsByName.set(client.cn, client);
     } catch { /* file not found or unreadable — try next path */ }
   }
   const clients = [...clientsByName.values()];

@@ -213,6 +213,7 @@ create table if not exists isp_routers (
   migration_source_only boolean not null default false,
   router_username  text not null default 'admin',
   router_secret    text,
+  router_secret_lookup_hash text,
   api_port         integer not null default 8728,
   api_use_ssl      boolean not null default false,
   token            text,
@@ -1230,3 +1231,24 @@ alter table public.router_migration_tunnel_leases
 drop function if exists public.create_router_migration_source_stub(bigint);
 -- The additive migration also installs finalize_router_migration_source_registration
 -- and the prepare/delete super-admin router-history RPCs.
+
+create table if not exists public.isp_hotspot_browser_sessions (
+  token_hash text primary key,
+  customer_id bigint not null,
+  admin_id bigint not null,
+  router_id bigint not null,
+  port_id bigint,
+  current_mac_address text,
+  current_ip_address inet,
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  expires_at timestamptz not null
+);
+create index if not exists isp_hotspot_browser_sessions_expiry_idx
+  on public.isp_hotspot_browser_sessions (expires_at);
+create index if not exists isp_hotspot_browser_sessions_customer_scope_idx
+  on public.isp_hotspot_browser_sessions (customer_id, admin_id, router_id, port_id);
+alter table public.isp_hotspot_browser_sessions enable row level security;
+revoke all on table public.isp_hotspot_browser_sessions from anon, authenticated;
+grant select, insert, update, delete
+  on table public.isp_hotspot_browser_sessions to service_role;

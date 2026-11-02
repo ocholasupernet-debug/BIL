@@ -12,6 +12,7 @@ import {
   CreditCard,
   Eye,
   EyeOff,
+  History,
   Landmark,
   Loader2,
   Maximize2,
@@ -49,6 +50,7 @@ import { getCustomerServiceStatus } from "@/lib/customer-service-status";
 import {
   buildLivePresenceByRouter,
   customerIsOnline,
+  getCustomerLiveState,
   prepaidServiceType,
 } from "@/lib/prepaid-live-presence";
 import { usePrepaidLiveQueries } from "@/lib/prepaid-live-queries";
@@ -128,7 +130,7 @@ async function fetchNetworkTelemetry(routerId: number | "all", portId: number | 
   if (routerId !== "all") params.set("routerId", String(routerId));
   if (portId !== "all") params.set("portId", String(portId));
   if (resellerId !== "all") params.set("resellerId", String(resellerId));
-  const response = await fetch(`/api/admin/dashboard/telemetry?${params.toString()}`);
+  const response = await adminApiFetch(`/api/admin/dashboard/telemetry?${params.toString()}`, { cache: "no-store" });
   const data = await response.json() as Partial<TelemetryResponse> & { error?: string };
   if (!response.ok) throw new Error(data.error ?? "Could not load network telemetry.");
   return data as TelemetryResponse;
@@ -174,6 +176,7 @@ async function fetchRouters(): Promise<DbRouter[]> {
 
 type CustomerBasic = {
   id: number;
+  name: string | null;
   type: string | null;
   status: string;
   created_at: string;
@@ -189,9 +192,23 @@ type CustomerBasic = {
   username: string | null;
   ip_address: string | null;
   service_online: boolean | null;
+  last_seen: string | null;
 };
 type CustomerPlanScope = { id: number; router_id: number | null };
 type CustomerPortScope = { id: number; router_id: number };
+type HotspotSessionHistory = {
+  radacctid: number;
+  username: string;
+  nasipaddress: string;
+  callingstationid: string;
+  framedipaddress: string;
+  acctstarttime: string | null;
+  acctstoptime: string | null;
+  acctinputoctets: number;
+  acctoutputoctets: number;
+  acctsessiontime: number;
+  acctterminatecause: string;
+};
 
 async function fetchCustomersBasic(): Promise<CustomerBasic[]> {
   const response = await adminApiFetch(`/api/customers?adminId=${ADMIN_ID}`, { cache: "no-store" });
@@ -221,6 +238,30 @@ async function fetchTransactions(customerIds: number[]): Promise<DbTransaction[]
   }
   const ids = new Set(customerIds);
   return result.filter(transaction => transaction.customer_id != null && ids.has(transaction.customer_id));
+}
+
+async function fetchHotspotSessionHistory(): Promise<HotspotSessionHistory[]> {
+  const response = await adminApiFetch("/api/hotspot-bindings/sessions?active=false", { cache: "no-store" });
+  const result = await response.json() as HotspotSessionHistory[] | { error?: string };
+  if (!response.ok || !Array.isArray(result)) {
+    throw new Error(!Array.isArray(result) && result.error ? result.error : "Hotspot connection history could not be loaded.");
+  }
+  return result;
+}
+
+function formatSessionDuration(seconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
+
+function formatSessionData(bytes: number): string {
+  const value = Math.max(0, Number(bytes) || 0);
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(0)} KB`;
+  return `${Math.round(value)} B`;
 }
 
 type PaymentSettingsResponse = {
@@ -405,6 +446,7 @@ export default function Dashboard() {
   const { preferences, saving: preferencesSaving, savePreferences } = useDashboardPreferences();
   const [chartCollapsed, setChartCollapsed] = useState(false);
   const [chartMinimized, setChartMinimized] = useState(false);
+  const [historyRequested, setHistoryRequested] = useState(false);
   const [selectedRouter, setSelectedRouter] = useState<number | "all">("all");
   const [selectedTelemetryPort, setSelectedTelemetryPort] = useState<number | "all">("all");
   const [selectedTelemetryReseller, setSelectedTelemetryReseller] = useState<number | "all">("all");
@@ -550,16 +592,37 @@ export default function Dashboard() {
     enabled: !customersLoading,
     refetchInterval: 60_000,
   });
+  const {
+    data: hotspotSessionHistory = [],
+    isLoading: hotspotHistoryLoading,
+    isError: hotspotHistoryError,
+    error: hotspotHistoryQueryError,
+    refetch: refetchHotspotSessionHistory,
+  } = useQuery({
+    queryKey: ["dashboard-hotspot-session-history", ADMIN_ID],
+    queryFn: fetchHotspotSessionHistory,
+    enabled: historyRequested,
+    staleTime: 60_000,
+    retry: false,
+  });
 
   const incomeToday = revenueSummary?.incomeToday ?? 0;
   const incomeMonth = revenueSummary?.incomeMonth ?? 0;
 
-  const liveQueries = usePrepaidLiveQueries(routers);
+  const liveQueries = usePrepaidLiveQueries(routers, 10_000, true);
   const livePresenceByRouter = useMemo(
     () => buildLivePresenceByRouter(routers, liveQueries),
     [routers, liveQueries],
   );
-  const liveCountUnavailable = liveQueries.some(result => result.isError);
+  const liveCountUnavailable = liveQueries.some(result =>
+    result.isError
+    || Boolean(result.data?.fetchedAt && (
+      result.data.hotspotUsersAvailable === false
+      || result.data.pppoeUsersAvailable === false
+    )),
+  );
+  const liveCountPending = routers.length > 0
+    && liveQueries.some(result => !result.data && result.isFetching && !result.isError);
   const liveCountRefreshing = liveQueries.some(result => result.isFetching);
   const uniqueServiceCustomers = useMemo(
     () => mergeCustomerServiceIdentities(filteredCustomers, customerPlanScopeMap),
@@ -583,15 +646,35 @@ export default function Dashboard() {
   const onlineStaticUsers = onlineServiceCustomers.filter(
     customer => prepaidServiceType(customer.type) === "static",
   ).length;
+  const disconnectedEntitledHotspots = uniqueServiceCustomers
+    .filter(customer => {
+      if (prepaidServiceType(customer.type) !== "hotspot" || getCustomerServiceStatus(customer) !== "active") return false;
+      const resolvedRouterId = customer.router_id
+        ?? (customer.plan_id != null ? customerPlanScopeMap[customer.plan_id]?.router_id : null)
+        ?? (customer.port_id != null ? customerPortRouterMap.get(customer.port_id) : null);
+      return getCustomerLiveState(
+        { ...customer, router_id: resolvedRouterId },
+        livePresenceByRouter,
+        customerPlanScopeMap,
+      ) === "offline";
+    })
+    .sort((left, right) => Date.parse(right.updated_at || right.created_at) - Date.parse(left.updated_at || left.created_at));
+  const visibleHotspotSessionHistory = hotspotSessionHistory.slice(0, 8);
+  const customerNameByHotspotUsername = new Map(customers
+    .filter(customer => customer.username)
+    .map(customer => [String(customer.username).trim().toLowerCase(), customer.name || customer.username || `Customer #${customer.id}`]));
+  const hasOnlinePresenceEvidence = [...livePresenceByRouter.values()].some(
+    presence => presence.authoritative,
+  ) || uniqueServiceCustomers.some(customer => typeof customer.service_online === "boolean");
   const activeUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "active").length;
   const expiredUsers = uniqueServiceCustomers.filter((customer) => getCustomerServiceStatus(customer) === "expired").length;
   const serviceCountsLoading = customersLoading || customerPlanScopesLoading;
   const serviceCountsUnavailable = (customersError && customers.length === 0)
     || (customerPlanScopesError && customerPlanScopes.plans.length === 0 && customerPlanScopes.ports.length === 0);
   const activeExpiredValue = serviceCountsLoading ? "…" : serviceCountsUnavailable ? "—" : `${activeUsers}/${expiredUsers}`;
-  const onlineCountValue = (count: number) => serviceCountsLoading
+  const onlineCountValue = (count: number) => serviceCountsLoading || (liveCountPending && !hasOnlinePresenceEvidence)
     ? "…"
-    : serviceCountsUnavailable
+    : serviceCountsUnavailable || (liveCountUnavailable && !hasOnlinePresenceEvidence)
       ? "—"
       : String(count);
   const totalOnlineValue = onlineCountValue(onlineServiceCustomers.length);
@@ -634,6 +717,27 @@ export default function Dashboard() {
     retry: false,
   });
   const telemetry = telemetryQuery.data;
+  const telemetryUsesLastKnownPresence = liveCountUnavailable
+    || Boolean(telemetry?.rows.some(row => !row.routerAvailable));
+  const resolvedOnlineTelemetryTotals = [
+    {
+      label: telemetryUsesLastKnownPresence
+        ? "Last known online users"
+        : selectedRouterObj ? `${selectedRouterObj.name} online users` : "System-wide online users",
+      value: onlineServiceCustomers.length,
+      tone: "green",
+    },
+    {
+      label: telemetryUsesLastKnownPresence ? "Last known PPPoE" : "PPPoE online",
+      value: onlinePppoeUsers,
+      tone: "accent",
+    },
+    {
+      label: telemetryUsesLastKnownPresence ? "Last known Hotspot" : "Hotspot online",
+      value: onlineHotspotUsers,
+      tone: "teal",
+    },
+  ] as const;
   const telemetryPorts = telemetry?.filters.ports.filter((port) => selectedRouter === "all" || port.routerId === selectedRouter) ?? [];
   const filteredCustomerIds = useMemo(() => new Set(filteredCustomers.map(customer => customer.id)), [filteredCustomers]);
   const filteredTransactions = useMemo(
@@ -692,7 +796,9 @@ export default function Dashboard() {
         {hasError && (
           <div className="dashboard-error" role="alert">
             <CircleAlert size={17} />
-            <span>Some live data could not be loaded. Your last available figures remain visible.</span>
+            <span>{liveCountUnavailable
+              ? "MikroTik session data is unavailable for one or more routers. Counts use the latest available session or saved status and may be incomplete."
+              : "Some live data could not be loaded. Your last available figures remain visible."}</span>
             <button
               type="button"
               className="dashboard-error-retry"
@@ -878,15 +984,21 @@ export default function Dashboard() {
           {telemetryQuery.isLoading ? (
             <div className="dashboard-loading"><Loader2 size={16} className="animate-spin" /> Reading active sessions…</div>
           ) : telemetryQuery.error ? (
-            <div className="dashboard-empty"><CircleAlert size={17} /><span>{(telemetryQuery.error as Error).message}</span></div>
+            <>
+              <div className="dashboard-empty"><CircleAlert size={17} /><span>{(telemetryQuery.error as Error).message}</span></div>
+              <div className="dashboard-telemetry-totals">
+                {resolvedOnlineTelemetryTotals.map(({ label, value, tone }) => (
+                  <div key={label} className={`dashboard-telemetry-total dashboard-telemetry-total--${tone}`}>
+                    <span>{label}</span>
+                    <strong>{String(value)}</strong>
+                  </div>
+                ))}
+              </div>
+            </>
           ) : telemetry ? (
             <>
               <div className="dashboard-telemetry-totals">
-                {[
-                  { label: selectedRouterObj ? `${selectedRouterObj.name} online users` : "System-wide online users", value: telemetry.totals.onlineUsers, tone: "green" },
-                  { label: "Active PPPoE sessions", value: telemetry.totals.pppoeActive, tone: "accent" },
-                  { label: "Active Hotspot leases", value: telemetry.totals.hotspotActive, tone: "teal" },
-                ].map(({ label, value, tone }) => (
+                {resolvedOnlineTelemetryTotals.map(({ label, value, tone }) => (
                   <div key={label} className={`dashboard-telemetry-total dashboard-telemetry-total--${tone}`}>
                     <span>{label}</span>
                     <strong>{String(value)}</strong>
@@ -926,6 +1038,136 @@ export default function Dashboard() {
             </>
           ) : null}
         </section>
+
+        <div className="dashboard-section-kicker" role="heading" aria-level={2}>
+          Hotspot customer care
+          <span>Valid access that needs attention and recent connection history</span>
+        </div>
+        <div className="dashboard-main-grid">
+          <section className="section-card" aria-label="Entitled Hotspot customers not online">
+            <div className="panel-heading">
+              <div className="panel-title">
+                <span className="panel-title-icon panel-title-icon--soft"><WifiOff size={16} /></span>
+                <div>
+                  <h2>Eligible, not showing online</h2>
+                  <p>Live session match where available; otherwise the last saved router state</p>
+                </div>
+              </div>
+              <span className="panel-heading-meta">{serviceCountsLoading ? "…" : disconnectedEntitledHotspots.length}</span>
+            </div>
+            {serviceCountsLoading ? (
+              <div className="dashboard-loading"><Loader2 size={15} className="animate-spin" /> Checking Hotspot packages…</div>
+            ) : serviceCountsUnavailable ? (
+              <div className="dashboard-empty"><CircleAlert size={16} /> Customer entitlement data is unavailable.</div>
+            ) : disconnectedEntitledHotspots.length === 0 ? (
+              <div className="dashboard-empty"><CircleCheck size={16} /> No entitled Hotspot customers are currently showing offline.</div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table className="isp-table">
+                  <thead><tr><th>Customer</th><th>Router</th><th>Package valid until</th><th>Status source</th></tr></thead>
+                  <tbody>
+                    {disconnectedEntitledHotspots.slice(0, 8).map(customer => {
+                      const routerId = customer.router_id
+                        ?? (customer.plan_id != null ? customerPlanScopeMap[customer.plan_id]?.router_id : null)
+                        ?? (customer.port_id != null ? customerPortRouterMap.get(customer.port_id) : null);
+                      const routerPresence = routerId == null ? undefined : livePresenceByRouter.get(Number(routerId));
+                      const liveConfirmed = Boolean(routerPresence?.authoritative && routerPresence.hotspotUsersAvailable);
+                      const displayName = customer.name || customer.username || `Customer #${customer.id}`;
+                      return (
+                        <tr key={customer.id}>
+                          <td>
+                            <strong>{displayName}</strong>
+                            <small style={{ display: "block", color: "var(--isp-text-muted)", marginTop: "0.2rem" }}>
+                              {customer.username || customer.mac_address || `Record #${customer.id}`}
+                            </small>
+                          </td>
+                          <td>{routers.find(router => router.id === Number(routerId))?.name ?? "Unassigned"}</td>
+                          <td>{customer.expires_at ? fmtSince(customer.expires_at) : "No expiry set"}</td>
+                          <td>
+                            <span className={`isp-badge ${liveConfirmed ? "isp-badge-green" : "isp-badge-amber"}`}>
+                              {liveConfirmed ? "Live RouterOS check" : "Last saved status"}
+                            </span>
+                            {customer.last_seen && (
+                              <small style={{ display: "block", color: "var(--isp-text-muted)", marginTop: "0.25rem" }}>
+                                Last seen {fmtSince(customer.last_seen)}
+                              </small>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {disconnectedEntitledHotspots.length > 8 && (
+                  <div className="panel-heading-meta" style={{ padding: "0.65rem 0.8rem" }}>
+                    Showing 8 of {disconnectedEntitledHotspots.length}. <Link href="/admin/customers?type=hotspot">Open Hotspot customers</Link>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="section-card" aria-label="Recent Hotspot device connection history">
+            <div className="panel-heading">
+              <div className="panel-title">
+                <span className="panel-title-icon panel-title-icon--soft"><History size={16} /></span>
+                <div>
+                  <h2>Recent device connections</h2>
+                  <p>Latest closed RADIUS sessions across this account</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="dashboard-refresh-button"
+                onClick={() => historyRequested ? void refetchHotspotSessionHistory() : setHistoryRequested(true)}
+                disabled={hotspotHistoryLoading}
+              >
+                <RefreshCw size={13} className={hotspotHistoryLoading ? "animate-spin" : ""} />
+                {historyRequested ? "Refresh history" : "Load history"}
+              </button>
+            </div>
+            {!historyRequested ? (
+              <div className="dashboard-empty"><History size={16} /> Load recent device sessions when you need them.</div>
+            ) : hotspotHistoryLoading ? (
+              <div className="dashboard-loading"><Loader2 size={15} className="animate-spin" /> Loading connection history…</div>
+            ) : hotspotHistoryError ? (
+              <div className="dashboard-empty"><CircleAlert size={16} /><span>{(hotspotHistoryQueryError as Error)?.message ?? "Connection history could not be loaded."}</span></div>
+            ) : visibleHotspotSessionHistory.length === 0 ? (
+              <div className="dashboard-empty"><History size={16} /> No closed Hotspot sessions are available for this account.</div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <div className="panel-heading-meta" style={{ padding: "0.45rem 0.8rem" }}>
+                  Showing {visibleHotspotSessionHistory.length} recent session{visibleHotspotSessionHistory.length === 1 ? "" : "s"}.
+                </div>
+                <table className="isp-table">
+                  <thead><tr><th>Customer / account</th><th>Device / IP</th><th>Connected</th><th>Duration</th><th>Data used</th></tr></thead>
+                  <tbody>
+                    {visibleHotspotSessionHistory.map(session => (
+                      <tr key={session.radacctid}>
+                        <td>
+                          <strong>{customerNameByHotspotUsername.get(session.username.trim().toLowerCase()) ?? session.username}</strong>
+                          <small style={{ display: "block", color: "var(--isp-text-muted)", marginTop: "0.2rem" }}>{session.username}</small>
+                        </td>
+                        <td>
+                          {session.callingstationid || "Unknown device"}
+                          <small style={{ display: "block", color: "var(--isp-text-muted)", marginTop: "0.2rem" }}>
+                            {session.framedipaddress || "No IP recorded"} · NAS {session.nasipaddress || "unknown"}
+                          </small>
+                        </td>
+                        <td>
+                          {fmtSince(session.acctstarttime)}
+                          <small style={{ display: "block", color: "var(--isp-text-muted)", marginTop: "0.2rem" }}>Ended {fmtSince(session.acctstoptime) || "unknown"}</small>
+                        </td>
+                        <td>{formatSessionDuration(session.acctsessiontime)}</td>
+                        <td>{formatSessionData(session.acctinputoctets + session.acctoutputoctets)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
 
         <div className="dashboard-section-kicker" role="heading" aria-level={2}>
           Customer intelligence

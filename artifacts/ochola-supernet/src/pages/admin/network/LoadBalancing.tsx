@@ -326,18 +326,34 @@ export default function LoadBalancing() {
     setMessage(null);
     setPreview(null);
     try {
-      const [configResponse, interfaceResponse] = await Promise.all([
+      const [configResult, interfaceResult] = await Promise.allSettled([
         apiJson<{ ok: boolean; config: LoadBalancingConfig | null; routerName?: string; recoveryAvailable?: boolean }>(`/api/router/${routerId}/load-balancing`),
         apiJson<InterfacePayload>(`/api/router/${routerId}/load-balancing/interfaces`),
       ]);
-      setConfig(normalizeConfig(configResponse.config, routerId));
-      setRouterName(configResponse.routerName || routers.find(router => router.id === routerId)?.name || `Router ${routerId}`);
-      setRecoveryAvailable(Boolean(configResponse.recoveryAvailable));
-      setInterfaces(interfaceResponse.interfaces);
-    } catch (cause) {
-      setConfig(null);
-      setInterfaces(null);
-      setLoadError(cause instanceof Error ? cause.message : "Unable to read multi-WAN settings from this router.");
+      const failures: string[] = [];
+      if (configResult.status === "fulfilled") {
+        const configResponse = configResult.value;
+        setConfig(normalizeConfig(configResponse.config, routerId));
+        setRouterName(configResponse.routerName || routers.find(router => router.id === routerId)?.name || `Router ${routerId}`);
+        setRecoveryAvailable(Boolean(configResponse.recoveryAvailable));
+      } else {
+        setConfig(null);
+        setRecoveryAvailable(false);
+        failures.push(configResult.reason instanceof Error ? configResult.reason.message : "Multi-WAN settings could not be loaded.");
+      }
+      if (interfaceResult.status === "fulfilled") {
+        setInterfaces(interfaceResult.value.interfaces);
+      } else {
+        setInterfaces({
+          interfaces: [],
+          bridges: [],
+          bridgePorts: [],
+          addresses: [],
+          hasActiveCustomerOvpn: false,
+        });
+        failures.push(interfaceResult.reason instanceof Error ? interfaceResult.reason.message : "Router interfaces could not be loaded.");
+      }
+      setLoadError(failures.join(" "));
     } finally {
       setLoading(false);
     }
@@ -700,7 +716,7 @@ export default function LoadBalancing() {
                       <p className="lw-section-note">These controls affect how the generated policy is installed and how customers leave the LAN.</p>
                     </div>
                     <div className="lw-toolbar">
-                      <button type="button" className="lw-btn" onClick={() => void loadRouterData(config.routerId)} disabled={loading}><RefreshCw size={14} /> Refresh</button>
+                      <button type="button" className="lw-btn" onClick={() => void loadRouterData(config.routerId)} disabled={loading}><RefreshCw size={14} /> Refresh ports</button>
                       {recoveryAvailable && <button type="button" className="lw-btn lw-btn-danger" onClick={() => void rollback()} disabled={rollingBack}><RotateCcw size={14} /> {rollingBack ? "Rolling back…" : "Rollback last apply"}</button>}
                     </div>
                   </div>
@@ -1061,7 +1077,7 @@ export default function LoadBalancing() {
                     </div>
                   )}
                   <div style={{ display: "grid", gap: 8, marginTop: 15 }}>
-                    <button type="button" className="lw-btn lw-btn-primary" onClick={() => void previewChanges()} disabled={previewing || !config.enabled || localIssues.length > 0}>
+                    <button type="button" className="lw-btn lw-btn-primary" onClick={() => void previewChanges()} disabled={previewing || !config.enabled || localIssues.length > 0 || Boolean(loadError)}>
                       {previewing ? <Loader2 size={14} /> : <Activity size={14} />} {previewing ? "Generating preview…" : "Generate change preview"}
                     </button>
                     <button type="button" className="lw-btn" onClick={() => { if (preview?.ok && preview.errors.length === 0) setApplyOpen(true); }} disabled={!preview?.ok || preview.errors.length > 0 || applying}>

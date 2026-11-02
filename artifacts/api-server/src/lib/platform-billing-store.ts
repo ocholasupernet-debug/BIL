@@ -98,6 +98,22 @@ export function billingRevenueSummary<T>(accountId: number): Promise<T[]> {
   });
 }
 
+export function billingMonthlyRevenueSummary<T>(accountId: number): Promise<T[]> {
+  return request<T>("rpc/get_monthly_revenue_summary", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ p_account_id: accountId }),
+  });
+}
+
+export function billingEligibleSalesSummary<T>(accountId: number, billingPeriod: string): Promise<T[]> {
+  return request<T>("rpc/get_previous_month_eligible_sales", {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({ p_account_id: accountId, p_billing_period: billingPeriod }),
+  });
+}
+
 export function billingRouterRevenueSummary<T>(accountId: number, routerId: number): Promise<T[]> {
   return request<T>("rpc/get_router_revenue_summary", {
     method: "POST",

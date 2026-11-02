@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { sbSelect, sbSelectStrict, sbUpdate, sbDelete, sbInsert } from "../lib/supabase-client.js";
 import { pingRouter, detectBridgeInterfaces, fetchBridgePortLayout } from "../lib/mikrotik.js";
 import { logger } from "../lib/logger.js";
+import { encryptRouterApiSecret } from "../lib/router-api-secret.js";
 import { logActivity } from "../lib/activity-log.js";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
@@ -124,9 +125,16 @@ router.get("/routers/admin-context", requireAdmin(), async (req: Request, res: R
       "last_connected_host", "router_uptime", "uptime_at", "created_at", "updated_at",
       "pppoe_mode", "coordinates", "coverage",
     ]);
-    const routers = rows.map(row => Object.fromEntries(
-      Object.entries(row).filter(([key]) => permittedFields.has(key)),
-    ));
+    const routers = rows.map(row => {
+      const safeRow = Object.fromEntries(
+        Object.entries(row).filter(([key]) => permittedFields.has(key)),
+      );
+      const password = row.router_secret;
+      if (typeof password === "string" && password) {
+        safeRow.router_secret = encryptRouterApiSecret(password);
+      }
+      return safeRow;
+    });
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, routers });
   } catch {

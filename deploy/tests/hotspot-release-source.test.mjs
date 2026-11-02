@@ -58,6 +58,27 @@ test("deployments register both loyalty and voucher entitlement migrations", () 
   }
 });
 
+test("deployments register the Nairobi-aware monthly ledger summary", () => {
+  const runner = api("scripts/apply-deployment-migrations.mjs");
+  const migration = api("migrations/2026_monthly_revenue_ledger_summary.sql");
+  assert.ok(runner.includes("../migrations/2026_monthly_revenue_ledger_summary.sql"));
+  assert.match(migration, /get_monthly_revenue_summary/);
+  assert.match(migration, /Africa\/Nairobi/);
+  assert.match(migration, /revenue_ledger/);
+});
+
+test("renewal banner totals use Nairobi-bounded eligible ledger sales", () => {
+  const runner = api("scripts/apply-deployment-migrations.mjs");
+  const migration = api("migrations/2026_billing_eligible_sales_summary.sql");
+  const billingRoute = api("src/routes/billing-route.ts");
+  assert.ok(runner.includes("../migrations/2026_billing_eligible_sales_summary.sql"));
+  assert.match(migration, /get_previous_month_eligible_sales/);
+  assert.match(migration, /Africa\/Nairobi/);
+  assert.match(migration, /mpesa_registration/);
+  assert.match(migration, /manual_registration/);
+  assert.match(billingRoute, /billingEligibleSalesSummary/);
+});
+
 test("deployments register and verify the PPPoE renewal settings migration", () => {
   const runner = api("scripts/apply-deployment-migrations.mjs");
   const migration = api("migrations/2026_pppoe_portal_settings.sql");
@@ -161,6 +182,17 @@ test("the deployment source check runs before migrations and API restart", () =>
   assert.ok(guard >= 0);
   assert.ok(guard < deploy.indexOf("\napply_supabase_migration\n"));
   assert.ok(guard < deploy.indexOf("pm2 reload ecosystem.config.cjs"));
+});
+
+test("router credential encryption follows the new build and reloads before router actions", () => {
+  const deploy = source("deploy/deploy.sh");
+  const apiBuild = deploy.indexOf("# 5. Build the API server");
+  const migration = deploy.indexOf("\napply_supabase_migration\n");
+  const apiReload = deploy.indexOf("pm2 reload ecosystem.config.cjs");
+  const routerActions = deploy.indexOf('bash "$PROJECT_DIR/deploy/run-router-one-shots.sh"');
+  assert.ok(apiBuild >= 0 && apiBuild < migration);
+  assert.ok(migration < apiReload);
+  assert.ok(apiReload < routerActions);
 });
 
 test("SSH transfer and deployment retain the verified VPS fingerprint", () => {

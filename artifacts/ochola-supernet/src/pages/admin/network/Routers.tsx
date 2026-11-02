@@ -910,8 +910,9 @@ export default function Routers() {
       vpn_ip:           r.vpn_ip             ?? "",
       proxy_ip:         r.proxy_ip           ?? "",
       bridge_interface: r.bridge_interface   ?? "",
-      router_username:  r.name               ?? "admin",
-      router_secret:    r.name               ?? "",
+      router_username:  r.router_username    ?? "admin",
+      /* Password stays server-side; blank means preserve the saved credential. */
+      router_secret:    "",
       coordinates:      (r as any).coordinates ?? "",
       coverage:         (r as any).coverage    ?? "",
     });
@@ -949,6 +950,7 @@ export default function Routers() {
     setEditError(null);
     try {
       const routerName = editForm.name.trim() || editRouter.name;
+      const routerUsername = editForm.router_username.trim() || editRouter.router_username || "admin";
       const response = await adminApiFetch(`/api/routers/${editRouter.id}`, {
         method: "PATCH",
         body: JSON.stringify({
@@ -958,10 +960,10 @@ export default function Routers() {
           vpn_ip:           editForm.vpn_ip.trim()           || null,
           proxy_ip:         editForm.proxy_ip.trim()         || null,
           bridge_interface: editForm.bridge_interface.trim() || "hotspot-bridge",
-          router_username:  routerName,
-          router_secret:    routerName,
+          router_username:  routerUsername,
           coordinates:      editForm.coordinates.trim()      || null,
           coverage:         editForm.coverage.trim()         || null,
+          ...(editForm.router_secret.trim() ? { router_secret: editForm.router_secret } : {}),
         }),
       });
       if (!response.ok) {
@@ -1810,7 +1812,7 @@ export default function Routers() {
                 proxy_ip:         "e.g. 10.9.0.2 — assigned by proxy OpenVPN",
                 bridge_interface: "Click Detect or type e.g. hotspot-bridge",
                 router_username:  "admin",
-                router_secret:    "••••••••",
+                router_secret:    "Leave blank to keep the current password",
                 coordinates:      "e.g. -1.2921, 36.8219 (Nairobi)",
                 coverage:         "e.g. 500",
               };

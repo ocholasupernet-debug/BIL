@@ -69,6 +69,21 @@ export function normalizeHotspotPortalLayout(value: unknown): HotspotPortalLayou
     : "classic";
 }
 
+/**
+ * Generated pages carry the administrator's selected layout in their runtime
+ * config. Treat that choice as authoritative over public branding data, which
+ * can otherwise replace the selected layout during asynchronous hydration.
+ */
+export function resolveHotspotPortalLayout(
+  runtimeLayout: unknown,
+  brandingLayout: unknown,
+  runtimeLayoutIsExplicit: boolean,
+): HotspotPortalLayout {
+  return normalizeHotspotPortalLayout(
+    runtimeLayoutIsExplicit ? runtimeLayout : brandingLayout ?? runtimeLayout,
+  );
+}
+
 const STATIC_PORTAL_LAYOUT_CSS: Partial<Record<HotspotPortalLayout, string>> = {
   classic: `
     html[data-portal-layout="classic"] body {
@@ -1377,7 +1392,7 @@ export const HOSTED_PORTAL_LAYOUT_CSS = `
     font-size:.78rem;
     text-decoration:none;
   }
-  .hp-root[data-portal-layout="dansted-wifi"] .hp-main { max-width:900px; }
+  .hp-root[data-portal-layout="dansted-wifi"] .hp-main { max-width:900px; padding:14px 20px 72px; }
   .hp-root[data-portal-layout="dansted-wifi"] .hp-hero {
     max-width:720px;
     margin:0 auto 12px;

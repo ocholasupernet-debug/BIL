@@ -16,6 +16,7 @@ import {
   isProtectedManagementOvpn,
 } from "../lib/openvpn-profile.js";
 import {
+  classifyRouterConnectionFailure,
   deployRouterFile,
   configureRouterOvpnWanClient,
   fetchRouterLoadBalancingInventory,
@@ -295,6 +296,79 @@ async function resolveScope(req: Request, res: Response): Promise<Scope | null> 
     return null;
   }
   return { adminId, routerId, routerName: routerRow.name, creds: found.creds };
+}
+
+export function classifyInterfaceInventoryFailure(error: unknown): {
+  code: string;
+  stage: string;
+  status: number;
+  message: string;
+} {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const message = rawMessage.toLowerCase();
+  const connection = classifyRouterConnectionFailure(error);
+  if (/not enough permissions|permission denied|not permitted|policy/.test(message)) {
+    return {
+      code: "API_PERMISSION_DENIED",
+      stage: "interface_read",
+      status: 403,
+      message: "The RouterOS API account connected but lacks read permission for interface inventory.",
+    };
+  }
+  if (/api service.*disabled|disabled.*api service/.test(message)) {
+    return {
+      code: "API_SERVICE_DISABLED",
+      stage: "api_service",
+      status: 503,
+      message: "The configured RouterOS API service is disabled.",
+    };
+  }
+  if (connection.profile === "bad_credentials") {
+    return {
+      code: "INVALID_CREDENTIALS",
+      stage: "authentication",
+      status: 401,
+      message: "RouterOS rejected the saved API username or password. Update the router credentials and retry.",
+    };
+  }
+  if (connection.profile === "offline_vpn_tunnel" || /management api forward|openvpn|vpn tunnel/.test(message)) {
+    return {
+      code: "VPN_CONNECTION_FAILED",
+      stage: "vpn",
+      status: 503,
+      message: "The router management VPN path is unavailable. Check the tunnel and retry.",
+    };
+  }
+  if (/timed out|timeout|etimedout/.test(message)) {
+    return {
+      code: "API_TIMEOUT",
+      stage: "router_api",
+      status: 504,
+      message: "The router did not respond before the API timeout. Retry when connectivity is stable.",
+    };
+  }
+  if (/econnrefused|not reachable|ehostunreach|enetunreach|port \d+/.test(message)) {
+    return {
+      code: "API_PORT_UNREACHABLE",
+      stage: "api_connect",
+      status: 503,
+      message: "The configured RouterOS API port is unreachable. Check the saved port, network path, firewall, and API service.",
+    };
+  }
+  if (/no such command|unknown command|bad command name|not supported/.test(message)) {
+    return {
+      code: "ROUTER_VERSION_INCOMPATIBLE",
+      stage: "router_os_command",
+      status: 502,
+      message: "This RouterOS version rejected an inventory command. Confirm the installed version and command support.",
+    };
+  }
+  return {
+    code: "INTERFACE_FETCH_FAILED",
+    stage: "interface_read",
+    status: 502,
+    message: "RouterOS connected, but interface inventory could not be read.",
+  };
 }
 
 function clientConfig(value: unknown, scope: Scope): ClientConfig | null {
@@ -1466,8 +1540,17 @@ router.get("/router/:id/load-balancing/interfaces", requireAdmin(), async (req, 
       },
     });
   } catch (error) {
-    logger.error({ routerId: req.params.id }, "Multi-WAN interface inventory failed");
-    res.status(502).json({ ok: false, error: "Live router interfaces could not be read." });
+    const diagnosis = classifyInterfaceInventoryFailure(error);
+    logger.warn(
+      { routerId: req.params.id, code: diagnosis.code, stage: diagnosis.stage },
+      "Multi-WAN interface inventory failed",
+    );
+    res.status(diagnosis.status).json({
+      ok: false,
+      code: diagnosis.code,
+      stage: diagnosis.stage,
+      error: diagnosis.message,
+    });
   }
 });
 

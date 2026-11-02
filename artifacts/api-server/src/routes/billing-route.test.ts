@@ -86,6 +86,7 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
   ));
   let accountCreatedAt = beforeCutoffDate.toISOString();
   let invoice: Record<string, unknown> | null = null;
+  let eligibleSalesAmount = 100;
 
   globalThis.fetch = async (input, init) => {
     const url = new URL(String(input));
@@ -118,8 +119,20 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
       if (url.searchParams.get("id") === "eq.17" && url.searchParams.get("admin_id") === "eq.42") {
         rows = [{ id: 17 }];
       }
+    } else if (url.pathname.endsWith("/rpc/get_previous_month_eligible_sales")) {
+      rows = [{
+        sales_period_start: "2026-10-01",
+        sales_period_end: "2026-11-01",
+        sales_total: eligibleSalesAmount,
+        payment_count: 1,
+      }];
     } else if (url.pathname.endsWith("/rpc/get_router_revenue_summary")) {
       rows = [{ income_today: 175, income_month: 950, total_revenue: 12250, total_transactions: 31 }];
+    } else if (url.pathname.endsWith("/rpc/get_monthly_revenue_summary")) {
+      rows = [
+        { month_start: "2026-10-01", income: 35835, payment_count: 3390 },
+        { month_start: "2026-11-01", income: 950, payment_count: 31 },
+      ];
     } else if (url.pathname.endsWith("/platform_billing_invoices")) {
       if (method === "POST") {
         const created = invoice ?? { ...JSON.parse(String(init?.body)) as Record<string, unknown>, id: 91 };
@@ -160,7 +173,15 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
      assert.equal(previewBody.invoice.sales_total, 100, "registration receipts must not increase tenant renewal assessments");
     assert.equal(previewBody.invoice.id, undefined);
     assert.ok(requests.length > 0);
-    assert.ok(requests.every(row => row.method === "GET"));
+    assert.ok(
+      requests.every(row => !row.path.endsWith("/platform_billing_invoices") || row.method === "GET"),
+      "preview reads must not rewrite a saved invoice",
+    );
+    assert.deepEqual(
+      requests.find(row => row.path.endsWith("/rpc/get_previous_month_eligible_sales"))?.body,
+      { p_account_id: 42, p_billing_period: currentBillingPeriod.toISOString().slice(0, 10) },
+      "the renewal banner must use a server-calculated, account-scoped eligible-sales period",
+    );
     assert.ok(requests.filter(row => row.path.endsWith("/isp_admins")).every(row => row.key === "billing-test-anon"));
     assert.ok(requests.filter(row => !row.path.endsWith("/isp_admins")).every(row => row.key === "billing-test-service"));
 
@@ -213,6 +234,24 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     );
 
     requests.splice(0);
+    const monthlyRevenue = await originalFetch(`${endpoint}/monthly-revenue`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(monthlyRevenue.status, 200);
+    assert.deepEqual(await monthlyRevenue.json(), {
+      ok: true,
+      months: [
+        { monthStart: "2026-10-01", income: 35835, paymentCount: 3390 },
+        { monthStart: "2026-11-01", income: 950, paymentCount: 31 },
+      ],
+    });
+    assert.deepEqual(
+      requests.find(row => row.path.endsWith("/rpc/get_monthly_revenue_summary"))?.body,
+      { p_account_id: 42 },
+      "monthly income must use the authenticated account's immutable ledger",
+    );
+
+    requests.splice(0);
     const foreignRouterRevenue = await originalFetch(`${endpoint}/revenue-summary?routerId=18`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -226,7 +265,38 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     });
     assert.equal(prepared.status, 503);
     assert.match((await prepared.json() as { error: string }).error, /unavailable/);
-    assert.ok(requests.every(row => row.method === "GET"), "no invoice must be created without settlement");
+    assert.ok(
+      !requests.some(row => row.path.endsWith("/platform_billing_invoices") && row.method === "POST"),
+      "no invoice may be created without settlement",
+    );
+    assert.ok(!requests.some(row => row.path.includes("/mpesa")), "no payment prompt may be started");
+
+    accountCreatedAt = beforeCutoffDate.toISOString();
+    eligibleSalesAmount = 35825;
+    invoice = {
+      id: 92,
+      account_id: 42,
+      billing_period: currentBillingPeriod.toISOString().slice(0, 10),
+      sales_total: 10190,
+      sales_threshold: 8000,
+      amount_due: 1500,
+      status: "pending",
+      due_date: "2026-11-05",
+    };
+    requests.splice(0);
+    const refreshedPreview = await originalFetch(`${endpoint}/current`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(refreshedPreview.status, 200);
+    const refreshedPreviewBody = await refreshedPreview.json() as {
+      invoice: { sales_total: number; amount_due: number };
+    };
+    assert.equal(refreshedPreviewBody.invoice.sales_total, 35825, "stale saved sales totals must not hide current ledger income");
+    assert.equal(refreshedPreviewBody.invoice.amount_due, 1500, "reading the corrected total must not rewrite the saved renewal fee");
+    assert.ok(
+      !requests.some(row => row.path.endsWith("/platform_billing_invoices") && row.method === "PATCH"),
+      "a preview must not mutate the saved invoice",
+    );
 
     invoice = { id: 91, account_id: 42, status: "pending", amount_due: 500, due_date: "2026-09-05" };
     const stk = await originalFetch(`http://127.0.0.1:${address.port}/api/mpesa/stk`, {
@@ -237,7 +307,10 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     assert.equal(stk.status, 503);
     assert.match((await stk.json() as { error: string }).error, /unavailable/);
     assert.ok(requests.filter(row => row.path.endsWith("/platform_billing_invoices")).every(row => row.key === "billing-test-service"));
-    assert.ok(requests.every(row => row.method === "GET"), "no transaction or payment prompt may be created");
+    assert.ok(
+      !requests.some(row => row.path.endsWith("/platform_billing_invoices") && row.method === "POST"),
+      "no invoice may be created without settlement",
+    );
 
     invoice = { id: 91, account_id: 42, status: "paid", amount_due: 500, due_date: "2026-09-05" };
     const paidCurrent = await originalFetch(`${endpoint}/current`, {

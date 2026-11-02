@@ -15,6 +15,7 @@ import { sbDelete, sbInsert, sbInsertStrict, sbRpc, sbSelect, sbSelectStrict, sb
 import { billingSelect } from "../lib/platform-billing-store.js";
 import { platformBillingAccessRestricted } from "./billing-route.js";
 import { logger } from "../lib/logger.js";
+import { routerManagementVpnIpFor } from "../lib/router-payment-credentials.js";
 import { sendRegistrationConfirmationEmail } from "../lib/platform-email.js";
 import { provisionTenantCertificateForAdmin } from "../lib/tenant-certificate-provisioner.js";
 import {
@@ -29,6 +30,7 @@ import { hasGatewaySettingsGrant } from "../services/whatsapp/whatsapp-gateway-s
 import { planBelongsToOwner } from "../lib/plan-ownership.js";
 import { isPrepaidCustomerEntitled } from "../lib/prepaid-entitlement.js";
 import {
+  ACTIVE_HOTSPOT_SESSION_PENDING_NOTE,
   isRetryablePaidHotspotAccount,
   type HotspotPlanRetryScope,
   type PaidHotspotTransactionForRetry,
@@ -72,7 +74,7 @@ import {
 } from "../lib/payment-routing.js";
 import { reactivatePppoeAccess, reactivateVlanAccess } from "../lib/auto-provision.js";
 import { syncRadiusCustomer } from "../lib/radius.js";
-import { readVpnClients, vpnIpFor } from "../lib/vpn-status.js";
+import { readVpnClients } from "../lib/vpn-status.js";
 import { ROUTER_MANAGEMENT_API_USERNAME } from "../lib/router-management-vpn.js";
 import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
 import { normalizePlanServiceType } from "../lib/plan-service-type.js";
@@ -263,13 +265,10 @@ function hotspotRouterCredentials(
 ): RouterCredentials {
   const storedManagementIp = [row.vpn_ip, row.bridge_ip].find(isManagementVpnIp) ?? "";
   const vpnClients = options.forceManagementVpn || !storedManagementIp ? readVpnClients() : [];
-  const discoveredManagementIp = vpnIpFor(row.host ?? "", vpnClients)
-    ?? vpnIpFor(row.name ?? "", vpnClients)
-    ?? "";
-  if (options.forceManagementVpn && storedManagementIp && !discoveredManagementIp) {
+  const discoveredManagementIp = routerManagementVpnIpFor(row, vpnClients) ?? "";
+  if (options.forceManagementVpn && !discoveredManagementIp) {
     throw new Error(
-      `OpenVPN management tunnel is offline for ${row.name ?? "the router"}; ` +
-      "no active router-management VPN client was found.",
+      `No router-management VPN address is available for ${row.name ?? "the router"}.`,
     );
   }
   const managementIp = discoveredManagementIp || storedManagementIp;
@@ -1268,6 +1267,33 @@ export async function processMpesaCallback(
   if (isSuccessful && !mpesaReceipt) {
     logger.warn({ checkoutId }, "[mpesa/callback] Verified success is missing a valid M-Pesa receipt; leaving transaction pending");
     return false;
+  }
+  if (isSuccessful) {
+    const amountValue = callbackItems.find(item => item.Name === "Amount")?.Value;
+    const phoneValue = callbackItems.find(item => item.Name === "PhoneNumber")?.Value;
+    const callbackAmount = amountValue == null ? Number.NaN : Number(amountValue);
+    const expectedAmount = Math.ceil(Number(transaction.amount));
+    const callbackPhone = phoneValue == null ? "" : normaliseKenyanPhone(String(phoneValue));
+    const expectedPhone = normaliseKenyanPhone(String(transaction.payment_phone ?? ""));
+    if (
+      !Number.isSafeInteger(callbackAmount)
+      || !Number.isSafeInteger(expectedAmount)
+      || callbackAmount !== expectedAmount
+      || !callbackPhone
+      || !expectedPhone
+      || callbackPhone !== expectedPhone
+    ) {
+      logger.warn(
+        {
+          checkoutId,
+          transactionId: transaction.id,
+          amountMatched: Number.isSafeInteger(callbackAmount) && callbackAmount === expectedAmount,
+          phoneMatched: Boolean(callbackPhone && expectedPhone && callbackPhone === expectedPhone),
+        },
+        "[mpesa/callback] Verified checkout metadata does not match the saved payment intent; leaving transaction pending",
+      );
+      return false;
+    }
   }
   if (isSuccessful && mpesaReceipt) {
     try {
@@ -3622,22 +3648,6 @@ async function runAutomaticHotspotActivationSweep(): Promise<void> {
     };
     const isHotspotPlan = async (adminId: number, planId: number): Promise<boolean> =>
       Boolean(await getHotspotPlan(adminId, planId));
-    for (const transaction of unlinked) {
-      if (
-        transaction.admin_id > 0
-        && transaction.reference
-        && transaction.mac_address
-        && await isHotspotPlan(transaction.admin_id, transaction.plan_id)
-      ) {
-        work.push({
-          transactionId: transaction.id,
-          adminId: transaction.admin_id,
-          checkoutId: transaction.reference,
-          macAddress: transaction.mac_address,
-          retry: false,
-        });
-      }
-    }
     const pendingCustomerIds = pendingCustomers.map(customer => Number(customer.id)).filter(id => id > 0);
     const routerPending = pendingCustomerIds.length
       ? await sbSelectStrict<PaidHotspotTransactionForRetry>(
@@ -3661,6 +3671,70 @@ async function runAutomaticHotspotActivationSweep(): Promise<void> {
         macAddress: transaction.mac_address!,
         retry: true,
       });
+    }
+
+    if (work.length < AUTOMATIC_HOTSPOT_ACTIVATION_BATCH) {
+      const legacyPendingQueries = await Promise.all([
+        sbSelectStrict<PaidHotspotTransactionForRetry & { notes: string | null }>(
+          "isp_transactions",
+          `status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&customer_id=not.is.null&plan_id=not.is.null&mac_address=not.is.null&notes=ilike.*awaiting%20router%20access*&select=id,admin_id,customer_id,plan_id,status,payment_method,payment_intent_id,reference,mac_address,notes&order=created_at.desc,id.desc&limit=30`,
+        ),
+        sbSelectStrict<PaidHotspotTransactionForRetry & { notes: string | null }>(
+          "isp_transactions",
+          `status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&customer_id=not.is.null&plan_id=not.is.null&mac_address=not.is.null&notes=ilike.*RouterOS%20account%20activation%20is%20pending*&select=id,admin_id,customer_id,plan_id,status,payment_method,payment_intent_id,reference,mac_address,notes&order=created_at.desc,id.desc&limit=30`,
+        ),
+        sbSelectStrict<PaidHotspotTransactionForRetry & { notes: string | null }>(
+          "isp_transactions",
+          `status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&customer_id=not.is.null&plan_id=not.is.null&mac_address=not.is.null&notes=ilike.*${encodeURIComponent(ACTIVE_HOTSPOT_SESSION_PENDING_NOTE)}*&select=id,admin_id,customer_id,plan_id,status,payment_method,payment_intent_id,reference,mac_address,notes&order=created_at.desc,id.desc&limit=30`,
+        ),
+      ]);
+      const legacyCandidates = [...new Map(
+        legacyPendingQueries.flat().map(transaction => [transaction.id, transaction]),
+      ).values()].sort((a, b) => b.id - a.id);
+      const seenLegacyCustomers = new Set<number>();
+      for (const transaction of legacyCandidates) {
+        if (work.length >= AUTOMATIC_HOTSPOT_ACTIVATION_BATCH) break;
+        if (seenLegacyCustomers.has(transaction.customer_id)) continue;
+        const customerRows = await sbSelectStrict<PendingHotspotCustomerForRetry>(
+          "isp_customers",
+          `id=eq.${transaction.customer_id}&admin_id=eq.${transaction.admin_id}&type=eq.hotspot&select=id,admin_id,plan_id,type,status,mac_address,router_id,port_id,expires_at,depletion_reason&limit=1`,
+        );
+        const customer = customerRows[0];
+        if (!customer || customer.status.toLowerCase() !== "active") continue;
+        const latestTransactions = await sbSelectStrict<PaidHotspotTransactionForRetry>(
+          "isp_transactions",
+          `admin_id=eq.${transaction.admin_id}&customer_id=eq.${transaction.customer_id}&plan_id=eq.${transaction.plan_id}&status=in.(completed,paid,success)&payment_method=eq.mpesa&payment_intent_id=not.is.null&select=id,admin_id,customer_id,plan_id,status,payment_method,payment_intent_id,reference,mac_address&order=created_at.desc,id.desc&limit=1`,
+        );
+        if (latestTransactions[0]?.id !== transaction.id) continue;
+        const plan = await getHotspotPlan(transaction.admin_id, transaction.plan_id);
+        if (!plan || !isRetryablePaidHotspotAccount(customer, transaction, plan, Date.now(), true)) continue;
+        seenLegacyCustomers.add(transaction.customer_id);
+        work.push({
+          transactionId: transaction.id,
+          adminId: transaction.admin_id,
+          checkoutId: transaction.reference!,
+          macAddress: transaction.mac_address!,
+          retry: true,
+        });
+      }
+    }
+
+    for (const transaction of unlinked) {
+      if (work.length >= AUTOMATIC_HOTSPOT_ACTIVATION_BATCH) break;
+      if (
+        transaction.admin_id > 0
+        && transaction.reference
+        && transaction.mac_address
+        && await isHotspotPlan(transaction.admin_id, transaction.plan_id)
+      ) {
+        work.push({
+          transactionId: transaction.id,
+          adminId: transaction.admin_id,
+          checkoutId: transaction.reference,
+          macAddress: transaction.mac_address,
+          retry: false,
+        });
+      }
     }
 
     const seen = new Set<number>();

@@ -15,6 +15,24 @@ Manual Prepaid Users sync must push only active prepaid identities and present o
 
 **How to apply:** Use the same newest-identity and effective-access rules as the Prepaid Users list. Never claim fully synced for skipped, failed, or unconfirmed accounts; provisioning confirmation is distinct from an online internet session.
 
+Keep paid Hotspot accounts in `payment_cleared_router_pending` until RouterOS account setup succeeds; pending remains entitled and visible. Retry pending purchases from verified customer, plan, MAC, router, and payment links, not from transaction-note text alone. Recheck legacy active rows when their latest payment note still signals incomplete router setup.
+
+If payment, account/MAC setup, and entitlement are confirmed but the live RouterOS session is still pending, retry that specific transaction in the production activation sweep until expiry. Keep the existing latest-payment, tenant/router/plan/MAC, no-depletion, and expiry checks; do not sweep every active user.
+
+The user expects paid Hotspot access to avoid preventable reconnect blockers and activation delays. Preserve confirmed entitlement through transient failures, keep retrying within expiry, and report an internet session only after RouterOS confirms it.
+
+**Why:** the user explicitly wants to prevent paid users from facing reconnect problems or delayed access.
+
+**How to apply:** Retry transient portal/API failures while entitlement remains valid, retain payment-to-customer/router scope checks, and stop only for expiry, depletion, or a confirmed terminal error.
+
+**Why:** A valid paid period must survive temporary router outages, but globally logging in every active account could create unwanted sessions or disrupt shared-device limits.
+
+**How to apply:** Persist a clear session-pending marker, select only its matching paid transaction and customer, retry within the bounded worker batch, and never report connected until RouterOS confirms the session.
+
+**Why:** Prematurely marking a paid account active can stop recovery after RouterOS fails, while users must remain visible and automatically retryable.
+
+**How to apply:** Persist `active` only after the RouterOS provisioning calls succeed. On failure, retain the pending state and retry without resetting a same-checkout account's expiry or usage.
+
 RouterOS-imported per-user Hotspot byte caps are account-level hard limits that must survive later RADIUS and router reconciliation. Require disconnect-cap package mapping for capped imports; never add a hard byte cap to a throttle package.
 
 When review-before-import replaces an existing same-tenant PPPoE or Hotspot account, update its customer record in place and change only RADIUS authorization. Do not send RouterOS disconnect/CoA, edit `radacct`, or reset expiry, usage, or account history. Active sessions keep their current policy until the next authentication; disabled or depleted source accounts may reject future logins.

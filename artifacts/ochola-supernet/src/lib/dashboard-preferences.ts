@@ -45,12 +45,42 @@ export const PORTAL_BACKGROUND_OPTIONS: Array<{
   description: string;
   gradient: string;
 }> = [
-  { value: "midnight", label: "Midnight", description: "Deep violet night", gradient: "linear-gradient(135deg,#0d0415,#1a0735)" },
-  { value: "ocean", label: "Ocean", description: "Cool blue depth", gradient: "linear-gradient(135deg,#031526,#075985)" },
-  { value: "aurora", label: "Aurora", description: "Violet and teal glow", gradient: "linear-gradient(135deg,#071827,#164e63,#312e81)" },
-  { value: "forest", label: "Forest", description: "Deep green calm", gradient: "linear-gradient(135deg,#04150d,#14532d)" },
-  { value: "sunset", label: "Sunset", description: "Warm plum and rose", gradient: "linear-gradient(135deg,#210914,#7f1d3b)" },
-  { value: "sand", label: "Sand", description: "Warm dusk neutrals", gradient: "linear-gradient(135deg,#21180d,#713f12)" },
+  {
+    value: "midnight",
+    label: "Obsidian grid",
+    description: "Graphite mesh with a soft violet glow",
+    gradient: "radial-gradient(ellipse at 78% 12%,rgba(111,91,190,.42),transparent 48%),repeating-linear-gradient(0deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),repeating-linear-gradient(90deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),linear-gradient(145deg,#111827,#20263a 58%,#111827)",
+  },
+  {
+    value: "ocean",
+    label: "Deep current",
+    description: "Blue depth with a fine wave lattice",
+    gradient: "radial-gradient(ellipse at 75% 8%,rgba(58,150,191,.42),transparent 48%),repeating-linear-gradient(135deg,rgba(153,218,236,.075) 0 1px,transparent 1px 12px),linear-gradient(145deg,#102735,#153f52 55%,#102735)",
+  },
+  {
+    value: "aurora",
+    label: "Northern lights",
+    description: "Jade and indigo light over a subtle star grid",
+    gradient: "radial-gradient(ellipse at 22% 15%,rgba(65,183,151,.42),transparent 48%),radial-gradient(ellipse at 82% 88%,rgba(106,91,190,.34),transparent 50%),repeating-linear-gradient(0deg,rgba(213,235,239,.055) 0 1px,transparent 1px 30px),repeating-linear-gradient(90deg,rgba(213,235,239,.055) 0 1px,transparent 1px 30px),linear-gradient(145deg,#14242c,#1b3440)",
+  },
+  {
+    value: "forest",
+    label: "Evergreen lattice",
+    description: "Calm pine tones with a clean box pattern",
+    gradient: "radial-gradient(ellipse at 80% 12%,rgba(81,154,112,.34),transparent 48%),repeating-linear-gradient(0deg,rgba(193,222,201,.085) 0 1px,transparent 1px 28px),repeating-linear-gradient(90deg,rgba(193,222,201,.085) 0 1px,transparent 1px 28px),linear-gradient(145deg,#152821,#203b30 58%,#14241f)",
+  },
+  {
+    value: "sunset",
+    label: "Ember glow",
+    description: "Muted copper light on a deep plum base",
+    gradient: "radial-gradient(ellipse at 78% 15%,rgba(191,105,89,.4),transparent 48%),repeating-linear-gradient(45deg,rgba(232,186,167,.055) 0 1px,transparent 1px 14px),linear-gradient(145deg,#292027,#493039 58%,#211d27)",
+  },
+  {
+    value: "sand",
+    label: "Warm stone",
+    description: "Soft bronze tones with a refined diamond texture",
+    gradient: "radial-gradient(ellipse at 75% 10%,rgba(190,151,93,.4),transparent 48%),repeating-linear-gradient(45deg,rgba(239,221,184,.075) 0 1px,transparent 1px 11px),repeating-linear-gradient(-45deg,rgba(239,221,184,.06) 0 1px,transparent 1px 11px),linear-gradient(145deg,#292820,#464032 58%,#25251f)",
+  },
 ];
 
 export const PORTAL_PACKAGE_SHAPE_OPTIONS: Array<{

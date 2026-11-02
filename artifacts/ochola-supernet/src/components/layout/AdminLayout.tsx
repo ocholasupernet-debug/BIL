@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, Package, CreditCard,
   Network, Settings, Bell, Wifi, Shield, FolderOpen,
   Sliders, BookOpen, LogOut, Webhook, ChevronRight,
-  CheckSquare, Search, Sun, Moon, Menu, KeyRound, X, ShieldAlert,
+  CheckSquare, Search, Sun, Moon, Menu, KeyRound, X, ShieldAlert, Sparkles,
 } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { useBrand } from "@/context/BrandContext";
@@ -132,6 +132,7 @@ const navSections: NavSection[] = [
     visibilityKey: "overview",
     items: [
       { name: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
+      { name: "OCHOLASUPERNET Co-Pilot", href: "/admin/copilot", icon: Sparkles },
     ],
   },
   {
@@ -150,6 +151,10 @@ const navSections: NavSection[] = [
       {
         name: "Prepaid Users", icon: CheckSquare, visibilityKey: "customers.activation",
         href: "/admin/activation/prepaid-users",
+      },
+      {
+        name: "Free Hotspot Access", icon: Wifi, visibilityKey: "customers.activation",
+        href: "/admin/free-access",
       },
       {
         name: "Hotspot Binding", icon: Wifi, visibilityKey: "customers.hotspot-binding",
@@ -207,6 +212,7 @@ const navSections: NavSection[] = [
           { name: "Wireless",       href: "/admin/network/wireless" },
           { name: "Queues",         href: "/admin/network/queues" },
           { name: "IP Pools",       href: "/admin/network/ip-pools" },
+          { name: "Bridges",        href: "/admin/network/bridges" },
           { name: "API Config",     href: "/admin/network/router-api-config" },
            { name: "Multi-WAN Load Balancing", href: "/admin/network/load-balancing" },
         ],
@@ -830,6 +836,12 @@ export function AdminLayout({
   useEffect(() => {
     const id = localStorage.getItem("ochola_admin_id");
     if (!id) { setLocation("/admin/login"); return; }
+    if (!getAdminApiToken()) {
+      clearAdminAuth();
+      queryClient.clear();
+      setLocation("/admin/login?session=expired");
+      return;
+    }
     const handleStorage = (e: StorageEvent) => {
       if (e.key === "ochola_admin_id" && !e.newValue) {
         clearAdminAuth();

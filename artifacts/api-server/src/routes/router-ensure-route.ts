@@ -14,6 +14,7 @@
 
 import { Router, type IRouter } from "express";
 import { randomBytes } from "crypto";
+import { encryptRouterApiSecret, routerApiSecretLookupHash } from "../lib/router-api-secret.js";
 import { allocateRouterVpnIp, isRouterVpnIp } from "../lib/router-vpn-ip.js";
 import { readIppEntries } from "../lib/vpn-status.js";
 import { provisionRouterManagementOpenVpnPair } from "../lib/router-vpn-provisioning.js";
@@ -126,6 +127,7 @@ async function unfinishedRouterName(adminId: number): Promise<string> {
 function publicRouter(row: Record<string, unknown>): Record<string, unknown> {
   const {
     router_secret: _routerSecret,
+    router_secret_lookup_hash: _routerSecretLookupHash,
     token: _token,
     password: _password,
     ...safe
@@ -263,7 +265,8 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
     name,
     host:             "",
     router_username:  name,
-    router_secret:    apiPassword, /* Dedicated RouterOS API password; never used as the installer token. */
+    router_secret:    encryptRouterApiSecret(apiPassword), /* Dedicated RouterOS API password; never used as the installer token. */
+    router_secret_lookup_hash: routerApiSecretLookupHash(apiPassword),
     token:            installerToken,
     bridge_interface: bridgeInterface || "bridge",
     bridge_ip:        bridgeIp        || "192.168.180.1",

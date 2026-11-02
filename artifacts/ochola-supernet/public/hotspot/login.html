@@ -13,13 +13,13 @@
       --accent:#c026d3; --accent2:#7c3aed;
       --portal-accent:#d96835; --portal-accent-dark:#9e3f1f;
        --portal-accent-soft:#d968351f; --portal-accent-border:#d9683555;
-       --portal-bg:#0d0415; --portal-bg2:#1a0735; --portal-card:#1a0f2e;
+        --portal-bg:#111827; --portal-bg2:#20263a; --portal-card:#1b2432;
        --portal-input:#000; --portal-text:#fff;
-      --bg:#0d0415; --surface:rgba(255,255,255,.04);
+       --bg:#111827; --surface:rgba(255,255,255,.04);
       --border:rgba(255,255,255,.08); --border-hover:rgba(255,255,255,.16);
     }
     html{scroll-behavior:smooth}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,ui-sans-serif,system-ui,sans-serif;background:radial-gradient(ellipse 120% 80% at 50% -10%,var(--portal-accent-dark) 0%,var(--portal-bg) 55%);min-height:100vh;color:var(--portal-text)}
+     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,ui-sans-serif,system-ui,sans-serif;background:radial-gradient(ellipse at 78% 12%,rgba(111,91,190,.42),transparent 48%),repeating-linear-gradient(0deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),repeating-linear-gradient(90deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),linear-gradient(145deg,#111827,#20263a 58%,#111827);min-height:100vh;color:var(--portal-text)}
     ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:var(--portal-bg)}::-webkit-scrollbar-thumb{background:var(--portal-accent-border);border-radius:3px}
 
     @keyframes ping{75%,100%{transform:scale(2);opacity:0}}
@@ -118,7 +118,7 @@
       </div>
       <div>
         <p id="portalNameHeader" style="font-size:.9375rem;font-weight:800;letter-spacing:-.02em;color:white;line-height:1.1">OcholaSupernet</p>
-        <p style="font-size:.6875rem;color:rgba(216,180,254,.55);font-weight:500;letter-spacing:.04em">Hotspot Portal</p>
+        <p id="portalHeaderSubtitle" style="font-size:.6875rem;color:rgba(216,180,254,.55);font-weight:500;letter-spacing:.04em">Hotspot Portal</p>
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:.75rem">
@@ -138,12 +138,12 @@
   <div class="anim-pulse" style="position:absolute;bottom:0;right:10%;width:20rem;height:16rem;border-radius:50%;background:radial-gradient(ellipse,rgba(192,38,211,.15),transparent);filter:blur(48px);pointer-events:none;animation-delay:1.5s"></div>
 
   <div style="max-width:44rem;margin:0 auto;position:relative" class="fade-up">
-    <div style="display:inline-flex;align-items:center;gap:.5rem;border-radius:9999px;padding:.375rem 1rem;font-size:.75rem;font-weight:600;color:rgba(216,180,254,.8);margin-bottom:2rem;background:rgba(147,51,234,.12);border:1px solid rgba(147,51,234,.25)">
+    <div id="portalPaymentBadge" style="display:inline-flex;align-items:center;gap:.5rem;border-radius:9999px;padding:.375rem 1rem;font-size:.75rem;font-weight:600;color:rgba(216,180,254,.8);margin-bottom:2rem;background:rgba(147,51,234,.12);border:1px solid rgba(147,51,234,.25)">
       <span class="dot-live dot-live-anim"></span>
       <span id="portalPaymentBadgeText" role="status" aria-live="polite">Checking online payment availability…</span>
     </div>
 
-    <div style="display:flex;justify-content:center;margin-bottom:2rem">
+    <div id="portalHeroIcon" style="display:flex;justify-content:center;margin-bottom:2rem">
       <div style="position:relative" class="anim-float">
         <div class="anim-ping" style="position:absolute;inset:0;border-radius:50%;background:rgba(147,51,234,.3);transform:scale(1.6)"></div>
         <div class="anim-ping" style="position:absolute;inset:0;border-radius:50%;background:rgba(147,51,234,.15);transform:scale(2.2);animation-delay:.5s"></div>
@@ -163,6 +163,16 @@
       Pick a plan below and connect in seconds — pay securely via <strong style="color:rgba(240,171,252,.85);font-weight:600">M-Pesa</strong>.
       No contracts. Instant activation.
     </p>
+    <section id="danstedPurchaseInstructions" hidden aria-labelledby="danstedPurchaseTitle" style="width:min(100%,720px);margin:14px auto 16px;padding:12px 14px;border:1px solid rgba(255,255,255,.18);border-radius:10px;background:rgba(77,78,79,.82);color:#f5f5f5;text-align:left;box-shadow:0 8px 20px rgba(0,0,0,.2)">
+      <strong id="danstedPurchaseTitle" style="display:block;margin-bottom:8px;text-align:center;font-size:.98rem">How To Purchase</strong>
+      <ol style="margin:0;padding-left:22px;font-size:.82rem;line-height:1.65">
+        <li>Tap your preferred package.</li>
+        <li>Enter your Safaricom phone number.</li>
+        <li>Tap Pay Now.</li>
+        <li>Approve the M-Pesa prompt and wait for confirmation (usually up to 30 seconds).</li>
+      </ol>
+      <p id="danstedSupportContact" hidden style="margin:8px 0 0;text-align:center;font-size:.76rem">Customer care: <span id="danstedSupportPhone"></span></p>
+    </section>
     <div id="portalHotspotAddress" style="display:none;align-items:center;justify-content:center;gap:.5rem;width:max-content;max-width:100%;margin:-1.5rem auto 1.5rem;padding:.5rem .85rem;border:1px solid rgba(255,255,255,.12);border-radius:999px;background:rgba(255,255,255,.05);color:rgba(255,255,255,.62);font-size:.75rem">
       <span aria-hidden="true" style="color:#70d9bd">●</span>
       <span>Hotspot address</span>
@@ -404,17 +414,17 @@
 <section id="mpesaReconnectSection" hidden style="max-width:840px;margin:1rem auto 0;padding:0">
   <div class="sec-card" style="background:rgba(255,255,255,.035)">
     <div class="sec-head" style="background:linear-gradient(135deg,rgba(6,95,70,.3),rgba(7,89,133,.3))">
-      <div style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(110,231,183,.65);margin-bottom:.625rem">
+      <div id="mpesaReconnectEyebrow" style="display:inline-flex;align-items:center;gap:.5rem;font-size:.6875rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(110,231,183,.65);margin-bottom:.625rem">
         <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/></svg>
         M-Pesa Verification
       </div>
-      <h3 style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Verify Your M-Pesa Payment</h3>
-      <p style="color:rgba(110,231,183,.5);font-size:.875rem;margin-top:.375rem">Enter the transaction code from your M-Pesa message, or paste the full SMS. We connect only when the saved payment and the router both confirm this device's MAC; unfinished paid setup is completed automatically.</p>
+      <h3 id="mpesaReconnectTitle" style="font-size:1.1875rem;font-weight:800;letter-spacing:-.02em;color:white">Verify Your M-Pesa Payment</h3>
+      <p id="mpesaReconnectDescription" style="color:rgba(110,231,183,.5);font-size:.875rem;margin-top:.375rem">Enter the transaction code from your M-Pesa message, or paste the full SMS. We connect only when the saved payment and the router both confirm this device's MAC; unfinished paid setup is completed automatically.</p>
     </div>
     <div class="sec-body" id="mpesaMsgWrap">
       <div style="display:flex;flex-direction:column;gap:1.125rem">
         <div>
-          <label class="lbl" style="color:rgba(52,211,153,.8)">M-Pesa receipt / transaction ID</label>
+          <label id="mpesaCodeLabel" class="lbl" style="color:rgba(52,211,153,.8)">M-Pesa receipt / transaction ID</label>
           <textarea id="mpesaMsg" rows="3" autocomplete="off" placeholder="Type the receipt code (for example ABC1234567) or paste the full confirmation SMS" class="inp inp-green"></textarea>
           <div id="mpesaMsgError" style="display:none;margin-top:.625rem;padding:.7rem .85rem;border-radius:.625rem;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.22);color:#fca5a5;font-size:.8125rem"></div>
         </div>
@@ -541,7 +551,7 @@ var COLORS=[
  var tvDevices=[], tvDeviceChoice="", tvMacAddress="", tvDeviceName="", tvPlanId="", tvPhone="", tvDeviceRouterId=0, tvError="", tvDevicesLoading=false, tvPurchase=false, tvRememberDevice=false, tvSavedEditMac="", tvSavedEditName="", tvDeviceSaveNotice="";
    var PORTAL_ADMIN_ID=0, PORTAL_ROUTER_ID=0, PORTAL_PORT_ID=0, PORTAL_API_BASE="", PORTAL_PAYMENT_INSTRUCTIONS="";
   var portalTroubleshootBusy=false, portalTroubleshootStatus="idle", portalTroubleshootDetails={};
-   var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalAutoReconnectStartedAt=0, portalPaidLoginHandoff=false;
+   var portalAutoReconnectBusy=false, portalAutoReconnectDone=false, portalAutoReconnectAttempts=0, portalAutoReconnectTimer=0, portalAutoReconnectEventAt=0, portalAutoReconnectStartedAt=0, portalAutoReconnectExpiry=0, portalPaidLoginHandoff=false;
    var portalMpesaVerifyBusy=false;
 var EMBEDDED_CONFIG=window.__HOTSPOT_CONFIG__||null;
 var ROUTER_NAS_IDENTIFIER="$(identity)";
@@ -574,6 +584,16 @@ var portalLoyaltyBusy=false, portalLoyaltyRequestId=0, voucherRedemptionBusy=fal
 var voucherRedeemedCredentials=null, voucherRedeemedAdminId=0;
 var SAFE_FONT_FAMILIES=["DM Sans","Inter","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Source Sans 3","Merriweather","Georgia","Arial","Verdana","Trebuchet MS","Courier New"];
 var PORTAL_QUERY=new URLSearchParams(window.location.search);
+if(!EMBEDDED_CONFIG&&PORTAL_QUERY.get("hosted")==="1"){
+  EMBEDDED_CONFIG={
+    apiBase:window.location.origin,
+    adminId:Number(PORTAL_QUERY.get("adminId"))||null,
+    routerId:Number(PORTAL_QUERY.get("routerId"))||null,
+    portId:Number(PORTAL_QUERY.get("portId"))||null,
+    resellerId:Number(PORTAL_QUERY.get("resellerId"))||null,
+    portalContextToken:PORTAL_QUERY.get("portalContextToken")||""
+  };
+}
 function normalisePortalCardVisibility(value,legacy){
   var input=value&&typeof value==="object"&&!Array.isArray(value)?value:{};
   var cards=Object.assign({},PORTAL_CARD_DEFAULTS);
@@ -929,6 +949,11 @@ function updatePaymentAvailability(){
   if(plansInitialised)renderPlans();
 }
 function applyPortalCardVisibility(){
+  if(isDanstedPortal()){
+    PORTAL_CARD_VISIBILITY=Object.assign({},PORTAL_CARD_VISIBILITY,{
+      hero:true,packages:true,connectionSupport:true,voucher:true,paymentRecovery:true
+    });
+  }
   var targets=[
     ["header","portalHeader"],["hero","portalHero"],["announcement","portalAnnouncement"],
     ["expiryNotice","portalExpiryNotice"],["packages","plansSection"],["paymentStatus","mpesaBanner"],
@@ -1026,7 +1051,7 @@ window.fetch=function(input,init){
     headers.set("X-Hotspot-NAS-Identifier",PORTAL_NAS_IDENTIFIER);
     headers.set("X-Hotspot-Server-Name",PORTAL_HOTSPOT_SERVER_NAME);
   }
-  return originalPortalFetch(input,Object.assign({},init||{},{headers:headers}));
+  return originalPortalFetch(input,Object.assign({},init||{},{headers:headers,credentials:"include"}));
 };
 function setPortalText(id,value){
   var element=document.getElementById(id);
@@ -1061,14 +1086,15 @@ function checkPortalExpiryOnLanding(){
  var PORTAL_AUTO_RECONNECT_MAX_ATTEMPTS=10;
  var PORTAL_AUTO_RECONNECT_WINDOW_MS=120000;
  function portalAutoReconnectCanRetry(){
+   if(portalAutoReconnectExpiry)return Date.now()<portalAutoReconnectExpiry;
   return portalAutoReconnectAttempts<PORTAL_AUTO_RECONNECT_MAX_ATTEMPTS
     &&(!portalAutoReconnectStartedAt||Date.now()-portalAutoReconnectStartedAt<PORTAL_AUTO_RECONNECT_WINDOW_MS);
  }
  function portalAutoReconnectRetryDelay(){
-  return Math.min(1000*Math.pow(2,Math.min(Math.max(portalAutoReconnectAttempts-1,0),4)),10000);
+   return Math.min(1000*Math.pow(2,Math.min(Math.max(portalAutoReconnectAttempts-1,0),5)),30000);
  }
  function schedulePortalAutoReconnect(delay){
-  if(portalAutoReconnectDone||!portalAutoReconnectCanRetry())return;
+   if(portalAutoReconnectDone||!portalAutoReconnectCanRetry()||document.visibilityState==="hidden")return;
   if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
   portalAutoReconnectTimer=setTimeout(function(){
     portalAutoReconnectTimer=0;
@@ -1097,6 +1123,8 @@ function attemptPortalAutoReconnect(){
   }).then(function(result){
     portalAutoReconnectBusy=false;
     var data=result.data||{};
+     var expiry=Date.parse(data.expiresAt||"");
+     if(Number.isFinite(expiry)&&expiry>Date.now())portalAutoReconnectExpiry=expiry;
     if(data.connected===true){
       portalAutoReconnectDone=true;
       if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
@@ -1158,12 +1186,12 @@ function normalisePortalPackageShape(value){
 }
 function applyPortalBackground(value){
   var backgrounds={
-    midnight:"radial-gradient(ellipse 120% 80% at 50% -10%,#37104d 0%,#0d0415 55%)",
-    ocean:"radial-gradient(ellipse 120% 80% at 50% -10%,#075985 0%,#031526 55%)",
-    aurora:"radial-gradient(ellipse 120% 80% at 50% -10%,#312e81 0%,#071827 58%)",
-    forest:"radial-gradient(ellipse 120% 80% at 50% -10%,#14532d 0%,#04150d 58%)",
-    sunset:"radial-gradient(ellipse 120% 80% at 50% -10%,#7f1d3b 0%,#210914 58%)",
-    sand:"radial-gradient(ellipse 120% 80% at 50% -10%,#713f12 0%,#21180d 58%)"
+    midnight:"radial-gradient(ellipse at 78% 12%,rgba(111,91,190,.42),transparent 48%),repeating-linear-gradient(0deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),repeating-linear-gradient(90deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),linear-gradient(145deg,#111827,#20263a 58%,#111827)",
+    ocean:"radial-gradient(ellipse at 75% 8%,rgba(58,150,191,.42),transparent 48%),repeating-linear-gradient(135deg,rgba(153,218,236,.075) 0 1px,transparent 1px 12px),linear-gradient(145deg,#102735,#153f52 55%,#102735)",
+    aurora:"radial-gradient(ellipse at 22% 15%,rgba(65,183,151,.42),transparent 48%),radial-gradient(ellipse at 82% 88%,rgba(106,91,190,.34),transparent 50%),repeating-linear-gradient(0deg,rgba(213,235,239,.055) 0 1px,transparent 1px 30px),repeating-linear-gradient(90deg,rgba(213,235,239,.055) 0 1px,transparent 1px 30px),linear-gradient(145deg,#14242c,#1b3440)",
+    forest:"radial-gradient(ellipse at 80% 12%,rgba(81,154,112,.34),transparent 48%),repeating-linear-gradient(0deg,rgba(193,222,201,.085) 0 1px,transparent 1px 28px),repeating-linear-gradient(90deg,rgba(193,222,201,.085) 0 1px,transparent 1px 28px),linear-gradient(145deg,#152821,#203b30 58%,#14241f)",
+    sunset:"radial-gradient(ellipse at 78% 15%,rgba(191,105,89,.4),transparent 48%),repeating-linear-gradient(45deg,rgba(232,186,167,.055) 0 1px,transparent 1px 14px),linear-gradient(145deg,#292027,#493039 58%,#211d27)",
+    sand:"radial-gradient(ellipse at 75% 10%,rgba(190,151,93,.4),transparent 48%),repeating-linear-gradient(45deg,rgba(239,221,184,.075) 0 1px,transparent 1px 11px),repeating-linear-gradient(-45deg,rgba(239,221,184,.06) 0 1px,transparent 1px 11px),linear-gradient(145deg,#292820,#464032 58%,#25251f)"
   };
   PORTAL_BACKGROUND=normalisePortalBackground(value);
   document.body.setAttribute("data-portal-background",PORTAL_BACKGROUND);
@@ -1268,10 +1296,59 @@ function applyPortalConfig(data){
    var isPlatformName=configuredName.toLowerCase().replace(/[^a-z0-9]/g,"")==="ocholasupernet";
     var name=configuredName&&!isPlatformName?configuredName:"OcholaSupernet";
   setPortalText("portalNameHeader",name);setPortalText("portalNameFooter",name);
-  setPortalText("portalHeroTitle","Connect with "+name);
+   setPortalText("portalHeroTitle",isDanstedPortal()?name:"Connect with "+name);
   setPortalText("portalTagline",typeof data.tagline==="string"?data.tagline:"");
-  document.title=name+" — Hotspot Portal";
+   document.title=isDanstedPortal()?name:name+" — Hotspot Portal";
+   if(isDanstedPortal()){
+     var portalHeader=document.getElementById("portalHeader");
+     var portalHeaderSubtitle=document.getElementById("portalHeaderSubtitle");
+     var portalPaymentBadge=document.getElementById("portalPaymentBadge");
+     var portalHeroIcon=document.getElementById("portalHeroIcon");
+     var portalHero=document.getElementById("portalHero");
+     var portalHeroTitle=document.getElementById("portalHeroTitle");
+     var portalTagline=document.getElementById("portalTagline");
+     if(portalHeader)portalHeader.style.display="none";
+     if(portalHeaderSubtitle)portalHeaderSubtitle.style.display="none";
+     if(portalPaymentBadge)portalPaymentBadge.style.display="none";
+     if(portalHeroIcon)portalHeroIcon.style.display="none";
+     if(portalTagline)portalTagline.style.display="none";
+     if(portalHero)portalHero.style.cssText="padding:1rem 1rem .5rem;position:relative;overflow:hidden;text-align:center";
+     if(portalHeroTitle)portalHeroTitle.style.cssText="display:block;width:min(100%,360px);margin:0 auto 9px;padding:4px 8px;border:1px solid rgba(255,255,255,.16);border-radius:7px;background:rgba(77,78,79,.82);box-shadow:0 5px 18px rgba(0,0,0,.16);color:#38d856;-webkit-text-fill-color:#38d856;font-size:clamp(1rem,4vw,1.5rem);font-weight:800;letter-spacing:-.035em;line-height:1.2;text-transform:uppercase;overflow-wrap:anywhere";
+     var mpesaSection=document.getElementById("mpesaReconnectSection");
+     var mpesaCard=mpesaSection&&mpesaSection.querySelector(".sec-card");
+     var mpesaHead=mpesaSection&&mpesaSection.querySelector(".sec-head");
+     var mpesaBody=document.getElementById("mpesaMsgWrap");
+     var mpesaEyebrow=document.getElementById("mpesaReconnectEyebrow");
+     var mpesaTitle=document.getElementById("mpesaReconnectTitle");
+     var mpesaDescription=document.getElementById("mpesaReconnectDescription");
+     var mpesaLabel=document.getElementById("mpesaCodeLabel");
+     var mpesaInput=document.getElementById("mpesaMsg");
+     var mpesaButton=document.getElementById("mpesaVerifyBtn");
+     if(mpesaSection){mpesaSection.style.width="min(calc(100% - 20px),720px)";mpesaSection.style.maxWidth="720px";mpesaSection.style.margin="14px auto 0";mpesaSection.style.padding="0";}
+     if(mpesaCard){mpesaCard.style.background="rgba(77,78,79,.82)";mpesaCard.style.border="1px solid rgba(255,255,255,.16)";mpesaCard.style.borderRadius="10px";mpesaCard.style.boxShadow="0 8px 20px rgba(0,0,0,.2)";}
+     if(mpesaHead){mpesaHead.style.display="block";mpesaHead.style.textAlign="center";mpesaHead.style.padding="10px 14px 4px";mpesaHead.style.background="transparent";}
+     if(mpesaEyebrow)mpesaEyebrow.style.display="none";
+     if(mpesaTitle){mpesaTitle.textContent="Reconnect account";mpesaTitle.style.fontSize=".86rem";mpesaTitle.style.letterSpacing="0";mpesaTitle.style.textAlign="center";}
+     if(mpesaDescription){mpesaDescription.textContent="(Enter mpesa code below from the payment you made eg: QAH9QWZRR)";mpesaDescription.style.color="rgba(255,255,255,.78)";mpesaDescription.style.fontSize=".75rem";mpesaDescription.style.marginTop=".35rem";}
+     if(mpesaBody)mpesaBody.style.padding="6px 14px 14px";
+     if(mpesaLabel)mpesaLabel.style.display="none";
+     if(mpesaInput){mpesaInput.rows=1;mpesaInput.placeholder="Enter Mpesa Code you paid with";mpesaInput.setAttribute("aria-label","Enter Mpesa Code you paid with");mpesaInput.style.minHeight="40px";mpesaInput.style.height="40px";mpesaInput.style.resize="none";mpesaInput.style.background="#fff";mpesaInput.style.color="#222";mpesaInput.style.border="2px solid #ee4444";mpesaInput.style.borderRadius="4px";mpesaInput.style.fontSize=".8rem";mpesaInput.style.padding="8px 10px";}
+     if(mpesaButton){mpesaButton.textContent="Reconnect";mpesaButton.style.width="100%";mpesaButton.style.borderRadius="8px";mpesaButton.style.background="linear-gradient(90deg,#f43f2f,#8de34f)";mpesaButton.style.color="#262626";mpesaButton.style.letterSpacing=".08em";mpesaButton.style.fontWeight="700";}
+   }
   var supportPhone=typeof data.supportPhone==="string"?data.supportPhone.trim():"";
+   var danstedInstructions=document.getElementById("danstedPurchaseInstructions");
+   var danstedSupportContact=document.getElementById("danstedSupportContact");
+   var danstedSupportPhone=document.getElementById("danstedSupportPhone");
+   if(isDanstedPortal()&&danstedInstructions){
+       danstedInstructions.style.width="min(100%,360px)";
+     danstedInstructions.hidden=false;
+     danstedInstructions.style.display="block";
+   }
+   if(danstedSupportContact&&danstedSupportPhone&&supportPhone){
+     danstedSupportPhone.textContent=supportPhone;
+     danstedSupportContact.hidden=false;
+     danstedSupportContact.style.display="";
+   }
   var phoneHref=supportPhone.replace(/[^\d+]/g,"");
   ["portalHeaderPhone","portalFooterPhone"].forEach(function(id){
     var element=document.getElementById(id);
@@ -1309,7 +1386,7 @@ function applyPortalConfig(data){
   var allowPackagesDuringMaintenance=Boolean(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.allowPackagesDuringMaintenance===true);
   if(plansSection)plansSection.style.display=shouldHidePackageSection(maintenance,allowPackagesDuringMaintenance)?"none":"";
   var voucherSection=document.getElementById("voucherSection");
-  if(voucherSection&&(data.vouchersEnabled===false||!portalCardEnabled("voucher")))voucherSection.style.display="none";
+   if(voucherSection&&((data.vouchersEnabled===false&&!isDanstedPortal())||!portalCardEnabled("voucher")))voucherSection.style.display="none";
   var paymentInstructions=typeof data.paymentInstructions==="string"?data.paymentInstructions.trim():"";
   PORTAL_PAYMENT_INSTRUCTIONS=paymentInstructions;
   var paymentMessage=document.getElementById("mpesaMessage");
@@ -1392,6 +1469,7 @@ function loadPortalTypography(done){
       served by the public API; reseller bundles do not include a local
       typography.json file. */
    applyPortalConfig(EMBEDDED_CONFIG);
+   if(redirectToFirstPartyHotspotPortal())return;
    loadPaymentStatus();
    var adminQuery=PORTAL_ADMIN_ID>0?"?adminId="+encodeURIComponent(PORTAL_ADMIN_ID):"";
    var brandingUrl=PORTAL_API_BASE?apiUrl("/api/public/hotspot-branding"+adminQuery):"";
@@ -1407,6 +1485,27 @@ function loadPortalTypography(done){
    var request=Promise.all([brandingRequest,typographyRequest]);
   var timeout=new Promise(function(resolve){setTimeout(function(){resolve(null);},5000);});
   Promise.race([request,timeout]).then(function(){if(typeof done==="function")done();});
+}
+
+function redirectToFirstPartyHotspotPortal(){
+  if(PORTAL_QUERY.get("hosted")==="1"||!PORTAL_API_BASE)return false;
+  var apiOrigin;
+  try{apiOrigin=new URL(PORTAL_API_BASE).origin;}catch(_error){return false;}
+  if(apiOrigin===window.location.origin)return false;
+  var target;
+  try{target=new URL("/hotspot/login.html",apiOrigin);}catch(_error){return false;}
+  target.searchParams.set("hosted","1");
+  target.searchParams.set("adminId",String(PORTAL_ADMIN_ID||""));
+  target.searchParams.set("routerId",String(PORTAL_ROUTER_ID||""));
+  if(PORTAL_PORT_ID>0)target.searchParams.set("portId",String(PORTAL_PORT_ID));
+  if(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.resellerId)target.searchParams.set("resellerId",String(EMBEDDED_CONFIG.resellerId));
+  if(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.portalContextToken)target.searchParams.set("portalContextToken",String(EMBEDDED_CONFIG.portalContextToken));
+  if(DEVICE_MAC)target.searchParams.set("mac",DEVICE_MAC);
+  if(DEVICE_IP)target.searchParams.set("ip",DEVICE_IP);
+  if(PORTAL_NAS_IDENTIFIER)target.searchParams.set("nasid",PORTAL_NAS_IDENTIFIER);
+  if(PORTAL_HOTSPOT_SERVER_NAME)target.searchParams.set("server",PORTAL_HOTSPOT_SERVER_NAME);
+  window.location.replace(target.toString());
+  return true;
 }
 
 function loadPaymentStatus(){
@@ -2533,7 +2632,75 @@ function configuredPostLoginDestination(){
     return destination.origin+"/";
   }catch(e){return "";}
 }
+function showHostedPortalLoginMessage(message,success){
+  var box=document.getElementById("hostedPortalLoginMessage");
+  if(!box){
+    box=document.createElement("div");
+    box.id="hostedPortalLoginMessage";
+    box.setAttribute("role","status");
+    box.setAttribute("aria-live","polite");
+    var wrap=document.getElementById("loginFormWrap");
+    if(wrap)wrap.insertBefore(box,wrap.firstChild);
+  }
+  if(!box)return;
+  box.textContent=message;
+  box.style.cssText="display:block;margin:0 1.5rem 1rem;padding:.8rem 1rem;border-radius:.75rem;font-size:.8rem;line-height:1.45;"+
+    (success
+      ?"color:#bbf7d0;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.35)"
+      :"color:#fecaca;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35)");
+}
+function loginHostedPortalAccount(form){
+  var user=document.getElementById("loginUser");
+  var pass=document.getElementById("loginPass");
+  var btn=document.getElementById("loginBtn");
+  var username=user?String(user.value||"").trim():"";
+  var password=pass?String(pass.value||""):"";
+  if(!PORTAL_ADMIN_ID||!username||!password||!DEVICE_MAC){
+    showHostedPortalLoginMessage(!DEVICE_MAC
+      ?"The router did not provide this device’s address. Reopen this page from the Hotspot Wi-Fi."
+      :"Wait for the Hotspot details to load, then try signing in again.",false);
+    return;
+  }
+  saveHotspotLoginCredentials({username:username,password:password});
+  if(btn){btn.disabled=true;btn.textContent="Connecting…";}
+  showHostedPortalLoginMessage("Checking your account and connecting through the Hotspot router…",true);
+  fetch(apiUrl("/api/customers/hotspot-login"),{
+    method:"POST",
+    credentials:"include",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      adminId:PORTAL_ADMIN_ID,
+      username:username,
+      password:password,
+      mac_address:DEVICE_MAC,
+      ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+    })
+  }).then(function(response){
+    return response.json().catch(function(){return{};}).then(function(data){return{ok:response.ok,data:data||{}};});
+  }).then(function(result){
+    if(!result.ok||result.data.ok!==true||result.data.connected!==true){
+      throw new Error(result.data.error||"The router has not confirmed this login yet.");
+    }
+    if(pass)pass.value="";
+    if(btn){btn.textContent="Connected";btn.disabled=true;}
+    showHostedPortalLoginMessage("Connected. You can now browse the internet; close this sign-in page to continue.",true);
+    var destination=configuredPostLoginDestination();
+    if(destination)window.setTimeout(function(){window.location.replace(destination);},1200);
+  }).catch(function(error){
+    if(btn){btn.disabled=false;btn.textContent="Click Here To Connect";}
+    showHostedPortalLoginMessage(error&&error.message?error.message:"Could not confirm the Hotspot login. Keep this device on Wi-Fi and retry.",false);
+  });
+}
 function doLogin(form){
+  var rawAction=form&&form.getAttribute?String(form.getAttribute("action")||""):"";
+  /* The VPS-hosted portal does not receive RouterOS macro substitution. Never
+     POST the literal $(link-login-only) path back to the website; use the
+     tenant-scoped credential-login API instead. Router-served pages still
+     have a resolved MikroTik login URL and keep the native form submission. */
+  if(/\$\([^)]*\)/.test(rawAction)){
+    loginHostedPortalAccount(form);
+    return false;
+  }
   var btn=document.getElementById("loginBtn");
   var pass=document.getElementById("loginPass");
   if(!pass||!pass.value)return false;
@@ -2725,24 +2892,68 @@ function renderPortalDeviceMac(){
     value.textContent=mac||"Resolved by router";
   }
 }
+var cookieSessionReauthStarted=false;
+function attemptCookieSessionReauth(){
+  if(PORTAL_QUERY.get("hosted")!=="1"||!DEVICE_MAC||PORTAL_ADMIN_ID<1)return false;
+  if(cookieSessionReauthStarted)return true;
+  cookieSessionReauthStarted=true;
+  fetch(apiUrl("/api/customers/hotspot-session/check"),{
+    method:"POST",
+    credentials:"include",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({adminId:PORTAL_ADMIN_ID,routerId:PORTAL_ROUTER_ID,portId:PORTAL_PORT_ID||null})
+  }).then(function(response){return response.ok?response.json():null;})
+    .then(function(data){
+      if(!data||data.sessionValid!==true){
+        attemptPortalAutoReconnect();
+        return;
+      }
+      return fetch(apiUrl("/api/customers/hotspot-login"),{
+        method:"POST",
+        credentials:"include",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          adminId:PORTAL_ADMIN_ID,
+          mac_address:DEVICE_MAC,
+          ...(DEVICE_IP?{client_ip:DEVICE_IP}:{})
+        })
+      }).then(function(response){return response.json().then(function(body){return{ok:response.ok,body:body};});})
+        .then(function(result){
+          if(result.ok&&result.body&&result.body.connected===true){
+            portalAutoReconnectDone=true;
+            if(portalAutoReconnectTimer)clearTimeout(portalAutoReconnectTimer);
+            portalAutoReconnectTimer=0;
+            var badge=document.getElementById("portalPaymentBadgeText");
+            if(badge)badge.textContent="Connected to the internet";
+            redirectAfterVerifiedPortalReconnect();
+            return;
+          }
+          attemptPortalAutoReconnect();
+        });
+    }).catch(function(){attemptPortalAutoReconnect();});
+  return true;
+}
 (function(){var base=applyPortalConfig;applyPortalConfig=function(data){var r=base(data);try{loadPortalLoyaltyBalance();}catch(e){}return r;};})();
 try{applyPortalConfig(EMBEDDED_CONFIG);}catch(e){
   EMBEDDED_PLANS=normalisePlanList(EMBEDDED_CONFIG&&EMBEDDED_CONFIG.plans);
 }
-loadPlans();
-bindPlanButtons();
-renderPortalDeviceMac();
-startPortalLoyaltyBalance();
-var portalPaidHandoffStarted=applyCredentialsFromHash();
-loadPortalTypography(function(){
+var portalFirstPartyRedirected=redirectToFirstPartyHotspotPortal();
+if(!portalFirstPartyRedirected){
   loadPlans();
-  checkPortalExpiryOnLanding();
-  if(!portalPaidHandoffStarted)attemptPortalAutoReconnect();
-});
-if(PORTAL_QUERY.get("page")==="troubleshoot")openTroubleshootModule();
-else{
-  checkPortalExpiryOnLanding();
-  if(!portalPaidHandoffStarted)attemptPortalAutoReconnect();
+  bindPlanButtons();
+  renderPortalDeviceMac();
+  startPortalLoyaltyBalance();
+  var portalPaidHandoffStarted=applyCredentialsFromHash();
+  loadPortalTypography(function(){
+    loadPlans();
+    checkPortalExpiryOnLanding();
+    if(!portalPaidHandoffStarted&&!attemptCookieSessionReauth())attemptPortalAutoReconnect();
+  });
+  if(PORTAL_QUERY.get("page")==="troubleshoot")openTroubleshootModule();
+  else{
+    checkPortalExpiryOnLanding();
+    if(!portalPaidHandoffStarted&&!attemptCookieSessionReauth())attemptPortalAutoReconnect();
+  }
 }
 </script>
 <div id="hotspot-chat-account" hidden style="position:fixed;right:16px;bottom:18px;z-index:9998;width:min(340px,calc(100vw - 32px));box-sizing:border-box;padding:16px;border:1px solid #d7e0ea;border-radius:14px;background:#fff;color:#172033;box-shadow:0 12px 36px #10243b30;font:14px system-ui,sans-serif">

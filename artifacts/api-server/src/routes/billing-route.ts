@@ -8,7 +8,9 @@ import {
   supabaseServiceRoleConfigured,
 } from "../lib/supabase-client.js";
 import {
+  billingEligibleSalesSummary,
   billingCreateInvoice,
+  billingMonthlyRevenueSummary,
   billingRouterRevenueSummary,
   billingRevenueSummary,
   billingSelect,
@@ -97,19 +99,28 @@ async function currentInvoice(
     "platform_billing_invoices",
     `account_id=eq.${account.id}&billing_period=eq.${period}&select=*&limit=1`,
   );
-  if (existing[0]) return { invoice: existing[0], config };
-
   const salesStart = previousMonthStart(period);
-  const ledgerRows = await billingSelect<{ amount: number | string; payment_method: string | null }>(
-    "revenue_ledger",
-    `revenue_account_id=eq.${account.id}&occurred_at=gte.${salesStart}T00:00:00.000Z&occurred_at=lt.${period}T00:00:00.000Z&select=amount,payment_method`,
-  );
-  const platformPaymentMethods = new Set(["mpesa_registration", "manual_registration"]);
-  const salesTotal = ledgerRows.reduce((sum, row) => (
-    platformPaymentMethods.has(row.payment_method ?? "")
-      ? sum
-      : sum + Number(row.amount || 0)
-  ), 0);
+  const [salesSummary] = await billingEligibleSalesSummary<{
+    sales_period_start: string;
+    sales_period_end: string;
+    sales_total: number | string;
+    payment_count: number | string;
+  }>(account.id, period);
+  if (!salesSummary) throw new Error("Previous-month eligible sales are unavailable.");
+  const resolvedSalesStart = salesSummary.sales_period_start || salesStart;
+  const salesTotal = Number(salesSummary.sales_total ?? 0);
+  if (existing[0]) {
+    return {
+      invoice: {
+        ...existing[0],
+        sales_period_start: resolvedSalesStart,
+        sales_period_end: salesSummary.sales_period_end || period,
+        sales_total: salesTotal,
+        sales_threshold: config.sales_threshold,
+      },
+      config,
+    };
+  }
   const amountDue = salesTotal > Number(config.sales_threshold)
     ? Number(config.high_sales_fee)
     : Number(config.low_sales_fee);
@@ -117,8 +128,8 @@ async function currentInvoice(
     account_id: account.id,
     tenant_id: account.parent_id ?? account.id,
     billing_period: period,
-    sales_period_start: salesStart,
-    sales_period_end: period,
+    sales_period_start: resolvedSalesStart,
+    sales_period_end: salesSummary.sales_period_end || period,
     sales_total: salesTotal,
     sales_threshold: config.sales_threshold,
     low_sales_fee: config.low_sales_fee,
@@ -283,6 +294,31 @@ router.get("/billing/revenue-summary", requireAdmin(), async (req: Request, res:
     });
   } catch {
     res.status(503).json({ ok: false, error: "Could not load immutable revenue totals." });
+  }
+});
+
+router.get("/billing/monthly-revenue", requireAdmin(), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (!account || !["isp_admin", "reseller"].includes(account.role)) {
+      res.status(403).json({ ok: false, error: "An active account is required." });
+      return;
+    }
+    const rows = await billingMonthlyRevenueSummary<{
+      month_start: string;
+      income: number | string;
+      payment_count: number | string;
+    }>(account.id);
+    res.json({
+      ok: true,
+      months: rows.map(row => ({
+        monthStart: row.month_start,
+        income: Number(row.income ?? 0),
+        paymentCount: Number(row.payment_count ?? 0),
+      })),
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Could not load monthly income from the payment ledger." });
   }
 });
 

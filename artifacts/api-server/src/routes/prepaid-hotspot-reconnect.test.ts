@@ -235,6 +235,9 @@ test("prepaid Hotspot reconnect safely restores and logs in one entitled device"
   assert.equal(connectedResult.status, "connected");
   assert.match(connectedResult.message, /reconnected/i);
   assert.equal(JSON.stringify(connectedResult).includes(customerFixture.password), false);
+  assert.equal(customers[0].service_online, true);
+  assert.equal(customers[0].ip_address, "10.45.0.20");
+  assert.equal(typeof customers[0].last_seen, "string");
   const reconcile = routerCalls.find(call => call.action === "reconcile");
   const connect = routerCalls.find(call => call.action === "connect");
   assert.equal(reconcile?.enabled, true);
@@ -258,6 +261,7 @@ test("prepaid Hotspot reconnect safely restores and logs in one entitled device"
   const deviceNotVisible = await postReconnect();
   assert.equal(deviceNotVisible.status, 200);
   assert.equal((await deviceNotVisible.json() as { status: string }).status, "device_not_found");
+  assert.equal(customers[0].service_online, false);
   assert.equal(routerCalls.some(call => call.action === "reconcile" || call.action === "connect"), false);
 
   clientIp = "10.45.0.20";
@@ -275,6 +279,8 @@ test("prepaid Hotspot reconnect safely restores and logs in one entitled device"
   const alreadyConnected = await postReconnect();
   assert.equal(alreadyConnected.status, 200);
   assert.equal((await alreadyConnected.json() as { status: string }).status, "already_connected");
+  assert.equal(customers[0].service_online, true);
+  assert.equal(customers[0].ip_address, "10.45.0.20");
   assert.equal(routerCalls.some(call => call.action === "connect" || call.action === "reconcile"), false);
 
   activeSessions = [];

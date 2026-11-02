@@ -37,8 +37,10 @@ import {
 import {
   HOSTED_PORTAL_LAYOUT_CSS,
   normalizeHotspotPortalLayout,
+  resolveHotspotPortalLayout,
   type HotspotPortalLayout,
 } from "@/lib/hotspot-layouts";
+import { isResolvedHotspotLoginUrl } from "@/lib/hotspot-login-url";
 
 interface Plan {
   id: number; name: string; price: number;
@@ -72,6 +74,7 @@ interface HotspotRuntimeConfig {
   portalContextToken: string;
   previewOnly: boolean;
   portalLayout: HotspotPortalLayout;
+  portalLayoutIsExplicit: boolean;
   loyaltyCard: HotspotLoyaltyCardSettings;
   plans: Plan[];
 }
@@ -210,6 +213,7 @@ function readHotspotRuntimeConfig(): HotspotRuntimeConfig {
   const apiBase = typeof raw?.apiBase === "string" && /^https?:\/\//i.test(raw.apiBase.trim())
     ? raw.apiBase.trim().replace(/\/+$/, "")
     : "";
+  const rawPortalLayout = typeof raw?.portalLayout === "string" ? raw.portalLayout : "";
   return {
     apiBase,
     adminId: positivePortalId(raw?.adminId),
@@ -218,7 +222,9 @@ function readHotspotRuntimeConfig(): HotspotRuntimeConfig {
     resellerId: positivePortalId(raw?.resellerId),
     portalContextToken: typeof raw?.portalContextToken === "string" ? raw.portalContextToken.trim() : "",
     previewOnly: raw?.previewOnly === true,
-    portalLayout: normalizeHotspotPortalLayout(raw?.portalLayout),
+    portalLayout: normalizeHotspotPortalLayout(rawPortalLayout),
+    portalLayoutIsExplicit: Boolean(rawPortalLayout)
+      && normalizeHotspotPortalLayout(rawPortalLayout) === rawPortalLayout,
     loyaltyCard: normalizeHotspotLoyaltyCardSettings(raw?.loyaltyCard),
     plans: Array.isArray(raw?.plans)
       ? raw.plans.map(normalizeRuntimePlan).filter((plan): plan is Plan => Boolean(plan))
@@ -479,9 +485,14 @@ function HotspotLoginView({
           portalHostname: typeof payload?.branding?.portalHostname === "string" ? payload.branding.portalHostname : undefined,
           portalCards: normalizeHotspotPortalCards(row.portalCards, row),
           loyaltyCard: normalizeHotspotLoyaltyCardSettings(row.loyaltyCard ?? HOTSPOT_RUNTIME_CONFIG.loyaltyCard),
-          portalLayout: typeof row.portalLayout === "string"
-            ? normalizeHotspotPortalLayout(row.portalLayout)
-            : HOTSPOT_RUNTIME_CONFIG.portalLayout,
+          // A generated portal's selected layout is authoritative. Public
+          // branding may be stale while a generated/exported page is being
+          // previewed, so it must not swap the layout after initial render.
+          portalLayout: resolveHotspotPortalLayout(
+            HOTSPOT_RUNTIME_CONFIG.portalLayout,
+            row.portalLayout,
+            HOTSPOT_RUNTIME_CONFIG.portalLayoutIsExplicit,
+          ),
         });
       })
       .catch(() => undefined);
@@ -505,7 +516,19 @@ function HotspotLoginView({
     supportEmail: portalBranding.supportEmail || brand.supportEmail,
     domain: "",
   };
-  const portalCards = portalBranding.portalCards ?? DEFAULT_HOTSPOT_PORTAL_CARDS;
+  const selectedPortalLayout = portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout;
+  const isDanstedLayout = selectedPortalLayout === "dansted-wifi";
+  const configuredPortalCards = portalBranding.portalCards ?? DEFAULT_HOTSPOT_PORTAL_CARDS;
+  const portalCards = isDanstedLayout
+    ? {
+        ...configuredPortalCards,
+        hero: true,
+        packages: true,
+        connectionSupport: true,
+        voucher: true,
+        paymentRecovery: true,
+      }
+    : configuredPortalCards;
   const [activeTab, setActiveTab] = useState<Tab>("plans");
   useEffect(() => {
     const availableTabs: Tab[] = [
@@ -528,6 +551,29 @@ function HotspotLoginView({
       return { mac: "", ip: "", linkLogin: "", linkOrig: "" };
     }
   })();
+  const redirectAfterConfirmedHotspotLogin = useCallback(() => {
+    if (HOTSPOT_RUNTIME_CONFIG.previewOnly) return;
+    let destination = "";
+    const originalDestination = portalContext.linkOrig.trim();
+    if (originalDestination) {
+      try {
+        const target = new URL(originalDestination, window.location.origin);
+        if (
+          (target.protocol === "http:" || target.protocol === "https:")
+          && !target.username
+          && !target.password
+        ) {
+          destination = target.href;
+        }
+      } catch {
+        // An invalid router destination falls back to the portal's own landing page.
+      }
+    }
+    if (!destination) destination = `${window.location.origin}/`;
+    const current = new URL(window.location.href);
+    if (destination === current.href || (destination === `${window.location.origin}/` && current.pathname === "/")) return;
+    window.location.replace(destination);
+  }, [portalContext.linkOrig]);
 
   const adminId: number | null = (() => {
     try {
@@ -575,7 +621,6 @@ function HotspotLoginView({
   const [phone, setPhone] = useState(() => {
     try { return typeof window !== "undefined" ? window.localStorage.getItem(danstedPhoneStorageKey) || "" : ""; } catch { return ""; }
   });
-  const isDanstedLayout = (portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout) === "dansted-wifi";
   const [deviceMacAddress, setDeviceMacAddress] = useState(portalContext.mac);
   const [deviceName, setDeviceName] = useState("");
   const [tvDialogOpen, setTvDialogOpen] = useState(false);
@@ -662,6 +707,7 @@ function HotspotLoginView({
   const [troubleshootError, setTroubleshootError] = useState("");
   const [troubleshootAction, setTroubleshootAction] = useState<"check" | "login" | null>(null);
   const [autoReconnectInProgress, setAutoReconnectInProgress] = useState(false);
+  const [manualReconnectRetryCycle, setManualReconnectRetryCycle] = useState(0);
   const troubleshootInFlight = useRef(false);
   const autoTroubleshootKey = useRef("");
   const [tvTroubleshootMode, setTvTroubleshootMode] = useState(false);
@@ -1018,7 +1064,7 @@ function HotspotLoginView({
           ...(portalScope.portId ? { port_id: portalScope.portId } : {}),
           mac_address: targetMacAddress,
           device_name: deviceName,
-          ...(!retryRouter && paymentMode !== "tv" && (portalContext.linkLogin || portalContext.linkOrig)
+          ...(!retryRouter && paymentMode !== "tv" && isResolvedHotspotLoginUrl(portalContext.linkLogin)
             ? { portal_login_handoff: true }
             : {}),
           ...(paymentMode === "tv" ? { target_device: true } : portalContext.ip ? { client_ip: portalContext.ip } : {}),
@@ -1278,7 +1324,9 @@ function HotspotLoginView({
   useEffect(() => {
     if (!accessReady && !portalHandoffReady) return;
     if (paymentMode === "tv") return;
-    const destination = portalContext.linkLogin || portalContext.linkOrig;
+    const destination = portalHandoffReady
+      ? portalContext.linkLogin
+      : portalContext.linkOrig || portalContext.linkLogin;
     if (!/^https?:\/\//i.test(destination) || !hotspotCredentials) {
       if (!troubleshootingOnly) {
         setTroubleshootDialogOpen(true);
@@ -1760,6 +1808,11 @@ function HotspotLoginView({
     }
   }, [adminId, portalContext.ip, portalContext.mac]);
 
+  const restartAutomaticReconnect = () => {
+    setAutoReconnectInProgress(true);
+    setManualReconnectRetryCycle(cycle => cycle + 1);
+  };
+
   useEffect(() => {
     if (!loginSession || loginSession.status !== "active" || !loginSession.expiresAt) return;
     const expiry = Date.parse(loginSession.expiresAt);
@@ -1823,6 +1876,7 @@ function HotspotLoginView({
     if (!savedCredentials?.username || !savedCredentials.password || !adminId || !portalContext.mac) {
       return { attempted: false, signedIn: false };
     }
+    let responseStatus: number | null = null;
     try {
       const response = await hotspotPortalFetch(hotspotApiUrl("/api/customers/hotspot-login"), {
         method: "POST",
@@ -1835,6 +1889,7 @@ function HotspotLoginView({
           ...(portalContext.ip ? { client_ip: portalContext.ip } : {}),
         }),
       });
+      responseStatus = response.status;
       const data = await response.json().catch(() => ({})) as {
         ok?: boolean;
         error?: string;
@@ -1866,7 +1921,16 @@ function HotspotLoginView({
             error: data.error,
           };
         }
-        throw new Error(data.error || "The saved hotspot account could not sign in.");
+        return {
+          attempted: true,
+          signedIn: false,
+          retryable: response.status === 408
+            || response.status === 425
+            || response.status === 429
+            || response.status >= 500
+            || response.ok,
+          error: data.error || "The saved hotspot account could not sign in.",
+        };
       }
       storeHotspotCredentials(loginCredentialsStorageKey, savedCredentials);
       setHotspotCredentials(savedCredentials);
@@ -1881,11 +1945,17 @@ function HotspotLoginView({
       });
       setTroubleshootMessage("Your saved package account is signed in.");
       setTroubleshootError("");
+      redirectAfterConfirmedHotspotLogin();
       return { attempted: true, signedIn: true };
     } catch (error) {
       return {
         attempted: true,
         signedIn: false,
+        retryable: responseStatus === null
+          || responseStatus === 408
+          || responseStatus === 425
+          || responseStatus === 429
+          || responseStatus >= 500,
         error: error instanceof Error ? error.message : "Could not sign in with the saved hotspot account.",
       };
     }
@@ -1897,6 +1967,7 @@ function HotspotLoginView({
     paymentMode,
     portalContext.ip,
     portalContext.mac,
+    redirectAfterConfirmedHotspotLogin,
   ]);
 
   const handleTroubleshoot = async () => {
@@ -1909,9 +1980,17 @@ function HotspotLoginView({
     setTroubleshootAction("login");
     try {
       const savedLogin = await signInWithSavedCredentials();
-      if (!savedLogin.signedIn && !savedLogin.activePlan) {
+      if (savedLogin.activePlan && savedLogin.retryable) {
+        setTroubleshootMessage("Your package is active. Reconnecting automatically while this device stays connected to Wi-Fi…");
+        restartAutomaticReconnect();
+      } else if (!savedLogin.signedIn && !savedLogin.activePlan) {
         const result = await requestHotspotTroubleshoot("login");
-        if (!result && savedLogin.error) setTroubleshootError(savedLogin.error);
+        if (result?.status === "active" && !result.connected && result.retryable) {
+          setTroubleshootMessage("Your package is active. Reconnecting automatically while this device stays connected to Wi-Fi…");
+          restartAutomaticReconnect();
+        } else if (!result && savedLogin.error) {
+          setTroubleshootError(savedLogin.error);
+        }
       }
     } finally {
       troubleshootInFlight.current = false;
@@ -1979,7 +2058,7 @@ function HotspotLoginView({
 
   useEffect(() => {
     if (HOTSPOT_RUNTIME_CONFIG.previewOnly || !adminId || !portalContext.mac) return;
-    const lookupKey = `${adminId}:${portalContext.mac}`;
+    const lookupKey = `${adminId}:${portalContext.mac}:${manualReconnectRetryCycle}`;
     if (autoTroubleshootKey.current === lookupKey) return;
     autoTroubleshootKey.current = lookupKey;
     let cancelled = false;
@@ -2036,7 +2115,14 @@ function HotspotLoginView({
       if (retryTimer) window.clearTimeout(retryTimer);
       if (autoTroubleshootKey.current === lookupKey) autoTroubleshootKey.current = "";
     };
-  }, [troubleshootingOnly, adminId, portalContext.mac, requestHotspotTroubleshoot, signInWithSavedCredentials]);
+  }, [
+    troubleshootingOnly,
+    adminId,
+    portalContext.mac,
+    manualReconnectRetryCycle,
+    requestHotspotTroubleshoot,
+    signInWithSavedCredentials,
+  ]);
 
   useEffect(() => {
     if (!tvTroubleshootMode || !troubleshootDialogOpen || !tvReconnectMac) return;
@@ -2130,13 +2216,19 @@ function HotspotLoginView({
     try {
       const savedLogin = await signInWithSavedCredentials();
       if (savedLogin.signedIn) return;
-      if (savedLogin.activePlan) return;
+      if (savedLogin.activePlan) {
+        if (savedLogin.retryable) restartAutomaticReconnect();
+        return;
+      }
 
       // Reconcile against the purchase record, not the visible, purchasable
       // plan cards. The server resolves the account's linked plan by ID.
       const result = await requestHotspotTroubleshoot("login");
       if (result && result.status === "active" && !result.connected) {
-        setTroubleshootMessage("Your package is active. Automatic sign-in will keep retrying while this device stays connected to Wi-Fi.");
+        if (result.retryable) {
+          setTroubleshootMessage("Your package is active. Reconnecting automatically while this device stays connected to Wi-Fi…");
+          restartAutomaticReconnect();
+        }
       } else if (result && savedLogin.error && result.status === "unavailable") {
         setTroubleshootMessage(result.error || savedLogin.error);
       }
@@ -2187,26 +2279,34 @@ function HotspotLoginView({
   };
 
   const mpesaReconnectCard = (
-    <div className="hp-glass" style={{ marginTop: 16 }}>
-      <div className="hp-glass-header">
-        <div className="hp-glass-icon" style={{ background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
+    <div className={`hp-glass${isDanstedLayout ? " hp-dansted-reconnect" : ""}`} style={isDanstedLayout
+      ? { width: "min(100%, 720px)", margin: "16px auto 0", borderRadius: 10, background: "rgba(77,78,79,.82)", border: "1px solid rgba(255,255,255,.16)", boxShadow: "0 8px 20px rgba(0,0,0,.2)" }
+      : { marginTop: 16 }}>
+      <div className="hp-glass-header" style={isDanstedLayout ? { justifyContent: "center", padding: "10px 14px 4px", borderBottom: 0 } : undefined}>
+        <div className="hp-glass-icon" style={{ display: isDanstedLayout ? "none" : undefined, background: "var(--isp-accent-glow)", border: "1px solid var(--isp-accent-glow)" }}>
           <Shield size={16} color="var(--isp-accent)" />
         </div>
-        <div>
-          <div className="hp-glass-title">Reconnect with M-Pesa</div>
-          <div className="hp-glass-desc">We look up completed payments on your account and only reconnect the device registered to that purchase while its package is active.</div>
+        <div style={isDanstedLayout ? { textAlign: "center", width: "100%" } : undefined}>
+          <div className="hp-glass-title">{isDanstedLayout ? "Reconnect account" : "Reconnect with M-Pesa"}</div>
+          <div className="hp-glass-desc" style={isDanstedLayout ? { color: "rgba(255,255,255,.76)", fontSize: ".76rem", marginTop: 5 } : undefined}>
+            {isDanstedLayout
+              ? "Enter M-Pesa code below from the payment you made, e.g. QAH9QWZRR."
+              : "We look up completed payments on your account and only reconnect the device registered to that purchase while its package is active."}
+          </div>
         </div>
       </div>
-      <div className="hp-glass-body">
+      <div className="hp-glass-body" style={isDanstedLayout ? { padding: "6px 14px 14px" } : undefined}>
         <form onSubmit={handleMpesaReconnect}>
           <div className="hp-input-group">
-            <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation message</label>
+            {!isDanstedLayout && <label className="hp-label" htmlFor="mpesa-reconnect-message">M-Pesa confirmation message</label>}
             <textarea
               id="mpesa-reconnect-message"
               className="hp-input hp-textarea"
-              rows={4}
+              rows={isDanstedLayout ? 1 : 4}
               maxLength={1000}
-              placeholder="Paste the full confirmation message"
+              placeholder={isDanstedLayout ? "Enter M-Pesa code you paid with" : "Paste the full confirmation message"}
+              aria-label={isDanstedLayout ? "Enter M-Pesa code you paid with" : undefined}
+              style={isDanstedLayout ? { minHeight: 40, height: 40, resize: "none", background: "#fff", color: "#222", border: "2px solid #ee4444", borderRadius: 4, fontSize: ".8rem", padding: "8px 10px" } : undefined}
               value={mpesaMessage}
               onChange={event => { setMpesaMessage(event.target.value); setMpesaReconnectError(""); }}
               required
@@ -2218,10 +2318,10 @@ function HotspotLoginView({
               {mpesaReconnectError}
             </div>
           )}
-          <button type="submit" disabled={mpesaReconnectLoading} className="hp-btn hp-btn-ghost">
+          <button type="submit" disabled={mpesaReconnectLoading} className={`hp-btn ${isDanstedLayout ? "hp-btn-mpesa" : "hp-btn-ghost"}`} style={isDanstedLayout ? { width: "100%", borderRadius: 8, background: "linear-gradient(90deg,#f43f2f,#8de34f)", color: "#262626", letterSpacing: ".08em", fontWeight: 700 } : undefined}>
             {mpesaReconnectLoading
               ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Verifying payment...</>
-              : <><Shield size={16} /> Verify and reconnect</>}
+              : isDanstedLayout ? "Reconnect" : <><Shield size={16} /> Verify and reconnect</>}
           </button>
         </form>
       </div>
@@ -3218,7 +3318,7 @@ function HotspotLoginView({
       ${HOSTED_PORTAL_LAYOUT_CSS}
       `}</style>
 
-      <div className="hp-root" data-portal-layout={portalBranding.portalLayout ?? HOTSPOT_RUNTIME_CONFIG.portalLayout}>
+      <div className="hp-root" data-portal-layout={selectedPortalLayout}>
         {isDanstedLayout && danstedCheckoutOpen && selectedPlan && (
           <div className="dansted-checkout-overlay" role="presentation">
             <section className="dansted-checkout-modal" role="dialog" aria-modal="true" aria-labelledby="dansted-checkout-title">
@@ -3380,14 +3480,45 @@ function HotspotLoginView({
                   <Wifi size={36} color="var(--isp-accent)" strokeWidth={2} />
                 </div>
               </div>
-              <h1 className="hp-title">{troubleshootingOnly ? "Connection help" : "Your world, connected."}</h1>
-              <p className="hp-subtitle">{troubleshootingOnly
+              <h1 className="hp-title">{troubleshootingOnly ? "Connection help" : isDanstedLayout ? portalDisplayName : "Your world, connected."}</h1>
+              {!isDanstedLayout && <p className="hp-subtitle">{troubleshootingOnly
                  ? "We’ll check your package and try to reconnect this device automatically."
-                : portalBranding.tagline || "Fast, reliable Wi-Fi for the things you love."}</p>
-              {!troubleshootingOnly && portalDnsHostname && (
+                : portalBranding.tagline || "Fast, reliable Wi-Fi for the things you love."}</p>}
+              {!troubleshootingOnly && !isDanstedLayout && portalDnsHostname && (
                 <div className="hp-dns-address" aria-label={`Hotspot address ${portalDnsHostname}`}>
                   <Wifi size={13} /><span>Hotspot address</span><strong>{portalDnsHostname}</strong>
                 </div>
+              )}
+              {!troubleshootingOnly && isDanstedLayout && (
+                <section
+                  aria-labelledby="dansted-purchase-guide-title"
+                  style={{
+                    width: "min(100%, 360px)",
+                    margin: "14px auto 16px",
+                    padding: "12px 14px",
+                    border: "1px solid rgba(255,255,255,.18)",
+                    borderRadius: 10,
+                    background: "rgba(77,78,79,.82)",
+                    color: "#f5f5f5",
+                    textAlign: "left",
+                    boxShadow: "0 8px 20px rgba(0,0,0,.2)",
+                  }}
+                >
+                  <h2 id="dansted-purchase-guide-title" style={{ margin: "0 0 8px", textAlign: "center", fontSize: ".98rem", fontWeight: 800 }}>
+                    How To Purchase
+                  </h2>
+                  <ol style={{ margin: 0, paddingLeft: 22, fontSize: ".82rem", lineHeight: 1.65 }}>
+                    <li>Tap your preferred package.</li>
+                    <li>Enter your Safaricom phone number.</li>
+                    <li>Tap Pay Now.</li>
+                    <li>Approve the M-Pesa prompt and wait for confirmation (usually up to 30 seconds).</li>
+                  </ol>
+                  {portalBranding.supportPhone && (
+                    <p style={{ margin: "8px 0 0", textAlign: "center", fontSize: ".76rem" }}>
+                      Customer care: {portalBranding.supportPhone}
+                    </p>
+                  )}
+                </section>
               )}
               <div className="hp-badges">
                 <span className="hp-badge"><Shield size={12} /> Secure</span>
@@ -3872,8 +4003,7 @@ function HotspotLoginView({
                   ) : (
                     <div className={`hp-plans-grid${selectedPlan ? " has-expanded" : ""}`}>
                       {plans.map((plan, i) => {
-                        const planGradients = portalBranding.portalLayout === "classic"
-                          || (!portalBranding.portalLayout && HOTSPOT_RUNTIME_CONFIG.portalLayout === "classic")
+                        const planGradients = selectedPortalLayout === "classic"
                           ? GUEST_PLAN_GRADIENTS
                           : PLAN_GRADIENTS;
                         const grad = planGradients[i % planGradients.length];

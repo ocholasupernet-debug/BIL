@@ -35,6 +35,44 @@ export interface PrepaidSyncRun {
   error?: string;
 }
 
+export interface PrepaidSyncRouter {
+  id: number;
+  name: string;
+}
+
+type SyncOptions = {
+  users: SyncCustomer[];
+  plans: SyncPlan[];
+  endpoint: string;
+  adminId: number;
+  token: string;
+  request?: typeof fetch;
+  onProgress?: (total: number, processed: number, users: PrepaidSyncResult[]) => void;
+  onLog?: (message: string) => void;
+};
+
+function eligibleUsersForRouter(users: SyncCustomer[], plans: SyncPlan[], routerId: number) {
+  const planMap = new Map(plans.map(plan => [plan.id, plan]));
+  return [...new Map(users.filter(user =>
+    String(user.type).toLowerCase() !== "vlan"
+    && getCustomerServiceStatus(user) === "active"
+    && Number(user.router_id ?? planMap.get(Number(user.plan_id))?.router_id) === routerId,
+  ).map(user => [user.id, user])).values()];
+}
+
+export function getActivePrepaidSyncTargets(options: {
+  routers: PrepaidSyncRouter[];
+  users: SyncCustomer[];
+  plans: SyncPlan[];
+}) {
+  return options.routers
+    .map(router => ({
+      router,
+      activeCount: eligibleUsersForRouter(options.users, options.plans, router.id).length,
+    }))
+    .filter(target => target.activeCount > 0);
+}
+
 /** One user-facing operation; bounded requests protect the MikroTik API. */
 export async function syncActiveAccountsToRouter(options: {
   router: { id: number; name: string };
@@ -49,11 +87,7 @@ export async function syncActiveAccountsToRouter(options: {
 }): Promise<PrepaidSyncRun> {
   const { router, plans } = options;
   const planMap = new Map(plans.map(plan => [plan.id, plan]));
-  const eligible = [...new Map(options.users.filter(user =>
-    String(user.type).toLowerCase() !== "vlan"
-    && getCustomerServiceStatus(user) === "active"
-    && Number(user.router_id ?? planMap.get(Number(user.plan_id))?.router_id) === router.id,
-  ).map(user => [user.id, user])).values()];
+  const eligible = eligibleUsersForRouter(options.users, plans, router.id);
   const results: PrepaidSyncResult[] = [];
   const total = eligible.length;
   let processed = 0;
@@ -143,4 +177,41 @@ export async function syncActiveAccountsToRouter(options: {
     });
   }
   return { ok: !error && results.every(row => row.outcome === "synced"), total, processed, users: results, ...(error ? { error } : {}) };
+}
+
+/** Sequential all-router sync; an offline router does not prevent later routers from running. */
+export async function syncActiveAccountsAcrossRouters(options: SyncOptions & {
+  routers: PrepaidSyncRouter[];
+}): Promise<PrepaidSyncRun> {
+  const targets = getActivePrepaidSyncTargets(options);
+  const total = targets.reduce((sum, target) => sum + target.activeCount, 0);
+  const results: PrepaidSyncResult[] = [];
+  const errors: string[] = [];
+  let processed = 0;
+  options.onProgress?.(total, processed, []);
+
+  for (const { router } of targets) {
+    const run = await syncActiveAccountsToRouter({
+      ...options,
+      router,
+      onLog: message => options.onLog?.(`[${router.name}] ${message}`),
+      onProgress: (_routerTotal, routerProcessed, routerUsers) => {
+        options.onProgress?.(total, processed + routerProcessed, [...results, ...routerUsers]);
+      },
+    });
+    results.push(...run.users);
+    processed += run.processed;
+    if (run.error) errors.push(`${router.name}: ${run.error}`);
+    else if (!run.ok) errors.push(`${router.name}: one or more accounts were not confirmed.`);
+    options.onProgress?.(total, processed, [...results]);
+  }
+
+  const error = errors.length ? errors.join(" ") : undefined;
+  return {
+    ok: !error && results.length === total && results.every(row => row.outcome === "synced"),
+    total,
+    processed,
+    users: results,
+    ...(error ? { error } : {}),
+  };
 }

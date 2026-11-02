@@ -42,6 +42,8 @@ export default function AdminLogin() {
   const [resetToken, setResetToken] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [recoveryStage, setRecoveryStage] = useState<"request" | "verify" | "password">("request");
+  const sessionExpired = typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).get("session") === "expired";
 
   const [company, setCompany]               = useState<CompanyInfo | null>(null);
   const [companyLoading, setCompanyLoading] = useState(false);
@@ -402,6 +404,18 @@ export default function AdminLogin() {
             }}>
               <AlertCircle size={15} style={{ color: "#DC2626", flexShrink: 0 }} />
                <p style={{ fontSize: "0.9rem", color: "#DC2626", margin: 0 }}>{error}</p>
+            </div>
+          )}
+          {sessionExpired && !error && (
+            <div role="status" style={{
+              display: "flex", alignItems: "center", gap: 10,
+              background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.24)",
+              borderRadius: 10, padding: "10px 14px", marginBottom: 20,
+            }}>
+              <AlertCircle size={15} style={{ color: "#B45309", flexShrink: 0 }} />
+              <p style={{ fontSize: "0.9rem", color: "#92400E", margin: 0 }}>
+                Your admin session expired. Sign in again to load your account data.
+              </p>
             </div>
           )}
           {otpNotice && <p role="status" style={{ margin: "0 0 16px", fontSize: "0.83rem", color: "var(--isp-text-muted)" }}>{otpNotice}</p>}

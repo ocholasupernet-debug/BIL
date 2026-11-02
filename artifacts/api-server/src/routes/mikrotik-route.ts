@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { randomBytes } from "crypto";
 import { isIspHotspotTawkEnabled, prepareIspHotspotAsset } from "../lib/isp-hotspot-asset.js";
 import { preserveCumulativeUsage } from "../lib/prepaid-usage.js";
+import { routerApiTransport } from "../lib/router-api-port.js";
 import {
   fetchHotspotUsers,
   fetchPPPoEActive,
@@ -14,6 +15,7 @@ import {
   fetchInterfaces,
   fetchTraffic,
   fetchRouterLiveData,
+  fetchRouterLiveSessions,
   fetchWireless,
   createWirelessVirtualAp,
   patchWirelessInterface,
@@ -47,6 +49,7 @@ import {
   isPrivateIp,
   type RouterCredentials,
 } from "../lib/mikrotik";
+import { buildRouterConfigurationSyncPlan } from "../lib/router-configuration-sync.js";
 import {
   getDeployableSource,
   listDeployableSources,
@@ -488,6 +491,7 @@ interface SbRouter {
   vpn_ip: string | null;
   router_username: string;
   router_secret: string | null;
+  api_port?: number | string | null;
   token?: string | null;
   status: string;
 }
@@ -661,10 +665,8 @@ async function persistPrepaidLiveState(
  *   1. creds.host    — should be public IP or VPN-reachable hostname
  *   2. creds.bridgeIp — dedicated management VPN IP, used as automatic fallback
  *
- * Port / SSL:
- *   - Default: 8728 (plain API)
- *   - Set api_ssl=true in Supabase (future column) or use port 8729 prefix in host
- *   - Remote connections should use 8729 SSL when possible
+ * Honor the router's saved API port so API-SSL routers do not silently retry
+ * plain API on 8728. Legacy records without a supported port stay on 8728.
  */
 function rowToCreds(row: SbRouter): RouterCredentials {
   /* Prefer host (normally the public IP); only the dedicated vpn_ip is a
@@ -674,9 +676,7 @@ function rowToCreds(row: SbRouter): RouterCredentials {
     ? row.vpn_ip?.trim()
     : (isManagementVpnIp(row.bridge_ip ?? "") ? row.bridge_ip?.trim() : undefined);
 
-  /* Auto-detect SSL: if host contains :8729 pattern or is explicitly set */
-  const useSSL = false; /* Can be extended via Supabase column later */
-  const port   = useSSL ? 8729 : 8728;
+  const { port, useSSL } = routerApiTransport(row.api_port);
 
   return {
     host:     primaryHost,
@@ -708,7 +708,7 @@ export async function getRouterCreds(id: number, adminId?: number): Promise<{ cr
   if (!supabaseConfigured) return null;
   const rows = await sbSelect<SbRouter>(
     "isp_routers",
-    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret,token,status&limit=1`,
+    `id=eq.${id}${adminId !== undefined ? `&admin_id=eq.${adminId}` : ""}&select=id,admin_id,name,host,bridge_ip,vpn_ip,router_username,router_secret,api_port,token,status&limit=1`,
   );
   const row = rows[0];
   if (!row || (!row.host?.trim() && !isManagementVpnIp(row.vpn_ip ?? "") && !isManagementVpnIp(row.bridge_ip ?? ""))) return null;
@@ -738,12 +738,67 @@ export async function getRouterCreds(id: number, adminId?: number): Promise<{ cr
   return { creds, row };
 }
 
+export async function syncRouterConfigurations(routerId: number, adminId: number): Promise<{
+  routerId: number;
+  hotspotInterfaces: string[];
+  disabledFasttrackRules: number;
+  addedTtlRules: number;
+  enabledTtlRules: number;
+  warnings: string[];
+}> {
+  const found = await getRouterCreds(routerId, adminId);
+  if (!found) throw new Error("Router was not found in this ISP account or has no management address.");
+
+  const readCommands = [
+    ["/ip/hotspot/print", "=.proplist=name,interface,disabled"],
+    ["/ip/firewall/filter/print", "=.proplist=.id,action,comment,disabled"],
+    ["/ip/firewall/mangle/print", "=.proplist=.id,chain,action,new-ttl,out-interface,out-interface-list,comment,disabled"],
+  ];
+  const [hotspotInterfaces, filterRules, mangleRules] = await runRouterCommands(found.creds, readCommands);
+  const plan = buildRouterConfigurationSyncPlan({ hotspotInterfaces, filterRules, mangleRules });
+  if (plan.hotspotInterfaces.length === 0) {
+    throw new Error("No enabled Hotspot interface was found; no router rules were changed.");
+  }
+  if (plan.unsafeGlobalTtlComments.length > 0) {
+    throw new Error("An unscoped TTL=1 Hotspot rule already exists; review it before syncing to avoid affecting non-Hotspot traffic.");
+  }
+
+  if (plan.commands.length > 0) await runRouterCommands(found.creds, plan.commands);
+
+  const [verifiedHotspotInterfaces, verifiedFilterRules, verifiedMangleRules] =
+    await runRouterCommands(found.creds, readCommands);
+  const remaining = buildRouterConfigurationSyncPlan({
+    hotspotInterfaces: verifiedHotspotInterfaces,
+    filterRules: verifiedFilterRules,
+    mangleRules: verifiedMangleRules,
+  });
+  if (remaining.commands.length > 0) {
+    throw new Error(`RouterOS verification found ${remaining.commands.length} configuration changes still unapplied.`);
+  }
+
+  const disabledFasttrackRules = plan.commands.filter(command => command[0] === "/ip/firewall/filter/disable").length;
+  const addedTtlRules = plan.commands.filter(command => command[0] === "/ip/firewall/mangle/add").length;
+  const enabledTtlRules = plan.commands.filter(command => command[0] === "/ip/firewall/mangle/enable").length;
+  logger.info(
+    { routerId, adminId, hotspotInterfaces: plan.hotspotInterfaces, disabledFasttrackRules, addedTtlRules, enabledTtlRules },
+    "Router queue and Hotspot tethering configuration synchronized",
+  );
+  return {
+    routerId,
+    hotspotInterfaces: plan.hotspotInterfaces,
+    disabledFasttrackRules,
+    addedTtlRules,
+    enabledTtlRules,
+    warnings: [],
+  };
+}
+
 /* ─── Load credentials by host IP ───────────────────────────────────────── */
 async function getRouterCredsByHost(host: string): Promise<RouterCredentials | null> {
   if (!supabaseConfigured) return null;
   const rows = await sbSelect<SbRouter>(
     "isp_routers",
-    `host=eq.${encodeURIComponent(host)}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,status&limit=1`,
+    `host=eq.${encodeURIComponent(host)}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret,api_port,status&limit=1`,
   );
   const row = rows[0];
   if (!row) return null;
@@ -1019,6 +1074,35 @@ router.get("/router/:id/managed-reset/jobs/:jobId", requireAdmin(), async (req, 
       removed: job.removed, ...(job.error ? { error: job.error } : {}),
     },
   });
+});
+
+router.post("/router/:id/configuration-sync", requireAdmin(), async (req, res): Promise<void> => {
+  const routerId = Number.parseInt(String(req.params.id), 10);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  if (!Number.isSafeInteger(routerId) || routerId <= 0 || !adminId) {
+    res.status(403).json({ ok: false, error: "A valid signed-in ISP account and router are required." });
+    return;
+  }
+  if (req.body?.confirm !== true) {
+    res.status(400).json({
+      ok: false,
+      confirmationRequired: true,
+      error: "Confirm before disabling FastTrack and changing Hotspot TTL handling.",
+    });
+    return;
+  }
+  try {
+    const result = await syncRouterConfigurations(routerId, adminId);
+    res.json({
+      ok: true,
+      result,
+      warning: "FastTrack is disabled router-wide; this restores queue processing but can increase CPU usage.",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Router configuration sync failed.";
+    logger.error({ err: error, routerId, adminId }, "Router configuration sync failed");
+    res.status(503).json({ ok: false, error: message });
+  }
 });
 
 /* ─── GET /api/router/:id/test ──────────────────────────────────────────── */
@@ -3680,6 +3764,11 @@ router.get("/router/:id/live", requireAdmin(), async (req, res): Promise<void> =
   const found = await getRouterCreds(id, tenantId);
   if (!found) { res.status(404).json({ error: "Router not found or has no IP" }); return; }
   try {
+    if (req.query.sessionsOnly === "true") {
+      const sessions = await fetchRouterLiveSessions(found.creds);
+      res.json({ routerId: id, ...sessions });
+      return;
+    }
     const data = await fetchRouterLiveData(found.creds);
     let onlineVlanUsers: number | null = null;
     try {

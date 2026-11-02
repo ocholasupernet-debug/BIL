@@ -60,6 +60,7 @@ export const ADMIN_PAGE_VISIBILITY_CATALOG: AdminVisibilitySection[] = [
       { key: "network.wireless", label: "Wireless", description: "Manage wireless settings." },
       { key: "network.queues", label: "Queues", description: "Manage bandwidth queues." },
       { key: "network.ip-pools", label: "IP Pools", description: "Manage router IP pools." },
+      { key: "network.bridges", label: "Bridges", description: "Manage live router bridges and port memberships." },
       { key: "network.router-api-config", label: "API Config", description: "Configure router API access." },
       { key: "network.bridge-ports", label: "Bridge Ports", description: "Manage bridge ports." },
       { key: "network.multiport", label: "Multiport", description: "Configure isolated Hotspot and PPPoE services per physical router port." },

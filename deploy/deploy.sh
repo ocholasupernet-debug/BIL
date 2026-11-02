@@ -314,13 +314,12 @@ node --test "$PROJECT_DIR/deploy/tests/hotspot-release-source.test.mjs"
 
 load_deploy_env
 
-# 3. Apply the registered Supabase schema migrations before building or restarting the API.
-echo "[3/7] Applying Supabase schema migrations..."
+# 3. Run release preflight tests before changing the database or restarting the API.
+echo "[3/7] Running release preflight tests..."
 (
   cd "$PROJECT_DIR/artifacts/api-server"
   node --test tests/prepaid-transaction-account-claim.test.mjs tests/mpesa-checkout-idempotency.test.mjs
 )
-apply_supabase_migration
 
 # 4. Build the frontend (VPS config — no Replit plugins)
 #    .env has already been loaded so VITE_SUPABASE_URL / VITE_SUPABASE_KEY are embedded at build time
@@ -355,6 +354,44 @@ else
   cd "$PROJECT_DIR/artifacts/api-server"
   pnpm run build
   cd "$PROJECT_DIR"
+fi
+
+# Encrypting stored router passwords makes the old API process incompatible
+# with the database. Build the replacement first, then migrate and reload it
+# immediately so the old process is not left serving encrypted rows.
+echo "[6/7] Applying Supabase migrations and switching to the compatible API..."
+(
+  cd "$PROJECT_DIR/artifacts/api-server"
+  node --test tests/prepaid-transaction-account-claim.test.mjs tests/mpesa-checkout-idempotency.test.mjs
+)
+apply_supabase_migration
+mkdir -p logs
+if [ -f "$PROJECT_DIR/.env" ]; then
+  set -a; source "$PROJECT_DIR/.env"; set +a
+  chmod 600 "$PROJECT_DIR/.env"
+fi
+unset SUPABASE_SERVICE_KEY
+if pm2 list | grep -q "ocholanet-api"; then
+  pm2 reload ecosystem.config.cjs --env standalone --update-env
+else
+  pm2 start ecosystem.config.cjs --env standalone
+  pm2 save
+fi
+
+api_ready=false
+for attempt in $(seq 1 30); do
+  if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8080/api/healthz >/dev/null; then
+    api_ready=true
+    break
+  fi
+  echo "API is still starting (attempt ${attempt}/30)..."
+  sleep 2
+done
+if [ "$api_ready" != "true" ]; then
+  echo "ERROR: API health check did not pass after 60 seconds." >&2
+  pm2 status || true
+  pm2 logs ocholanet-api --lines 80 --nostream || true
+  exit 1
 fi
 
 # 6. Publish frontend build → the active web root
@@ -495,25 +532,6 @@ else
   ensure_management_tunnel "ochola-router" "tun-router"
   ensure_management_tunnel "ochola-router-backup" "tun-router-bkp"
 fi
-# 10. Restart API via PM2
-#    .env was already sourced in step 3 (set -a), so VITE_SUPABASE_* are in the shell env.
-#    Explicitly unset SUPABASE_SERVICE_KEY after sourcing so PM2 doesn't inherit
-#    a stale legacy value that could mask the canonical service-role key.
-echo "[10/10] Restarting PM2..."
-mkdir -p logs
-if [ -f "$PROJECT_DIR/.env" ]; then
-  set -a; source "$PROJECT_DIR/.env"; set +a
-  chmod 600 "$PROJECT_DIR/.env"
-fi
-# Clear old key name; export the canonical name so PM2 picks it up.
-unset SUPABASE_SERVICE_KEY
-if pm2 list | grep -q "ocholanet-api"; then
-  pm2 reload ecosystem.config.cjs --env standalone --update-env
-else
-  pm2 start ecosystem.config.cjs --env standalone
-  pm2 save
-fi
-
 verify_public_health() {
   local host="$1"
   local attempts=30

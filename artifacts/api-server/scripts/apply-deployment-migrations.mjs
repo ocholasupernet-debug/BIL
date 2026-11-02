@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { Client } from "pg";
 
 function normalizeConnectionString(raw) {
@@ -99,6 +100,8 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_shared_hotspot_resource_names.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_immutable_revenue_billing.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_revenue_summary_africa_nairobi.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_monthly_revenue_ledger_summary.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_billing_eligible_sales_summary.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_platform_income_reporting.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_revenue_summary.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_port_service_provisioning_status.sql", import.meta.url)),
@@ -136,14 +139,87 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_radacct_standard_accounting_columns.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_hotspot_chat_accounts.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_customer_archive_staged.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_hotspot_browser_sessions.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_router_api_secret_encryption.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
+
+function routerSecretKey() {
+  const secret = process.env.SESSION_SECRET?.trim();
+  if (!secret) throw new Error("SESSION_SECRET is required to encrypt router API credentials.");
+  return createHash("sha256")
+    .update(`ochola-supernet:vpn-secrets:v1:${secret}`)
+    .digest();
+}
+
+function encryptRouterSecret(value, key) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
+  return `enc:v1:${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${ciphertext.toString("base64")}`;
+}
+
+function decryptRouterSecret(value, key) {
+  if (!value.startsWith("enc:v1:")) return value;
+  const [iv, authTag, ciphertext, ...extra] = value.slice("enc:v1:".length).split(":");
+  if (!iv || !authTag || !ciphertext || extra.length) {
+    throw new Error("A stored router API credential has an invalid encrypted format.");
+  }
+  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64"));
+  decipher.setAuthTag(Buffer.from(authTag, "base64"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(ciphertext, "base64")),
+    decipher.final(),
+  ]).toString("utf8");
+}
+
+function routerSecretLookupHash(value) {
+  const secret = process.env.SESSION_SECRET?.trim();
+  if (!secret) throw new Error("SESSION_SECRET is required to index router API credentials.");
+  return createHmac("sha256", secret)
+    .update(`ochola-supernet:router-api-secret-lookup:v1:${value}`)
+    .digest("hex");
+}
+
+async function encryptStoredRouterSecrets() {
+  const key = routerSecretKey();
+  await client.query("begin");
+  try {
+    const { rows } = await client.query(
+      `select id, router_secret
+         from public.isp_routers
+        where router_secret is not null
+          and router_secret <> ''
+          and (router_secret not like 'enc:v1:%' or router_secret_lookup_hash is null)
+        for update`,
+    );
+    for (const row of rows) {
+      const plaintext = decryptRouterSecret(String(row.router_secret), key);
+      const ciphertext = encryptRouterSecret(plaintext, key);
+      const lookupHash = routerSecretLookupHash(plaintext);
+      await client.query(
+        `update public.isp_routers
+            set router_secret = $2, router_secret_lookup_hash = $3
+          where id = $1`,
+        [row.id, ciphertext, lookupHash],
+      );
+    }
+    await client.query("commit");
+    if (rows.length > 0) {
+      console.log(`[migration] encrypted ${rows.length} router API credential record(s)`);
+    }
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
+}
 
 try {
   await client.connect();
   for (const migrationPath of migrationPaths) {
     await client.query(await readFile(migrationPath, "utf8"));
   }
+  await encryptStoredRouterSecrets();
 } finally {
   await client.end();
 }

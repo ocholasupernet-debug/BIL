@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { supabase, ADMIN_ID, getAdminApiToken, type DbCustomer } from "@/lib/supabase";
@@ -16,13 +17,18 @@ import { getCustomerServiceStatus } from "@/lib/customer-service-status";
 import {
   buildLivePresenceByRouter,
   customerIsOnline,
+  getCustomerLiveState,
   normalizeLiveIdentity,
   prepaidServiceType,
   purchaseUsername,
 } from "@/lib/prepaid-live-presence";
 import { usePrepaidLiveQueries } from "@/lib/prepaid-live-queries";
 import { PrepaidSyncReport, type PrepaidSyncResult } from "@/components/ui/PrepaidSyncReport";
-import { syncActiveAccountsToRouter } from "@/lib/prepaid-sync";
+import {
+  getActivePrepaidSyncTargets,
+  syncActiveAccountsAcrossRouters,
+  syncActiveAccountsToRouter,
+} from "@/lib/prepaid-sync";
 import { transactionDisplayId } from "@/lib/transaction-reference";
 import { PrepaidHotspotAdminGrantDialog } from "./PrepaidHotspotAdminGrantDialog";
 
@@ -694,6 +700,7 @@ function ExtendUserDialog({
 
 /* ══════════════════════════════ Page ══════════════════════════════ */
 export default function PrepaidUsers() {
+  const [location] = useLocation();
   const qc = useQueryClient();
   const [statusTab, setStatusTab] = useState<StatusFilter>("all");
   const [archivePreview, setArchivePreview] = useState<{
@@ -804,6 +811,14 @@ export default function PrepaidUsers() {
     });
     return grouped;
   }, [paymentsByCustomerId, displayCustomers]);
+  const syncUsers = useMemo(() => displayCustomers.map(customer => ({
+    ...customer,
+    plan_id: customerPackageId(customer, paymentMap) ?? customer.plan_id,
+  })), [displayCustomers, paymentMap]);
+  const allSyncTargets = useMemo(
+    () => getActivePrepaidSyncTargets({ routers, users: syncUsers, plans }),
+    [routers, syncUsers, plans],
+  );
   const packageOptions = useMemo(() => {
     const ids = new Set<number>(plans.map(plan => plan.id));
     displayCustomers.forEach(customer => {
@@ -818,11 +833,14 @@ export default function PrepaidUsers() {
     () => displayCustomers.some(customer => customerPackageId(customer, paymentMap) === null),
     [displayCustomers, paymentMap],
   );
-  const liveQueries = usePrepaidLiveQueries(routers);
+  // Share the same fast session snapshot with Dashboard for consistent online
+  // counts. The broader counters/queue snapshot is only needed here for usage.
+  const liveQueries = usePrepaidLiveQueries(routers, 10_000, true);
+  const liveMetricsQueries = usePrepaidLiveQueries(routers, 60_000);
   const livePresenceByRouter = useMemo(() => {
     return buildLivePresenceByRouter(routers, liveQueries);
   }, [routers, liveQueries]);
-  const liveSnapshotKey = liveQueries
+  const liveSnapshotKey = liveMetricsQueries
     .map(query => query.data?.fetchedAt ?? "")
     .filter(Boolean)
     .join("|");
@@ -840,19 +858,19 @@ export default function PrepaidUsers() {
       if (!key) return;
       usage.set(key, (usage.get(key) ?? 0) + Math.max(0, Number(bytesIn) || 0) + Math.max(0, Number(bytesOut) || 0));
     };
-    liveQueries.forEach(query => {
+    liveMetricsQueries.forEach(query => {
       query.data?.hotspotUsers?.forEach(user => add(user.user, user.bytesIn, user.bytesOut));
       query.data?.pppoeUsers?.forEach(user => add(user.name, user.bytesIn, user.bytesOut));
     });
     return usage;
-  }, [liveQueries]);
+  }, [liveMetricsQueries]);
   const reconnectEligibleUsers = useMemo(() => displayCustomers.filter(user => {
     const plan = user.plan_id ? planMap[user.plan_id] : null;
     const routerId = user.router_id ?? plan?.router_id ?? null;
     const normalizedMac = String(user.mac_address ?? "").toLowerCase().replace(/[^a-f0-9]/g, "");
     return prepaidServiceType(user.type) === "hotspot"
       && hasUnexpiredPaidAccess(user)
-      && !customerIsOnline(user, livePresenceByRouter, planMap)
+      && getCustomerLiveState(user, livePresenceByRouter, planMap) === "offline"
       && Boolean(user.plan_id && plan && routerId && routerMap[routerId])
       && normalizedMac.length === 12;
   }), [displayCustomers, planMap, routerMap, livePresenceByRouter]);
@@ -873,7 +891,12 @@ export default function PrepaidUsers() {
   const [adjustingExpiryUser, setAdjustingExpiryUser] = useState<Customer | null>(null);
   const [rechargePickerOpen, setRechargePickerOpen] = useState(false);
   const [addingVlanUser, setAddingVlanUser] = useState(false);
-  const [grantingHotspotUser, setGrantingHotspotUser] = useState(false);
+  const [grantingHotspotUser, setGrantingHotspotUser] = useState(
+    typeof window !== "undefined" && window.location.pathname === "/admin/free-access",
+  );
+  useEffect(() => {
+    setGrantingHotspotUser(location === "/admin/free-access");
+  }, [location]);
   const [rechargeTargetId, setRechargeTargetId] = useState("");
   const [actionError, setActionError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
@@ -1008,6 +1031,7 @@ export default function PrepaidUsers() {
   /* Sync state */
   const [showSyncPicker,  setShowSyncPicker]  = useState(false);
   const [pickedRouter,    setPickedRouter]     = useState("");
+  const [confirmAllSync, setConfirmAllSync] = useState(false);
   const [syncing,         setSyncing]         = useState(false);
   const syncBusyRef = useRef(false);
   const [syncLogs,        setSyncLogs]        = useState<string[] | null>(null);
@@ -1249,10 +1273,7 @@ export default function PrepaidUsers() {
     try {
       const result = await syncActiveAccountsToRouter({
         router,
-        users: displayCustomers.map(customer => ({
-          ...customer,
-          plan_id: customerPackageId(customer, paymentMap) ?? customer.plan_id,
-        })),
+        users: syncUsers,
         plans,
         endpoint: apiUrl("/api/admin/sync/users"),
         adminId: ADMIN_ID,
@@ -1265,7 +1286,64 @@ export default function PrepaidUsers() {
       setSyncReport({ ...result, routerName: router.name });
       void qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
       const routerIndex = routers.findIndex(item => item.id === router.id);
-      if (routerIndex >= 0) void liveQueries[routerIndex]?.refetch();
+      if (routerIndex >= 0) {
+        void liveQueries[routerIndex]?.refetch();
+        void liveMetricsQueries[routerIndex]?.refetch();
+      }
+    } catch (error) {
+      setSyncReport(previous => previous ? {
+        ...previous,
+        error: error instanceof Error ? error.message : "Sync could not be completed.",
+      } : null);
+    } finally {
+      syncBusyRef.current = false;
+      setSyncing(false);
+    }
+  }
+
+  async function handleSyncAll() {
+    if (syncBusyRef.current || allSyncTargets.length === 0) return;
+    syncBusyRef.current = true;
+    setSyncing(true);
+    setSyncLogs([]);
+    setConfirmAllSync(false);
+    setShowSyncPicker(false);
+    setSyncReport({
+      total: allSyncTargets.reduce((sum, target) => sum + target.activeCount, 0),
+      processed: 0,
+      users: [],
+      routerName: "All assigned routers",
+    });
+    const logs: string[] = [];
+    const log = (message: string) => {
+      logs.push(message);
+      setSyncLogs([...logs]);
+    };
+    try {
+      const result = await syncActiveAccountsAcrossRouters({
+        routers: allSyncTargets.map(target => target.router),
+        users: syncUsers,
+        plans,
+        endpoint: apiUrl("/api/admin/sync/users"),
+        adminId: ADMIN_ID,
+        token: getAdminApiToken() || "",
+        onLog: log,
+        onProgress: (total, processed, users) => setSyncReport({
+          total,
+          processed,
+          users,
+          routerName: "All assigned routers",
+        }),
+      });
+      setSyncReport({ ...result, routerName: "All assigned routers" });
+      void qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
+      for (const { router } of allSyncTargets) {
+        const routerIndex = routers.findIndex(item => item.id === router.id);
+        if (routerIndex >= 0) {
+          void liveQueries[routerIndex]?.refetch();
+          void liveMetricsQueries[routerIndex]?.refetch();
+        }
+      }
     } catch (error) {
       setSyncReport(previous => previous ? {
         ...previous,
@@ -1392,6 +1470,7 @@ export default function PrepaidUsers() {
         .prepaid-plain-status::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px;background:var(--isp-text-sub)}
         .prepaid-plain-status--online::before{background:var(--isp-green)}
         .prepaid-plain-status--offline::before{background:#c66b5f}
+        .prepaid-plain-status--unknown::before{background:#d39b42}
         .prepaid-table-shell tbody tr.prepaid-row-expired .prepaid-plain-status{color:#ef4444}
         .prepaid-table-shell tbody tr.prepaid-row-expired .prepaid-plain-status::before{background:#ef4444}
         .prepaid-table-shell th,.prepaid-table-shell td{border-right:1px solid var(--isp-border)}
@@ -1462,7 +1541,7 @@ export default function PrepaidUsers() {
           onCreated={async () => {
             await qc.invalidateQueries({ queryKey: ["prepaid_customers", ADMIN_ID] });
             setActionError("");
-            setActionNotice("The 30-day Hotspot admin grant was applied to MikroTik. No payment transaction was created.");
+            setActionNotice("The free Hotspot account was applied to MikroTik. No payment transaction was created.");
           }}
         />
       )}
@@ -1558,6 +1637,47 @@ export default function PrepaidUsers() {
                   {syncing ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <RefreshCw size={12} />}
                   Sync active accounts
                 </button>
+                <div style={{ borderTop: "1px solid var(--isp-border)", marginTop: 12, paddingTop: 10 }}>
+                  {!confirmAllSync ? (
+                    <>
+                      <p style={{ margin: "0 0 8px", fontSize: "0.72rem", lineHeight: 1.5, color: "var(--isp-text-muted)" }}>
+                        Sync {allSyncTargets.reduce((sum, target) => sum + target.activeCount, 0)} eligible accounts across {allSyncTargets.length} assigned routers.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmAllSync(true)}
+                        disabled={syncing || allSyncTargets.length === 0}
+                        style={{ ...BTN(allSyncTargets.length ? "#b45309" : "rgba(255,255,255,0.06)"), width: "100%", justifyContent: "center" }}
+                      >
+                        Sync all routers
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p role="alert" style={{ margin: "0 0 8px", fontSize: "0.72rem", lineHeight: 1.5, color: "var(--isp-text-muted)" }}>
+                        Confirm sync of currently entitled accounts only. Existing online sessions are preserved; expired, suspended, and data-depleted accounts are excluded.
+                      </p>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          type="button"
+                          onClick={() => void handleSyncAll()}
+                          disabled={syncing || allSyncTargets.length === 0}
+                          style={{ ...BTN("#b45309"), flex: 1, justifyContent: "center" }}
+                        >
+                          Confirm sync
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmAllSync(false)}
+                          disabled={syncing}
+                          style={{ ...BTN("var(--isp-text-muted)"), justifyContent: "center" }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -1873,7 +1993,8 @@ export default function PrepaidUsers() {
                   const payment = paymentMap[user.id];
                   const displayedPlan = plan;
                   const username = purchaseUsername(user);
-                  const online = customerIsOnline(user, livePresenceByRouter, planMap);
+                  const liveState = getCustomerLiveState(user, livePresenceByRouter, planMap);
+                  const online = liveState === "online";
                   const fup = user.fup_limit_mb ?? plan?.data_limit_mb ?? null;
                   const expired  = isCustomerExpired(user);
                   const planStatus = expired
@@ -1925,13 +2046,15 @@ export default function PrepaidUsers() {
                       <td style={TD}><span className="prepaid-plain-status">{planStatus}</span></td>
                       <td style={TD}>
                         <span
-                          className={`prepaid-plain-status ${online ? "prepaid-plain-status--online" : "prepaid-plain-status--offline"}`}
-                          title="Based on the latest RouterOS session; the last saved status is kept while the router is loading or unavailable."
+                          className={`prepaid-plain-status prepaid-plain-status--${liveState}`}
+                          title={liveState === "unknown"
+                            ? "MikroTik Active Users could not be verified. This account is not being classified as offline."
+                            : "Based on the latest available MikroTik session list or last confirmed saved status."}
                         >
-                          {online ? "Online" : "Offline"}
+                          {liveState === "online" ? "Online" : liveState === "offline" ? "Offline" : "Unknown"}
                         </span>
                       </td>
-                      <td className="prepaid-col-optional" style={{ ...TD, fontSize: "0.68rem", fontVariantNumeric: "tabular-nums" }}>{online ? "Online" : fmtTableDateTime(user.last_seen ?? (expired ? user.expires_at : null))}</td>
+                      <td className="prepaid-col-optional" style={{ ...TD, fontSize: "0.68rem", fontVariantNumeric: "tabular-nums" }}>{online ? "Online" : liveState === "unknown" ? "—" : fmtTableDateTime(user.last_seen ?? (expired ? user.expires_at : null))}</td>
                       <td className="prepaid-col-optional" style={{ ...TD, whiteSpace: "nowrap" }}>
                          <span className="prepaid-plain-muted" title={usageBytes === null ? undefined : `${Math.floor(usageBytes).toLocaleString("en-US")} bytes`}>
                            {formatUsageBytes(usageBytes)}

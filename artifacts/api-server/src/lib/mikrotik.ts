@@ -1,7 +1,9 @@
 import * as net from "net";
 import { randomBytes, X509Certificate } from "node:crypto";
 import { RouterOSAPI } from "node-routeros";
+import { guardRouterOSConnection } from "./routeros-connection.js";
 import { logger } from "./logger";
+import { decryptRouterApiSecret } from "./router-api-secret.js";
 import {
   ROUTER_MANAGEMENT_VPN,
   ROUTER_MANAGEMENT_VPN_BACKUP,
@@ -150,11 +152,11 @@ export function getEnvCredentials(): RouterCredentials | null {
 function makeConn(host: string, creds: RouterCredentials): RouterOSAPI {
   const ssl = creds.useSSL ?? creds.port === 8729;
   const connectSec = Math.ceil((creds.connectTimeoutMs ?? DEFAULT_CONNECT_MS) / 1000);
-  return new RouterOSAPI({
+  return guardRouterOSConnection(new RouterOSAPI({
     host,
     port:      creds.port,
     user:      creds.username,
-    password:  creds.password,
+    password:  decryptRouterApiSecret(creds.password),
     timeout:   connectSec,
     keepalive: false,
     ...(ssl
@@ -167,7 +169,7 @@ function makeConn(host: string, creds: RouterCredentials): RouterOSAPI {
           },
         }
       : {}),
-  });
+  }));
 }
 
 /* ─── Timeout helper ─────────────────────────────────────────────────────── */
@@ -3833,9 +3835,12 @@ export async function connectHotspotUser(
     // Do not serialize opts.server: /ip/hotspot/active/login does not accept it.
     await withTimeout(conn.write(command), ms);
 
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    const confirmationDelaysMs = [150, 300, 600, 900] as const;
+    for (let attempt = 0; attempt <= confirmationDelaysMs.length; attempt += 1) {
       if (isTargetSessionActive(await readActive())) return true;
-      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 120));
+      if (attempt < confirmationDelaysMs.length) {
+        await new Promise((resolve) => setTimeout(resolve, confirmationDelaysMs[attempt]));
+      }
     }
     return false;
   });
@@ -3917,6 +3922,7 @@ export type HotspotMacReconnectKind =
 export interface HotspotMacReconnectResult {
   kind: HotspotMacReconnectKind;
   stageDurationsMs: Record<string, number>;
+  clientIpAddress?: string;
 }
 
 /**
@@ -3938,7 +3944,11 @@ export async function reconnectHotspotUserByMac(
   },
 ): Promise<HotspotMacReconnectResult> {
   const stageDurationsMs: Record<string, number> = {};
-  const result = (kind: HotspotMacReconnectKind): HotspotMacReconnectResult => ({ kind, stageDurationsMs });
+  const result = (kind: HotspotMacReconnectKind, clientIpAddress?: string): HotspotMacReconnectResult => ({
+    kind,
+    stageDurationsMs,
+    ...(clientIpAddress ? { clientIpAddress } : {}),
+  });
   const targetMac = validRouterMac(opts.macAddress);
   if (!targetMac) return result("device-not-found");
 
@@ -3963,20 +3973,23 @@ export async function reconnectHotspotUserByMac(
       ]), ms);
       return Array.isArray(rows) ? rows as Record<string, string>[] : [];
     });
-    const sessionMatchesTarget = (rows: Record<string, string>[], ip?: string): boolean =>
-      rows.some(session =>
+    const matchingTargetSession = (rows: Record<string, string>[], ip?: string): Record<string, string> | undefined =>
+      rows.find(session =>
         hotspotActiveSessionMatchesDevice([session], { user: opts.user, macAddress: targetMac, ip })
         && (!opts.expectedServer || opts.expectedServer === "all" || session.server === opts.expectedServer),
       );
+    const sessionMatchesTarget = (rows: Record<string, string>[], ip?: string): boolean =>
+      Boolean(matchingTargetSession(rows, ip));
 
-    if (sessionMatchesTarget(activeRows, opts.expectedIp)) return result("connected");
+    const alreadyActiveSession = matchingTargetSession(activeRows, opts.expectedIp);
+    if (alreadyActiveSession) return result("connected", alreadyActiveSession.address);
 
     const discoveredIp = await measure("router_ip_discovery", () =>
       resolveHotspotClientIpByMacOnConnection(conn, creds, targetMac, activeRows),
     );
     if (!discoveredIp) return result("device-not-found");
     if (opts.expectedIp && discoveredIp !== opts.expectedIp) return result("ip-mismatch");
-    if (opts.verifyOnly) return result("device-ready");
+    if (opts.verifyOnly) return result("device-ready", discoveredIp);
 
     const loginIp = opts.loginIp?.trim() || discoveredIp;
     const loginAccepted = await measure("routeros_login_and_confirmation", async () => {
@@ -4012,20 +4025,23 @@ export async function reconnectHotspotUserByMac(
         "=mac-address=" + targetMac,
       ]), ms));
 
-      // Do not hold the portal request open for four serial RouterOS reads.
-      // If the session is not visible after two confirmations, the portal's
-      // existing retry loop will check again without risking a second purchase.
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      // RouterOS may add an accepted Hotspot login to /active asynchronously.
+      // Poll read-only for up to about two seconds; never repeat the login command
+      // on this connection because a timed-out write may already have taken effect.
+      const confirmationDelaysMs = [150, 300, 600, 900] as const;
+      for (let attempt = 0; attempt <= confirmationDelaysMs.length; attempt += 1) {
         const confirmed = await measure(
           `routeros_login_confirmation_${attempt + 1}`,
           async () => sessionMatchesTarget(await readActiveForUser(), loginIp),
         );
         if (confirmed) return true;
-        if (attempt < 1) await new Promise(resolve => setTimeout(resolve, 120));
+        if (attempt < confirmationDelaysMs.length) {
+          await new Promise(resolve => setTimeout(resolve, confirmationDelaysMs[attempt]));
+        }
       }
       return false;
     });
-    return result(loginAccepted ? "connected" : "login-pending");
+    return result(loginAccepted ? "connected" : "login-pending", loginAccepted ? loginIp : undefined);
   });
 }
 
@@ -5407,6 +5423,68 @@ export async function fetchTraffic(
 }
 
 /* ─── Combined fetch ─────────────────────────────────────────────────────── */
+
+export interface RouterLiveSessions {
+  hotspotUsers: ActiveHotspotUser[];
+  hotspotUsersAvailable: boolean;
+  pppoeUsers: ActivePPPoESession[];
+  pppoeUsersAvailable: boolean;
+  fetchedAt: string;
+}
+
+/**
+ * Fast status-only read for dashboard presence. Avoid waiting for counters,
+ * queues, interfaces, and traffic samples that are not needed to count sessions.
+ */
+export async function fetchRouterLiveSessions(
+  creds: RouterCredentials,
+): Promise<RouterLiveSessions> {
+  return withConn(creds, async conn => {
+    const requestMs = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    let hotspotUsersAvailable = true;
+    let hotspotRows: Record<string, string>[] = [];
+    try {
+      const rows = await withTimeout(conn.write(["/ip/hotspot/active/print"]), requestMs);
+      hotspotRows = Array.isArray(rows) ? rows as Record<string, string>[] : [];
+    } catch (error) {
+      hotspotUsersAvailable = false;
+      logger.warn({ err: error }, "dashboard Hotspot session read failed");
+    }
+    let pppoeUsersAvailable = true;
+    let pppoeRows: Record<string, string>[] = [];
+    try {
+      const rows = await withTimeout(conn.write(["/ppp/active/print"]), requestMs);
+      pppoeRows = Array.isArray(rows) ? rows as Record<string, string>[] : [];
+    } catch (error) {
+      pppoeUsersAvailable = false;
+      logger.warn({ err: error }, "dashboard PPPoE session read failed");
+    }
+    return {
+      hotspotUsers: hotspotRows.map(row => ({
+        id: row[".id"] ?? "",
+        user: row.user ?? "",
+        address: row.address ?? "",
+        macAddress: row["mac-address"] ?? "",
+        uptime: row.uptime ?? "",
+        bytesIn: parseBytes(row["bytes-in"]),
+        bytesOut: parseBytes(row["bytes-out"]),
+        server: row.server ?? "",
+      })),
+      hotspotUsersAvailable,
+      pppoeUsers: pppoeRows.map(row => ({
+        id: row[".id"] ?? "",
+        name: row.name ?? "",
+        address: row.address ?? "",
+        uptime: row.uptime ?? "",
+        bytesIn: parseBytes(row["bytes-in"]),
+        bytesOut: parseBytes(row["bytes-out"]),
+        service: row.service ?? "",
+      })),
+      pppoeUsersAvailable,
+      fetchedAt: new Date().toISOString(),
+    };
+  });
+}
 
 export async function fetchRouterLiveData(
   creds: RouterCredentials
@@ -8523,19 +8601,16 @@ export async function fetchRouterLoadBalancingInventory(
       conn.write([path]),
       ms,
     ) as Promise<Record<string, string>[]>;
-    const [ifaceRows, bridgeRows, bridgePortRows, addressRows, pppoeRows, dhcpRows, vlanRows, ovpnRows, bridgeSettingsRows, resourceRows] =
-      await Promise.all([
-        read("/interface/print"),
-        read("/interface/bridge/print"),
-        read("/interface/bridge/port/print"),
-        read("/ip/address/print"),
-        read("/interface/pppoe-client/print"),
-        read("/ip/dhcp-client/print"),
-        read("/interface/vlan/print"),
-        read("/interface/ovpn-client/print"),
-        read("/interface/bridge/settings/print"),
-        read("/system/resource/print"),
-      ]);
+    const ifaceRows = await read("/interface/print");
+    const bridgeRows = await read("/interface/bridge/print");
+    const bridgePortRows = await read("/interface/bridge/port/print");
+    const addressRows = await read("/ip/address/print");
+    const pppoeRows = await read("/interface/pppoe-client/print");
+    const dhcpRows = await read("/ip/dhcp-client/print");
+    const vlanRows = await read("/interface/vlan/print");
+    const ovpnRows = await read("/interface/ovpn-client/print");
+    const bridgeSettingsRows = await read("/interface/bridge/settings/print");
+    const resourceRows = await read("/system/resource/print");
 
     const interfaces: RouterInterface[] = (Array.isArray(ifaceRows) ? ifaceRows : []).map(r => ({
       id:         r[".id"]         ?? "",
@@ -8750,5 +8825,144 @@ export async function createBridge(
     );
 
     return { created: true, message: `Bridge "${bridgeName}" created successfully.` };
+  });
+}
+
+const isSafeBridgeName = (value: string) => /^[A-Za-z0-9_.-]{1,64}$/.test(value);
+const protectedBridgeName = (value: string) =>
+  value.toLowerCase() === "bridge"
+  || value.toLowerCase() === "hotspot-bridge"
+  || value.toLowerCase().startsWith("co-hotspot")
+  || value.toLowerCase().includes("ocholasuper");
+
+/** Carefully manage empty, non-system bridges; live/service bridges are left untouched. */
+export async function mutateBridge(
+  creds: RouterCredentials,
+  action: "create" | "rename" | "delete",
+  name: string,
+  newName?: string,
+): Promise<string> {
+  if (!isSafeBridgeName(name) || (newName && !isSafeBridgeName(newName))) {
+    throw new Error("Bridge names may contain only letters, numbers, dots, underscores, and hyphens.");
+  }
+  return withConn(creds, async conn => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const read = async (path: string) => await withTimeout(conn.write([path]), ms) as Record<string, string>[];
+    const bridges = await read("/interface/bridge/print");
+    const exists = bridges.some(row => row.name === name);
+    if (action === "create") {
+      if (exists) throw new Error(`Bridge "${name}" already exists.`);
+      await withTimeout(conn.write(["/interface/bridge/add", `=name=${name}`]), ms);
+      const verify = await read("/interface/bridge/print");
+      if (!verify.some(row => row.name === name)) throw new Error("RouterOS did not confirm the new bridge.");
+      return `Created bridge "${name}".`;
+    }
+    if (!exists) throw new Error(`Bridge "${name}" no longer exists; reload the router.`);
+    if (protectedBridgeName(name)) throw new Error(`The managed bridge "${name}" is protected.`);
+    const [ports, addresses, hotspot, pppoe, dhcp, vlans, listMembers] = await Promise.all([
+      read("/interface/bridge/port/print"),
+      read("/ip/address/print"),
+      read("/ip/hotspot/print"),
+      read("/interface/pppoe-server/server/print"),
+      read("/ip/dhcp-client/print"),
+      read("/interface/vlan/print"),
+      read("/interface/list/member/print"),
+    ]);
+    const references = [
+      ...ports.filter(row => row.bridge === name).map(() => "bridge ports"),
+      ...addresses.filter(row => row.interface === name).map(() => "IP addresses"),
+      ...hotspot.filter(row => row.interface === name).map(() => "Hotspot servers"),
+      ...pppoe.filter(row => row.interface === name).map(() => "PPPoE servers"),
+      ...dhcp.filter(row => row.interface === name).map(() => "DHCP clients"),
+      ...vlans.filter(row => row.interface === name).map(() => "VLAN interfaces"),
+      ...listMembers.filter(row => row.interface === name).map(() => "interface lists"),
+    ];
+    if (references.length) {
+      throw new Error(`Bridge "${name}" is in use (${[...new Set(references)].join(", ")}). Remove or migrate those dependencies first.`);
+    }
+    if (action === "rename") {
+      const target = String(newName ?? "").trim();
+      if (!target || target === name) throw new Error("Enter a different valid bridge name.");
+      if (bridges.some(row => row.name === target)) throw new Error(`Bridge "${target}" already exists.`);
+      const match = bridges.find(row => row.name === name);
+      const id = match?.[".id"];
+      if (!id) throw new Error("RouterOS did not return the bridge identifier; reload and try again.");
+      await withTimeout(conn.write(["/interface/bridge/set", `=.id=${id}`, `=name=${target}`]), ms);
+      const verify = await read("/interface/bridge/print");
+      if (!verify.some(row => row.name === target) || verify.some(row => row.name === name)) {
+        throw new Error("Bridge rename could not be verified.");
+      }
+      return `Renamed bridge "${name}" to "${target}".`;
+    }
+    const match = bridges.find(row => row.name === name);
+    if (!match?.[".id"]) throw new Error("RouterOS did not return the bridge identifier; reload and try again.");
+    await withTimeout(conn.write(["/interface/bridge/remove", `=.id=${match[".id"]}`]), ms);
+    const verify = await read("/interface/bridge/print");
+    if (verify.some(row => row.name === name)) throw new Error("Bridge removal could not be verified.");
+    return `Deleted empty bridge "${name}".`;
+  });
+}
+
+/** Adds an unassigned physical Ethernet interface or removes only its bridge membership. */
+export async function mutateBridgePort(
+  creds: RouterCredentials,
+  action: "add" | "remove" | "move",
+  bridgeName: string,
+  interfaceName: string,
+  fromBridge?: string,
+): Promise<string> {
+  if (!isSafeBridgeName(bridgeName) || !/^(ether|sfp|combo)[A-Za-z0-9_.-]{0,60}$/i.test(interfaceName)
+    || interfaceName.toLowerCase() === "ether1") {
+    throw new Error("Choose a valid customer-facing physical port; WAN and management interfaces are protected.");
+  }
+  return withConn(creds, async conn => {
+    const ms = creds.requestTimeoutMs ?? DEFAULT_REQUEST_MS;
+    const [interfaces, bridges, memberships, listMembers] = await Promise.all([
+      withTimeout(conn.write(["/interface/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/interface/bridge/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/interface/bridge/port/print"]), ms) as Promise<Record<string, string>[]>,
+      withTimeout(conn.write(["/interface/list/member/print"]), ms) as Promise<Record<string, string>[]>,
+    ]);
+    if (!bridges.some(row => row.name === bridgeName)) throw new Error(`Bridge "${bridgeName}" does not exist.`);
+    const iface = interfaces.find(row => row.name === interfaceName);
+    if (!iface || !["ether", "sfp"].includes(String(iface.type ?? "").toLowerCase())) {
+      throw new Error("Only a live physical Ethernet/SFP interface can be managed here.");
+    }
+    if (listMembers.some(row => row.interface === interfaceName && row.list?.toLowerCase() === "wan")) {
+      throw new Error(`${interfaceName} is assigned to the WAN interface list; its bridge membership is protected.`);
+    }
+    const member = memberships.find(row => row.interface === interfaceName);
+    if (action === "add") {
+      if (member) throw new Error(`${interfaceName} already belongs to "${member.bridge}". Remove it there first; ports are never moved automatically.`);
+      await withTimeout(conn.write(["/interface/bridge/port/add", `=bridge=${bridgeName}`, `=interface=${interfaceName}`]), ms);
+    } else if (action === "remove") {
+      if (!member || member.bridge !== bridgeName || !member[".id"]) {
+        throw new Error(`${interfaceName} is not a member of "${bridgeName}".`);
+      }
+      await withTimeout(conn.write(["/interface/bridge/port/remove", `=.id=${member[".id"]}`]), ms);
+    } else {
+      if (!fromBridge || fromBridge === bridgeName || member?.bridge !== fromBridge || !member[".id"]) {
+        throw new Error("The port membership changed. Reload the router and try again.");
+      }
+      if (protectedBridgeName(fromBridge)) throw new Error(`Moving ports out of managed bridge "${fromBridge}" is blocked.`);
+      await withTimeout(conn.write(["/interface/bridge/port/remove", `=.id=${member[".id"]}`]), ms);
+      try {
+        await withTimeout(conn.write(["/interface/bridge/port/add", `=bridge=${bridgeName}`, `=interface=${interfaceName}`]), ms);
+      } catch (error) {
+        // Best-effort restore prevents leaving a port unassigned after a failed move.
+        const current = await withTimeout(conn.write(["/interface/bridge/port/print"]), ms) as Record<string, string>[];
+        if (!current.some(row => row.interface === interfaceName)) {
+          await withTimeout(conn.write(["/interface/bridge/port/add", `=bridge=${fromBridge}`, `=interface=${interfaceName}`]), ms);
+        }
+        throw error;
+      }
+    }
+    const verify = await withTimeout(conn.write(["/interface/bridge/port/print"]), ms) as Record<string, string>[];
+    const exists = verify.some(row => row.bridge === bridgeName && row.interface === interfaceName);
+    const remainsOld = action === "move" && verify.some(row => row.bridge === fromBridge && row.interface === interfaceName);
+    if ((action !== "remove") !== exists || remainsOld) throw new Error(`RouterOS did not verify the ${action} operation for ${interfaceName}.`);
+    if (action === "add") return `Added ${interfaceName} to "${bridgeName}".`;
+    if (action === "move") return `Moved ${interfaceName} from "${fromBridge}" to "${bridgeName}".`;
+    return `Removed ${interfaceName} from "${bridgeName}"; the physical interface was not deleted.`;
   });
 }
