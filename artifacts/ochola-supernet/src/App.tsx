@@ -100,20 +100,27 @@ function ResellerBlockedPage() {
 /* ── SubdomainGuard ──────────────────────────────────────────────
    When the visitor arrives at a company subdomain (e.g. fastnet.isplatty.org),
    the root "/" path redirects straight to that company's login page.
-   The reserved registration host has its own public entry point.
+   Admin opens the tenant login selector; registration has its own entry point.
    On the bare domain (isplatty.org) the normal landing page is shown.
 ──────────────────────────────────────────────────────────────── */
 function SubdomainGuard() {
   const [, setLocation] = useLocation();
+  const isAdminEntryHost = typeof window !== "undefined"
+    && /^admin\.isplatty\.(org|com)$/.test(window.location.hostname.toLowerCase());
 
   useEffect(() => {
+    if (isAdminEntryHost) {
+      setLocation("/admin/login");
+      return;
+    }
     const sub = getHostSubdomain();
     if (sub && sub !== "register" && sub !== "latex") {
       setLocation("/admin/login");
     }
-  }, [setLocation]);
+  }, [isAdminEntryHost, setLocation]);
 
   /* Render platform entry points directly so they never flash blank. */
+  if (isAdminEntryHost) return null;
   const sub = getHostSubdomain();
    if (sub === "register") return <AdminRegister />;
   if (sub === "latex") return <SuperAdminLogin />;
