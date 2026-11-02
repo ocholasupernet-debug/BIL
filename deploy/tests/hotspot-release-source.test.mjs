@@ -58,6 +58,15 @@ test("deployments register both loyalty and voucher entitlement migrations", () 
   }
 });
 
+test("deployments register the Nairobi-aware monthly ledger summary", () => {
+  const runner = api("scripts/apply-deployment-migrations.mjs");
+  const migration = api("migrations/2026_monthly_revenue_ledger_summary.sql");
+  assert.ok(runner.includes("../migrations/2026_monthly_revenue_ledger_summary.sql"));
+  assert.match(migration, /get_monthly_revenue_summary/);
+  assert.match(migration, /Africa\/Nairobi/);
+  assert.match(migration, /revenue_ledger/);
+});
+
 test("deployments register and verify the PPPoE renewal settings migration", () => {
   const runner = api("scripts/apply-deployment-migrations.mjs");
   const migration = api("migrations/2026_pppoe_portal_settings.sql");

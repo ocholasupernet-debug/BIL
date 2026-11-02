@@ -120,6 +120,11 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
       }
     } else if (url.pathname.endsWith("/rpc/get_router_revenue_summary")) {
       rows = [{ income_today: 175, income_month: 950, total_revenue: 12250, total_transactions: 31 }];
+    } else if (url.pathname.endsWith("/rpc/get_monthly_revenue_summary")) {
+      rows = [
+        { month_start: "2026-10-01", income: 35835, payment_count: 3390 },
+        { month_start: "2026-11-01", income: 950, payment_count: 31 },
+      ];
     } else if (url.pathname.endsWith("/platform_billing_invoices")) {
       if (method === "POST") {
         const created = invoice ?? { ...JSON.parse(String(init?.body)) as Record<string, unknown>, id: 91 };
@@ -210,6 +215,24 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
       requests.find(row => row.path.endsWith("/rpc/get_router_revenue_summary"))?.body,
       { p_account_id: 42, p_router_id: 17 },
       "router-scoped ledger totals must be requested for the authenticated account",
+    );
+
+    requests.splice(0);
+    const monthlyRevenue = await originalFetch(`${endpoint}/monthly-revenue`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(monthlyRevenue.status, 200);
+    assert.deepEqual(await monthlyRevenue.json(), {
+      ok: true,
+      months: [
+        { monthStart: "2026-10-01", income: 35835, paymentCount: 3390 },
+        { monthStart: "2026-11-01", income: 950, paymentCount: 31 },
+      ],
+    });
+    assert.deepEqual(
+      requests.find(row => row.path.endsWith("/rpc/get_monthly_revenue_summary"))?.body,
+      { p_account_id: 42 },
+      "monthly income must use the authenticated account's immutable ledger",
     );
 
     requests.splice(0);

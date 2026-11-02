@@ -9,6 +9,7 @@ import {
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { ADMIN_ID, getAdminApiToken, type DbTransaction } from "@/lib/supabase";
 import { TrendingUp, TrendingDown, Minus, RefreshCw } from "lucide-react";
+import { fmtMoney } from "@/lib/utils";
 
 /* ─── Types ─── */
 interface PlanRow  { id: number; router_id: number | null }
@@ -17,6 +18,11 @@ interface TransactionOverview {
   transactions: DbTransaction[];
   plans: PlanRow[];
   routers: RouterRow[];
+}
+interface MonthlyRevenue {
+  monthStart: string;
+  income: number;
+  paymentCount: number;
 }
 
 /* ─── Authenticated, account-scoped data fetcher ─── */
@@ -31,6 +37,22 @@ async function fetchTransactionOverview(): Promise<TransactionOverview> {
     throw new Error(data?.error ?? "Could not load the transaction overview.");
   }
   return data;
+}
+
+async function fetchMonthlyRevenue(): Promise<MonthlyRevenue[]> {
+  const token = getAdminApiToken();
+  const response = await fetch("/api/billing/monthly-revenue", {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    cache: "no-store",
+  });
+  const data = await response.json().catch(() => null) as {
+    months?: MonthlyRevenue[];
+    error?: string;
+  } | null;
+  if (!response.ok || !Array.isArray(data?.months)) {
+    throw new Error(data?.error ?? "Could not load verified monthly income.");
+  }
+  return data.months;
 }
 
 /* ─── Date helpers ─── */
@@ -75,11 +97,13 @@ function fmtDay(key: string) {
 const PIE_COLORS = ["var(--chart-line)", "var(--chart-cyan)", "var(--chart-slate)", "var(--chart-amber)", "var(--isp-accent)", "#64748b", "#0ea5e9"];
 
 /* ─── Comparison card ─── */
-function CompareCard({ title, current, previous, unit = "Ksh" }: {
+function CompareCard({ title, current, previous, currentLabel = "Current", previousLabel = "Previous", featured = false }: {
   title: string;
   current: number;
   previous: number;
-  unit?: string;
+  currentLabel?: string;
+  previousLabel?: string;
+  featured?: boolean;
 }) {
   const pct = previous === 0
     ? current > 0 ? 100 : 0
@@ -87,21 +111,21 @@ function CompareCard({ title, current, previous, unit = "Ksh" }: {
   const isUp = pct > 0;
   const isDown = pct < 0;
   return (
-    <div className="telemetry-card telemetry-comparison-card">
+    <div className={`telemetry-card telemetry-comparison-card${featured ? " telemetry-comparison-card--featured" : ""}`}>
       <p className="telemetry-card-label">
         {title}
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <p className="telemetry-card-reading">
-          Current: <strong>{unit} {current.toLocaleString()}</strong>
+          {currentLabel}: <strong>{fmtMoney(current)}</strong>
         </p>
         <p className="telemetry-card-reading">
-          Previous: <strong>{unit} {previous.toLocaleString()}</strong>
+          {previousLabel}: <strong>{fmtMoney(previous)}</strong>
         </p>
-        <p className="telemetry-card-reading telemetry-card-reading--change">Change:</p>
+        <p className="telemetry-card-reading telemetry-card-reading--change">Change from previous period</p>
         <div className={`telemetry-change ${isUp ? "telemetry-change--up" : isDown ? "telemetry-change--down" : "telemetry-change--flat"}`}>
           {isUp ? <TrendingUp size={14} /> : isDown ? <TrendingDown size={14} /> : <Minus size={14} />}
-          {Math.abs(pct).toFixed(2)}% {isUp ? "Increase" : isDown ? "Decrease" : "No change"}
+          {Math.abs(pct).toFixed(1)}% {isUp ? "increase" : isDown ? "decrease" : "no change"}
         </div>
       </div>
     </div>
@@ -129,7 +153,7 @@ function ChartTooltip({ active, payload, label }: {
     <div className="telemetry-tooltip">
       <p className="telemetry-tooltip-label">{label}</p>
       {payload.map((p, i) => (
-        <p key={i} className="telemetry-tooltip-value">Ksh {Number(p.value).toLocaleString()}</p>
+        <p key={i} className="telemetry-tooltip-value">{fmtMoney(Number(p.value))}</p>
       ))}
     </div>
   );
@@ -144,9 +168,23 @@ export default function TransactionGraphs() {
     queryFn: fetchTransactionOverview,
     refetchInterval: 60_000,
   });
+  const {
+    data: monthlyRevenue = [],
+    isLoading: loadingMonthlyRevenue,
+    isError: monthlyRevenueFailed,
+    error: monthlyRevenueError,
+  } = useQuery({
+    queryKey: ["monthly-revenue-ledger", ADMIN_ID],
+    queryFn: fetchMonthlyRevenue,
+    refetchInterval: 60_000,
+  });
   const txns = overview?.transactions ?? [];
   const plans = overview?.plans ?? [];
   const routers = overview?.routers ?? [];
+  const revenueByMonth = useMemo(
+    () => new Map(monthlyRevenue.map(row => [row.monthStart.slice(0, 7), row])),
+    [monthlyRevenue],
+  );
 
   /* Use only completed transactions for revenue numbers */
   const completed = useMemo(() =>
@@ -171,8 +209,8 @@ export default function TransactionGraphs() {
   const yesterdayTotal = sumWhere(t => toDateStr(new Date(t.created_at)) === yesterdayStr);
   const thisWeekTotal  = sumWhere(t => isoWeekKey(new Date(t.created_at)) === thisWeekKey);
   const lastWeekTotal  = sumWhere(t => isoWeekKey(new Date(t.created_at)) === lastWeekKey);
-  const thisMonthTotal = sumWhere(t => monthKey(new Date(t.created_at)) === thisMonthKey);
-  const lastMonthTotal = sumWhere(t => monthKey(new Date(t.created_at)) === lastMonthKey);
+  const thisMonthTotal = Number(revenueByMonth.get(thisMonthKey)?.income ?? 0);
+  const lastMonthTotal = Number(revenueByMonth.get(lastMonthKey)?.income ?? 0);
 
   /* ─── Daily chart — last 30 days ─── */
   const dailyData = useMemo(() => {
@@ -210,21 +248,14 @@ export default function TransactionGraphs() {
 
   /* ─── Monthly chart — last 12 months ─── */
   const monthlyData = useMemo(() => {
-    const map: Record<string, number> = {};
     const months: string[] = [];
     const [currentYear, currentMonth] = todayStr.split("-").map(Number);
     for (let i = 11; i >= 0; i--) {
       const d = new Date(Date.UTC(currentYear, currentMonth - 1 - i, 1, 12));
-      const k = monthKey(d);
-      map[k] = 0;
-      months.push(k);
+      months.push(monthKey(d));
     }
-    completed.forEach(t => {
-      const k = monthKey(new Date(t.created_at));
-      if (k in map) map[k] += t.amount;
-    });
-    return months.map(k => ({ label: fmtMonth(k), total: map[k] }));
-  }, [completed, todayStr]);
+    return months.map(k => ({ label: fmtMonth(k), total: Number(revenueByMonth.get(k)?.income ?? 0) }));
+  }, [revenueByMonth, todayStr]);
 
   /* ─── By Router (current month) ─── */
   const routerPieData = useMemo(() => {
@@ -261,7 +292,7 @@ export default function TransactionGraphs() {
         <div className="telemetry-header">
           <div>
             <h1>Transactions Overview</h1>
-            <p>As of {nowStr}</p>
+        <p>Verified sales and transaction activity · Updated {nowStr}</p>
           </div>
           <button
             onClick={() => refetch()}
@@ -271,19 +302,28 @@ export default function TransactionGraphs() {
           </button>
         </div>
 
-        {loadingTxns ? (
+        {loadingTxns || loadingMonthlyRevenue ? (
           <div className="telemetry-loading">Loading transactions…</div>
-        ) : isError ? (
+        ) : isError || monthlyRevenueFailed ? (
           <div className="telemetry-loading" role="alert">
-            {error instanceof Error ? error.message : "The transaction overview could not be loaded."}
+            {(monthlyRevenueFailed ? monthlyRevenueError : error) instanceof Error
+              ? (monthlyRevenueFailed ? monthlyRevenueError : error)?.message
+              : "The sales overview could not be loaded."}
           </div>
         ) : (
           <>
             {/* Comparison cards */}
             <div className="telemetry-comparison-grid">
-              <CompareCard title="Today vs Yesterday"        current={todayTotal}     previous={yesterdayTotal} />
-              <CompareCard title="This Week vs Last Week"    current={thisWeekTotal}  previous={lastWeekTotal} />
-              <CompareCard title="This Month vs Last Month"  current={thisMonthTotal} previous={lastMonthTotal} />
+              <CompareCard title="Daily income" current={todayTotal} previous={yesterdayTotal} currentLabel="Today" previousLabel="Yesterday" />
+              <CompareCard title="Weekly income" current={thisWeekTotal} previous={lastWeekTotal} currentLabel="This week" previousLabel="Last week" />
+              <CompareCard
+                title="Monthly income performance"
+                current={thisMonthTotal}
+                previous={lastMonthTotal}
+                currentLabel={fmtMonth(thisMonthKey)}
+                previousLabel={fmtMonth(lastMonthKey)}
+                featured
+              />
             </div>
 
             {/* Charts grid */}
@@ -322,7 +362,7 @@ export default function TransactionGraphs() {
               </ChartCard>
 
               {/* Monthly */}
-              <ChartCard title="Monthly Transactions">
+              <ChartCard title="Monthly income trend">
                 <ResponsiveContainer width="100%" height={260}>
                   <AreaChart data={monthlyData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
                     <defs>
@@ -363,7 +403,7 @@ export default function TransactionGraphs() {
                         ))}
                       </Pie>
                       <Tooltip
-                        formatter={(v: number) => [`Ksh ${v.toLocaleString()}`, "Revenue"]}
+                        formatter={(v: number) => [fmtMoney(v), "Revenue"]}
                         contentStyle={{ background: "var(--isp-card)", border: "1px solid var(--isp-border)", borderRadius: 7, color: "var(--isp-text)", padding: "6px 9px", fontSize: 12 }}
                       />
                       <Legend wrapperStyle={{ color: "var(--chart-axis)", fontSize: 11, paddingTop: 4 }} />

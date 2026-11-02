@@ -3312,6 +3312,11 @@ code, kbd, pre, .font-mono, .table-mono, .reseller-mono, .technical-value, [data
   padding: 12px 14px;
   border-left: 4px solid #10b981;
 }
+.telemetry-comparison-card--featured {
+  background: linear-gradient(135deg, var(--isp-card) 68%, rgba(16, 185, 129, 0.09));
+  border-color: rgba(16, 185, 129, 0.24);
+  border-left-color: #059669;
+}
 .telemetry-card-label {
   margin: 0 0 13px;
   color: var(--isp-text-muted);

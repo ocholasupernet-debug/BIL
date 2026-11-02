@@ -9,6 +9,7 @@ import {
 } from "../lib/supabase-client.js";
 import {
   billingCreateInvoice,
+  billingMonthlyRevenueSummary,
   billingRouterRevenueSummary,
   billingRevenueSummary,
   billingSelect,
@@ -283,6 +284,31 @@ router.get("/billing/revenue-summary", requireAdmin(), async (req: Request, res:
     });
   } catch {
     res.status(503).json({ ok: false, error: "Could not load immutable revenue totals." });
+  }
+});
+
+router.get("/billing/monthly-revenue", requireAdmin(), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    if (!account || !["isp_admin", "reseller"].includes(account.role)) {
+      res.status(403).json({ ok: false, error: "An active account is required." });
+      return;
+    }
+    const rows = await billingMonthlyRevenueSummary<{
+      month_start: string;
+      income: number | string;
+      payment_count: number | string;
+    }>(account.id);
+    res.json({
+      ok: true,
+      months: rows.map(row => ({
+        monthStart: row.month_start,
+        income: Number(row.income ?? 0),
+        paymentCount: Number(row.payment_count ?? 0),
+      })),
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Could not load monthly income from the payment ledger." });
   }
 });
 

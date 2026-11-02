@@ -45,11 +45,27 @@ async function resolveTransactionAccount(
 async function readScopedTransactions(account: TransactionAccount): Promise<TransactionRow[]> {
   const ownerFilter = transactionOwnerFilter(account);
   if (!ownerFilter) throw new Error("The signed-in account has no valid transaction scope.");
-  const rows = await sbSelectStrict<TransactionRow>(
-    "isp_transactions",
-    `${ownerFilter}&payment_method=not.in.(${PLATFORM_PAYMENT_METHODS})&select=${TRANSACTION_COLUMNS}&order=created_at.desc&limit=10000`,
-  );
-  return rows.map(row => ({ ...row, amount: Number(row.amount) }));
+  const rows: TransactionRow[] = [];
+  let lastId = 0;
+  while (true) {
+    const cursor = lastId > 0 ? `&id=gt.${lastId}` : "";
+    const page = await sbSelectStrict<TransactionRow>(
+      "isp_transactions",
+      `${ownerFilter}&payment_method=not.in.(${PLATFORM_PAYMENT_METHODS})${cursor}&select=${TRANSACTION_COLUMNS}&order=id.asc&limit=1000`,
+    );
+    rows.push(...page);
+    if (page.length < 1000) break;
+
+    const nextId = Number(page[page.length - 1]?.id);
+    if (!Number.isSafeInteger(nextId) || nextId <= lastId) {
+      throw new Error("Transaction pagination did not advance.");
+    }
+    lastId = nextId;
+  }
+
+  return rows
+    .map(row => ({ ...row, amount: Number(row.amount) }))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id - a.id);
 }
 
 async function readScopedPlanRouterContext(account: TransactionAccount): Promise<{

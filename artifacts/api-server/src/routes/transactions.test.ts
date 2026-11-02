@@ -48,12 +48,13 @@ test("transaction APIs enforce ISP and reseller ownership from the signed-in acc
     if (url.pathname.endsWith("/rest/v1/isp_transactions")) {
       transactionReads += 1;
       assert.equal(url.searchParams.get("payment_method"), "not.in.(mpesa_registration,manual_registration,mpesa_platform_billing)");
-      assert.equal(url.searchParams.get("order"), "created_at.desc");
-      assert.equal(url.searchParams.get("limit"), "10000");
+      assert.equal(url.searchParams.get("order"), "id.asc");
+      assert.equal(url.searchParams.get("limit"), "1000");
       assert.equal(
         url.searchParams.get("select"),
         "id,customer_id,plan_id,amount,payment_method,reference,mpesa_receipt,status,notes,created_at",
       );
+      const cursor = Number(url.searchParams.get("id")?.replace(/^gt\./, "") ?? 0);
       if (activeAccountId === 41) {
         assert.equal(url.searchParams.get("admin_id"), "eq.41");
         assert.equal(url.searchParams.get("reseller_id"), "is.null");
@@ -65,18 +66,26 @@ test("transaction APIs enforce ISP and reseller ownership from the signed-in acc
         );
         assert.equal(url.searchParams.get("admin_id"), null);
       }
-      return new Response(JSON.stringify([{
-        id: 900 + activeAccountId,
+      const makeTransaction = (id: number, createdAt: string, amount = "250") => ({
+        id,
         customer_id: null,
         plan_id: 7,
-        amount: "250",
+        amount,
         payment_method: "mpesa",
-        reference: `TX-${activeAccountId}`,
+        reference: `TX-${id}`,
         mpesa_receipt: "UJ5QQ8VB9M",
         status: "completed",
         notes: null,
-        created_at: "2026-10-03T08:00:00.000Z",
-      }]), { status: 200, headers: { "Content-Type": "application/json" } });
+        created_at: createdAt,
+      });
+      const rows = activeAccountId === 41
+        ? [makeTransaction(941, "2026-10-03T08:00:00.000Z")]
+        : cursor === 0
+          ? Array.from({ length: 1000 }, (_, index) => makeTransaction(index + 1, "2026-10-03T08:00:00.000Z"))
+          : cursor === 1000
+            ? [makeTransaction(1001, "2026-10-04T08:00:00.000Z", "300")]
+            : [];
+      return new Response(JSON.stringify(rows), { status: 200, headers: { "Content-Type": "application/json" } });
     }
 
     if (url.pathname.endsWith("/rest/v1/isp_reseller_ports")) {
@@ -136,7 +145,7 @@ test("transaction APIs enforce ISP and reseller ownership from the signed-in acc
     );
     const ispRows = await ispResponse.json() as Array<{ amount: number; reference: string }>;
     assert.equal(ispRows[0]?.amount, 250);
-    assert.equal(ispRows[0]?.reference, "TX-41");
+    assert.equal(ispRows[0]?.reference, "TX-941");
 
     const mismatchedTenant = await originalFetch(`${endpoint}/transactions?adminId=83`, {
       headers: { Authorization: `Bearer ${ispToken}`, Connection: "close" },
@@ -160,11 +169,17 @@ test("transaction APIs enforce ISP and reseller ownership from the signed-in acc
       plans: Array<{ id: number; router_id: number }>;
       routers: Array<{ id: number; name: string }>;
     };
-    assert.equal(overview.transactions[0]?.amount, 250);
-    assert.equal(overview.transactions[0]?.reference, "TX-83");
+    assert.equal(overview.transactions.length, 1001);
+    assert.equal(overview.transactions[0]?.amount, 300);
+    assert.equal(overview.transactions[0]?.reference, "TX-1001");
+    assert.equal(
+      overview.transactions.reduce((sum, transaction) => sum + transaction.amount, 0),
+      250300,
+      "overview reads must include transactions beyond PostgREST's first 1,000 rows",
+    );
     assert.deepEqual(overview.plans, [{ id: 7, router_id: 7 }]);
     assert.deepEqual(overview.routers, [{ id: 7, name: "Scoped router" }]);
-    assert.equal(transactionReads, 2);
+    assert.equal(transactionReads, 3);
   } finally {
     globalThis.fetch = originalFetch;
     await new Promise<void>(resolve => {
