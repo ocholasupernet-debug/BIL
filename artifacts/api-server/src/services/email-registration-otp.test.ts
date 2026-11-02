@@ -69,3 +69,26 @@ test("email OTP migration is runner-registered and enforces private, one-time ch
   assert.match(migration, /and consumed_at is null/i);
   assert.match(migration, /grant execute on function consume_email_registration_token/i);
 });
+
+test("gateway email OTP migration binds challenges to account, email, request, and session", async () => {
+  const [migration, runner, schemaSnapshot] = await Promise.all([
+    readFile(new URL("../../migrations/2026_email_gateway_settings_otp.sql", import.meta.url), "utf8"),
+    readFile(new URL("../../scripts/apply-deployment-migrations.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../../migrations/supabase_schema.sql", import.meta.url), "utf8"),
+  ]);
+  assert.match(runner, /2026_email_gateway_settings_otp\.sql/);
+  assert.match(migration, /alter table email_gateway_settings_otps enable row level security/i);
+  assert.match(migration, /revoke all on table email_gateway_settings_otps from authenticated/i);
+  assert.match(migration, /interval '60 seconds'/i);
+  assert.match(migration, /interval '1 hour'/i);
+  assert.match(migration, /for update/i);
+  assert.match(migration, /email_address <> lower\(p_email_address\)/i);
+  assert.match(migration, /session_binding_hash <> p_session_binding_hash/i);
+  assert.match(migration, /attempt_count \+ 1 >= greatest\(1, least\(p_max_attempts, 5\)\)/i);
+  assert.match(migration, /revoke all on function issue_email_gateway_settings_otp[\s\S]+from public/i);
+  assert.match(migration, /revoke all on function verify_email_gateway_settings_otp[\s\S]+from authenticated/i);
+  assert.match(migration, /create or replace function issue_email_gateway_settings_otp/i);
+  assert.match(migration, /create or replace function verify_email_gateway_settings_otp/i);
+  assert.match(schemaSnapshot, /create table if not exists public\.email_gateway_settings_otps/i);
+  assert.match(schemaSnapshot, /create or replace function public\.verify_email_gateway_settings_otp/i);
+});

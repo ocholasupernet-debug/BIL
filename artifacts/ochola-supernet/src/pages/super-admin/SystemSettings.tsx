@@ -299,7 +299,7 @@ export default function SuperAdminSystemSettings() {
           ) : (
             <>
               <p style={{ color: C.muted, fontSize: "0.8rem", lineHeight: 1.55, margin: "0 0 16px" }}>
-                One shared sender for the platform. Registration confirmations go to the new account; gateway-change and Super Admin sign-in alerts go to the security email. SMTP passwords are encrypted and never returned to this page.
+                One shared sender for registration OTPs, welcome emails, and gateway OTPs. Gateway OTPs go to the signed-in admin’s account email when email verification is enabled; security alerts go to the alert address.
               </p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
                 <Field label="SMTP Host">

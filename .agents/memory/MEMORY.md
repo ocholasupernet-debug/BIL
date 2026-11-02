@@ -132,3 +132,4 @@
 - [Tenant renewal access gate](tenant-renewal-access-gate.md) — Overdue renewal blocks new purchases and limits tenant admins to Dashboard, where renewal remains available.
 - [Hotspot tethering TTL scope](hotspot-tethering-ttl-scope.md) — Set TTL=1 only on egress to enabled Hotspot interfaces; stop on unscoped global rules.
 - [Tenant domain ownership](tenant-domain-ownership.md) — Use isplatty.org for tenant hostnames unless ownership and DNS for another domain are verified.
+- [Gateway email OTP recipient](gateway-email-otp-recipient.md) — Send payment-settings codes to the signed-in tenant admin’s account email, never the shared security-alert mailbox.
