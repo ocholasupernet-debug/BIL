@@ -1268,6 +1268,33 @@ export async function processMpesaCallback(
     logger.warn({ checkoutId }, "[mpesa/callback] Verified success is missing a valid M-Pesa receipt; leaving transaction pending");
     return false;
   }
+  if (isSuccessful) {
+    const amountValue = callbackItems.find(item => item.Name === "Amount")?.Value;
+    const phoneValue = callbackItems.find(item => item.Name === "PhoneNumber")?.Value;
+    const callbackAmount = amountValue == null ? Number.NaN : Number(amountValue);
+    const expectedAmount = Math.ceil(Number(transaction.amount));
+    const callbackPhone = phoneValue == null ? "" : normaliseKenyanPhone(String(phoneValue));
+    const expectedPhone = normaliseKenyanPhone(String(transaction.payment_phone ?? ""));
+    if (
+      !Number.isSafeInteger(callbackAmount)
+      || !Number.isSafeInteger(expectedAmount)
+      || callbackAmount !== expectedAmount
+      || !callbackPhone
+      || !expectedPhone
+      || callbackPhone !== expectedPhone
+    ) {
+      logger.warn(
+        {
+          checkoutId,
+          transactionId: transaction.id,
+          amountMatched: Number.isSafeInteger(callbackAmount) && callbackAmount === expectedAmount,
+          phoneMatched: Boolean(callbackPhone && expectedPhone && callbackPhone === expectedPhone),
+        },
+        "[mpesa/callback] Verified checkout metadata does not match the saved payment intent; leaving transaction pending",
+      );
+      return false;
+    }
+  }
   if (isSuccessful && mpesaReceipt) {
     try {
       if (!await dependencies.saveReceipt(transaction.id, checkoutId, mpesaReceipt)) {
