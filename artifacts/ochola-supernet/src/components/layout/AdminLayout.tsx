@@ -836,6 +836,12 @@ export function AdminLayout({
   useEffect(() => {
     const id = localStorage.getItem("ochola_admin_id");
     if (!id) { setLocation("/admin/login"); return; }
+    if (!getAdminApiToken()) {
+      clearAdminAuth();
+      queryClient.clear();
+      setLocation("/admin/login?session=expired");
+      return;
+    }
     const handleStorage = (e: StorageEvent) => {
       if (e.key === "ochola_admin_id" && !e.newValue) {
         clearAdminAuth();
