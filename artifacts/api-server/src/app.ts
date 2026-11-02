@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from "fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { resolveVlanHotspotPortalRequest } from "./lib/api-auth.js";
+import { TENANT_BASE_DOMAINS } from "./lib/tenant-host.js";
 
 const app: Express = express();
 
@@ -100,7 +101,10 @@ if (shouldServeStatic) {
         && !req.path.startsWith("/api/")
         && !req.path.startsWith("/assets/")
         && !/\.[a-z0-9]+$/i.test(req.path);
-      if (requestHost !== "register.isplatty.org" || !isDocumentRequest) {
+      const isRegistrationHost = TENANT_BASE_DOMAINS.some(
+        (domain) => requestHost === `register.${domain}`,
+      );
+      if (!isRegistrationHost || !isDocumentRequest) {
         next();
         return;
       }

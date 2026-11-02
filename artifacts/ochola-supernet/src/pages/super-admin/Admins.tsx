@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { PUBLIC_BASE_DOMAIN } from "@/lib/public-domain";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import { superAdminApiFetch } from "@/lib/api-client";
@@ -210,7 +211,7 @@ export default function SuperAdminAdmins() {
                       <td style={{ padding: "13px 16px", fontFamily: "monospace", color: C.sub }}>{a.username}</td>
                       <td style={{ padding: "13px 16px" }}>
                         {a.subdomain
-                          ? <span style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: "monospace", fontSize: "0.72rem", color: C.accent }}><Globe size={10} />{a.subdomain}.isplatty.org</span>
+                          ? <span style={{ display: "flex", alignItems: "center", gap: 4, fontFamily: "monospace", fontSize: "0.72rem", color: C.accent }}><Globe size={10} />{a.subdomain}.{PUBLIC_BASE_DOMAIN}</span>
                           : <span style={{ color: C.muted }}>—</span>}
                       </td>
                       <td style={{ padding: "13px 16px" }}>

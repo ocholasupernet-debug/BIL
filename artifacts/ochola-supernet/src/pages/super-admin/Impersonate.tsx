@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { PUBLIC_BASE_DOMAIN } from "@/lib/public-domain";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { AlertTriangle, Clock3, Copy, KeyRound, Loader2, LogIn, Search, ShieldCheck } from "lucide-react";
@@ -190,7 +191,7 @@ export default function SuperAdminImpersonate() {
               <div key={admin.id} style={{ border: "1px solid rgba(255,255,255,0.09)", borderRadius: 10, padding: 13, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
                 <div>
                   <strong style={{ color: "white" }}>{admin.fullname || admin.name || admin.username}</strong>
-                  <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>@{admin.username} · {admin.role || "admin"} · {admin.subdomain ? `${admin.subdomain}.isplatty.org` : "No subdomain"} · {admin.is_active ? "Active" : "Inactive"}</div>
+                  <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 4 }}>@{admin.username} · {admin.role || "admin"} · {admin.subdomain ? `${admin.subdomain}.${PUBLIC_BASE_DOMAIN}` : "No subdomain"} · {admin.is_active ? "Active" : "Inactive"}</div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button type="button" style={{ ...styles.button, background: "#b45309" }} disabled={!admin.is_active || busy} onClick={() => { setTarget(admin); setReason(""); setError(""); }}>

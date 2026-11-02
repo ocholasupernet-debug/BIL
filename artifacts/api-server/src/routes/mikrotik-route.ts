@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomBytes } from "crypto";
+import { TENANT_BASE_DOMAIN, TENANT_BASE_DOMAINS } from "../lib/tenant-host.js";
 import { isIspHotspotTawkEnabled, prepareIspHotspotAsset } from "../lib/isp-hotspot-asset.js";
 import { preserveCumulativeUsage } from "../lib/prepaid-usage.js";
 import { routerApiTransport } from "../lib/router-api-port.js";
@@ -314,9 +315,11 @@ function managementScriptSourceOrigin(req: import("express").Request): string {
     .split(":")[0]
     .toLowerCase();
   const requestHost = (forwardedHost || req.get("host") || "").split(":")[0].toLowerCase();
-  if (requestHost === "api.isplatty.org" || requestHost === "isplatty.org" || requestHost === "www.isplatty.org") {
+  if (TENANT_BASE_DOMAINS.some(
+    (domain) => requestHost === domain || requestHost === `www.${domain}` || requestHost === `api.${domain}`,
+  )) {
     /* The API is reached through /api on the root app hostname. */
-    return "https://isplatty.org";
+    return `https://${TENANT_BASE_DOMAIN}`;
   }
   if (process.env.NODE_ENV === "production" && /^(?:\d{1,3}\.){3}\d{1,3}$/.test(requestHost)) {
     /*
@@ -326,7 +329,7 @@ function managementScriptSourceOrigin(req: import("express").Request): string {
      * validation. Use the certificate-backed hostname when the app was opened
      * by IP.
      */
-    return "https://isplatty.org";
+    return `https://${TENANT_BASE_DOMAIN}`;
   }
   return requestOrigin(req);
 }
@@ -2692,7 +2695,7 @@ router.post("/router/:id/hotspot-portal/sync-tenant-host", requireAdmin(), async
   try {
     const result = await syncHotspotPortalHostname(
       found.creds,
-      `${subdomain}.isplatty.org`,
+      `${subdomain}.${TENANT_BASE_DOMAIN}`,
     );
     logger.info({ routerId: id, adminId, hostname: result.hostname }, "Tenant hotspot hostname synchronized");
     res.json({ ok: true, routerId: id, routerName: found.row.name, ...result });

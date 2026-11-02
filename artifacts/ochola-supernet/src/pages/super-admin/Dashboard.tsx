@@ -1,4 +1,5 @@
 import React, { useMemo } from "react";
+import { PUBLIC_BASE_DOMAIN } from "@/lib/public-domain";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
@@ -502,7 +503,7 @@ export default function SuperAdminDashboard() {
                             </div>
                           </div>
                         </td>
-                        <td className="sa-mono">{admin.subdomain ? `${admin.subdomain}.isplatty.org` : "—"}</td>
+                        <td className="sa-mono">{admin.subdomain ? `${admin.subdomain}.${PUBLIC_BASE_DOMAIN}` : "—"}</td>
                         <td className="sa-mono">{adminCustomerCounts.get(admin.id) || 0} customers · {adminRouterCounts.get(admin.id) || 0} routers</td>
                         <td><StatusBadge active={admin.is_active !== false} /></td>
                         <td><Link className="sa-table-link" href="/super-admin/admins">Manage <ArrowUpRight size={12} /></Link></td>

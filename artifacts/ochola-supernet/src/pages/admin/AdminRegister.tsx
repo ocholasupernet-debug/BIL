@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { Building2, Phone, UserRound, Mail, ArrowRight, CheckCircle2, XCircle, Loader2, AlertTriangle, ShieldCheck, Router, CreditCard, Sparkles, Copy, RefreshCw, WalletCards, Network, Plug } from "lucide-react";
 import { apiUrl } from "@/lib/api-client";
+import { tenantHostname } from "@/lib/public-domain";
 import { INITIAL_ADMIN_PASSWORD, INITIAL_ADMIN_USERNAME } from "@/lib/initial-admin-credentials";
 import { Logo } from "@/components/Logo";
 
@@ -372,7 +373,7 @@ export default function AdminRegister() {
   const accountTypeLabel = isReseller ? "reseller" : "ISP";
 
   if (success) {
-    const subdomainUrl = `https://${registeredSubdomain}.isplatty.org`;
+    const subdomainUrl = `https://${tenantHostname(registeredSubdomain)}`;
     const adminLoginUrl = `${subdomainUrl}/admin/login?first_login=1&subdomain=${encodeURIComponent(registeredSubdomain)}`;
     return (
       <div className="register-state-page" style={{ minHeight: "100vh", background: "var(--isp-bg)", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px", fontFamily: "'Inter', system-ui, sans-serif" }}>

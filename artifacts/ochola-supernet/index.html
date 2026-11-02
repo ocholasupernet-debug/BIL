@@ -17,7 +17,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
-      if (window.location.hostname.toLowerCase() === "register.isplatty.org") {
+      const host = window.location.hostname.toLowerCase();
+      if (host === "register.isplatty.org" || host === "register.isplatty.com") {
         document.title = "Register New company | OcholaSupernet";
         document.querySelector('meta[name="description"]')?.setAttribute(
           "content",

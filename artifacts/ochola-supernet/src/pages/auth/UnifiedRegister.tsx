@@ -3,6 +3,7 @@ import { ArrowRight, Check, Eye, EyeOff, LockKeyhole, Mail, Network, Plug, Shiel
 import { useLocation } from "wouter";
 import { Logo } from "@/components/Logo";
 import { setAdminAuth } from "@/lib/supabase";
+import { PUBLIC_BASE_DOMAIN } from "@/lib/public-domain";
 
 type RegistrationRole = "isp_admin" | "reseller";
 
@@ -333,10 +334,10 @@ export default function UnifiedRegister() {
                 placeholder="yourbusiness"
                 aria-describedby="register-workspace-url"
               />
-              <span className="unified-register-suffix-mark">.isplatty.org</span>
+              <span className="unified-register-suffix-mark">.{PUBLIC_BASE_DOMAIN}</span>
             </div>
             <p id="register-workspace-url" className="unified-register-helper">
-              Your workspace URL: https://{subdomainPrefix || "[prefix]"}.isplatty.org
+              Your workspace URL: https://{subdomainPrefix || "[prefix]"}.{PUBLIC_BASE_DOMAIN}
             </p>
           </div>
 

@@ -21,7 +21,11 @@ import {
   type ApiTokenPayload,
 } from "../lib/api-auth.js";
 import { hashIspAdminPassword, verifyIspAdminPassword } from "../lib/passwords.js";
-import { getTenantSubdomainFromRequest, RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
+import {
+  getTenantSubdomainFromRequest,
+  RESERVED_SUBDOMAINS,
+  TENANT_BASE_DOMAIN,
+} from "../lib/tenant-host.js";
 import { registerAccount } from "../controllers/auth-controller.js";
 import { logger } from "../lib/logger.js";
 import { recordWhatsAppSignInFailure, type WhatsAppLoginAccountType } from "../services/whatsapp/whatsapp-service.js";
@@ -523,7 +527,7 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
     && !RESERVED_SUBDOMAINS.has(requestedSubdomain);
   const tenantSubdomain = hostTenantSubdomain || (requestedSubdomainIsValid ? requestedSubdomain : "");
   if (!hostTenantSubdomain && !tenantSubdomain) {
-    res.status(400).json({ ok: false, error: "Enter your company subdomain to sign in from isplatty.org." });
+    res.status(400).json({ ok: false, error: `Enter your company subdomain to sign in from ${TENANT_BASE_DOMAIN}.` });
     return;
   }
 

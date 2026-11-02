@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { PUBLIC_BASE_DOMAIN } from "@/lib/public-domain";
 import { Link } from "wouter";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
 import {
@@ -389,7 +390,7 @@ export default function SuperAdminPaymentsPackages() {
         )}
 
         <section style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 14, padding: 18, marginBottom: 18 }}>
-          <Field label="ISP account" hint={selectedAdmin ? `${selectedAdmin.subdomain || "No subdomain"}.isplatty.org · ${selectedAdmin.currency || "KES"}` : undefined}>
+          <Field label="ISP account" hint={selectedAdmin ? `${selectedAdmin.subdomain || "No subdomain"}.${PUBLIC_BASE_DOMAIN} · ${selectedAdmin.currency || "KES"}` : undefined}>
             <select value={adminId} onChange={event => { setAdminId(event.target.value); setEditingId(null); setForm(EMPTY_FORM); }} style={inputStyle} disabled={loadingAdmins || admins.length === 0}>
               {loadingAdmins && <option>Loading ISP accounts…</option>}
               {!loadingAdmins && admins.length === 0 && <option>No active ISP accounts</option>}

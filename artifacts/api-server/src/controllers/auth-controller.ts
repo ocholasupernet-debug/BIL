@@ -7,7 +7,7 @@ import {
 } from "../lib/registration-contact-capacity.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { apiTokenSigningConfigured, generateAdminSessionToken } from "../lib/api-auth.js";
-import { RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
+import { RESERVED_SUBDOMAINS, TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 import { sendRegistrationConfirmationEmail } from "../lib/platform-email.js";
 
 export type UnifiedRegistrationRole = "isp_admin" | "reseller";
@@ -111,7 +111,7 @@ export async function registerAccount(req: Request, res: Response): Promise<void
     `subdomain=eq.${encodeURIComponent(subdomainPrefix)}&select=id&limit=1`,
   );
   if (duplicateRows.length > 0) {
-    const message = `The workspace URL prefix 'https://${subdomainPrefix}.isplatty.org' is already reserved by another provider account.`;
+    const message = `The workspace URL prefix 'https://${subdomainPrefix}.${TENANT_BASE_DOMAIN}' is already reserved by another provider account.`;
     res.status(400).json({ success: false, ok: false, message, error: message });
     return;
   }
@@ -168,7 +168,7 @@ export async function registerAccount(req: Request, res: Response): Promise<void
       return;
     }
     if (isUniqueViolation(error)) {
-      const message = `The workspace URL prefix 'https://${subdomainPrefix}.isplatty.org' is already reserved by another provider account.`;
+      const message = `The workspace URL prefix 'https://${subdomainPrefix}.${TENANT_BASE_DOMAIN}' is already reserved by another provider account.`;
       res.status(400).json({ success: false, ok: false, message, error: message });
       return;
     }
@@ -193,7 +193,7 @@ export async function registerAccount(req: Request, res: Response): Promise<void
     company_name: account.company_name ?? businessName,
   };
   const token = generateAdminSessionToken(String(account.id), 1);
-  const assignedUrl = `https://${account.subdomain}.isplatty.org`;
+  const assignedUrl = `https://${account.subdomain}.${TENANT_BASE_DOMAIN}`;
   void sendRegistrationConfirmationEmail(account.id);
   res.status(201).json({
     success: true,

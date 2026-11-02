@@ -6,6 +6,7 @@ import {
 } from "node:crypto";
 import nodemailer from "nodemailer";
 import { logger } from "./logger.js";
+import { TENANT_BASE_DOMAIN } from "./tenant-host.js";
 import {
   sbSelectStrict,
   sbUpsertStrict,
@@ -349,8 +350,8 @@ export async function sendRegistrationConfirmationEmail(adminId: number): Promis
     const company = admin.fullname?.trim() || admin.name?.trim() || "your company";
     const subdomain = admin.subdomain.trim().toLowerCase();
     const loginUrl = admin.must_change_password
-      ? `https://${subdomain}.isplatty.org/admin/login?first_login=1&subdomain=${encodeURIComponent(subdomain)}`
-      : `https://${subdomain}.isplatty.org/admin/login`;
+      ? `https://${subdomain}.${TENANT_BASE_DOMAIN}/admin/login?first_login=1&subdomain=${encodeURIComponent(subdomain)}`
+      : `https://${subdomain}.${TENANT_BASE_DOMAIN}/admin/login`;
     const isReseller = admin.role === "reseller";
     const signInDirection = admin.must_change_password
       ? "Use the temporary sign-in details shown after registration. You will be prompted to set your own password."

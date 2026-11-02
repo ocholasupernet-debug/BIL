@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { ADMIN_ID, isLoggedIn } from "@/lib/supabase";
 import { setAdminCurrency, setAdminCountryLocal } from "@/lib/utils";
 import { adminApiFetch } from "@/lib/api-client";
+import { PUBLIC_BASE_DOMAIN } from "@/lib/public-domain";
 
 export interface Brand {
   ispName:      string;   // e.g. "OcholaSupernet"
@@ -16,7 +17,7 @@ export interface Brand {
 
 const DEFAULT: Brand = {
   ispName:      "OcholaSupernet",
-  domain:       "isplatty.org",
+  domain:       PUBLIC_BASE_DOMAIN,
   supportEmail: "support@isplatty.org",
   adminName:    "Administrator",
   phone:        "",

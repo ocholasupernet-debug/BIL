@@ -2,8 +2,9 @@ import React from "react";
 import { Link } from "wouter";
 import { Shield, Zap, CreditCard, Activity, Ticket, ArrowRight, CheckCircle2, Users, Server } from "lucide-react";
 import { Logo } from "@/components/Logo";
+import { PUBLIC_BASE_DOMAIN, tenantHostname } from "@/lib/public-domain";
 
-const REGISTRATION_URL = "https://register.isplatty.org/";
+const REGISTRATION_URL = `https://${tenantHostname("register")}/`;
 
 export default function LandingPage() {
   return (
@@ -181,7 +182,7 @@ export default function LandingPage() {
       <footer className="border-t border-white/10 py-12 px-6">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
           <Logo size="sm" />
-          <p className="text-slate-500 text-sm">© 2026 isplatty.org. All rights reserved.</p>
+          <p className="text-slate-500 text-sm">© 2026 {PUBLIC_BASE_DOMAIN}. All rights reserved.</p>
           <div className="flex gap-6">
             <Link href="/admin/login" className="text-slate-500 hover:text-white text-sm transition-colors">Admin Portal</Link>
             <Link href="/hotspot-login" className="text-slate-500 hover:text-purple-400 text-sm transition-colors">Hotspot Demo</Link>

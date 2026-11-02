@@ -7,6 +7,7 @@ import {
 import { decryptVpnSecret, encryptVpnSecret } from "../lib/vpn-crypto.js";
 import { sbDeleteStrict, sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict } from "../lib/supabase-client.js";
 import { runRouterCommand, type RouterCredentials } from "../lib/mikrotik.js";
+import { TENANT_BASE_DOMAINS } from "../lib/tenant-host.js";
 import {
   buildMigrationPlan,
   assertDistinctTargets,
@@ -253,7 +254,9 @@ function publicApiOrigin(req: Request): string {
     const forwardedProto = String(req.get("x-forwarded-proto") ?? "").split(",")[0]?.trim().toLowerCase();
     const protocol = req.secure || forwardedProto === "https" ? "https:" : "";
     const hostname = String(req.hostname ?? "").toLowerCase();
-    const allowedHost = hostname === "isplatty.org" || hostname.endsWith(".isplatty.org");
+    const allowedHost = TENANT_BASE_DOMAINS.some(
+      (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+    );
     if (protocol !== "https:" || !allowedHost) {
       throw new Error("Set ROUTER_MIGRATION_PUBLIC_API_ORIGIN to the tenant API's public HTTPS origin.");
     }
