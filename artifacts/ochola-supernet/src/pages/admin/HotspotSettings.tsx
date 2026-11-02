@@ -761,6 +761,11 @@ const STYLES = `
   .hs-title { margin:0; color:var(--isp-text); font-size:1.65rem; line-height:1.15; font-weight:850; letter-spacing:-.04em; }
   .hs-subtitle { margin:8px 0 0; color:var(--isp-text-muted); font-size:.85rem; max-width:590px; line-height:1.55; }
   .hs-actions { display:flex; align-items:center; justify-content:flex-end; gap:9px; flex-wrap:wrap; }
+  .hs-more-actions { position:relative; }
+  .hs-more-actions > summary { list-style:none; }
+  .hs-more-actions > summary::-webkit-details-marker { display:none; }
+  .hs-more-menu { position:absolute; top:calc(100% + 7px); right:0; z-index:30; display:grid; gap:6px; min-width:190px; padding:8px; border:1px solid var(--isp-border); border-radius:11px; background:var(--isp-section); box-shadow:var(--shadow-card); }
+  .hs-more-menu > * { justify-content:flex-start; width:100%; }
   .hs-btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:38px; padding:8px 14px; border-radius:9px; border:1px solid transparent; font:600 .78rem inherit; cursor:pointer; transition:all .16s ease; white-space:nowrap; }
   .hs-btn:disabled { cursor:not-allowed; opacity:.55; }
   .hs-btn-primary { background:var(--isp-accent); border-color:var(--isp-accent); color:#fff; box-shadow:0 4px 13px var(--isp-accent-glow); }
@@ -778,11 +783,25 @@ const STYLES = `
   .hs-card-head { display:flex; align-items:flex-start; gap:12px; padding:17px 20px 15px; border-bottom:1px solid var(--isp-border-subtle); }
   .hs-card-icon { display:flex; align-items:center; justify-content:center; flex:0 0 32px; width:32px; height:32px; border-radius:9px; color:var(--isp-accent); background:var(--isp-accent-glow); border:1px solid var(--isp-accent-border); }
   .hs-card-title { margin:0; color:var(--isp-text); font-size:.92rem; font-weight:800; }
-  .hs-card-desc { margin:3px 0 0; color:var(--isp-text-muted); font-size:.72rem; line-height:1.45; }
+  .hs-card-desc { display:none; }
   .hs-card-body { padding:4px 20px 8px; }
+  .hs-card-summary { display:flex; align-items:center; cursor:pointer; list-style:none; }
+  .hs-card-summary::-webkit-details-marker { display:none; }
+  .hs-card-summary > svg:last-child { margin-left:auto; color:var(--isp-text-sub); transition:transform .15s; }
+  .hs-collapsible[open] > .hs-card-summary > svg:last-child { transform:rotate(180deg); }
+  .hs-collapsible > .hs-card-body { border-top:1px solid var(--isp-border-subtle); }
+  .hs-inline-disclosure { margin:8px 0; border:1px solid var(--isp-border); border-radius:10px; background:var(--isp-input-bg); }
+  .hs-inline-disclosure > summary { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 13px; color:var(--isp-text); font-size:.74rem; font-weight:750; cursor:pointer; list-style:none; }
+  .hs-inline-disclosure > summary::-webkit-details-marker { display:none; }
+  .hs-inline-disclosure > summary svg { color:var(--isp-text-sub); transition:transform .15s; }
+  .hs-inline-disclosure[open] > summary svg { transform:rotate(180deg); }
+  .hs-inline-body { padding:0 12px; border-top:1px solid var(--isp-border-subtle); }
   .hs-field { display:grid; grid-template-columns:minmax(150px,.62fr) minmax(0,1.38fr); gap:20px; padding:17px 0; border-bottom:1px solid var(--isp-border-subtle); }
   .hs-field:last-child { border-bottom:0; }
   .hs-label { display:block; color:var(--isp-text); font-size:.78rem; font-weight:750; line-height:1.3; }
+  .hs-help-toggle { margin-top:4px; }
+  .hs-help-toggle > summary { display:inline-flex; align-items:center; gap:4px; color:var(--isp-text-sub); font-size:.64rem; cursor:pointer; list-style:none; }
+  .hs-help-toggle > summary::-webkit-details-marker { display:none; }
   .hs-help { margin:5px 0 0; color:var(--isp-text-sub); font-size:.68rem; line-height:1.45; }
   .hs-control { min-width:0; }
   .hs-input, .hs-select, .hs-textarea { width:100%; color:var(--isp-text); background:var(--isp-input-bg); border:1px solid var(--isp-input-border); border-radius:8px; padding:10px 12px; font:500 .78rem inherit; outline:none; transition:border-color .15s, box-shadow .15s; }
@@ -893,11 +912,11 @@ const STYLES = `
   .hs-modal-close { display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:7px; border:1px solid rgba(248,113,113,.25); background:rgba(248,113,113,.08); color:#fca5a5; font:700 .68rem inherit; cursor:pointer; }
   .hs-modal-frame { flex:1; min-height:0; border:0; background:#02090f; }
   @media (max-width: 900px) { .hs-grid { grid-template-columns:1fr; } .hs-side { display:grid; grid-template-columns:1fr 1fr; gap:18px; } }
-  @media (max-width: 680px) { .hs-page { padding:22px 15px 42px; } .hs-hero { display:block; } .hs-actions { justify-content:flex-start; margin-top:18px; } .hs-field { grid-template-columns:1fr; gap:8px; } .hs-card-body { padding-inline:15px; } .hs-card-head { padding-inline:15px; } .hs-color-grid { grid-template-columns:repeat(4,1fr); gap:12px 7px; } .hs-choice-grid, .hs-visibility-grid { grid-template-columns:1fr; } .hs-side { display:flex; flex-direction:column; } .hs-foot-actions { justify-content:stretch; } .hs-foot-actions .hs-btn { flex:1; } .hs-layout-detail { align-items:flex-start; } .hs-layout-thumb { flex-basis:78px; width:78px; height:60px; } }
+   @media (max-width: 680px) { .hs-page { padding:22px 15px 42px; } .hs-hero { display:block; } .hs-actions { justify-content:flex-start; margin-top:12px; } .hs-field { grid-template-columns:1fr; gap:8px; } .hs-card-body { padding-inline:15px; } .hs-card-head { padding-inline:15px; } .hs-color-grid { grid-template-columns:repeat(4,1fr); gap:12px 7px; } .hs-choice-grid, .hs-visibility-grid { grid-template-columns:1fr; } .hs-side { display:flex; flex-direction:column; } .hs-foot-actions { justify-content:stretch; } .hs-foot-actions .hs-btn { flex:1; } .hs-layout-detail { align-items:flex-start; } .hs-layout-thumb { flex-basis:78px; width:78px; height:60px; } .hs-more-menu { left:0; right:auto; } }
 `;
 
 function Section({
-  icon, title, description, children, className = "", id,
+  icon, title, description, children, className = "", id, collapsible = false,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -905,7 +924,20 @@ function Section({
   children: React.ReactNode;
   className?: string;
   id?: string;
+  collapsible?: boolean;
 }) {
+  if (collapsible) {
+    return (
+      <details id={id} className={`hs-card hs-collapsible ${className}`}>
+        <summary className="hs-card-head hs-card-summary">
+          <div className="hs-card-icon">{icon}</div>
+          <div><h2 className="hs-card-title">{title}</h2></div>
+          <ChevronDown size={16} aria-hidden="true" />
+        </summary>
+        <div className="hs-card-body">{children}</div>
+      </details>
+    );
+  }
   return (
     <section id={id} className={`hs-card ${className}`}>
       <div className="hs-card-head">
@@ -931,7 +963,12 @@ function Field({
     <div className="hs-field">
       <div>
         <label className="hs-label">{label}</label>
-        {help && <p className="hs-help">{help}</p>}
+        {help && (
+          <details className="hs-help-toggle">
+            <summary aria-label={`Help for ${label}`} title="Help"><CircleHelp size={13} /></summary>
+            <p className="hs-help">{help}</p>
+          </details>
+        )}
       </div>
       <div className="hs-control">{children}</div>
     </div>
@@ -1835,31 +1872,32 @@ export default function HotspotSettings() {
       <div className="hs-page">
         <header className="hs-hero">
           <div>
-            <div className="hs-eyebrow"><Wifi size={13} /> Customer access experience</div>
-            <h1 className="hs-title">{isResellerAccount ? "Assigned VLAN hotspot" : "Hotspot portal"}</h1>
-            <p className="hs-subtitle">
-              {isResellerAccount
-                ? "Edit only the hotspot page assigned to your ISP-linked VLAN. Saving generates reseller-specific files and pushes them to the ISP MikroTik service directory."
-                : <>Choose what customers see when they join your Wi-Fi. With a linked router selected, <strong>Save settings</strong> updates its login.html and rlogin.html after you confirm.</>}
-            </p>
+            <div className="hs-eyebrow"><Wifi size={13} /> Hotspot settings</div>
+            <h1 className="hs-title">{isResellerAccount ? "Assigned hotspot" : "Customer portal"}</h1>
+            <p className="hs-subtitle">Choose a layout, review the preview, then save.</p>
           </div>
           <div className="hs-actions">
             <button type="button" className="hs-btn hs-btn-quiet" onClick={() => void handlePreview()} disabled={previewLoading || portsLoading}>
               {previewLoading ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
             </button>
-            <button type="button" className="hs-btn hs-btn-soft" onClick={handleDownload} disabled={exporting || portsLoading}>
-              {exporting ? <Loader2 size={14} className="animate-spin" /> : <ArrowDownToLine size={14} />} Download HTML
-            </button>
-            {!isResellerAccount && <button type="button" className="hs-btn hs-btn-soft" onClick={handleInstallHotspotFiles} disabled={installingHotspotFiles || saving || exporting}>
-              {installingHotspotFiles ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />} {installingHotspotFiles ? "Installing files…" : "Install support files"}
-            </button>}
-            {!isResellerAccount && <Link href="/admin/network/files" className="hs-btn hs-btn-quiet">
-              <FolderOpen size={14} /> View router files
-            </Link>}
             <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving || portsLoading || installingHotspotFiles || savingPortId !== null}>
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
               {saving ? "Syncing…" : saved ? "Synced" : isResellerAccount ? "Sync to MikroTik" : settings.routerId ? "Save & sync to MikroTik" : "Save settings"}
             </button>
+            <details className="hs-more-actions">
+              <summary className="hs-btn hs-btn-quiet">More <ChevronDown size={13} /></summary>
+              <div className="hs-more-menu">
+                <button type="button" className="hs-btn hs-btn-soft" onClick={handleDownload} disabled={exporting || portsLoading}>
+                  {exporting ? <Loader2 size={14} className="animate-spin" /> : <ArrowDownToLine size={14} />} Download HTML
+                </button>
+                {!isResellerAccount && <button type="button" className="hs-btn hs-btn-soft" onClick={handleInstallHotspotFiles} disabled={installingHotspotFiles || saving || exporting}>
+                  {installingHotspotFiles ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />} {installingHotspotFiles ? "Installing…" : "Install support files"}
+                </button>}
+                {!isResellerAccount && <Link href="/admin/network/files" className="hs-btn hs-btn-quiet">
+                  <FolderOpen size={14} /> View router files
+                </Link>}
+              </div>
+            </details>
           </div>
         </header>
 
@@ -1871,12 +1909,12 @@ export default function HotspotSettings() {
         )}
 
         <nav className="hs-jump-nav" aria-label="Hotspot settings sections">
-          <a href="#hotspot-identity">Portal basics</a>
-          {!isResellerAccount && <a href="#hotspot-ports">Assigned ports</a>}
-          <a href="#hotspot-appearance">Appearance</a>
-          <a href="#hotspot-content">Portal content</a>
-          <a href="#hotspot-checkout">Checkout & access</a>
-          <a href="#hotspot-support">Trust & support</a>
+          <a href="#hotspot-identity">Basics</a>
+          {!isResellerAccount && <a href="#hotspot-ports">Ports</a>}
+          <a href="#hotspot-appearance">Layout</a>
+          <a href="#hotspot-content">Content</a>
+          <a href="#hotspot-checkout">Checkout</a>
+          <a href="#hotspot-support">Support</a>
         </nav>
 
         <div className="hs-grid">
@@ -1885,6 +1923,12 @@ export default function HotspotSettings() {
               <Field label="ISP name" help="Used in the page title, header, footer, and downloaded filename.">
                 <input className="hs-input" value={settings.ispName} maxLength={80} onChange={event => update("ispName", event.target.value)} placeholder="Your ISP name" />
               </Field>
+              <Field label="Tagline">
+                <input className="hs-input" value={settings.tagline} maxLength={120} onChange={event => update("tagline", event.target.value)} placeholder="Fast and reliable internet" />
+              </Field>
+              <details className="hs-inline-disclosure">
+                <summary>More portal settings <ChevronDown size={14} /></summary>
+                <div className="hs-inline-body">
                 <Field label="Customer portal hostname" help="After successful Hotspot sign-in, customers are sent to this hostname. Portal API calls use a custom host only when its health check passes; otherwise they use the tenant API address. Saving syncs the selected router’s sign-in files after confirmation but does not change DNS or RouterOS service configuration.">
                  <input className="hs-input" value={settings.portalHostname} maxLength={253} onChange={event => update("portalHostname", event.target.value)} placeholder="wifi.example.com" inputMode="url" />
                </Field>
@@ -1898,9 +1942,8 @@ export default function HotspotSettings() {
                     Enable Tawk.to on the OcholaSupernet portal
                   </label>
                 </Field>
-              <Field label="Tagline" help="A short promise shown below the portal title.">
-                <input className="hs-input" value={settings.tagline} maxLength={120} onChange={event => update("tagline", event.target.value)} placeholder="Fast and reliable internet" />
-              </Field>
+                </div>
+              </details>
                <Field label={isResellerAccount ? "Assigned MikroTik VLAN interface" : "Linked router"} help={isResellerAccount ? "Use the VLAN interface name assigned on the MikroTik. Syncing this service writes changes to that VLAN interface." : "Saving with a router selected pushes the updated customer sign-in pages to it."}>
                  {(!isResellerAccount && routersLoading) ? <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading routers…</div> : (
                   <div className="hs-select-wrap">
@@ -1938,7 +1981,9 @@ export default function HotspotSettings() {
                 )}
               </Field>
                {!isResellerAccount && (
-                 <div style={{ display: "grid", gap: 10, padding: "12px 0 4px", borderTop: "1px solid var(--isp-border)" }}>
+                  <details className="hs-inline-disclosure">
+                    <summary>Router checks <ChevronDown size={14} /></summary>
+                    <div className="hs-inline-body" style={{ display: "grid", gap: 10, paddingBottom: 12 }}>
                    <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
                      <button
                        type="button"
@@ -1951,7 +1996,7 @@ export default function HotspotSettings() {
                          : <FolderOpen size={14} />}
                        {portalPreflightLoading
                          ? `Checking routers ${portalPreflightProgress.completed}/${portalPreflightProgress.total}…`
-                         : `Check portal folders on all routers (${routers.length})`}
+                          : `Check all portal folders (${routers.length})`}
                      </button>
                      <span style={{ color: "var(--isp-muted)", fontSize: ".72rem" }}>
                        Read-only check. It will not upload files, change profiles, or disconnect users.
@@ -2005,7 +2050,8 @@ export default function HotspotSettings() {
                        })}
                      </div>
                    )}
-                 </div>
+                    </div>
+                  </details>
                )}
                {!isResellerAccount && portalTargets.length > 0 && (
                  <Field label="Portal service" help="Preview, download, save, and sync use this exact service's plans and isolated Hotspot folder.">
@@ -2033,7 +2079,7 @@ export default function HotspotSettings() {
               </Field>
             </Section>
 
-            <Section id="hotspot-ports" icon={<Wifi size={16} />} title={isResellerAccount ? "Your assigned VLAN hotspot" : "Assigned hotspot ports"} description={isResellerAccount ? "This is the only VLAN service and hotspot page this reseller account can edit. Save to create isolated login.html and rlogin.html files on the ISP MikroTik." : "View and edit the isolated services assigned to the selected router. New ports use separate /24 networks from 192.168.180.0/22."}>
+            <Section id="hotspot-ports" icon={<Wifi size={16} />} title={isResellerAccount ? "Assigned VLAN service" : "Port services"} description={isResellerAccount ? "Assigned hotspot service." : "Router port services."} collapsible>
                {!settings.routerId && !isResellerAccount ? (
                 <div className="hs-status hs-status-info"><Info size={15} /> Choose a linked router above to load its assigned physical ports.</div>
               ) : portsLoading ? (
@@ -2260,7 +2306,10 @@ export default function HotspotSettings() {
                       ))}
                     </div>
                   </Field>
-                  <Field label="Portal colors" help="Keep backgrounds, buttons, cards, and text aligned with your brand.">
+                  <details className="hs-inline-disclosure">
+                    <summary>Custom colors <ChevronDown size={14} /></summary>
+                    <div className="hs-inline-body">
+                  <Field label="Portal colors">
                     <div>
                       <div className="hs-color-grid">
                         <ColorPicker label="Top background" value={settings.colors.bgColor} onChange={value => updateColor("bgColor", value)} />
@@ -2284,11 +2333,13 @@ export default function HotspotSettings() {
                       </div>
                     </div>
                   </Field>
+                    </div>
+                  </details>
                 </>
               )}
             </Section>
 
-            <Section id="hotspot-content" icon={<Eye size={16} />} title="Portal content" description="Choose which optional cards appear on the customer sign-in page.">
+            <Section id="hotspot-content" icon={<Eye size={16} />} title="Portal content" description="Optional customer page cards." collapsible>
               <p style={{ margin: "12px 0 0", color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5 }}>
                 Hiding a card removes it from the customer page without deleting its content or changing router configuration.
               </p>
@@ -2319,7 +2370,9 @@ export default function HotspotSettings() {
                   );
                 })}
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, marginTop: 16 }}>
+              <details className="hs-inline-disclosure">
+                <summary>Loyalty card style <ChevronDown size={14} /></summary>
+                <div className="hs-inline-body" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 12, paddingBottom: 10 }}>
                 <Field label="Loyalty card position" help="Choose where customers see their points balance.">
                   <SelectField
                     value={settings.loyaltyCard.position === "top" ? "At top" : settings.loyaltyCard.position === "after-packages" ? "After packages" : "At bottom"}
@@ -2349,9 +2402,10 @@ export default function HotspotSettings() {
                   />
                 </Field>
               </div>
+              </details>
             </Section>
 
-            <Section id="hotspot-checkout" icon={<Smartphone size={16} />} title="Checkout & access" description="Choose which access paths appear and make the payment step easy to understand.">
+            <Section id="hotspot-checkout" icon={<Smartphone size={16} />} title="Checkout & access" description="Payment and access settings." collapsible>
               <Field label="M-Pesa STK prompt" help="Show the phone-number checkout that sends a PIN approval prompt to the customer's M-Pesa line.">
                 <SelectField value={settings.mpesaPrompt} onChange={value => update("mpesaPrompt", value)} options={["Enable", "Disable"]} />
               </Field>
@@ -2372,7 +2426,7 @@ export default function HotspotSettings() {
               </Field>
             </Section>
 
-            <Section id="hotspot-support" icon={<CircleHelp size={16} />} title="Trust & support" description="Give customers a clear way to get help and understand your service.">
+            <Section id="hotspot-support" icon={<CircleHelp size={16} />} title="Support & policies" description="Customer contact details and policy links." collapsible>
               <Field label="Support contacts" help="Add up to eight phone and WhatsApp contacts. They appear in the customer portal in this order.">
                 <div style={{ display: "grid", gap: 10 }}>
                   {settings.supportContacts.map((contact, index) => (
@@ -2436,7 +2490,7 @@ export default function HotspotSettings() {
             <section className="hs-card hs-side-card">
               <div className="hs-card-head">
                 <div className="hs-card-icon"><Sparkles size={16} /></div>
-                <div><h2 className="hs-card-title">Live design snapshot</h2><p className="hs-card-desc">A quick look at your current identity.</p></div>
+                <div><h2 className="hs-card-title">Preview</h2></div>
               </div>
               <div className="hs-side-body">
                 <div className="hs-preview-screen" style={previewStyle}>
@@ -2455,38 +2509,26 @@ export default function HotspotSettings() {
                     <div className="hs-mini-button">Connect with M-Pesa</div>
                   </div>
                 </div>
-                <div className="hs-side-note"><Info size={14} /> Preview and download use the same generated portal template, including the configured tenant API origin.</div>
               </div>
             </section>
 
-            <section className="hs-card hs-side-card">
-              <div className="hs-card-head">
-                <div className="hs-card-icon"><ArrowDownToLine size={16} /></div>
-                <div><h2 className="hs-card-title">Export checklist</h2><p className="hs-card-desc">What the HTML export keeps intact.</p></div>
-              </div>
-              <div className="hs-side-body">
-                <ul className="hs-checklist">
-                  <li><Check size={14} /> RouterOS redirect variables and login form conventions</li>
-                  <li><Check size={14} /> Tenant-scoped plan loading and M-Pesa status polling</li>
-                  <li><Check size={14} /> Paid-device MAC access, voucher, and member login paths</li>
-                  <li><Check size={14} /> Branding and content embedded safely in the downloaded file</li>
-                  <li><Check size={14} /> No router credentials, payment secrets, or VPN keys</li>
-                </ul>
-              </div>
-            </section>
-
-            <section className="hs-card">
-              <div className="hs-card-head">
+            <details className="hs-card hs-collapsible">
+              <summary className="hs-card-head hs-card-summary">
                 <div className="hs-card-icon"><ShieldCheck size={16} /></div>
-                <div><h2 className="hs-card-title">Safe publishing</h2><p className="hs-card-desc">Keep the write boundary clear.</p></div>
-              </div>
-              <div className="hs-side-body">
-                 <div className="hs-status hs-status-info">
+                <div><h2 className="hs-card-title">Export & safety</h2></div>
+                <ChevronDown size={16} aria-hidden="true" />
+              </summary>
+              <div className="hs-card-body" style={{ display: "grid", gap: 16 }}>
+                <ul className="hs-checklist">
+                  <li><Check size={14} /> Sign-in, voucher, and payment flows stay intact.</li>
+                  <li><Check size={14} /> Credentials and payment secrets are not exported.</li>
+                </ul>
+                <div className="hs-status hs-status-info">
                   <Info size={15} />
-                   <span>Download keeps a local <strong>login.html</strong> copy. Deploy sends this exact export to the selected router only after confirmation; an existing file is never replaced without a second confirmation.</span>
+                  <span>Router files are replaced only after confirmation.</span>
                 </div>
               </div>
-            </section>
+            </details>
           </aside>
         </div>
       </div>
