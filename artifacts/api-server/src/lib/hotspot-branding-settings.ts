@@ -3,7 +3,7 @@ const SAFE_SETTINGS = new Set([
   "mpesaPrompt", "testimonials", "faqSection", "logoUrl", "advertUrl", "announcement",
   "paymentInstructions", "supportPhone", "supportEmail", "whatsappNumber", "termsUrl",
   "privacyUrl", "maintenanceMode", "maintenanceMessage", "testimonialText", "faqText", "colors",
-  "portalCards", "loyaltyCard", "portalLayout", "tawkEnabled",
+  "portalCards", "loyaltyCard", "portalLayout", "tawkEnabled", "layoutAppearances", "supportContacts",
 ]);
 
 const SAFE_PORTAL_CARD_KEYS = new Set([
@@ -22,6 +22,20 @@ const SAFE_LOYALTY_CARD_SETTINGS = {
   shape: new Set(["rounded", "square", "pill"]),
   size: new Set(["compact", "standard", "large"]),
 } as const;
+const SAFE_LAYOUT_KEYS = new Set(["classic", "dansted-wifi"]);
+const SAFE_BACKGROUND_KEYS = new Set(["midnight", "ocean", "aurora", "forest", "sunset", "sand"]);
+const SAFE_PACKAGE_SHAPES = new Set(["rounded", "soft-square", "compact", "square", "circle", "pill", "hexagon", "octagon", "squircle"]);
+
+function sanitizeColors(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const colors: Record<string, string> = {};
+  for (const [name, color] of Object.entries(value)) {
+    if (/^[a-zA-Z][a-zA-Z0-9]*$/.test(name) && typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)) {
+      colors[name] = color.toLowerCase();
+    }
+  }
+  return colors;
+}
 
 export function sanitizeHotspotBrandingSettings(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -31,13 +45,7 @@ export function sanitizeHotspotBrandingSettings(value: unknown): Record<string, 
     const item = input[key];
     if (key === "colors") {
       if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-      const colors: Record<string, string> = {};
-      for (const [name, color] of Object.entries(item)) {
-        if (/^[a-zA-Z][a-zA-Z0-9]*$/.test(name) && typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)) {
-          colors[name] = color.toLowerCase();
-        }
-      }
-      output.colors = colors;
+      output.colors = sanitizeColors(item);
     } else if (key === "portalCards") {
       if (!item || typeof item !== "object" || Array.isArray(item)) continue;
       const cards: Record<string, boolean> = {};
@@ -62,6 +70,35 @@ export function sanitizeHotspotBrandingSettings(value: unknown): Record<string, 
       if (typeof item === "boolean") output.tawkEnabled = item;
     } else if (key === "portalLayout") {
       if (typeof item === "string" && SAFE_PORTAL_LAYOUTS.has(item)) output.portalLayout = item;
+    } else if (key === "layoutAppearances") {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const appearances: Record<string, unknown> = {};
+      for (const [layout, value] of Object.entries(item)) {
+        if (!SAFE_LAYOUT_KEYS.has(layout) || !value || typeof value !== "object" || Array.isArray(value)) continue;
+        const appearance = value as Record<string, unknown>;
+        appearances[layout] = {
+          ...(typeof appearance.portalBackground === "string" && SAFE_BACKGROUND_KEYS.has(appearance.portalBackground)
+            ? { portalBackground: appearance.portalBackground }
+            : {}),
+          ...(typeof appearance.portalPackageShape === "string" && SAFE_PACKAGE_SHAPES.has(appearance.portalPackageShape)
+            ? { portalPackageShape: appearance.portalPackageShape }
+            : {}),
+          colors: sanitizeColors(appearance.colors),
+        };
+      }
+      output.layoutAppearances = appearances;
+    } else if (key === "supportContacts") {
+      if (!Array.isArray(item)) continue;
+      output.supportContacts = item.slice(0, 8).flatMap(contact => {
+        if (!contact || typeof contact !== "object" || Array.isArray(contact)) return [];
+        const row = contact as Record<string, unknown>;
+        return [{
+          id: typeof row.id === "string" ? row.id.slice(0, 80) : "",
+          label: typeof row.label === "string" ? row.label.slice(0, 60) : "",
+          phone: typeof row.phone === "string" ? row.phone.slice(0, 30) : "",
+          whatsapp: typeof row.whatsapp === "string" ? row.whatsapp.slice(0, 30) : "",
+        }];
+      });
     } else if (typeof item === "string" && item.length <= 2_000_000) {
       output[key] = item;
     }

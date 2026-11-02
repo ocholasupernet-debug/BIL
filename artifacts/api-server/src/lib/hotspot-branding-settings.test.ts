@@ -90,3 +90,38 @@ test("accepts only boolean Tawk enablement values", () => {
   assert.deepEqual(sanitizeHotspotBrandingSettings({ tawkEnabled: false }), { tawkEnabled: false });
   assert.deepEqual(sanitizeHotspotBrandingSettings({ tawkEnabled: "true" }), {});
 });
+
+test("keeps only supported per-layout appearance settings and support contacts", () => {
+  assert.deepEqual(
+    sanitizeHotspotBrandingSettings({
+      layoutAppearances: {
+        classic: {
+          portalBackground: "sand",
+          portalPackageShape: "rounded",
+          colors: { primaryColor: "#ABCDEF", invalid: "red" },
+          script: "discard",
+        },
+        "dansted-wifi": {
+          portalBackground: "midnight",
+          portalPackageShape: "hexagon",
+          colors: { buttonColor: "#40C965" },
+        },
+        retired: { portalBackground: "sunset" },
+      },
+      supportContacts: [
+        { id: "one", label: "Care", phone: "0712345678", whatsapp: "254712345678", ignored: true },
+        { id: "two", label: "Sales", phone: "", whatsapp: "254700000000" },
+      ],
+    }),
+    {
+      layoutAppearances: {
+        classic: { portalBackground: "sand", portalPackageShape: "rounded", colors: { primaryColor: "#abcdef" } },
+        "dansted-wifi": { portalBackground: "midnight", portalPackageShape: "hexagon", colors: { buttonColor: "#40c965" } },
+      },
+      supportContacts: [
+        { id: "one", label: "Care", phone: "0712345678", whatsapp: "254712345678" },
+        { id: "two", label: "Sales", phone: "", whatsapp: "254700000000" },
+      ],
+    },
+  );
+});
