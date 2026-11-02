@@ -67,6 +67,18 @@ test("deployments register the Nairobi-aware monthly ledger summary", () => {
   assert.match(migration, /revenue_ledger/);
 });
 
+test("renewal banner totals use Nairobi-bounded eligible ledger sales", () => {
+  const runner = api("scripts/apply-deployment-migrations.mjs");
+  const migration = api("migrations/2026_billing_eligible_sales_summary.sql");
+  const billingRoute = api("src/routes/billing-route.ts");
+  assert.ok(runner.includes("../migrations/2026_billing_eligible_sales_summary.sql"));
+  assert.match(migration, /get_previous_month_eligible_sales/);
+  assert.match(migration, /Africa\/Nairobi/);
+  assert.match(migration, /mpesa_registration/);
+  assert.match(migration, /manual_registration/);
+  assert.match(billingRoute, /billingEligibleSalesSummary/);
+});
+
 test("deployments register and verify the PPPoE renewal settings migration", () => {
   const runner = api("scripts/apply-deployment-migrations.mjs");
   const migration = api("migrations/2026_pppoe_portal_settings.sql");

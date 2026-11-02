@@ -100,6 +100,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_immutable_revenue_billing.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_revenue_summary_africa_nairobi.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_monthly_revenue_ledger_summary.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_billing_eligible_sales_summary.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_platform_income_reporting.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_router_revenue_summary.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_port_service_provisioning_status.sql", import.meta.url)),
