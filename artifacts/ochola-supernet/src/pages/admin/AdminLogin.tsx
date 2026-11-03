@@ -443,9 +443,6 @@ export default function AdminLogin() {
           {otpNotice && <p role="status" style={{ margin: "0 0 16px", fontSize: "0.83rem", color: "var(--isp-text-muted)" }}>{otpNotice}</p>}
 
            <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-             {(loginMethod === "password" || (loginMethod !== "recovery" && otpChallengeId && otpPurpose === "login")) && (
-               <TurnstileCheck action="admin_login" resetKey={turnstileResetKey} onToken={setTurnstileToken} />
-             )}
              {!hostSubdomain && (
                <div>
                  <label style={{
@@ -628,6 +625,7 @@ export default function AdminLogin() {
                         style={inputStyle}
                       />
                     </div>
+                    {otpPurpose === "login" && <TurnstileCheck action="admin_login" resetKey={turnstileResetKey} onToken={setTurnstileToken} />}
                     <button type="button" onClick={() => void verifyWhatsappCode()} disabled={otpLoading || otpCode.length !== 6} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || otpCode.length !== 6 ? 0.6 : 1 }}>
                       {otpLoading ? "Verifying…" : "Verify code"}
                     </button>
@@ -651,21 +649,28 @@ export default function AdminLogin() {
               </div>
             )}
 
-            {loginMethod === "password" && <button
-              type="submit"
-              disabled={isLoading || companyLoading}
-              className="btn btn-primary"
-              style={{
-                width: "100%", padding: "12px 20px",
-                borderRadius: 10,
-                opacity: isLoading || companyLoading ? 0.5 : 1,
-                cursor: isLoading || companyLoading ? "not-allowed" : "pointer",
-                display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-              }}
-            >
-              {isLoading ? "Signing in…" : "Sign In"}
-              {!isLoading && <ArrowRight size={16} />}
-            </button>}
+            {loginMethod === "password" && (
+             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+               <div style={{ flex: "0 1 300px", maxWidth: "100%" }}>
+                 <TurnstileCheck action="admin_login" resetKey={turnstileResetKey} onToken={setTurnstileToken} />
+               </div>
+               <button
+                 type="submit"
+                 disabled={isLoading || companyLoading}
+                 className="btn btn-primary"
+                 style={{
+                   width: "auto", minWidth: 104, padding: "12px 8px", flex: "1 1 104px",
+                   borderRadius: 10,
+                   opacity: isLoading || companyLoading ? 0.5 : 1,
+                   cursor: isLoading || companyLoading ? "not-allowed" : "pointer",
+                   display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                 }}
+               >
+                 {isLoading ? "Signing in…" : "Sign In"}
+                 {!isLoading && <ArrowRight size={16} />}
+               </button>
+             </div>
+           )}
           </form>
 
            <p style={{ marginTop: 28, textAlign: "center", fontSize: "0.9rem", color: "var(--isp-text-sub)" }}>

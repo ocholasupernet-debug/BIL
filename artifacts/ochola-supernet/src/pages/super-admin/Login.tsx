@@ -255,16 +255,14 @@ export default function SuperAdminLogin() {
               </button>
             </Field>
 
-            <TurnstileCheck
-              action="admin_login"
-              resetKey={turnstileResetKey}
-              onToken={setTurnstileToken}
-            />
-
-            {/* Divider */}
-            <div style={{ borderTop: "1px solid rgba(212,179,74,0.08)" }} />
-
-            {/* Submit */}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ flex: "0 1 300px", maxWidth: "100%" }}>
+                <TurnstileCheck
+                  action="admin_login"
+                  resetKey={turnstileResetKey}
+                  onToken={setTurnstileToken}
+                />
+              </div>
             <button
               type="submit"
               disabled={loading}
@@ -273,8 +271,10 @@ export default function SuperAdminLogin() {
                 alignItems: "center",
                 justifyContent: "center",
                 gap: 8,
-                width: "100%",
-                padding: "14px 24px",
+                width: "auto",
+                minWidth: 120,
+                flex: "1 1 120px",
+                padding: "14px 10px",
                 borderRadius: 12,
                 background: loading
                   ? "rgba(180,144,50,0.4)"
@@ -302,6 +302,7 @@ export default function SuperAdminLogin() {
                 </>
               )}
             </button>
+            </div>
 
           </form>
         </div>
