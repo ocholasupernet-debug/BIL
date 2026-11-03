@@ -55,6 +55,7 @@ module.exports = {
         NODE_ENV: "production",
         PORT: "8080",
         SERVE_STATIC: "true",
+        GMAIL_APP_PASSWORD: process.env.GMAIL_APP_PASSWORD || "",
         TAWK_API_KEY: process.env.TAWK_API_KEY || "",
       },
 
@@ -70,6 +71,7 @@ module.exports = {
         SUPABASE_URL:         process.env.SUPABASE_URL || "",
         SUPABASE_DB_URL: process.env.SUPABASE_DB_URL || process.env.SUPABASE_DATABASE_URL || "",
          SESSION_SECRET:       process.env.SESSION_SECRET || "",
+         GMAIL_APP_PASSWORD:  process.env.GMAIL_APP_PASSWORD || "",
          TURNSTILE_SECRET:     process.env.TURNSTILE_SECRET || "",
          VITE_TURNSTILE_SITE_KEY: process.env.VITE_TURNSTILE_SITE_KEY || "",
         TAWK_API_KEY:         process.env.TAWK_API_KEY || "",

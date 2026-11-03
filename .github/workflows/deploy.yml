@@ -99,6 +99,9 @@ jobs:
       - name: Test WhatsApp environment sync
         run: node --test deploy/tests/sync-whatsapp-env.test.mjs
 
+      - name: Test Gmail secret reaches PM2
+        run: node --test deploy/tests/gmail-secret-release.test.mjs
+
       - name: Verify application release source contract
         run: node --test deploy/tests/hotspot-release-source.test.mjs
 
