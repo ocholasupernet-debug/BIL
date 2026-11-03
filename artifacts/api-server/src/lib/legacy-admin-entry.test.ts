@@ -2,20 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveLegacyAdminEntry } from "./legacy-admin-entry.js";
 
-test("routes the requested PHP-style URL to the tenant login role selector", () => {
+test("routes the requested PHP-style URL directly to the tenant admin login", () => {
   assert.equal(
     resolveLegacyAdminEntry(
       "ocholasupernet.isplatty.com",
       "/index.php?_route=admin/",
     ),
-    "/admin/entry",
+    "/admin/login",
   );
   assert.equal(
     resolveLegacyAdminEntry(
       "ocholasupernet.isplatty.org",
       "/index.php?_route=admin/",
     ),
-    "/admin/entry",
+    "/admin/login",
   );
 });
 

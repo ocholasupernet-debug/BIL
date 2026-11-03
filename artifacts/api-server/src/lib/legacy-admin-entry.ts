@@ -19,5 +19,5 @@ export function resolveLegacyAdminEntry(host: string, requestUrl: string): strin
     return null;
   }
 
-  return "/admin/entry";
+  return "/admin/login";
 }

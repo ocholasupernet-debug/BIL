@@ -13,7 +13,7 @@ import { getAdminApiToken, getAdminRole, isImpersonating } from "@/lib/supabase"
 
 import LandingPage from "./pages/LandingPage";
 import AdminLogin from "./pages/admin/AdminLogin";
-import AdminEntrySelection from "./pages/admin/AdminEntrySelection";
+
 import AdminDashboard from "./pages/admin/Dashboard";
 import Copilot from "./pages/admin/Copilot";
 import AdminCustomers from "./pages/admin/Customers";
@@ -115,9 +115,9 @@ function SubdomainGuard() {
     && /^admin\.isplatty\.(org|com)$/.test(window.location.hostname.toLowerCase());
 
   useEffect(() => {
-    if (isAdminEntryHost) { setLocation("/admin/entry"); return; }
+    if (isAdminEntryHost) { setLocation("/admin/login"); return; }
     const sub = getHostSubdomain();
-    if (sub && sub !== "register" && sub !== "latex") setLocation("/admin/entry");
+    if (sub && sub !== "register" && sub !== "latex") setLocation("/admin/login");
   }, [isAdminEntryHost, setLocation]);
 
   if (customHotspotPortal) return <HotspotLogin />;
@@ -211,8 +211,8 @@ function Router() {
     <Switch>
       {import.meta.env.DEV && <Route path="/__visual/:page" component={VisualCheckHarness} />}
       <Route path="/" component={SubdomainGuard} />
-      <Route path="/admin/entry" component={AdminEntrySelection} />
-      <Route path="/admin/login" component={AdminEntrySelection} />
+      <Route path="/admin/entry" component={AdminLogin} />
+      <Route path="/admin/login" component={AdminLogin} />
       <Route path="/admin/login/isp" component={AdminLogin} />
       <Route path="/admin/dashboard" component={RoleAwareDashboard} />
       <Route path="/admin/copilot" component={Copilot} />
