@@ -135,11 +135,16 @@ jobs:
         env:
           DEPLOY_VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           DEPLOY_VPS_SSH_PASSPHRASE: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          DEPLOY_GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: |
           printf 'VPS_SSH_KEY_B64=%s\n' \
             "$(printf '%s' "$DEPLOY_VPS_SSH_KEY" | base64 -w0)" >> "$GITHUB_OUTPUT"
           printf 'VPS_SSH_PASSPHRASE_B64=%s\n' \
             "$(printf '%s' "$DEPLOY_VPS_SSH_PASSPHRASE" | base64 -w0)" >> "$GITHUB_OUTPUT"
+          GMAIL_APP_PASSWORD_B64="$(printf '%s' "$DEPLOY_GMAIL_APP_PASSWORD" | base64 -w0)"
+          echo "::add-mask::$GMAIL_APP_PASSWORD_B64"
+          printf 'GMAIL_APP_PASSWORD_B64=%s\n' "$GMAIL_APP_PASSWORD_B64" >> "$GITHUB_OUTPUT"
+          unset GMAIL_APP_PASSWORD_B64 DEPLOY_GMAIL_APP_PASSWORD
 
       - name: Copy release to VPS
         uses: appleboy/scp-action@v0.1.7
@@ -167,7 +172,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,VITE_TURNSTILE_SITE_KEY,TURNSTILE_SECRET,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,SYNC_ROUTER_CONFIGURATION_IDS,SYNC_ROUTER_ADMIN_ID,SYNC_ROUTER_AUTH_VERSION,INSPECT_API_ERRORS,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE
+          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,VITE_TURNSTILE_SITE_KEY,TURNSTILE_SECRET,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,SYNC_ROUTER_CONFIGURATION_IDS,SYNC_ROUTER_ADMIN_ID,SYNC_ROUTER_AUTH_VERSION,INSPECT_API_ERRORS,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE,GMAIL_APP_PASSWORD_B64
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -268,7 +273,9 @@ jobs:
                   printf '%s\n' "$line" >> "$temp_file"
                 done < .env
               fi
-              printf '%s=%s\n' "$key" "$val" >> "$temp_file"
+              local escaped_val
+              printf -v escaped_val '%q' "$val"
+              printf '%s=%s\n' "$key" "$escaped_val" >> "$temp_file"
               mv -f "$temp_file" .env
               chmod 600 .env
               echo "  ✓ ${key} written to .env"
@@ -280,6 +287,11 @@ jobs:
             upsert_env "SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_SERVICE_ROLE_KEY"
             upsert_env "SUPABASE_DB_URL"           "$SUPABASE_DB_URL"
             upsert_env "SESSION_SECRET"             "$SESSION_SECRET"
+            if [ -n "${GMAIL_APP_PASSWORD_B64:-}" ]; then
+              GMAIL_APP_PASSWORD="$(printf '%s' "$GMAIL_APP_PASSWORD_B64" | base64 -d)"
+              upsert_env "GMAIL_APP_PASSWORD" "$GMAIL_APP_PASSWORD"
+              unset GMAIL_APP_PASSWORD
+            fi
             upsert_env "TURNSTILE_SECRET"            "$TURNSTILE_SECRET"
             upsert_env "VITE_TURNSTILE_SITE_KEY"     "$VITE_TURNSTILE_SITE_KEY"
             upsert_env "TAWK_API_KEY"               "$TAWK_API_KEY"
@@ -510,3 +522,4 @@ jobs:
           WAHA_API_KEY: ${{ secrets.WAHA_API_KEY }}
           WAHA_SESSION_ID: ${{ secrets.WAHA_SESSION_ID }}
           WAHA_DEFAULT_COUNTRY_CODE: ${{ secrets.WAHA_DEFAULT_COUNTRY_CODE }}
+          GMAIL_APP_PASSWORD_B64: ${{ steps.encode_runtime_ssh.outputs.GMAIL_APP_PASSWORD_B64 }}
