@@ -57,7 +57,7 @@ import {
 } from "../lib/portal-assets.js";
 import { vlanCustomerQueuePresence } from "../lib/vlan-customer-queue.js";
 import { generateVpsOvpnSetupScript, describeVpnArchitecture } from "../lib/vpn-utils";
-import { sbInsert, sbSelect, sbSelectStrict, sbUpdate, supabaseConfigured } from "../lib/supabase-client";
+import { sbInsert, sbInsertStrict, sbSelect, sbSelectStrict, sbUpdate, sbUpdateStrict, supabaseConfigured } from "../lib/supabase-client";
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
@@ -2449,6 +2449,176 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
   } finally {
     pendingRouterFileSources.delete(token);
     pendingRouterFileSources.delete(roamingToken);
+  }
+});
+
+/* ─── POST /api/router/:id/hotspot-layouts/deploy ───────────────────────── */
+router.post("/router/:id/hotspot-layouts/deploy", requireAdmin(), async (req, res): Promise<void> => {
+  const routerId = Number(req.params.id);
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const layoutId = String(req.body?.layoutId ?? "");
+  const layoutVersion = String(req.body?.layoutVersion ?? "").slice(0, 40);
+  const portal = validateGeneratedHotspotPortal(req.body?.html);
+  const embedded = typeof req.body?.html === "string" ? findEmbeddedHotspotConfig(req.body.html) : null;
+  if (!Number.isSafeInteger(routerId) || routerId < 1) { res.status(400).json({ error: "Invalid router id." }); return; }
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
+  if (!["classic", "dansted-wifi", "circuit-noir", "aurora-network"].includes(layoutId) || !layoutVersion) {
+    res.status(400).json({ error: "A supported layout and version are required." });
+    return;
+  }
+  if (req.body?.replacementConsent !== true) {
+    res.status(400).json({ error: "Confirm replacement of the selected Hotspot profile before deployment." });
+    return;
+  }
+  if (!("content" in portal)) { res.status(400).json({ error: portal.error }); return; }
+  if (!embedded || embedded.config.portalLayout !== layoutId) {
+    res.status(400).json({ error: "The generated portal layout does not match the selected layout." });
+    return;
+  }
+  if (Number(embedded.config.portId ?? 0) > 0) {
+    res.status(400).json({ error: "This staged deployment endpoint only supports the router-wide Hotspot profile; assigned-port deployments remain unchanged." });
+    return;
+  }
+  const origin = requestOrigin(req);
+  if (!origin.startsWith("https://")) { res.status(400).json({ error: "Portal deployment requires an HTTPS public request origin." }); return; }
+
+  const found = await getRouterCreds(routerId, adminId);
+  if (!found) { res.status(404).json({ error: "Router not found or not assigned to this administrator." }); return; }
+  let profileTarget: ReturnType<typeof selectUniquePrimaryHotspotProfile>["selected"] = null;
+  try {
+    const [servers, profiles] = await Promise.all([
+      runRouterCommand(found.creds, ["/ip/hotspot/print", "=.proplist=name,interface,profile,disabled"]),
+      runRouterCommand(found.creds, ["/ip/hotspot/profile/print", "=.proplist=.id,name,html-directory"]),
+    ]);
+    const selection = selectUniquePrimaryHotspotProfile(servers, profiles);
+    if (!selection.selected) {
+      res.status(409).json({
+        error: "A single active root-level Hotspot profile could not be identified. No router files or settings were changed.",
+        candidates: selection.candidates.map(item => ({ server: item.serverName, profile: item.profileName, directory: item.htmlDirectory })),
+      });
+      return;
+    }
+    profileTarget = selection.selected;
+  } catch (error) {
+    routerErrorResponse(res, error);
+    return;
+  }
+
+  const previousDirectory = profileTarget.htmlDirectory;
+  const parentDirectory = `${previousDirectory}/bil-layouts`;
+  const stageDirectory = `${parentDirectory}/${layoutId}-${Date.now()}-${randomBytes(5).toString("hex")}`;
+  const filePaths = [`${stageDirectory}/login.html`, `${stageDirectory}/rlogin.html`];
+  let historyId: number | undefined;
+  try {
+    const [history] = await sbInsertStrict<{ id: number }>("isp_hotspot_layout_deployments", {
+      admin_id: adminId,
+      router_id: routerId,
+      layout_id: layoutId,
+      layout_version: layoutVersion,
+      status: "staging",
+      profile_name: profileTarget.profileName,
+      previous_directory: previousDirectory,
+      deployed_directory: stageDirectory,
+      files: filePaths,
+    });
+    historyId = history?.id;
+    if (!historyId) throw new Error("The deployment history record could not be created.");
+  } catch (error) {
+    res.status(503).json({ error: error instanceof Error ? error.message : "Deployment history is unavailable; no router files were changed." });
+    return;
+  }
+
+  const tokens = [randomBytes(24).toString("hex"), randomBytes(24).toString("hex")];
+  cleanPendingRouterFileSources();
+  for (let i = 0; i < tokens.length; i += 1) {
+    pendingRouterFileSources.set(tokens[i], {
+      content: portal.content,
+      contentType: "text/html; charset=utf-8",
+      fileName: i === 0 ? "login.html" : "rlogin.html",
+      expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+    });
+  }
+  let rollbackVerified: boolean | null = null;
+  let profileSwitchAttempted = false;
+  try {
+    await ensureRouterFileDirectory(found.creds, `${previousDirectory}/bil-layouts`);
+    await ensureRouterFileDirectory(found.creds, stageDirectory);
+    for (let i = 0; i < filePaths.length; i += 1) {
+      await deployRouterFile(found.creds, {
+        destinationPath: filePaths[i],
+        sourceUrl: `${origin}/api/router-file-source/${tokens[i]}`,
+        overwrite: false,
+        uploadId: tokens[i].slice(0, 16),
+      });
+    }
+    const routerFiles = await fetchRouterFiles(found.creds);
+    const uploadedNames = new Set((routerFiles.files ?? []).map(file => String(file.name ?? "").replaceAll("\\", "/").toLowerCase()));
+    if (filePaths.some(path => !uploadedNames.has(path.toLowerCase()))) {
+      throw new Error("RouterOS did not verify both staged portal files; the active profile was not changed.");
+    }
+
+    const currentProfiles = await runRouterCommand(found.creds, ["/ip/hotspot/profile/print", "=.proplist=.id,name,html-directory"]);
+    const currentProfile = (Array.isArray(currentProfiles) ? currentProfiles : [])
+      .find(profile => String(profile[".id"] ?? "") === profileTarget!.profileId);
+    const currentDirectory = String(currentProfile?.["html-directory"] ?? "").replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    if (!currentProfile || currentDirectory.toLowerCase() !== previousDirectory.toLowerCase()) {
+      throw new Error("The Hotspot profile changed during staging; no profile update was attempted.");
+    }
+    profileSwitchAttempted = true;
+    await runRouterCommand(found.creds, ["/ip/hotspot/profile/set", `=.id=${profileTarget.profileId}`, `=html-directory=${stageDirectory}`]);
+    const verifiedProfiles = await runRouterCommand(found.creds, ["/ip/hotspot/profile/print", "=.proplist=.id,html-directory"]);
+    const verifiedProfile = (Array.isArray(verifiedProfiles) ? verifiedProfiles : [])
+      .find(profile => String(profile[".id"] ?? "") === profileTarget!.profileId);
+    const verifiedDirectory = String(verifiedProfile?.["html-directory"] ?? "").replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    if (verifiedDirectory.toLowerCase() !== stageDirectory.toLowerCase()) {
+      throw new Error("RouterOS did not confirm the new Hotspot directory.");
+    }
+    await sbUpdateStrict("isp_hotspot_layout_deployments", `id=eq.${historyId}&admin_id=eq.${adminId}`, {
+      status: "success",
+      rollback_verified: null,
+    });
+    res.status(201).json({ ok: true, routerId, layoutId, layoutVersion, profileName: profileTarget.profileName, previousDirectory, deployedDirectory: stageDirectory, files: filePaths });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "RouterOS returned an unknown deployment error.";
+    if (profileSwitchAttempted) {
+      try {
+        await runRouterCommand(found.creds, ["/ip/hotspot/profile/set", `=.id=${profileTarget.profileId}`, `=html-directory=${previousDirectory}`]);
+        const rows = await runRouterCommand(found.creds, ["/ip/hotspot/profile/print", "=.proplist=.id,html-directory"]);
+        const restored = (Array.isArray(rows) ? rows : []).find(profile => String(profile[".id"] ?? "") === profileTarget!.profileId);
+        rollbackVerified = String(restored?.["html-directory"] ?? "").replaceAll("\\", "/").replace(/^\/+|\/+$/g, "").toLowerCase() === previousDirectory.toLowerCase();
+      } catch {
+        rollbackVerified = false;
+      }
+    }
+    await sbUpdateStrict("isp_hotspot_layout_deployments", `id=eq.${historyId}&admin_id=eq.${adminId}`, {
+      status: "failed",
+      rollback_verified: rollbackVerified,
+      error_message: message.slice(0, 500),
+    }).catch(updateError => logger.error({ updateError, historyId, routerId }, "Failed to update Hotspot layout deployment history"));
+    res.status(502).json({
+      error: message,
+      deployedDirectory: stageDirectory,
+      activeProfileRestored: rollbackVerified,
+      note: "RouterOS does not provide an atomic multi-file swap. The previous directory was retained; staged files are not automatically deleted.",
+    });
+  } finally {
+    tokens.forEach(token => pendingRouterFileSources.delete(token));
+  }
+});
+
+router.get("/router/:id/hotspot-layouts/history", requireAdmin(), async (req, res): Promise<void> => {
+  const routerId = Number(req.params.id);
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  if (!Number.isSafeInteger(routerId) || routerId < 1) { res.status(400).json({ error: "Invalid router id." }); return; }
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
+  try {
+    const rows = await sbSelectStrict<Record<string, unknown>>(
+      "isp_hotspot_layout_deployments",
+      `admin_id=eq.${adminId}&router_id=eq.${routerId}&select=id,layout_id,layout_version,status,profile_name,previous_directory,deployed_directory,files,rollback_verified,error_message,created_at&order=created_at.desc&limit=50`,
+    );
+    res.json({ history: rows });
+  } catch (error) {
+    res.status(503).json({ error: error instanceof Error ? error.message : "Deployment history could not be loaded." });
   }
 });
 

@@ -45,6 +45,7 @@ import {
   hotspotPostLoginDestination,
   resolveHotspotPortalApiOrigin,
 } from "@/lib/hotspot-portal-origin";
+import { HotspotLayoutManager, type HotspotDeploymentHistoryEntry } from "./HotspotLayoutManager";
 import {
   AlertCircle, ArrowDownToLine, Check, ChevronDown, CircleHelp, Eye, FolderOpen,
   Image, Info, LayoutTemplate, Link2, Loader2, Mail, Phone,
@@ -79,6 +80,15 @@ const DEFAULT_COLORS = {
 type ColorSettings = typeof DEFAULT_COLORS;
 type SupportedPortalLayout = "classic" | "dansted-wifi" | "circuit-noir" | "aurora-network";
 type SupportContact = { id: string; label: string; phone: string; whatsapp: string };
+type LayoutDeploymentRecord = {
+  id: number;
+  layout_id: string;
+  layout_version: string;
+  status: string;
+  profile_name: string;
+  deployed_directory: string;
+  created_at: string;
+};
 type LayoutAppearance = {
   portalBackground: PortalBackground;
   portalPackageShape: PortalPackageShape;
@@ -1213,6 +1223,12 @@ export default function HotspotSettings() {
   const [portalPreflightLoading, setPortalPreflightLoading] = useState(false);
   const [portalPreflightProgress, setPortalPreflightProgress] = useState({ completed: 0, total: 0 });
   const [portalPreflightResults, setPortalPreflightResults] = useState<RouterPortalPreflight[]>([]);
+  const [layoutHistory, setLayoutHistory] = useState<LayoutDeploymentRecord[]>([]);
+  const [layoutHistoryLoading, setLayoutHistoryLoading] = useState(false);
+  const [layoutHistoryError, setLayoutHistoryError] = useState<string | null>(null);
+  const [layoutDeployBusy, setLayoutDeployBusy] = useState(false);
+  const [layoutPreviewUrls, setLayoutPreviewUrls] = useState<Record<string, string>>({});
+  const [layoutHistoryRefresh, setLayoutHistoryRefresh] = useState(0);
 
   useEffect(() => {
     if (appearanceSaving) return;
@@ -1293,6 +1309,36 @@ export default function HotspotSettings() {
       return data;
     },
   });
+
+  const selectedRouterForLayout = routers.find(router => router.id === Number(settings.routerId));
+  const layoutTenantId = Number(selectedRouterForLayout?.admin_id ?? adminId);
+  useEffect(() => {
+    const routerId = Number(settings.routerId);
+    if (!Number.isSafeInteger(routerId) || routerId < 1 || !Number.isSafeInteger(layoutTenantId) || layoutTenantId < 1) {
+      setLayoutHistory([]);
+      setLayoutHistoryError(null);
+      return;
+    }
+    let cancelled = false;
+    setLayoutHistoryLoading(true);
+    setLayoutHistoryError(null);
+    fetch(`/api/router/${routerId}/hotspot-layouts/history?adminId=${encodeURIComponent(String(layoutTenantId))}`, {
+      headers: adminApiHeaders(),
+      cache: "no-store",
+    }).then(async response => {
+      const data = await parseApiResponse<{ history?: LayoutDeploymentRecord[] }>(response, "Layout deployment history could not be loaded.");
+      if (!response.ok) throw new Error(data.error || "Layout deployment history could not be loaded.");
+      if (!Array.isArray(data.history)) throw new Error("Layout deployment history returned an invalid response.");
+      return data.history;
+    }).then(rows => {
+      if (!cancelled) setLayoutHistory(rows);
+    }).catch(error => {
+      if (!cancelled) setLayoutHistoryError(error instanceof Error ? error.message : "Layout deployment history is unavailable.");
+    }).finally(() => {
+      if (!cancelled) setLayoutHistoryLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [settings.routerId, layoutTenantId, layoutHistoryRefresh]);
 
   useEffect(() => () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -1947,6 +1993,81 @@ export default function HotspotSettings() {
     }
   };
 
+  const previewManagedLayout = async (layoutId: string) => {
+    const layout = normalizeHotspotSettingsLayout(layoutId);
+    try {
+      const appearance = settings.layoutAppearances[layout];
+      const html = await buildPortalHtml(
+        { ...settings, portalLayout: layout },
+        brand.domain,
+        { ...appearance, portalLayout: layout },
+        { portId: selectedPortalPort?.id, previewOnly: true },
+      );
+      setLayoutPreviewUrls(previous => {
+        const oldUrl = previous[layout];
+        if (oldUrl) URL.revokeObjectURL(oldUrl);
+        return { ...previous, [layout]: URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" })) };
+      });
+    } catch (error) {
+      setNotice({ type: "error", text: error instanceof Error ? error.message : "The layout preview could not be generated." });
+    }
+  };
+
+  const deployManagedLayout = async () => {
+    const routerId = Number(settings.routerId);
+    if (!Number.isSafeInteger(routerId) || routerId < 1 || !selectedRouterForLayout) {
+      setNotice({ type: "error", text: "Choose a linked router before deploying a layout." });
+      return;
+    }
+    if (isResellerAccount || selectedAssignedPortId) {
+      setNotice({ type: "error", text: "Staged deployment currently supports the router-wide Hotspot only; assigned-port deployment was not changed." });
+      return;
+    }
+    setLayoutDeployBusy(true);
+    setNotice(null);
+    try {
+      const html = await buildPortalHtml(
+        settings,
+        brand.domain,
+        { ...settings.layoutAppearances[settings.portalLayout], portalLayout: settings.portalLayout },
+      );
+      const headers = new Headers(adminApiHeaders());
+      headers.set("Content-Type", "application/json");
+      const response = await fetch(`/api/router/${routerId}/hotspot-layouts/deploy`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          adminId: layoutTenantId,
+          layoutId: settings.portalLayout,
+          layoutVersion: settings.portalLayout === "aurora-network" ? "1.0.0" : "legacy-1",
+          html,
+          replacementConsent: true,
+        }),
+      });
+      const data = await parseApiResponse<{ error?: string; deployedDirectory?: string }>(response, "The staged layout deployment failed.");
+      if (!response.ok) throw new Error(data.error || "The staged layout deployment failed.");
+      setNotice({
+        type: "success",
+        text: `Portal staged and verified, then assigned to the selected Hotspot profile. Previous files were retained. ${data.deployedDirectory ?? ""}`,
+      });
+      setLayoutHistoryRefresh(value => value + 1);
+    } catch (error) {
+      setNotice({ type: "error", text: error instanceof Error ? error.message : "The staged layout deployment failed." });
+      setLayoutHistoryRefresh(value => value + 1);
+    } finally {
+      setLayoutDeployBusy(false);
+    }
+  };
+
+  const successfulLayoutDeployment = layoutHistory.find(row => row.status === "success");
+  const managedLayoutHistory: HotspotDeploymentHistoryEntry[] = layoutHistory.map(row => ({
+    date: row.created_at,
+    layout: HOTSPOT_SETTINGS_LAYOUTS.find(layout => layout.value === row.layout_id)?.label ?? row.layout_id,
+    version: row.layout_version,
+    status: row.status,
+    router: selectedRouterForLayout?.name ?? `Router ${settings.routerId}`,
+  }));
+
   const presets = [
     { name: "Signal Orange", colors: { bgColor: "#081416", bgColor2: "#173638", primaryColor: "#d96835", accentColor: "#f09562", cardColor: "#12292b", buttonColor: "#168c78", textColor: "#ffffff", inputBgColor: "#0b1d1f" } },
     { name: "Purple Night", colors: DEFAULT_COLORS },
@@ -2312,62 +2433,11 @@ export default function HotspotSettings() {
               )}
             </Section>
 
-            <Section id="hotspot-appearance" icon={<Sparkles size={16} />} title="Portal appearance" description="Choose one of three page layouts, then refine its background, package cards, and colors.">
+            <Section id="hotspot-appearance" icon={<Sparkles size={16} />} title="Portal appearance" description="Customize the selected layout. Selection and deployment are managed in the layout panel below.">
               {appearanceLoading ? (
                 <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading portal appearance…</div>
               ) : (
                 <>
-                  {(() => {
-                    return (
-                      <Field label="Customer page layout" help="Each layout keeps its own saved appearance. Switching layouts does not overwrite the other one.">
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
-                          {HOTSPOT_SETTINGS_LAYOUTS.map(option => (
-                            <button
-                              key={option.value}
-                              type="button"
-                              aria-pressed={settings.portalLayout === option.value}
-                              onClick={() => selectPortalLayout(option.value as SupportedPortalLayout)}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 13,
-                                minHeight: 96,
-                                padding: 14,
-                                textAlign: "left",
-                                color: "var(--isp-text)",
-                                background: settings.portalLayout === option.value ? "var(--isp-accent-glow)" : "var(--isp-input-bg)",
-                                border: `1px solid ${settings.portalLayout === option.value ? "var(--isp-accent)" : "var(--isp-border)"}`,
-                                borderRadius: 12,
-                                cursor: "pointer",
-                                boxShadow: settings.portalLayout === option.value ? "0 0 0 2px var(--isp-accent-glow)" : "none",
-                              }}
-                            >
-                            <span
-                              className={`hs-layout-thumb hs-layout-thumb-${option.value}`}
-                              style={{
-                                "--layout-preview-bg": option.background,
-                                "--layout-preview-panel": option.panel,
-                                "--layout-preview-accent": option.accent,
-                              } as React.CSSProperties}
-                              aria-hidden="true"
-                            >
-                              <i className="hs-layout-thumb-header" />
-                              <i className="hs-layout-thumb-hero" />
-                              <i className="hs-layout-thumb-plans" />
-                            </span>
-                              <span style={{ display: "grid", gap: 4 }}>
-                                <strong>{hotspotSettingsLayoutLabel(option)}</strong>
-                                <small style={{ color: "var(--isp-text-sub)", lineHeight: 1.4 }}>{option.description}</small>
-                                <small style={{ color: settings.portalLayout === option.value ? "var(--isp-accent)" : "var(--isp-text-sub)", fontWeight: 750 }}>
-                                  {settings.portalLayout === option.value ? "Selected · editing this layout" : "Select layout"}
-                                </small>
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      </Field>
-                    );
-                  })()}
                   <Field label="Portal background" help="This controls the main background of the generated hotspot page.">
                     <div className="hs-choice-grid">
                       {PORTAL_BACKGROUND_OPTIONS.map(option => (
@@ -2436,6 +2506,39 @@ export default function HotspotSettings() {
                 </>
               )}
             </Section>
+
+            <HotspotLayoutManager
+              layouts={HOTSPOT_SETTINGS_LAYOUTS.map((layout, index) => ({
+                id: layout.value,
+                name: hotspotSettingsLayoutLabel(layout),
+                version: layout.value === "aurora-network" ? "1.0.0" : "legacy",
+                description: layout.description,
+                availability: successfulLayoutDeployment?.layout_id === layout.value ? "active" : "available",
+                previewUrl: layoutPreviewUrls[layout.value],
+                isBuiltIn: true,
+                canDuplicate: false,
+                canArchive: false,
+              }))}
+              selectedLayoutId={settings.portalLayout}
+              deployment={{
+                routerName: selectedRouterForLayout?.name ?? (settings.routerId ? `Router ${settings.routerId}` : "No router selected"),
+                hotspotName: selectedPortalPort?.hotspot_server_name ?? (selectedAssignedPortId ? "Assigned Hotspot service" : "Router-wide Hotspot"),
+                selectedLayout: HOTSPOT_SETTINGS_LAYOUTS.find(layout => layout.value === settings.portalLayout)?.label ?? settings.portalLayout,
+                installedLayout: successfulLayoutDeployment
+                  ? HOTSPOT_SETTINGS_LAYOUTS.find(layout => layout.value === successfulLayoutDeployment.layout_id)?.label ?? successfulLayoutDeployment.layout_id
+                  : null,
+                syncStatus: layoutHistory[0]?.status ?? "not-deployed",
+                lastSuccessfulSync: successfulLayoutDeployment?.created_at ?? null,
+              }}
+              history={managedLayoutHistory}
+              state={{ loading: layoutHistoryLoading, error: layoutHistoryError, busy: layoutDeployBusy }}
+              selectLayout={id => selectPortalLayout(normalizeHotspotSettingsLayout(id))}
+              previewLayout={(id, _viewport) => { void previewManagedLayout(id); }}
+              duplicateLayout={() => undefined}
+              archiveLayout={() => undefined}
+              restoreLayout={() => undefined}
+              confirmDeploy={deployManagedLayout}
+            />
 
             <Section id="hotspot-content" icon={<Eye size={16} />} title="Portal content" description="Optional customer page cards." collapsible>
               <p style={{ margin: "12px 0 0", color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5 }}>
