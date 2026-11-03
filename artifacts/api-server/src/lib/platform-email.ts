@@ -6,6 +6,7 @@ import {
 } from "node:crypto";
 import nodemailer from "nodemailer";
 import { logger } from "./logger.js";
+import { TENANT_BASE_DOMAIN } from "./tenant-host.js";
 import {
   sbSelectStrict,
   sbUpsertStrict,
@@ -41,6 +42,8 @@ interface EncryptedEmailSettings {
 }
 
 const EMAIL_SETTINGS_ID = "global_email";
+export const PLATFORM_EMAIL_SENDER = "ocholasupernetbilling@gmail.com";
+export const PLATFORM_EMAIL_DEFAULT_FROM_NAME = "BIL";
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const EMPTY_SETTINGS: PlatformEmailSettings = {
   enabled: false,
@@ -67,6 +70,19 @@ function encryptionKey(): Buffer {
 
 export function isValidEmailAddress(value: string): boolean {
   return value.length <= 254 && EMAIL_PATTERN.test(value);
+}
+
+export function getPlatformEmailStatus() {
+  const configured = Boolean(process.env.GMAIL_APP_PASSWORD?.trim());
+  return {
+    provider: "gmail-smtp" as const,
+    enabled: configured,
+    configured,
+    senderEmail: PLATFORM_EMAIL_SENDER,
+    fromName: PLATFORM_EMAIL_DEFAULT_FROM_NAME,
+    status: configured ? "configured" as const : "needs_setup" as const,
+    missingConfiguration: configured ? [] : ["GMAIL_APP_PASSWORD"],
+  };
 }
 
 export function normalisePlatformEmailSettings(
@@ -293,9 +309,44 @@ export async function sendPlatformEmail(message: {
   to: string;
   subject: string;
   text: string;
+  fromName?: "BIL" | "BIL Security";
 }): Promise<void> {
-  const settings = await getPlatformEmailSettings();
-  await sendWithSettings(settings, message);
+  const password = process.env.GMAIL_APP_PASSWORD?.trim();
+  if (!password) {
+    throw new Error("Email is not configured. Add the GMAIL_APP_PASSWORD server secret to enable delivery.");
+  }
+  if (!isValidEmailAddress(message.to)) {
+    throw new Error("Enter a valid email address for the recipient.");
+  }
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    requireTLS: true,
+    auth: { user: PLATFORM_EMAIL_SENDER, pass: password },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
+  });
+  try {
+    await transporter.sendMail({
+      from: {
+        name: message.fromName ?? PLATFORM_EMAIL_DEFAULT_FROM_NAME,
+        address: PLATFORM_EMAIL_SENDER,
+      },
+      to: message.to,
+      subject: message.subject,
+      text: message.text,
+    });
+  } catch (error) {
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[platform-email] Gmail SMTP delivery failed",
+    );
+    throw new Error("Gmail email delivery failed. Check the server-side app-password configuration.");
+  } finally {
+    transporter.close();
+  }
 }
 
 export async function sendPlatformSecurityNotice(
@@ -303,12 +354,13 @@ export async function sendPlatformSecurityNotice(
   details: string,
 ): Promise<void> {
   try {
-    const settings = await getPlatformEmailSettings();
-    if (!settings.enabled || !settings.securityEmail) return;
-    await sendWithSettings(settings, {
-      to: settings.securityEmail,
-      subject: `OcholaSupernet security notice: ${event}`,
-      text: `${event}\n\n${details}\n\nThis message was generated automatically by OcholaSupernet.`,
+    const recipient = process.env.EMAIL_SECURITY_ALERT_TO?.trim() || PLATFORM_EMAIL_SENDER;
+    if (!getPlatformEmailStatus().configured) return;
+    await sendPlatformEmail({
+      fromName: "BIL Security",
+      to: recipient,
+      subject: `BIL security notice: ${event}`,
+      text: `${event}\n\n${details}\n\nThis message was generated automatically by BIL.`,
     });
   } catch {
     logger.warn(
@@ -316,6 +368,72 @@ export async function sendPlatformSecurityNotice(
       "[platform-email] security notice could not be sent",
     );
   }
+}
+
+export function buildRegistrationConfirmationEmail(admin: {
+  name?: string | null;
+  fullname?: string | null;
+  email?: string | null;
+  username?: string | null;
+  subdomain?: string | null;
+  role?: string | null;
+  must_change_password?: boolean | null;
+  is_active: boolean;
+  status: string | null;
+}, domain = TENANT_BASE_DOMAIN): {
+  fromName: "BIL";
+  to: string;
+  subject: string;
+  text: string;
+} | null {
+  if (
+    admin.is_active !== true ||
+    admin.status !== "active" ||
+    !admin.email ||
+    !admin.subdomain ||
+    !isValidEmailAddress(admin.email)
+  ) return null;
+
+  const company = admin.fullname?.trim() || admin.name?.trim() || "your company";
+  const subdomain = admin.subdomain.trim().toLowerCase();
+  const loginUrl = admin.must_change_password
+    ? `https://${subdomain}.${domain}/admin/login?first_login=1&subdomain=${encodeURIComponent(subdomain)}`
+    : `https://${subdomain}.${domain}/admin/login`;
+  const isReseller = admin.role === "reseller";
+  const signInDirection = admin.must_change_password
+    ? "Use the temporary sign-in details shown after registration. You will be prompted to set your own password."
+    : "Sign in with the password you created during registration.";
+  const roleSteps = isReseller
+    ? [
+        "Confirm your assigned service port and router with your ISP administrator.",
+        "Review your collection settings, then create or update the packages you offer.",
+      ]
+    : [
+        "Review your company profile and payment collection settings.",
+        "Connect your first router, configure service ports, and add your plans.",
+      ];
+  return {
+    fromName: "BIL",
+    to: admin.email,
+    subject: "Welcome to BIL — your workspace is ready",
+    text: [
+      `Congratulations, ${company}!`,
+      "",
+      `Your ${isReseller ? "reseller" : "ISP"} account is active.`,
+      "",
+      "Sign in to your dashboard:",
+      loginUrl,
+      admin.username ? `Username: ${admin.username}` : "",
+      "",
+      "Next steps:",
+      `1. ${signInDirection}`,
+      `2. ${roleSteps[0]}`,
+      `3. ${roleSteps[1]}`,
+      "4. Continue setup from your dashboard and add the customers or services you manage.",
+      "",
+      "For your security, this email does not contain a password.",
+    ].filter(Boolean).join("\n"),
+  };
 }
 
 export async function sendRegistrationConfirmationEmail(adminId: number): Promise<void> {
@@ -336,55 +454,10 @@ export async function sendRegistrationConfirmationEmail(adminId: number): Promis
       `id=eq.${adminId}&select=id,name,fullname,email,username,subdomain,role,must_change_password,is_active,status&limit=1`,
     );
     const admin = admins[0];
-    if (
-      !admin ||
-      admin.is_active !== true ||
-      admin.status !== "active" ||
-      !admin.email ||
-      !admin.subdomain ||
-      !isValidEmailAddress(admin.email)
-    ) {
-      return;
-    }
-    const company = admin.fullname?.trim() || admin.name?.trim() || "your company";
-    const subdomain = admin.subdomain.trim().toLowerCase();
-    const loginUrl = admin.must_change_password
-      ? `https://${subdomain}.isplatty.org/admin/login?first_login=1&subdomain=${encodeURIComponent(subdomain)}`
-      : `https://${subdomain}.isplatty.org/admin/login`;
-    const isReseller = admin.role === "reseller";
-    const signInDirection = admin.must_change_password
-      ? "Use the temporary sign-in details shown after registration. You will be prompted to set your own password."
-      : "Sign in with the password you created during registration.";
-    const roleSteps = isReseller
-      ? [
-          "Confirm your assigned service port and router with your ISP administrator.",
-          "Review your collection settings, then create or update the packages you offer.",
-        ]
-      : [
-          "Review your company profile and payment collection settings.",
-          "Connect your first router, configure service ports, and add your plans.",
-        ];
-    await sendPlatformEmail({
-      to: admin.email,
-      subject: "Welcome to OcholaSupernet — your workspace is ready",
-      text: [
-        `Congratulations, ${company}!`,
-        "",
-        `Your ${isReseller ? "reseller" : "ISP"} account is active.`,
-        "",
-        "Sign in to your dashboard:",
-        loginUrl,
-        admin.username ? `Username: ${admin.username}` : "",
-        "",
-        "Next steps:",
-        `1. ${signInDirection}`,
-        `2. ${roleSteps[0]}`,
-        `3. ${roleSteps[1]}`,
-        "4. Continue setup from your dashboard and add the customers or services you manage.",
-        "",
-        "For your security, this email does not contain a password.",
-      ].filter(Boolean).join("\n"),
-    });
+    if (!admin) return;
+    const message = buildRegistrationConfirmationEmail(admin);
+    if (!message) return;
+    await sendPlatformEmail(message);
   } catch {
     logger.warn(
       { adminId },
