@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   normalisePlatformEmailSettings,
   publicPlatformEmailSettings,
+  safeTransportErrorFields,
 } from "./platform-email.js";
 
 const completeSettings = {
@@ -54,4 +55,16 @@ test("SMTP can be enabled without authentication when the relay allows it", () =
   assert.equal(settings.enabled, true);
   assert.equal(settings.authEnabled, false);
   assert.equal(publicPlatformEmailSettings(settings).configured, true);
+});
+test("Gmail diagnostics expose safe SMTP codes without response text", () => {
+  const error = Object.assign(new Error("sensitive server response"), { code: "EAUTH", responseCode: 535, command: "AUTH PLAIN", response: "private provider response" });
+  const details = safeTransportErrorFields(error);
+  assert.deepEqual(details, { errorType: "Error", smtpCode: "EAUTH", smtpResponseCode: 535, smtpCommand: "AUTH" });
+  assert.equal(JSON.stringify(details).includes("private"), false);
+  assert.equal(JSON.stringify(details).includes("sensitive"), false);
+});
+
+test("Gmail diagnostics discard unsafe provider fields", () => {
+  const details = safeTransportErrorFields({ code: "AUTH failed with password", responseCode: 999, command: "AUTH private-value" });
+  assert.deepEqual(details, { errorType: "unknown", smtpCommand: "AUTH" });
 });

@@ -298,7 +298,15 @@ router.post(
         return;
       }
       if (issued.outcome !== "issued" || !issued.challengeId) {
-        res.status(503).json({ ok: false, error: "The email verification code could not be sent." });
+        logger.warn({ outcome: issued.outcome }, "[email] gateway settings OTP was not issued");
+        const error = issued.outcome === "delivery_failed"
+          ? "Gmail could not deliver the payment-settings code. Check the admin account email and retry."
+          : issued.outcome === "email_unavailable"
+            ? "A valid email address is not available for this admin account."
+            : issued.outcome === "invalid"
+              ? "The verification service rejected this request. Verify the admin account email and try again."
+              : "The verification service could not create a code. Try again later.";
+        res.status(issued.outcome === "delivery_failed" ? 502 : 503).json({ ok: false, error });
         return;
       }
       res.set("Cache-Control", "no-store").status(202).json({

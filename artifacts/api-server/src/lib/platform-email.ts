@@ -45,6 +45,35 @@ const EMAIL_SETTINGS_ID = "global_email";
 export const PLATFORM_EMAIL_SENDER = "ocholasupernetbilling@gmail.com";
 export const PLATFORM_EMAIL_DEFAULT_FROM_NAME = "BIL";
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function safeTransportErrorFields(error: unknown): {
+  errorType: string;
+  smtpCode?: string;
+  smtpResponseCode?: number;
+  smtpCommand?: string;
+} {
+  const details = error && typeof error === "object"
+    ? error as Record<string, unknown>
+    : {};
+  const code = typeof details.code === "string" && /^[A-Z0-9_-]{1,32}$/i.test(details.code)
+    ? details.code
+    : undefined;
+  const responseCode = typeof details.responseCode === "number"
+    && Number.isInteger(details.responseCode)
+    && details.responseCode >= 100
+    && details.responseCode <= 599
+    ? details.responseCode
+    : undefined;
+  const rawCommand = typeof details.command === "string" ? details.command.split(/\s+/, 1)[0] : "";
+  const command = /^[A-Z]{3,8}$/i.test(rawCommand) ? rawCommand.toUpperCase() : undefined;
+  return {
+    errorType: error instanceof Error ? error.name : "unknown",
+    ...(code ? { smtpCode: code } : {}),
+    ...(responseCode ? { smtpResponseCode: responseCode } : {}),
+    ...(command ? { smtpCommand: command } : {}),
+  };
+}
+
 const EMPTY_SETTINGS: PlatformEmailSettings = {
   enabled: false,
   host: "",
@@ -340,7 +369,7 @@ export async function sendPlatformEmail(message: {
     });
   } catch (error) {
     logger.warn(
-      { errorType: error instanceof Error ? error.name : "unknown" },
+      safeTransportErrorFields(error),
       "[platform-email] Gmail SMTP delivery failed",
     );
     throw new Error("Gmail email delivery failed. Check the server-side app-password configuration.");
