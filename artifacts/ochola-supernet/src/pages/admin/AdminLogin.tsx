@@ -4,7 +4,6 @@ import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from "lucide-react";
 import { clearAdminAuth, clearPasswordSetupToken, setAdminAuth, setPasswordSetupToken } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-client";
 import { getHostSubdomain } from "@/lib/subdomain";
-import { PUBLIC_BASE_DOMAIN, tenantHostname } from "@/lib/public-domain";
 import { INITIAL_ADMIN_PASSWORD, INITIAL_ADMIN_USERNAME } from "@/lib/initial-admin-credentials";
 import { Logo } from "@/components/Logo";
 import { TurnstileCheck } from "@/components/TurnstileCheck";
@@ -110,6 +109,7 @@ export default function AdminLogin() {
           purpose,
           accountType: "admin",
           subdomain: (hostSubdomain || companySubdomain).trim().toLowerCase(),
+          turnstileToken,
         }),
       });
       const data = await response.json();
@@ -240,7 +240,6 @@ export default function AdminLogin() {
           username: username.trim(),
           password,
           subdomain: (hostSubdomain || companySubdomain).trim().toLowerCase(),
-          turnstileToken,
         }),
       });
       const apiSession = await apiLogin.json() as {
@@ -293,7 +292,7 @@ export default function AdminLogin() {
   };
 
   const displayName   = company?.name ?? "ISPlatty";
-  const displayDomain = company ? tenantHostname(company.subdomain) : PUBLIC_BASE_DOMAIN;
+  const displayDomain = company ? `${company.subdomain}.isplatty.org` : "isplatty.org";
 
   const inputStyle: React.CSSProperties = {
     width: "100%", paddingLeft: 38, paddingRight: 14,
@@ -445,11 +444,7 @@ export default function AdminLogin() {
 
            <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
              {(loginMethod === "password" || (loginMethod !== "recovery" && otpChallengeId && otpPurpose === "login")) && (
-               <TurnstileCheck
-                 action="admin_login"
-                 resetKey={turnstileResetKey}
-                 onToken={setTurnstileToken}
-               />
+               <TurnstileCheck action="admin_login" resetKey={turnstileResetKey} onToken={setTurnstileToken} />
              )}
              {!hostSubdomain && (
                <div>
@@ -475,7 +470,7 @@ export default function AdminLogin() {
                    <span style={{
                      position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
                      color: "var(--isp-text-sub)", fontSize: "0.82rem", pointerEvents: "none",
-                   }}>.{PUBLIC_BASE_DOMAIN}</span>
+                   }}>.isplatty.org</span>
                  </div>
                  <p style={{ margin: "6px 0 0", fontSize: "0.78rem", color: "var(--isp-text-muted)" }}>
                    Use the company name from your ISP address.
