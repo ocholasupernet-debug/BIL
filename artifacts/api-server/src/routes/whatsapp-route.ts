@@ -22,6 +22,7 @@ import {
 } from "../lib/supabase-client.js";
 import { getTenantSubdomainFromRequest, RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
 import { isOtpChannelEnabled } from "../lib/platform-auth-security.js";
+import { getPlatformEmailStatus, isValidEmailAddress } from "../lib/platform-email.js";
 import { activeSuperAdminName } from "./super-admin-auth-route.js";
 import {
   checkWhatsAppConnection,
@@ -61,6 +62,11 @@ import {
   issueWhatsAppGatewaySettingsOtp,
   verifyWhatsAppGatewaySettingsOtp,
 } from "../services/whatsapp/whatsapp-gateway-settings-otp.js";
+import {
+  issueEmailGatewaySettingsOtp,
+  maskGatewaySettingsEmail,
+  verifyEmailGatewaySettingsOtp,
+} from "../services/email-gateway-settings-otp.js";
 
 const router: IRouter = Router();
 const OTP_TTL_SECONDS = Math.max(
@@ -155,6 +161,7 @@ function respondInvalidOtp(res: Response): void {
 
 interface GatewaySettingsActor {
   id: number;
+  email: string | null;
   otpPhone: string | null;
   passwordHash: string | null;
   sessionToken: string;
@@ -178,7 +185,7 @@ async function gatewaySettingsActor(
   }
   const rows = await sbSelectStrict<Record<string, unknown>>(
     "isp_admins",
-    `id=eq.${id}&select=id,is_active,gateway_settings_otp_phone_e164,gateway_settings_password_hash&limit=1`,
+    `id=eq.${id}&select=id,is_active,email,gateway_settings_otp_phone_e164,gateway_settings_password_hash&limit=1`,
   );
   const account = rows[0];
   if (!account || account.is_active !== true) {
@@ -196,6 +203,7 @@ async function gatewaySettingsActor(
     : "";
   return {
     id,
+    email: typeof account.email === "string" && isValidEmailAddress(account.email.trim()) ? account.email.trim().toLowerCase() : null,
     otpPhone: /^\+[1-9][0-9]{7,14}$/.test(otpPhone) ? otpPhone : null,
     passwordHash: passwordHash || null,
     sessionToken,
@@ -238,16 +246,103 @@ router.get(
     try {
       const actor = await gatewaySettingsActor(req, res);
       if (!actor) return;
-      const mode = await isOtpChannelEnabled("whatsapp") ? "whatsapp" : "password";
+      // Gateway OTP uses the server-managed Gmail sender, not the optional
+      // legacy SMTP settings stored in platform_secure_settings.
+      const emailReady = Boolean(actor.email)
+        && await isOtpChannelEnabled("email")
+        && getPlatformEmailStatus().configured;
+      const whatsappReady = await isOtpChannelEnabled("whatsapp");
+      const mode = emailReady ? "email" : whatsappReady ? "whatsapp" : "password";
       res.set("Cache-Control", "no-store").json({
         ok: true,
         mode,
+        otpEmailConfigured: !!actor.email,
+        otpEmailMasked: actor.email ? maskGatewaySettingsEmail(actor.email) : null,
         otpNumberConfigured: !!actor.otpPhone,
         otpNumberMasked: maskGatewaySettingsPhone(actor.otpPhone),
         passwordConfigured: !!actor.passwordHash,
       });
     } catch {
       res.status(503).json({ ok: false, error: "Payment settings verification is unavailable." });
+    }
+  },
+);
+
+router.post(
+  "/auth/email/gateway-settings/request-otp",
+  requireAdmin(),
+  requireTenantPermission("Manage Gateways"),
+  async (req, res): Promise<void> => {
+    if (!await isOtpChannelEnabled("email")) {
+      res.status(409).json({ ok: false, error: "Email verification is not enabled." });
+      return;
+    }
+    const actor = await gatewaySettingsActor(req, res);
+    if (!actor) return;
+    if (!actor.email) {
+      res.status(409).json({ ok: false, error: "Add a valid email to your account before using email verification." });
+      return;
+    }
+    const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : "";
+    if (!/^[0-9a-f-]{36}$/i.test(requestId)) {
+      res.status(400).json({ ok: false, error: "Start a new payment settings request and try again." });
+      return;
+    }
+    try {
+      const issued = await issueEmailGatewaySettingsOtp({
+        accountId: actor.id, requestId, sessionToken: actor.sessionToken,
+        ip: req.ip ?? req.socket.remoteAddress ?? "",
+      });
+      if (issued.outcome === "limited") {
+        res.status(429).json({ ok: false, error: "Too many verification requests. Wait before requesting another code." });
+        return;
+      }
+      if (issued.outcome !== "issued" || !issued.challengeId) {
+        res.status(503).json({ ok: false, error: "The email verification code could not be sent." });
+        return;
+      }
+      res.set("Cache-Control", "no-store").status(202).json({
+        ok: true, challengeId: issued.challengeId, expiresInSeconds: 300,
+        resendAfterSeconds: 60, message: "A verification code was sent to your account email.",
+      });
+    } catch (error) {
+      logger.warn({ errorType: error instanceof Error ? error.name : "unknown" }, "[email] gateway settings OTP delivery failed");
+      res.status(502).json({ ok: false, error: "The verification code could not be delivered. Try again later." });
+    }
+  },
+);
+
+router.post(
+  "/auth/email/gateway-settings/verify-otp",
+  requireAdmin(),
+  requireTenantPermission("Manage Gateways"),
+  async (req, res): Promise<void> => {
+    if (!await isOtpChannelEnabled("email")) {
+      res.status(409).json({ ok: false, error: "Email verification is not enabled." });
+      return;
+    }
+    const actor = await gatewaySettingsActor(req, res);
+    if (!actor) return;
+    if (!actor.email) {
+      res.status(409).json({ ok: false, error: "Add a valid email to your account before using email verification." });
+      return;
+    }
+    const challengeId = typeof req.body?.challengeId === "string" ? req.body.challengeId.trim() : "";
+    const requestId = typeof req.body?.requestId === "string" ? req.body.requestId.trim() : "";
+    const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+    try {
+      const result = await verifyEmailGatewaySettingsOtp({
+        accountId: actor.id, email: actor.email, challengeId, requestId,
+        code, sessionToken: actor.sessionToken,
+      });
+      if (result.outcome !== "verified" || !result.grant) {
+        respondInvalidOtp(res);
+        return;
+      }
+      res.set("Cache-Control", "no-store").json({ ok: true, grant: result.grant, expiresInSeconds: 600 });
+    } catch (error) {
+      logger.warn({ errorType: error instanceof Error ? error.name : "unknown" }, "[email] gateway settings OTP verification failed");
+      res.status(503).json({ ok: false, error: "Verification is temporarily unavailable." });
     }
   },
 );

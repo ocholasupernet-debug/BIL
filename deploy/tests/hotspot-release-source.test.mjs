@@ -42,6 +42,13 @@ test("payment settings reads do not silently rewrite saved ISP gateway destinati
   );
 });
 
+test("gateway email OTP availability follows the server-managed Gmail sender", () => {
+  const route = api("src/routes/whatsapp-route.ts");
+  assert.ok(route.includes("getPlatformEmailStatus().configured"));
+  assert.ok(route.includes("await isOtpChannelEnabled(\"email\")"));
+  assert.doesNotMatch(route, /getPlatformEmailSettings\(\)|publicPlatformEmailSettings\(/);
+});
+
 test("deployments register both loyalty and voucher entitlement migrations", () => {
   const runner = api("scripts/apply-deployment-migrations.mjs");
   for (const name of [
