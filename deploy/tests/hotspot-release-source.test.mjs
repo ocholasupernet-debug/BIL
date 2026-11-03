@@ -202,3 +202,23 @@ test("SSH transfer and deployment retain the verified VPS fingerprint", () => {
     2,
   );
 });
+
+test("Gmail app password is encoded before SSH transfer and decoded only on the VPS", () => {
+  const workflow = source(".github/workflows/deploy.yml");
+  const sshStep = workflow.split("      - name: Deploy via SSH")[1].split("\n      - name:")[0];
+  assert.equal((sshStep.match(/^\s{8}env:\s*$/gm) ?? []).length, 1);
+  assert.ok(workflow.includes("DEPLOY_GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}"));
+  assert.ok(workflow.includes("GMAIL_APP_PASSWORD_B64: ${{ steps.encode_runtime_ssh.outputs.GMAIL_APP_PASSWORD_B64 }}"));
+  assert.ok(workflow.includes("$(printf '%s' \"$DEPLOY_GMAIL_APP_PASSWORD\" | base64 -w0)"));
+  assert.ok(workflow.includes("echo \"::add-mask::$GMAIL_APP_PASSWORD_B64\""));
+  assert.ok(workflow.includes("printf -v escaped_val '%q' \"$val\""));
+  assert.ok(workflow.includes("GMAIL_APP_PASSWORD=\"$(printf '%s' \"$GMAIL_APP_PASSWORD_B64\" | base64 -d)\""));
+  assert.doesNotMatch(workflow, /^\s+GMAIL_APP_PASSWORD: \$\{\{ secrets\.GMAIL_APP_PASSWORD \}\}/m);
+});
+
+test("release retains the tenant-branded admin login instead of the legacy page", () => {
+  const login = web("src/pages/admin/AdminLogin.tsx");
+  assert.ok(login.includes("OCHOLA ISP"));
+  assert.ok(login.includes("tenantBranding.ispName"));
+  assert.ok(login.includes("OCHOLASUPERNET ISP"));
+});
