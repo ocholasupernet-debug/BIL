@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
-import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from "lucide-react";
+import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Wifi } from "lucide-react";
 import { clearAdminAuth, clearPasswordSetupToken, setAdminAuth, setPasswordSetupToken } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-client";
 import { getHostSubdomain } from "@/lib/subdomain";
 import { INITIAL_ADMIN_PASSWORD, INITIAL_ADMIN_USERNAME } from "@/lib/initial-admin-credentials";
-import { Logo } from "@/components/Logo";
 import { TurnstileCheck } from "@/components/TurnstileCheck";
 
 interface CompanyInfo {
@@ -49,6 +48,8 @@ export default function AdminLogin() {
     && new URLSearchParams(window.location.search).get("session") === "expired";
 
   const [company, setCompany]               = useState<CompanyInfo | null>(null);
+  const [tenantBranding, setTenantBranding] = useState<{ ispName?: string; logoUrl?: string }>({});
+  const [tenantLogoFailed, setTenantLogoFailed] = useState(false);
   const [companyLoading, setCompanyLoading] = useState(false);
   const hostSubdomain = getHostSubdomain();
 
@@ -60,7 +61,28 @@ export default function AdminLogin() {
       try {
         const response = await fetch(apiUrl(`/api/auth/company-info?subdomain=${encodeURIComponent(sub)}`), { cache: "no-store" });
         const data = await response.json() as { company?: CompanyInfo | null };
-        if (response.ok && data.company) setCompany(data.company);
+        if (response.ok && data.company) {
+          setCompany(data.company);
+          setCompanyLoading(false);
+          try {
+            const brandingResponse = await fetch(
+              apiUrl(`/api/public/hotspot-branding?adminId=${encodeURIComponent(data.company.id)}`),
+              { cache: "no-store" },
+            );
+            if (brandingResponse.ok) {
+              const brandingData = await brandingResponse.json() as {
+                branding?: { settings?: { ispName?: string; logoUrl?: string } };
+              };
+              const settings = brandingData.branding?.settings;
+              setTenantBranding({
+                ispName: typeof settings?.ispName === "string" ? settings.ispName.trim() : "",
+                logoUrl: typeof settings?.logoUrl === "string" ? settings.logoUrl.trim() : "",
+              });
+            }
+          } catch {
+            // Missing public branding must not block administrator sign-in.
+          }
+        }
       } finally {
         setCompanyLoading(false);
       }
@@ -291,7 +313,12 @@ export default function AdminLogin() {
     }
   };
 
-  const displayName   = company?.name ?? "ISPlatty";
+  const displayName = tenantBranding.ispName || company?.name?.trim() || "OCHOLASUPERNET ISP";
+  const tenantLogoUrl = tenantBranding.logoUrl && (
+    (tenantBranding.logoUrl.startsWith("/") && !tenantBranding.logoUrl.startsWith("//")) ||
+    /^https:\/\//i.test(tenantBranding.logoUrl) ||
+    /^data:image\/(?:png|jpeg|webp);base64,/i.test(tenantBranding.logoUrl)
+  ) ? tenantBranding.logoUrl : "";
   const displayDomain = hostSubdomain && typeof window !== "undefined"
     ? window.location.hostname.toLowerCase()
     : company
@@ -316,10 +343,15 @@ export default function AdminLogin() {
 
   return (
     <div style={{
-      minHeight: "100vh",
-      background: "var(--isp-bg)",
+      minHeight: "100svh",
+      background: "radial-gradient(circle at 16% 18%, rgba(14,165,233,.22), transparent 34%), radial-gradient(circle at 84% 82%, rgba(245,158,11,.14), transparent 30%), linear-gradient(145deg, #071326 0%, #102745 54%, #0a1930 100%)",
       display: "flex",
-        fontFamily: "'Inter', system-ui, sans-serif",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "32px 18px",
+      position: "relative",
+      overflow: "hidden",
+      fontFamily: "'Inter', system-ui, sans-serif",
     }}>
       <div style={{
         display: "none",
@@ -343,10 +375,6 @@ export default function AdminLogin() {
           width: 240, height: 240, borderRadius: "50%",
           background: "var(--isp-accent-glow)",
         }} />
-
-         <div style={{ display: "flex", alignItems: "center", position: "relative" }}>
-           <Logo size="lg" />
-         </div>
 
         <div style={{ position: "relative" }}>
           <h2 style={{
@@ -387,25 +415,28 @@ export default function AdminLogin() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        padding: "40px 24px",
+         padding: "0",
       }}>
-        <div style={{ width: "100%", maxWidth: 420 }}>
+        <div className="admin-login-card" style={{ width: "100%", maxWidth: 456, padding: "clamp(24px, 5vw, 42px)", boxSizing: "border-box" }}>
 
-           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 9, marginBottom: 30 }}>
-             <Logo size="lg" />
-             <div style={{ fontSize: "0.75rem", color: "var(--isp-text-sub)", fontWeight: 600, textAlign: "center" }}>
-               {displayName} · {displayDomain}
-             </div>
+           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, marginBottom: 26 }}>
+             {tenantLogoUrl && !tenantLogoFailed ? (
+               <img src={tenantLogoUrl} alt={`${displayName} logo`} onError={() => setTenantLogoFailed(true)} style={{ width: 76, height: 76, objectFit: "contain", borderRadius: 18, background: "#fff", padding: 8 }} />
+             ) : (
+               <div className="admin-login-mark" aria-hidden="true"><Wifi size={30} strokeWidth={1.8} /></div>
+             )}
+             <span className="admin-login-product">OCHOLA ISP</span>
+             <div className="admin-login-domain">{displayDomain}</div>
            </div>
 
           <h1 style={{
-             fontSize: "1.9rem", fontWeight: 600, color: "var(--isp-text)",
-            letterSpacing: "-0.03em", marginBottom: 6,
+              fontSize: "clamp(1.5rem, 5vw, 1.9rem)", fontWeight: 750, color: "#10243e",
+             letterSpacing: "-0.035em", marginBottom: 7, textAlign: "center", lineHeight: 1.2, overflowWrap: "anywhere",
           }}>
-            Welcome back
+             {displayName}
           </h1>
-           <p style={{ fontSize: "1rem", color: "var(--isp-text-muted)", marginBottom: 32 }}>
-            Sign in to your admin dashboard
+            <p style={{ fontSize: "0.95rem", color: "#607188", marginBottom: 26, textAlign: "center" }}>
+             Secure administrator sign in
           </p>
 
           {(whatsappLoginEnabled || smsLoginEnabled || whatsappRecoveryEnabled || smsRecoveryEnabled) && (
@@ -629,7 +660,7 @@ export default function AdminLogin() {
                         style={inputStyle}
                       />
                     </div>
-                    {otpPurpose === "login" && <TurnstileCheck action="admin_login" resetKey={turnstileResetKey} onToken={setTurnstileToken} />}
+                    {otpPurpose === "login" && <TurnstileCheck action="admin_login" resetKey={turnstileResetKey} onToken={setTurnstileToken} size="flexible" />}
                     <button type="button" onClick={() => void verifyWhatsappCode()} disabled={otpLoading || otpCode.length !== 6} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || otpCode.length !== 6 ? 0.6 : 1 }}>
                       {otpLoading ? "Verifying…" : "Verify code"}
                     </button>
@@ -654,9 +685,9 @@ export default function AdminLogin() {
             )}
 
             {loginMethod === "password" && (
-             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+             <div className="login-turnstile-actions">
                <div style={{ flex: "0 1 300px", maxWidth: "100%" }}>
-                 <TurnstileCheck action="admin_login" resetKey={turnstileResetKey} onToken={setTurnstileToken} />
+                  <TurnstileCheck action="admin_login" resetKey={turnstileResetKey} onToken={setTurnstileToken} size="flexible" />
                </div>
                <button
                  type="submit"
@@ -706,9 +737,17 @@ export default function AdminLogin() {
       </div>
 
       <style>{`
-        @media (min-width: 900px) {
-          .login-left-panel { display: flex !important; }
-        }
+        .admin-login-card { position: relative; overflow: hidden; border: 1px solid rgba(255,255,255,.72); border-radius: 26px; background: rgba(255,255,255,.97); box-shadow: 0 28px 90px rgba(0,0,0,.32), 0 2px 10px rgba(15,35,60,.08); animation: login-card-enter .5s cubic-bezier(.2,.75,.25,1) both; }
+        .admin-login-card::before { content: ""; position: absolute; inset: 0 0 auto; height: 5px; background: linear-gradient(90deg, #16a6c8, #f6a53b, #16a6c8); }
+        .admin-login-mark { width: 76px; height: 76px; display: grid; place-items: center; border-radius: 22px; color: #fff; background: linear-gradient(145deg, #087ea4, #12345a); box-shadow: 0 10px 24px rgba(8,126,164,.24); }
+        .admin-login-product { color: #087ea4; font-size: .7rem; font-weight: 800; letter-spacing: .18em; }
+        .admin-login-domain { color: #8492a3; font-size: .75rem; font-weight: 600; text-align: center; overflow-wrap: anywhere; }
+        .login-turnstile-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; width: 100%; }
+        .login-turnstile-actions > div:first-child { min-width: 0; max-width: 100%; overflow: visible; }
+        .login-turnstile-actions > button { width: 100% !important; min-height: 48px; }
+        @keyframes login-card-enter { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        @media (max-width: 480px) { .admin-login-card { border-radius: 22px; } }
+        @media (prefers-reduced-motion: reduce) { .admin-login-card { animation: none; } }
       `}</style>
     </div>
   );
