@@ -44,15 +44,20 @@ import {
   sendConfiguredWhatsAppOtp,
 } from "../services/whatsapp/whatsapp-otp-delivery.js";
 import {
-  getPlatformEmailSettings,
+  getPlatformEmailStatus,
   isValidEmailAddress,
-  publicPlatformEmailSettings,
   sendPlatformEmail,
 } from "../lib/platform-email.js";
 import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
 const OTP_METHODS = new Set<PageAuthMethod>(["whatsapp", "sms", "email"]);
+
+class PageOtpReadinessError extends Error {
+  constructor(readonly reason: "channel_disabled" | "email_missing" | "email_sender_unconfigured") {
+    super(reason);
+  }
+}
 
 interface PageAuthAdmin {
   id: number;
@@ -140,17 +145,15 @@ async function sendPageOtp(
 
   if (context.method === "email") {
     const email = String(context.admin.email ?? "").trim();
-    const settings = await getPlatformEmailSettings();
     if (
-      !settings.enabled ||
-      settings.security === "none" ||
-      !publicPlatformEmailSettings(settings).configured ||
+      !getPlatformEmailStatus().configured ||
       !isValidEmailAddress(email)
-    ) throw new Error("Secure email delivery is not available.");
+    ) throw new Error("Gmail email delivery is not configured on the server.");
     await sendPlatformEmail({
+      fromName: "BIL Security",
       to: email,
-      subject: "Your OcholaSuperNet verification code",
-      text: `Your verification code is ${code}. It expires in five minutes. If you did not request this code, ignore this email.`,
+      subject: "Your BIL security verification code",
+      text: `Your six-digit BIL verification code is ${code}. It expires in five minutes and can be used once. If you did not request this code, ignore this email.`,
     });
     return maskEmail(email);
   }
@@ -186,6 +189,21 @@ async function sendPageOtp(
   return maskPhone(phone);
 }
 
+async function assertPageOtpReady(context: PageAuthContext): Promise<void> {
+  if (!await isOtpChannelEnabled(context.method)) {
+    throw new PageOtpReadinessError("channel_disabled");
+  }
+  if (context.method !== "email") return;
+
+  const email = String(context.admin.email ?? "").trim();
+  if (!isValidEmailAddress(email)) {
+    throw new PageOtpReadinessError("email_missing");
+  }
+  if (!getPlatformEmailStatus().configured) {
+    throw new PageOtpReadinessError("email_sender_unconfigured");
+  }
+}
+
 router.post("/auth/admin/page-otp/request", async (req: Request, res: Response): Promise<void> => {
   res.set("Cache-Control", "no-store");
   const context = await resolveContext(req, res, req.body?.method);
@@ -205,8 +223,12 @@ router.post("/auth/admin/page-otp/request", async (req: Request, res: Response):
   });
   const rawIp = req.ip ?? req.socket.remoteAddress ?? null;
   const requestIp = rawIp && !rawIp.includes("%") ? rawIp : null;
+  let phase: "readiness" | "challenge" | "delivery" = "readiness";
+  let challengeCreated = false;
 
   try {
+    await assertPageOtpReady(context);
+    phase = "challenge";
     const issued = await issuePlatformPageOtpChallenge({
       id: challengeId,
       adminId: Number(context.payload.uid),
@@ -225,6 +247,8 @@ router.post("/auth/admin/page-otp/request", async (req: Request, res: Response):
       res.status(429).json({ ok: false, error: "Too many verification code requests. Try again later." });
       return;
     }
+    challengeCreated = true;
+    phase = "delivery";
     const destination = await sendPageOtp(context, code);
     res.status(202).json({
       ok: true,
@@ -234,18 +258,35 @@ router.post("/auth/admin/page-otp/request", async (req: Request, res: Response):
       resendAfterSeconds: 60,
     });
   } catch (error) {
-    try {
-      await invalidatePlatformPageOtpChallenge({
-        id: challengeId,
-        adminId: Number(context.payload.uid),
-        sessionHash,
-      });
-    } catch {}
+    if (challengeCreated) {
+      try {
+        await invalidatePlatformPageOtpChallenge({
+          id: challengeId,
+          adminId: Number(context.payload.uid),
+          sessionHash,
+        });
+      } catch {}
+    }
+    const readinessReason = error instanceof PageOtpReadinessError ? error.reason : null;
+    const errorMessage = readinessReason === "channel_disabled"
+      ? "Email verification is disabled in the security settings."
+      : readinessReason === "email_missing"
+        ? "No valid email is saved on this administrator account. Update the account email and try again."
+        : readinessReason === "email_sender_unconfigured"
+          ? "The website email sender is not configured. Contact the Super Admin."
+          : phase === "challenge"
+            ? "The verification request could not be created. Try again later."
+            : "The verification email could not be delivered. Confirm the saved account email and retry.";
     logger.warn(
-      { method: context.method, errorType: error instanceof Error ? error.name : "unknown" },
+      {
+        method: context.method,
+        phase,
+        reason: readinessReason ?? undefined,
+        errorType: error instanceof Error ? error.name : "unknown",
+      },
       "[page-auth] verification code delivery or challenge creation failed",
     );
-    res.status(503).json({ ok: false, error: "The verification code could not be sent. Check the saved contact and channel settings, then try again." });
+    res.status(readinessReason ? 409 : 503).json({ ok: false, error: errorMessage });
   }
 });
 
