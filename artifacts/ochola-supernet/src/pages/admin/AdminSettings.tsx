@@ -107,6 +107,7 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
   const pendingRef = useRef<Promise<GatewaySettingsAccess> | null>(null);
   const resolveRef = useRef<((value: GatewaySettingsAccess) => void) | null>(null);
   const rejectRef = useRef<((reason: Error) => void) | null>(null);
+  const requestCodeInFlightRef = useRef(false);
 
   const rejectDisabledOtp = useCallback(() => {
     const reject = rejectRef.current;
@@ -123,11 +124,12 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const requestCode = useCallback(async (id: string) => {
-    if (mode === "password") return;
+    if (mode === "password" || requestCodeInFlightRef.current) return;
     if (mode === "whatsapp" && !otpNumberConfigured && !phone.trim()) {
       setError("Enter a WhatsApp number for payment settings.");
       return;
     }
+    requestCodeInFlightRef.current = true;
     setLoading(true);
     setError("");
     try {
@@ -155,6 +157,7 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
       setCode("");
       setResendSeconds(Math.max(1, data.resendAfterSeconds ?? 60));
     } finally {
+      requestCodeInFlightRef.current = false;
       setLoading(false);
     }
   }, [mode, otpNumberConfigured, phone, rejectDisabledOtp]);
@@ -316,23 +319,37 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
     rejectRef.current = null;
   };
 
-  const inputClass = "mt-1 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2.5 text-base text-white outline-none focus:border-cyan-500";
+  const inputClass = "mt-1 w-full rounded-xl border border-[var(--isp-input-border)] bg-[var(--isp-input-bg)] px-3.5 py-3 text-base text-[var(--isp-text)] outline-none focus:border-[var(--isp-accent)]";
 
   return (
     <GatewaySettingsOtpContext.Provider value={{ headers }}>
       {children}
       {dialogOpen && (
-        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/75 p-4" role="presentation">
-          <section role="dialog" aria-modal="true" aria-labelledby="gateway-otp-title" className="w-full max-w-md rounded-2xl border border-white/10 bg-slate-900 p-6 text-slate-100 shadow-2xl">
-            <h2 id="gateway-otp-title" className="text-lg font-semibold text-white">
-              {statusLoading
-                ? "Payment settings"
-                : mode === "email"
-                  ? "Verify payment settings by email"
-                  : mode === "whatsapp"
-                  ? otpNumberConfigured ? "Verify payment settings" : "Set payment settings OTP number"
-                  : passwordConfigured ? "Verify payment settings" : "Set a payment settings password"}
-            </h2>
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" role="presentation">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="gateway-otp-title"
+            aria-describedby="gateway-otp-description"
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-[var(--isp-border)] bg-[var(--isp-card)] text-[var(--isp-text)] shadow-2xl"
+          >
+            <div className="border-b border-[var(--isp-border)] bg-gradient-to-r from-[var(--isp-accent)]/10 to-transparent px-6 py-5">
+              <div className="flex items-center gap-3">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[var(--isp-accent)]/15 text-[var(--isp-accent)]">
+                  <Shield size={19} aria-hidden="true" />
+                </span>
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--isp-text-muted)]">Secure access</p>
+                  <h2 id="gateway-otp-title" className="mt-0.5 text-lg font-semibold">
+                    {statusLoading ? "Payment settings" : "Verify your identity"}
+                  </h2>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-4 px-6 py-5">
+              <p id="gateway-otp-description" className="text-sm leading-6 text-[var(--isp-text-muted)]">
+                Confirm once to view or update saved gateway details. Access lasts 10 minutes.
+              </p>
             {statusLoading ? (
               <>
                 <p className="mt-4 text-sm text-slate-400">Checking verification method…</p>
@@ -346,34 +363,37 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
             ) : mode !== "password" ? (
               <form onSubmit={challengeId ? verifyCode : sendCode} className="mt-5 space-y-3">
                 {mode === "email" && !challengeId && (
-                  <p className="text-sm text-slate-400">
-                    {otpEmailConfigured
-                      ? `We’ll send a code to ${otpEmailMasked || "your account email"}.`
-                      : "Add a valid email to your account before using email verification."}
-                  </p>
+                  <div className="rounded-xl border border-[var(--isp-border)] bg-black/[0.025] px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[var(--isp-text-muted)]">Code destination</p>
+                    <p className="mt-1 text-sm font-medium">{otpEmailMasked || "Account email"}</p>
+                    {!otpEmailConfigured && <p className="mt-2 text-xs text-amber-600">Add a valid email to your account before continuing.</p>}
+                  </div>
                 )}
                 {mode === "whatsapp" && !challengeId && !otpNumberConfigured && (
-                  <label className="block text-sm text-slate-300">WhatsApp number for payment settings
+                  <label className="block text-sm font-medium">WhatsApp number
                     <input autoFocus type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={event => setPhone(event.target.value)} placeholder="+254…" className={inputClass} />
                   </label>
                 )}
                 {mode === "whatsapp" && !challengeId && otpNumberConfigured && (
-                  <p className="text-sm text-slate-400">Send a code to {otpNumberMasked || "your saved WhatsApp number"}.</p>
+                  <div className="rounded-xl border border-[var(--isp-border)] bg-black/[0.025] px-4 py-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-[var(--isp-text-muted)]">Code destination</p>
+                    <p className="mt-1 text-sm font-medium">{otpNumberMasked || "Saved WhatsApp number"}</p>
+                  </div>
                 )}
                 {challengeId && (
-                  <label className="block text-sm text-slate-300">Enter {mode === "email" ? "email" : "WhatsApp"} code
-                    <input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} className={`${inputClass} tracking-[0.25em]`} />
+                  <label className="block text-sm font-medium">Six-digit verification code
+                    <input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} className={`${inputClass} text-center text-lg font-semibold tracking-[0.45em]`} />
                   </label>
                 )}
-                {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
-                <div className="flex flex-wrap justify-between gap-2 pt-2">
-                  <button type="button" onClick={cancel} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
-                  <div className="flex gap-2">
+                {error && <p role="alert" className="rounded-xl border border-red-500/20 bg-red-500/10 px-3.5 py-3 text-sm text-red-700">{error}</p>}
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--isp-border)] pt-4">
+                  <button type="button" onClick={cancel} className="rounded-xl border border-[var(--isp-border)] px-4 py-2.5 text-sm font-medium text-[var(--isp-text-muted)] hover:bg-black/5">Cancel</button>
+                  <div className="flex flex-wrap justify-end gap-2">
                     {challengeId && resendSeconds === 0 && (
-                      <button type="button" onClick={() => void requestCode(requestId).catch(cause => { setError(cause instanceof Error ? cause.message : "Could not resend the code."); setResendSeconds(60); })} disabled={loading} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300 disabled:opacity-50">Send another code</button>
+                      <button type="button" onClick={() => void requestCode(requestId).catch(cause => { setError(cause instanceof Error ? cause.message : "Could not resend the code."); setResendSeconds(60); })} disabled={loading} className="rounded-xl border border-[var(--isp-border)] px-3.5 py-2.5 text-sm font-medium text-[var(--isp-text-muted)] disabled:opacity-50">Resend code</button>
                     )}
-                    <button type="submit" disabled={loading || statusLoading || (challengeId ? code.trim().length !== 6 : mode === "whatsapp" && !otpNumberConfigured && !phone.trim())} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
-                      {loading ? challengeId ? "Checking…" : "Sending…" : challengeId ? "Verify code" : "Send code"}
+                    <button type="submit" disabled={loading || statusLoading || (challengeId ? code.trim().length !== 6 : mode === "whatsapp" && !otpNumberConfigured && !phone.trim())} className="rounded-xl bg-[var(--isp-accent)] px-5 py-2.5 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
+                      {loading ? challengeId ? "Verifying…" : "Sending…" : challengeId ? "Verify & continue" : "Send code"}
                     </button>
                   </div>
                 </div>
@@ -382,27 +402,27 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
               <form onSubmit={submitPassword} className="mt-5 space-y-3">
                 {!passwordConfigured && !passwordSetupOpen ? (
                   <>
-                    <p className="text-sm text-slate-400">Create a separate password for payment settings.</p>
-                    {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
-                    <div className="flex justify-between gap-2 pt-2">
-                      <button type="button" onClick={cancel} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
-                      <button type="button" onClick={() => { setPasswordSetupOpen(true); setError(""); }} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white">Set a password</button>
+                    <p className="text-sm text-[var(--isp-text-muted)]">Create a separate password to protect payment settings.</p>
+                    {error && <p role="alert" className="rounded-xl border border-red-500/20 bg-red-500/10 px-3.5 py-3 text-sm text-red-700">{error}</p>}
+                    <div className="flex justify-between gap-2 border-t border-[var(--isp-border)] pt-4">
+                      <button type="button" onClick={cancel} className="rounded-xl border border-[var(--isp-border)] px-4 py-2.5 text-sm font-medium text-[var(--isp-text-muted)]">Cancel</button>
+                      <button type="button" onClick={() => { setPasswordSetupOpen(true); setError(""); }} className="rounded-xl bg-[var(--isp-accent)] px-5 py-2.5 text-sm font-semibold text-white">Set password</button>
                     </div>
                   </>
                 ) : (
                   <>
-                    <label className="block text-sm text-slate-300">{passwordConfigured ? "Payment settings password" : "New password"}
+                    <label className="block text-sm font-medium">{passwordConfigured ? "Payment settings password" : "New password"}
                       <input autoFocus type="password" autoComplete={passwordConfigured ? "current-password" : "new-password"} minLength={10} maxLength={128} value={password} onChange={event => setPassword(event.target.value)} className={inputClass} />
                     </label>
                     {!passwordConfigured && (
-                      <label className="block text-sm text-slate-300">Confirm password
+                      <label className="block text-sm font-medium">Confirm password
                         <input type="password" autoComplete="new-password" minLength={10} maxLength={128} value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} className={inputClass} />
                       </label>
                     )}
-                    {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
-                    <div className="flex justify-between gap-2 pt-2">
-                      <button type="button" onClick={cancel} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
-                      <button type="submit" disabled={loading || statusLoading || password.length < 10 || (!passwordConfigured && !confirmPassword)} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                    {error && <p role="alert" className="rounded-xl border border-red-500/20 bg-red-500/10 px-3.5 py-3 text-sm text-red-700">{error}</p>}
+                    <div className="flex justify-between gap-2 border-t border-[var(--isp-border)] pt-4">
+                      <button type="button" onClick={cancel} className="rounded-xl border border-[var(--isp-border)] px-4 py-2.5 text-sm font-medium text-[var(--isp-text-muted)]">Cancel</button>
+                      <button type="submit" disabled={loading || statusLoading || password.length < 10 || (!passwordConfigured && !confirmPassword)} className="rounded-xl bg-[var(--isp-accent)] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
                         {loading ? "Checking…" : passwordConfigured ? "Verify & continue" : "Set password & continue"}
                       </button>
                     </div>
@@ -410,6 +430,7 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
                 )}
               </form>
             )}
+            </div>
           </section>
         </div>
       )}
@@ -2798,19 +2819,45 @@ const ROUTING_CONFIGURABLE_GATEWAYS = new Set([
 function PaymentSettingsLoadPrompt({ onLoad }: { onLoad: () => void }) {
   return (
     <Card
-      title="Protected payment settings"
-      desc="Load your saved gateway details and payment routing when you are ready."
+      title="Payment gateway security"
+      desc="Verify once to open your saved gateway details and payment routing."
     >
-      <p style={{ color: C.muted, fontSize: "0.75rem", lineHeight: 1.5, margin: "0 0 14px" }}>
-        Loading these settings does not change them. Access is granted for ten minutes using the verification method set for this page.
-      </p>
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "14px 16px",
+        marginBottom: 16,
+        border: `1px solid ${C.border}`,
+        borderRadius: 12,
+        background: "linear-gradient(115deg, color-mix(in srgb, var(--isp-accent) 10%, transparent), transparent 70%)",
+      }}>
+        <span style={{
+          display: "grid",
+          placeItems: "center",
+          width: 38,
+          height: 38,
+          borderRadius: 11,
+          background: "color-mix(in srgb, var(--isp-accent) 16%, transparent)",
+          color: C.cyan,
+          flexShrink: 0,
+        }}>
+          <Shield size={18} />
+        </span>
+        <div>
+          <strong style={{ display: "block", color: C.text, fontSize: "0.82rem" }}>One verification step</strong>
+          <span style={{ display: "block", marginTop: 3, color: C.muted, fontSize: "0.72rem" }}>
+            Gateway details stay hidden until verified. Access lasts 10 minutes.
+          </span>
+        </div>
+      </div>
       <Row>
         <button
           type="button"
           onClick={onLoad}
-          style={{ display: "flex", alignItems: "center", gap: 6, background: C.cyan, border: "none", cursor: "pointer", color: "white", fontSize: "0.8rem", fontWeight: 700, padding: "0.5rem 1.25rem", borderRadius: 8, fontFamily: "inherit" }}
+          style={{ display: "flex", alignItems: "center", gap: 8, background: C.cyan, border: "none", cursor: "pointer", color: "white", fontSize: "0.82rem", fontWeight: 700, padding: "0.65rem 1.2rem", borderRadius: 10, fontFamily: "inherit", boxShadow: "0 4px 12px color-mix(in srgb, var(--isp-accent) 25%, transparent)" }}
         >
-          Verify and load settings
+          <Key size={15} /> Unlock payment settings
         </button>
       </Row>
     </Card>

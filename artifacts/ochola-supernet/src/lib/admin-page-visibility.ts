@@ -186,7 +186,16 @@ export function getAdminPageAuthFeatureKeyForPath(path: string): string | null {
   if (pathname === "/admin/settings") {
     const query = queryIndex < 0 ? "" : path.slice(queryIndex + 1);
     const requestedTab = new URLSearchParams(query).get("tab") || "profile";
+    if (requestedTab === "gateways") return null;
     return SETTINGS_AUTH_TABS.has(requestedTab) ? `settings.${requestedTab}` : "settings.profile";
   }
   return getAdminFeatureKeyForPath(pathname);
+}
+
+export function isPaymentGatewaySettingsPath(path: string): boolean {
+  const queryIndex = path.indexOf("?");
+  const pathname = (queryIndex < 0 ? path : path.slice(0, queryIndex)).replace(/\/+$/, "") || "/";
+  if (pathname !== "/admin/settings") return false;
+  const query = queryIndex < 0 ? "" : path.slice(queryIndex + 1);
+  return new URLSearchParams(query).get("tab") === "gateways";
 }

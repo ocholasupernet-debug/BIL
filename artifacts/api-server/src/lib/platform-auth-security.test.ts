@@ -59,7 +59,6 @@ test("settings tabs receive independent policies while legacy Settings policy is
   const settingsKeys = [
     "settings.profile",
     "settings.billing",
-    "settings.gateways",
     "settings.dashboard",
     "settings.typography",
     "settings.sms",
@@ -86,7 +85,9 @@ test("settings tabs receive independent policies while legacy Settings policy is
   assert.ok(independent);
   assert.equal(independent.pageMethods.isp_admin["settings.profile"], "password");
   assert.equal(independent.pageMethods.isp_admin["settings.billing"], "none");
-  assert.equal(independent.pageMethods.isp_admin["settings.gateways"], "password");
+  assert.equal(independent.pageMethods.isp_admin["settings.gateways"], undefined);
+  assert.equal(isSupportedPasswordReauthFeature("settings.gateways"), false);
+  assert.equal(ADMIN_PAGE_AUTH_CATALOG.flatMap(section => section.pages).some(page => page.key === "settings.gateways"), false);
 });
 
 test("settings API reauthentication maps M-Pesa endpoints to Billing & M-Pesa", () => {

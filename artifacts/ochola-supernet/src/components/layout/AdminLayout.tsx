@@ -24,6 +24,7 @@ import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import {
   getAdminFeatureKeyForPath,
   getAdminPageAuthFeatureKeyForPath,
+  isPaymentGatewaySettingsPath,
 } from "@/lib/admin-page-visibility";
 import { Logo } from "@/components/Logo";
 import { AdminInstallButton } from "@/components/pwa/AdminInstallButton";
@@ -552,7 +553,11 @@ export function AdminLayout({
   const queryClient                   = useQueryClient();
   const { isVisible }                 = useAdminPageVisibility();
   const currentFeatureKey             = getAdminFeatureKeyForPath(currentRoute);
-  const currentPageAuthFeatureKey     = getAdminPageAuthFeatureKeyForPath(currentRoute) ?? currentFeatureKey;
+  // Payment Gateways has its own server-enforced, request-bound verification
+  // grant before any gateway data can load. Avoid asking for page OTP as well.
+  const currentPageAuthFeatureKey     = isPaymentGatewaySettingsPath(currentRoute)
+    ? null
+    : getAdminPageAuthFeatureKeyForPath(currentRoute) ?? currentFeatureKey;
   const isOverviewFeature             = !currentPageAuthFeatureKey || currentPageAuthFeatureKey === "overview" || currentPageAuthFeatureKey === "overview.dashboard";
   const requiresReauthGate            = !isOverviewFeature && !isImpersonating();
   const usesPagePassword              = reauthMethod === "password";

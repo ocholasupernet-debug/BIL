@@ -12,7 +12,6 @@ import {
 const SETTINGS_AUTH_PAGES = [
   { key: "settings.profile", label: "ISP Profile", description: "Company identity, portal branding, and support details." },
   { key: "settings.billing", label: "Billing & M-Pesa", description: "Billing preferences and M-Pesa configuration." },
-  { key: "settings.gateways", label: "Payment Gateways", description: "Payment gateway connections and routing." },
   { key: "settings.dashboard", label: "Dashboard Page Builder", description: "Configure the customer dashboard page." },
   { key: "settings.typography", label: "Desired Font", description: "Choose the application font and typography." },
   { key: "settings.sms", label: "SMS & Email", description: "Configure SMS, email, and delivery settings." },
@@ -35,7 +34,7 @@ export const ADMIN_PAGE_AUTH_CATALOG: AdminVisibilitySection[] = [
   {
     key: "settings",
     label: "Settings",
-    description: "Each settings page has its own verification policy.",
+    description: "Settings pages have individual policies. Payment Gateways uses its own verification grant.",
     pages: SETTINGS_AUTH_PAGES,
   },
 ];
