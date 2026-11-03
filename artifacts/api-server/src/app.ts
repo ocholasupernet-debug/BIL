@@ -92,17 +92,7 @@ app.use("/api", router);
 // Support the old PHP-style admin URL as a narrow redirect only. The tenant
 // hostname is preserved, so the existing login flow continues resolving the
 // correct ISP; custom Hotspot domains such as ocholasupernet.com are excluded.
-app.get("/index.php", (req, res, next) => {
-  const destination = resolveLegacyAdminEntry(
-    req.get("host") ?? req.hostname ?? "",
-    req.originalUrl,
-  );
-  if (!destination) {
-    next();
-    return;
-  }
-  res.set("Cache-Control", "no-store").redirect(302, destination);
-});
+
 
 
 // ── Static file serving for VPS ──────────────────────────────────────────────
@@ -131,6 +121,18 @@ if (shouldServeStatic) {
 
   if (existsSync(staticDir)) {
     const registerIndexPath = path.join(staticDir, "index.html");
+    // Keep the tenant's PHP-style URL while serving the existing React login.
+    app.get("/index.php", (req, res, next) => {
+      const destination = resolveLegacyAdminEntry(
+        req.get("host") ?? req.hostname ?? "",
+        req.originalUrl,
+      );
+      if (!destination) {
+        next();
+        return;
+      }
+      res.set("Cache-Control", "no-store").sendFile(registerIndexPath);
+    });
       const resolvePortalHost = async (host: string): Promise<HotspotHostMapping | null> => {
         const hostname = normalizeRequestHostname(host);
         if (!hostname || isPlatformHostname(hostname, TENANT_BASE_DOMAINS)) return null;

@@ -214,6 +214,7 @@ function Router() {
       <Route path="/admin/entry" component={AdminLogin} />
       <Route path="/admin/login" component={AdminLogin} />
       <Route path="/admin/login/isp" component={AdminLogin} />
+      <Route path="/index.php" component={AdminLogin} />
       <Route path="/admin/dashboard" component={RoleAwareDashboard} />
       <Route path="/admin/copilot" component={Copilot} />
       <Route path="/admin/reseller" component={ResellerWorkspace} />
