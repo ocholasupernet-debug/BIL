@@ -63,6 +63,14 @@ export const HOTSPOT_PORTAL_LAYOUTS = [
     panel: "#19231f",
     accent: "#d3f36b",
   },
+  {
+    value: "aurora-network",
+    label: "Aurora Network",
+    description: "A luminous, editorial guest portal with a split welcome and focused access panel.",
+    background: "#07131d",
+    panel: "#102637",
+    accent: "#53e0c5",
+  },
 ] as const;
 
 export type HotspotPortalLayout = (typeof HOTSPOT_PORTAL_LAYOUTS)[number]["value"];

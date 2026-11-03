@@ -19,6 +19,18 @@ const circuitNoirLayout = readFileSync(
   new URL("../../public/hotspot/layouts/circuit-noir.html", import.meta.url),
   "utf8",
 );
+const auroraPackageHtml = readFileSync(
+  new URL("../../public/hotspot/layouts/aurora-network/index.html", import.meta.url),
+  "utf8",
+);
+const auroraPackageCss = readFileSync(
+  new URL("../../public/hotspot/layouts/aurora-network/theme.css", import.meta.url),
+  "utf8",
+);
+const auroraManifest = JSON.parse(readFileSync(
+  new URL("../../public/hotspot/layouts/aurora-network/manifest.json", import.meta.url),
+  "utf8",
+)) as { id: string; entry: string; styles: string[]; scripts: string[]; assets: string[] };
 
 test("the standalone portal applies background and package shape from typography settings", () => {
   const typographyHandler = portalTemplate.match(/function applyPortalTypography\(data\)\{([\s\S]*?)\n\}/)?.[1] ?? "";
@@ -59,6 +71,23 @@ test("Circuit Noir is a responsive, reduced-motion style pack embedded in a stan
   assert.match(portalTemplate, /\$\(link-login-only\)/);
   assert.match(portalTemplate, /href="\$\(link-status\)"/);
   assert.match(portalTemplate, /\$\(if error\)[\s\S]*?Login Failed:[\s\S]*?\$\(error\)[\s\S]*?\$\(endif\)/);
+});
+
+test("Aurora Network is an independent package and preserves the established Hotspot login contract", () => {
+  assert.equal(auroraManifest.id, "aurora-network");
+  assert.equal(auroraManifest.entry, "index.html");
+  assert.deepEqual(auroraManifest.styles, ["theme.css"]);
+  assert.deepEqual(auroraManifest.scripts, ["runtime.js"]);
+  assert.deepEqual(auroraManifest.assets, ["assets/network-mark.svg"]);
+  for (const macro of ["$(link-login-only)", "$(chap-id)", "$(chap-challenge)", "$(link-status)", "$(error)"]) {
+    assert.ok(auroraPackageHtml.includes(macro), `Aurora package must preserve ${macro}`);
+  }
+  assert.match(auroraPackageHtml, /name="username"/);
+  assert.match(auroraPackageHtml, /name="password"/);
+  assert.match(auroraPackageCss, /html\[data-portal-layout="aurora-network"\]/);
+  assert.match(auroraPackageCss, /@media\s*\(max-width:\s*780px\)/);
+  assert.match(auroraPackageCss, /prefers-reduced-motion:\s*reduce/);
+  assert.match(auroraPackageCss, /__NETWORK_MARK__/);
 });
 
 test("Dansted and Classic remain independent across hosted hydration and static export", () => {

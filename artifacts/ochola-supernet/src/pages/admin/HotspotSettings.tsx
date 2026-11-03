@@ -53,11 +53,11 @@ import {
 
 const PUBLIC_BASE_DOMAIN = "isplatty.org";
 const HOTSPOT_SETTINGS_LAYOUTS = HOTSPOT_PORTAL_LAYOUTS.filter(
-  layout => layout.value === "classic" || layout.value === "dansted-wifi" || layout.value === "circuit-noir",
+  layout => layout.value === "classic" || layout.value === "dansted-wifi" || layout.value === "circuit-noir" || layout.value === "aurora-network",
 );
 
 function normalizeHotspotSettingsLayout(value: unknown): SupportedPortalLayout {
-  return value === "dansted-wifi" || value === "circuit-noir" ? value : "classic";
+  return value === "dansted-wifi" || value === "circuit-noir" || value === "aurora-network" ? value : "classic";
 }
 
 function hotspotSettingsLayoutLabel(layout: (typeof HOTSPOT_SETTINGS_LAYOUTS)[number]): string {
@@ -77,7 +77,7 @@ const DEFAULT_COLORS = {
 };
 
 type ColorSettings = typeof DEFAULT_COLORS;
-type SupportedPortalLayout = "classic" | "dansted-wifi" | "circuit-noir";
+type SupportedPortalLayout = "classic" | "dansted-wifi" | "circuit-noir" | "aurora-network";
 type SupportContact = { id: string; label: string; phone: string; whatsapp: string };
 type LayoutAppearance = {
   portalBackground: PortalBackground;
@@ -118,6 +118,21 @@ const DEFAULT_LAYOUT_APPEARANCES: LayoutAppearances = {
       inputBgColor: "#091827",
     },
   },
+  "aurora-network": {
+    portalBackground: "midnight",
+    portalPackageShape: "soft-square",
+    colors: {
+      ...DEFAULT_COLORS,
+      bgColor: "#07131d",
+      bgColor2: "#102637",
+      primaryColor: "#53e0c5",
+      accentColor: "#ffcc82",
+      cardColor: "#102637",
+      buttonColor: "#53e0c5",
+      textColor: "#effcff",
+      inputBgColor: "#0b1d2a",
+    },
+  },
 };
 
 function normalizeLayoutAppearances(
@@ -148,6 +163,7 @@ function normalizeLayoutAppearances(
     classic: normalizeOne("classic"),
     "dansted-wifi": normalizeOne("dansted-wifi"),
     "circuit-noir": normalizeOne("circuit-noir"),
+    "aurora-network": normalizeOne("aurora-network"),
   };
 }
 
@@ -643,7 +659,7 @@ export async function buildPortalHtml(
   const adminId = getSelectedTenantId() ?? AUTH_ADMIN_ID;
   const response = await fetch("/hotspot/login.html", { cache: "no-store" });
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
-  const template = await response.text();
+  let template = await response.text();
   const resolvedAppearance = await resolvePortalAppearance(domain, adminId);
   // Keep a custom portal/API hostname only when its public health endpoint
   // proves it serves this app. Otherwise use the tenant-resolved API origin.
@@ -767,6 +783,41 @@ export async function buildPortalHtml(
   };
   const config = makeExportConfig(exportSettings, adminId, appearance.apiBase, plans, appearance, scope.portId, scope.previewOnly === true);
   let layoutCss = renderStaticPortalLayoutCss(config.portalLayout);
+  if (config.portalLayout === "aurora-network") {
+    const packageFiles = await Promise.all([
+      fetch("/hotspot/layouts/aurora-network/index.html", { cache: "no-store" }),
+      fetch("/hotspot/layouts/aurora-network/theme.css", { cache: "no-store" }),
+      fetch("/hotspot/layouts/aurora-network/runtime.js", { cache: "no-store" }),
+      fetch("/hotspot/layouts/aurora-network/assets/network-mark.svg", { cache: "no-store" }),
+      fetch("/hotspot/layouts/aurora-network/manifest.json", { cache: "no-store" }),
+    ]);
+    if (packageFiles.some(file => !file.ok)) throw new Error("The Aurora Network layout package is incomplete.");
+    const [packageHtml, packageCss, packageJs, networkMark, manifest] = await Promise.all([
+      ...packageFiles.slice(0, 4).map(file => file.text()),
+      packageFiles[4].json(),
+    ]) as [string, string, string, string, {
+      id?: unknown;
+      entry?: unknown;
+      styles?: unknown;
+      scripts?: unknown;
+      assets?: unknown;
+    }];
+    if (
+      manifest.id !== "aurora-network"
+      || manifest.entry !== "index.html"
+      || !Array.isArray(manifest.styles) || !manifest.styles.includes("theme.css")
+      || !Array.isArray(manifest.scripts) || !manifest.scripts.includes("runtime.js")
+      || !Array.isArray(manifest.assets) || !manifest.assets.includes("assets/network-mark.svg")
+    ) {
+      throw new Error("The Aurora Network manifest is invalid.");
+    }
+    if (!packageHtml.includes('name="username"') || !packageHtml.includes("$(link-login-only)")) {
+      throw new Error("The Aurora Network package is missing required MikroTik login fields.");
+    }
+    template = packageHtml;
+    layoutCss = packageCss.replaceAll("__NETWORK_MARK__", `data:image/svg+xml,${encodeURIComponent(networkMark)}`);
+    template = template.replace("</body>", `<script>${packageJs}</script></body>`);
+  }
   if (config.portalLayout === "circuit-noir") {
     const layoutResponse = await fetch("/hotspot/layouts/circuit-noir.html", { cache: "no-store" });
     if (!layoutResponse.ok) throw new Error("The Circuit Noir layout file could not be loaded.");
@@ -1602,6 +1653,15 @@ export default function HotspotSettings() {
         if (!selectedPort) {
           throw new Error("Choose an assigned Hotspot service before syncing.");
         }
+        if (settings.portalLayout === "aurora-network") {
+          setNotice({
+            type: "info",
+            text: "Aurora Network settings were saved, but no router files were changed. Use the staged layout deployment manager when it is available.",
+          });
+          setSaved(true);
+          window.setTimeout(() => setSaved(false), 2500);
+          return;
+        }
         routerSyncStarted = true;
         if (!await saveAssignedPort(selectedPort)) return;
         setSaved(true);
@@ -1614,7 +1674,9 @@ export default function HotspotSettings() {
       let noticeText = "Hotspot settings saved on this admin workspace.";
 
        const canRefreshPortal = Number.isSafeInteger(routerId) && routerId > 0 && Boolean(adminId);
-        if (canRefreshPortal && !window.confirm(
+        if (canRefreshPortal && settings.portalLayout === "aurora-network") {
+          noticeText = "Settings saved. Aurora Network was not pushed to the router; the existing portal remains unchanged until staged deployment is available.";
+        } else if (canRefreshPortal && !window.confirm(
           "Push the updated sign-in pages to hotspot/ and switch the router's single active root-level Hotspot profile to use that folder? Existing hotspot/login.html and hotspot/rlogin.html files will be replaced without an automatic backup. Copies under flash/hotspot/ are left untouched. If the router has multiple root-level Hotspot services, the server will make no router changes. Continue?",
         )) {
          noticeText = "Settings saved. Router portal files were left unchanged.";

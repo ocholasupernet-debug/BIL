@@ -1,0 +1,12 @@
+{
+  "id": "aurora-network",
+  "name": "Aurora Network",
+  "version": "1.0.0",
+  "description": "An editorial split-screen guest portal with a luminous network atmosphere.",
+  "entry": "index.html",
+  "styles": ["theme.css"],
+  "scripts": ["runtime.js"],
+  "assets": ["assets/network-mark.svg"],
+  "requiredRouterOSMacros": ["$(link-login-only)", "$(chap-id)", "$(chap-challenge)", "$(link-status)", "$(error)"],
+  "standaloneExport": true
+}
