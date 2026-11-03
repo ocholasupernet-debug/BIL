@@ -222,3 +222,14 @@ test("release retains the tenant-branded admin login instead of the legacy page"
   assert.ok(login.includes("tenantBranding.ispName"));
   assert.ok(login.includes("OCHOLASUPERNET ISP"));
 });
+
+test("VPS releases guard against stale or divergent source before building", () => {
+  const workflow = source(".github/workflows/deploy.yml");
+  const guard = workflow.indexOf("node deploy/verify-release-ancestry.mjs");
+  const build = workflow.indexOf("Build release artifacts on the runner");
+  const deploy = workflow.indexOf("Deploy via SSH");
+  assert.ok(workflow.includes("actions: read"));
+  assert.ok(guard >= 0 && guard < build);
+  assert.ok(guard < deploy);
+  assert.ok(workflow.includes("node --test deploy/tests/verify-release-ancestry.test.mjs"));
+});

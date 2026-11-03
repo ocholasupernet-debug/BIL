@@ -56,6 +56,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
@@ -83,6 +84,14 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+
+      - name: Guard against deploying stale source
+        env:
+          DEPLOY_GUARD_TOKEN: ${{ github.token }}
+        run: node deploy/verify-release-ancestry.mjs
+
+      - name: Test release ancestry guard
+        run: node --test deploy/tests/verify-release-ancestry.test.mjs
 
       - name: Test paid Hotspot account claim status contract
         run: node --test artifacts/api-server/tests/prepaid-transaction-account-claim.test.mjs
