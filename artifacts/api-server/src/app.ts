@@ -8,6 +8,10 @@ import { existsSync, readFileSync } from "fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { resolveVlanHotspotPortalRequest } from "./lib/api-auth.js";
+import { TENANT_BASE_DOMAINS } from "./lib/tenant-host.js";
+import { resolveLegacyAdminEntry } from "./lib/legacy-admin-entry.js";
+import { sbSelectStrict } from "./lib/supabase-client.js";
+import { injectHotspotHostConfig, isPlatformHostname, normalizeRequestHostname, resolveHotspotHostMapping, type HotspotHostMapping } from "./lib/hotspot-host-routing.js";
 
 const app: Express = express();
 
@@ -56,12 +60,50 @@ app.use(express.json({
   },
 }));
 app.use(express.urlencoded({ extended: true }));
+
+// Customer portal domains must not be used to submit administrator credentials.
+// Their public Hotspot endpoints remain available on the same hostname.
+app.use((req, res, next) => {
+  const host = req.get("host") ?? req.hostname ?? "";
+  const isAdminAuthRequest = req.method === "POST" && (
+    req.path === "/api/auth/admin/login"
+    || req.path === "/api/super-admin/login"
+    || req.path.startsWith("/api/auth/whatsapp/")
+    || req.path.startsWith("/api/auth/sms/")
+  );
+  if (
+    process.env.NODE_ENV === "production"
+    && isAdminAuthRequest
+    && !isPlatformHostname(host, TENANT_BASE_DOMAINS)
+  ) {
+    res.status(403).json({ ok: false, error: "Administrator sign-in is only available on BIL admin hostnames." });
+    return;
+  }
+  next();
+});
+
 // Scope verification applies to API calls from the captive portal. The
 // router-served HTML must load first so it can attach its embedded signed
 // context token to those API calls.
 app.use("/api", resolveVlanHotspotPortalRequest);
 
 app.use("/api", router);
+
+// Support the old PHP-style admin URL as a narrow redirect only. The tenant
+// hostname is preserved, so the existing login flow continues resolving the
+// correct ISP; custom Hotspot domains such as ocholasupernet.com are excluded.
+app.get("/index.php", (req, res, next) => {
+  const destination = resolveLegacyAdminEntry(
+    req.get("host") ?? req.hostname ?? "",
+    req.originalUrl,
+  );
+  if (!destination) {
+    next();
+    return;
+  }
+  res.set("Cache-Control", "no-store").redirect(302, destination);
+});
+
 
 // ── Static file serving for VPS ──────────────────────────────────────────────
 // Production always serves the built SPA because nginx proxies both the web
@@ -89,6 +131,75 @@ if (shouldServeStatic) {
 
   if (existsSync(staticDir)) {
     const registerIndexPath = path.join(staticDir, "index.html");
+      const resolvePortalHost = async (host: string): Promise<HotspotHostMapping | null> => {
+        const hostname = normalizeRequestHostname(host);
+        if (!hostname || isPlatformHostname(hostname, TENANT_BASE_DOMAINS)) return null;
+        const branding = await sbSelectStrict<{ admin_id: number; portal_hostname: string | null }>(
+          "isp_hotspot_branding",
+          `portal_hostname=eq.${encodeURIComponent(hostname)}&select=admin_id,portal_hostname&limit=2`,
+        );
+        if (branding.length !== 1) return null;
+        const adminId = Number(branding[0].admin_id);
+        if (!Number.isSafeInteger(adminId) || adminId < 1) return null;
+        const admins = await sbSelectStrict<{
+          id: number;
+          subdomain: string | null;
+          is_active: boolean;
+          status: string;
+        }>(
+          "isp_admins",
+          `id=eq.${adminId}&is_active=is.true&status=eq.active&select=id,subdomain,is_active,status&limit=1`,
+        );
+        return resolveHotspotHostMapping(hostname, admins.length === 1
+          ? [{
+              adminId: Number(branding[0].admin_id),
+              portalHostname: branding[0].portal_hostname,
+              subdomain: admins[0].subdomain,
+              isActive: admins[0].is_active,
+              status: admins[0].status,
+            }]
+          : []);
+      };
+
+      // A configured customer domain loads the hosted Hotspot portal at its
+      // root. The bootstrap contains only the mapped tenant ID and same-origin
+      // API base; the portal then loads that tenant's saved branding/layout.
+      app.use(async (req, res, next) => {
+        const isPortalEntry = req.method === "GET" && (
+          req.path === "/"
+          || req.path === "/index.php"
+          || req.path.startsWith("/admin")
+          || req.path.startsWith("/super-admin")
+        );
+        if (!isPortalEntry) {
+          next();
+          return;
+        }
+        const forwardedHost = String(req.headers["x-forwarded-host"] ?? "").split(",")[0].trim();
+        const host = forwardedHost || req.get("host") || req.hostname || "";
+        if (isPlatformHostname(host, TENANT_BASE_DOMAINS)) {
+          next();
+          return;
+        }
+        try {
+          const mapping = await resolvePortalHost(host);
+          if (!mapping) {
+            next();
+            return;
+          }
+          if (req.path !== "/") {
+            res.redirect(302, "/");
+            return;
+          }
+          const html = readFileSync(registerIndexPath, "utf8");
+          res.set("Cache-Control", "no-store")
+            .type("html")
+            .send(injectHotspotHostConfig(html, host, mapping.adminId));
+        } catch (error) {
+          logger.error({ err: error }, "Custom Hotspot hostname lookup failed");
+          res.status(503).type("text").send("Hotspot portal is temporarily unavailable.\n");
+        }
+      });
     app.use((req, res, next) => {
       const forwardedHost = String(req.headers["x-forwarded-host"] ?? "")
         .split(",")[0]

@@ -13,6 +13,7 @@ import { getAdminApiToken, getAdminRole, isImpersonating } from "@/lib/supabase"
 
 import LandingPage from "./pages/LandingPage";
 import AdminLogin from "./pages/admin/AdminLogin";
+import AdminEntrySelection from "./pages/admin/AdminEntrySelection";
 import AdminDashboard from "./pages/admin/Dashboard";
 import Copilot from "./pages/admin/Copilot";
 import AdminCustomers from "./pages/admin/Customers";
@@ -105,20 +106,26 @@ function ResellerBlockedPage() {
 ──────────────────────────────────────────────────────────────── */
 function SubdomainGuard() {
   const [, setLocation] = useLocation();
+  const hotspotConfig = typeof window !== "undefined"
+    ? (window as Window & { __HOTSPOT_CONFIG__?: { adminId?: unknown } }).__HOTSPOT_CONFIG__
+    : undefined;
+  const customHotspotPortal = Number.isSafeInteger(Number(hotspotConfig?.adminId))
+    && Number(hotspotConfig?.adminId) > 0;
+  const isAdminEntryHost = typeof window !== "undefined"
+    && /^admin\.isplatty\.(org|com)$/.test(window.location.hostname.toLowerCase());
 
   useEffect(() => {
+    if (isAdminEntryHost) { setLocation("/admin/entry"); return; }
     const sub = getHostSubdomain();
-    if (sub && sub !== "register" && sub !== "latex") {
-      setLocation("/admin/login");
-    }
-  }, [setLocation]);
+    if (sub && sub !== "register" && sub !== "latex") setLocation("/admin/entry");
+  }, [isAdminEntryHost, setLocation]);
 
-  /* Render platform entry points directly so they never flash blank. */
+  if (customHotspotPortal) return <HotspotLogin />;
+  if (isAdminEntryHost) return null;
   const sub = getHostSubdomain();
-   if (sub === "register") return <AdminRegister />;
+  if (sub === "register") return <AdminRegister />;
   if (sub === "latex") return <SuperAdminLogin />;
   if (sub) return null;
-
   return <LandingPage />;
 }
 
@@ -204,7 +211,9 @@ function Router() {
     <Switch>
       {import.meta.env.DEV && <Route path="/__visual/:page" component={VisualCheckHarness} />}
       <Route path="/" component={SubdomainGuard} />
-      <Route path="/admin/login" component={AdminLogin} />
+      <Route path="/admin/entry" component={AdminEntrySelection} />
+      <Route path="/admin/login" component={AdminEntrySelection} />
+      <Route path="/admin/login/isp" component={AdminLogin} />
       <Route path="/admin/dashboard" component={RoleAwareDashboard} />
       <Route path="/admin/copilot" component={Copilot} />
       <Route path="/admin/reseller" component={ResellerWorkspace} />
