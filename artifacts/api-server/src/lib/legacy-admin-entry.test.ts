@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveLegacyAdminEntry } from "./legacy-admin-entry.js";
+import {
+  resolveCanonicalAdminLoginRedirect,
+  resolveLegacyAdminEntry,
+} from "./legacy-admin-entry.js";
 
 test("routes the requested PHP-style URL directly to the tenant admin login", () => {
   assert.equal(
@@ -44,4 +47,27 @@ test("only the exact PHP-style admin route is accepted", () => {
       requestUrl,
     );
   }
+});
+
+test("canonicalizes tenant admin login URLs to the PHP-style entry", () => {
+  assert.equal(
+    resolveCanonicalAdminLoginRedirect("ocholasupernet.isplatty.com", "/admin/login"),
+    "/index.php?_route=admin/",
+  );
+  assert.equal(
+    resolveCanonicalAdminLoginRedirect(
+      "ocholasupernet.isplatty.com",
+      "/admin/login?first_login=1&subdomain=ocholasupernet&_route=wrong",
+    ),
+    "/index.php?_route=admin/&first_login=1&subdomain=ocholasupernet",
+  );
+});
+
+test("does not canonicalize Hotspot, platform, or unrelated login routes", () => {
+  assert.equal(resolveCanonicalAdminLoginRedirect("ocholasupernet.com", "/admin/login"), null);
+  assert.equal(resolveCanonicalAdminLoginRedirect("admin.isplatty.com", "/admin/login"), null);
+  assert.equal(
+    resolveCanonicalAdminLoginRedirect("ocholasupernet.isplatty.com", "/admin/login/isp"),
+    null,
+  );
 });

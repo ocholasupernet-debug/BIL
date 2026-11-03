@@ -9,7 +9,10 @@ import router from "./routes";
 import { logger } from "./lib/logger";
 import { resolveVlanHotspotPortalRequest } from "./lib/api-auth.js";
 import { TENANT_BASE_DOMAINS } from "./lib/tenant-host.js";
-import { resolveLegacyAdminEntry } from "./lib/legacy-admin-entry.js";
+import {
+  resolveCanonicalAdminLoginRedirect,
+  resolveLegacyAdminEntry,
+} from "./lib/legacy-admin-entry.js";
 import { sbSelectStrict } from "./lib/supabase-client.js";
 import { injectHotspotHostConfig, isPlatformHostname, normalizeRequestHostname, resolveHotspotHostMapping, type HotspotHostMapping } from "./lib/hotspot-host-routing.js";
 
@@ -121,6 +124,17 @@ if (shouldServeStatic) {
 
   if (existsSync(staticDir)) {
     const registerIndexPath = path.join(staticDir, "index.html");
+    app.get("/admin/login", (req, res, next) => {
+      const destination = resolveCanonicalAdminLoginRedirect(
+        req.get("host") ?? req.hostname ?? "",
+        req.originalUrl,
+      );
+      if (!destination) {
+        next();
+        return;
+      }
+      res.set("Cache-Control", "no-store").redirect(302, destination);
+    });
     // Keep the tenant's PHP-style URL while serving the existing React login.
     app.get("/index.php", (req, res, next) => {
       const destination = resolveLegacyAdminEntry(

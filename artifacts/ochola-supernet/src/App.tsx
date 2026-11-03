@@ -92,6 +92,25 @@ function RoleAwareDashboard() {
   return getAdminRole() === "reseller" ? <ResellerWorkspace /> : <AdminDashboard />;
 }
 
+function TenantAdminLoginRoute() {
+  const hostSubdomain = getHostSubdomain();
+
+  useEffect(() => {
+    if (!hostSubdomain || typeof window === "undefined") return;
+
+    const params = new URLSearchParams();
+    params.set("_route", "admin/");
+    new URLSearchParams(window.location.search).forEach((value, key) => {
+      if (key !== "_route") params.append(key, value);
+    });
+    const query = params.toString().replace("_route=admin%2F", "_route=admin/");
+    window.location.replace(`/index.php?${query}`);
+  }, [hostSubdomain]);
+
+  return hostSubdomain ? null : <AdminLogin />;
+}
+
+
 function ResellerBlockedPage() {
   const [, setLocation] = useLocation();
   useEffect(() => { setLocation("/admin/dashboard"); }, [setLocation]);
@@ -211,9 +230,9 @@ function Router() {
     <Switch>
       {import.meta.env.DEV && <Route path="/__visual/:page" component={VisualCheckHarness} />}
       <Route path="/" component={SubdomainGuard} />
-      <Route path="/admin/entry" component={AdminLogin} />
-      <Route path="/admin/login" component={AdminLogin} />
-      <Route path="/admin/login/isp" component={AdminLogin} />
+      <Route path="/admin/entry" component={TenantAdminLoginRoute} />
+      <Route path="/admin/login" component={TenantAdminLoginRoute} />
+      <Route path="/admin/login/isp" component={TenantAdminLoginRoute} />
       <Route path="/index.php" component={AdminLogin} />
       <Route path="/admin/dashboard" component={RoleAwareDashboard} />
       <Route path="/admin/copilot" component={Copilot} />
