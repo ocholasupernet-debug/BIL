@@ -2,6 +2,7 @@ import { randomUUID, createHmac } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import { sbRpc, sbSelect, sbUpdateStrict } from "../lib/supabase-client.js";
 import { logger } from "../lib/logger.js";
+import { verifyAdminTurnstile } from "../lib/turnstile.js";
 import { checkRegistrationContactCapacity } from "../lib/registration-contact-capacity.js";
 import { hashIspAdminPassword } from "../lib/passwords.js";
 import { generateAdminSessionToken, generateToken } from "../lib/api-auth.js";
@@ -310,6 +311,11 @@ router.post("/auth/sms/verify-otp", async (req, res) => {
         c.account_id,
       ),
     });
+  if (c.purpose === "login" && c.account_type === "admin") {
+    const turnstile = await verifyAdminTurnstile(req, "admin_login");
+    if (!turnstile.ok)
+      return void res.status(turnstile.status).json({ ok: false, error: turnstile.error });
+  }
   const table = c.account_type === "admin" ? "isp_admins" : "isp_customers";
   const rows = await sbSelect<Record<string, unknown>>(
     table,

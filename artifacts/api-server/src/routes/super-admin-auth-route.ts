@@ -14,6 +14,7 @@ import { randomBytes, timingSafeEqual } from "crypto";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { logger } from "../lib/logger.js";
 import { sendPlatformSecurityNotice } from "../lib/platform-email.js";
+import { verifyAdminTurnstile } from "../lib/turnstile.js";
 
 const router: IRouter = Router();
 
@@ -81,7 +82,12 @@ export function activeSuperAdminName(token: string): string | null {
 }
 
 /* ── POST /api/super-admin/login ─────────────────────────────────── */
-router.post("/super-admin/login", (req: Request, res: Response): void => {
+router.post("/super-admin/login", async (req: Request, res: Response): Promise<void> => {
+  const turnstile = await verifyAdminTurnstile(req, "admin_login");
+  if (!turnstile.ok) {
+    res.status(turnstile.status).json({ ok: false, error: turnstile.error });
+    return;
+  }
   const { username, api_key, password } = req.body as {
     username?: string; api_key?: string; password?: string;
   };

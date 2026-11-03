@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { User, Key, Lock, Eye, EyeOff, AlertCircle, ArrowRight, Clock, LogOut } from "lucide-react";
 import { Logo } from "@/components/Logo";
+import { TurnstileCheck } from "@/components/TurnstileCheck";
 
 /* ── Helper: store super admin session in localStorage ── */
 function setSuperAdminSession(name: string, token: string, issuedAt: number) {
@@ -71,6 +72,8 @@ export default function SuperAdminLogin() {
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
   const [reason,   setReason]   = useState<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileResetKey, setTurnstileResetKey] = useState(0);
 
   /* Read ?reason= from URL on mount */
   useEffect(() => {
@@ -83,6 +86,10 @@ export default function SuperAdminLogin() {
     e.preventDefault();
     setError("");
     setReason(null);
+    if (!turnstileToken) {
+      setError("Complete Cloudflare verification before signing in.");
+      return;
+    }
     if (!username.trim() || !apiKey.trim() || !password) {
       setError("All three fields are required.");
       return;
@@ -92,7 +99,12 @@ export default function SuperAdminLogin() {
       const res = await fetch("/api/super-admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim(), api_key: apiKey.trim(), password }),
+        body: JSON.stringify({
+          username: username.trim(),
+          api_key: apiKey.trim(),
+          password,
+          turnstileToken,
+        }),
       });
       const data = await res.json() as {
         ok: boolean; error?: string; name?: string; token?: string; issuedAt?: number;
@@ -111,6 +123,8 @@ export default function SuperAdminLogin() {
       setError("Could not reach the server. Please try again.");
     } finally {
       setLoading(false);
+      setTurnstileToken("");
+      setTurnstileResetKey((key) => key + 1);
     }
   };
 
@@ -240,6 +254,12 @@ export default function SuperAdminLogin() {
                 {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
               </button>
             </Field>
+
+            <TurnstileCheck
+              action="admin_login"
+              resetKey={turnstileResetKey}
+              onToken={setTurnstileToken}
+            />
 
             {/* Divider */}
             <div style={{ borderTop: "1px solid rgba(212,179,74,0.08)" }} />

@@ -11,6 +11,7 @@ import { getOtpPasswordSetupToken } from "../lib/admin-password-setup.js";
 import { requireTenantPermission } from "../lib/tenant-permission.js";
 import { hashIspAdminPassword, verifyIspAdminPassword } from "../lib/passwords.js";
 import { logger } from "../lib/logger.js";
+import { verifyAdminTurnstile } from "../lib/turnstile.js";
 import { checkRegistrationContactCapacity } from "../lib/registration-contact-capacity.js";
 import { resolvePrepaidPackagePlanId } from "../lib/prepaid-package-lookup.js";
 import {
@@ -760,6 +761,14 @@ router.post("/auth/whatsapp/verify-otp", async (req, res): Promise<void> => {
     );
     res.set("Cache-Control", "no-store").json({ ok: true, resetToken });
     return;
+  }
+
+  if (accountType === "admin") {
+    const turnstile = await verifyAdminTurnstile(req, "admin_login");
+    if (!turnstile.ok) {
+      res.status(turnstile.status).json({ ok: false, error: turnstile.error });
+      return;
+    }
   }
 
   const table = accountType === "admin" ? "isp_admins" : "isp_customers";

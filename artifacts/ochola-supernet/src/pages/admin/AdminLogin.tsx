@@ -4,8 +4,10 @@ import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle } from "lucide-react";
 import { clearAdminAuth, clearPasswordSetupToken, setAdminAuth, setPasswordSetupToken } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-client";
 import { getHostSubdomain } from "@/lib/subdomain";
+import { PUBLIC_BASE_DOMAIN, tenantHostname } from "@/lib/public-domain";
 import { INITIAL_ADMIN_PASSWORD, INITIAL_ADMIN_USERNAME } from "@/lib/initial-admin-credentials";
 import { Logo } from "@/components/Logo";
+import { TurnstileCheck } from "@/components/TurnstileCheck";
 
 interface CompanyInfo {
   id: number;
@@ -39,6 +41,8 @@ export default function AdminLogin() {
   const [otpLoading, setOtpLoading] = useState(false);
   const [otpNotice, setOtpNotice] = useState("");
   const [resendWait, setResendWait] = useState(0);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [resetToken, setResetToken] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [recoveryStage, setRecoveryStage] = useState<"request" | "verify" | "password">("request");
@@ -127,12 +131,20 @@ export default function AdminLogin() {
   const verifyWhatsappCode = async () => {
     setError("");
     setOtpNotice("");
+    if (otpPurpose === "login" && !turnstileToken) {
+      setError("Complete Cloudflare verification before signing in.");
+      return;
+    }
     setOtpLoading(true);
     try {
       const response = await fetch(`/api/auth/${otpChannel}/verify-otp`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ challengeId: otpChallengeId, code: otpCode }),
+        body: JSON.stringify({
+          challengeId: otpChallengeId,
+          code: otpCode,
+          ...(otpPurpose === "login" ? { turnstileToken } : {}),
+        }),
       });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "The code is invalid or expired.");
@@ -176,6 +188,10 @@ export default function AdminLogin() {
       setError(cause instanceof Error ? cause.message : "Phone verification failed.");
     } finally {
       setOtpLoading(false);
+      if (otpPurpose === "login") {
+        setTurnstileToken("");
+        setTurnstileResetKey((key) => key + 1);
+      }
     }
   };
 
@@ -205,6 +221,10 @@ export default function AdminLogin() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    if (!turnstileToken) {
+      setError("Complete Cloudflare verification before signing in.");
+      return;
+    }
      if (!username.trim() || !password.trim()) {
        setError(firstLogin
          ? "Enter the admin username and temporary password."
@@ -220,6 +240,7 @@ export default function AdminLogin() {
           username: username.trim(),
           password,
           subdomain: (hostSubdomain || companySubdomain).trim().toLowerCase(),
+          turnstileToken,
         }),
       });
       const apiSession = await apiLogin.json() as {
@@ -266,11 +287,13 @@ export default function AdminLogin() {
       setError("Login failed. Please try again.");
     } finally {
       setIsLoading(false);
+      setTurnstileToken("");
+      setTurnstileResetKey((key) => key + 1);
     }
   };
 
   const displayName   = company?.name ?? "ISPlatty";
-  const displayDomain = company ? `${company.subdomain}.isplatty.org` : "isplatty.org";
+  const displayDomain = company ? tenantHostname(company.subdomain) : PUBLIC_BASE_DOMAIN;
 
   const inputStyle: React.CSSProperties = {
     width: "100%", paddingLeft: 38, paddingRight: 14,
@@ -421,6 +444,13 @@ export default function AdminLogin() {
           {otpNotice && <p role="status" style={{ margin: "0 0 16px", fontSize: "0.83rem", color: "var(--isp-text-muted)" }}>{otpNotice}</p>}
 
            <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+             {(loginMethod === "password" || (loginMethod !== "recovery" && otpChallengeId && otpPurpose === "login")) && (
+               <TurnstileCheck
+                 action="admin_login"
+                 resetKey={turnstileResetKey}
+                 onToken={setTurnstileToken}
+               />
+             )}
              {!hostSubdomain && (
                <div>
                  <label style={{
@@ -445,7 +475,7 @@ export default function AdminLogin() {
                    <span style={{
                      position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
                      color: "var(--isp-text-sub)", fontSize: "0.82rem", pointerEvents: "none",
-                   }}>.isplatty.org</span>
+                   }}>.{PUBLIC_BASE_DOMAIN}</span>
                  </div>
                  <p style={{ margin: "6px 0 0", fontSize: "0.78rem", color: "var(--isp-text-muted)" }}>
                    Use the company name from your ISP address.

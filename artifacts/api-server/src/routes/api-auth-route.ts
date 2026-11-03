@@ -24,6 +24,7 @@ import { hashIspAdminPassword, verifyIspAdminPassword } from "../lib/passwords.j
 import { getTenantSubdomainFromRequest, RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
 import { registerAccount } from "../controllers/auth-controller.js";
 import { logger } from "../lib/logger.js";
+import { verifyAdminTurnstile } from "../lib/turnstile.js";
 import { recordWhatsAppSignInFailure, type WhatsAppLoginAccountType } from "../services/whatsapp/whatsapp-service.js";
 import { getPageAuthMethod, isSupportedPasswordReauthFeature, recordPlatformAuthAudit } from "../lib/platform-auth-security.js";
 import {
@@ -495,6 +496,11 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
   const { username, email, password, api_key, subdomain } = req.body as {
     username?: string; email?: string; password?: string; api_key?: string; subdomain?: string;
   };
+  const turnstile = await verifyAdminTurnstile(req, "admin_login");
+  if (!turnstile.ok) {
+    res.status(turnstile.status).json({ ok: false, error: turnstile.error });
+    return;
+  }
   const identity = (typeof username === "string" ? username : email ?? "").trim();
 
   if (!identity || !password) {
