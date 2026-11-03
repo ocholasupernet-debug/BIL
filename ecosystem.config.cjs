@@ -70,6 +70,8 @@ module.exports = {
         SUPABASE_URL:         process.env.SUPABASE_URL || "",
         SUPABASE_DB_URL: process.env.SUPABASE_DB_URL || process.env.SUPABASE_DATABASE_URL || "",
          SESSION_SECRET:       process.env.SESSION_SECRET || "",
+         TURNSTILE_SECRET:     process.env.TURNSTILE_SECRET || "",
+         VITE_TURNSTILE_SITE_KEY: process.env.VITE_TURNSTILE_SITE_KEY || "",
         TAWK_API_KEY:         process.env.TAWK_API_KEY || "",
          WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || "",
          WHATSAPP_WEBHOOK_VERIFY_TOKEN: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "",
