@@ -89,6 +89,15 @@ type LayoutDeploymentRecord = {
   deployed_directory: string;
   created_at: string;
 };
+type CustomLayoutRecord = {
+  id: string;
+  source_layout_id: string;
+  name: string;
+  description: string;
+  version: string;
+  status: "active" | "archived";
+  created_at: string;
+};
 type LayoutAppearance = {
   portalBackground: PortalBackground;
   portalPackageShape: PortalPackageShape;
@@ -1229,6 +1238,9 @@ export default function HotspotSettings() {
   const [layoutDeployBusy, setLayoutDeployBusy] = useState(false);
   const [layoutPreviewUrls, setLayoutPreviewUrls] = useState<Record<string, string>>({});
   const [layoutHistoryRefresh, setLayoutHistoryRefresh] = useState(0);
+  const [customLayouts, setCustomLayouts] = useState<CustomLayoutRecord[]>([]);
+  const [customLayoutsLoading, setCustomLayoutsLoading] = useState(false);
+  const [selectedManagerLayoutId, setSelectedManagerLayoutId] = useState<string>(initialSettings.portalLayout);
 
   useEffect(() => {
     if (appearanceSaving) return;
@@ -1312,6 +1324,35 @@ export default function HotspotSettings() {
 
   const selectedRouterForLayout = routers.find(router => router.id === Number(settings.routerId));
   const layoutTenantId = Number(selectedRouterForLayout?.admin_id ?? adminId);
+  useEffect(() => {
+    setSelectedManagerLayoutId(settings.portalLayout);
+  }, [settings.portalLayout]);
+  useEffect(() => {
+    if (!Number.isSafeInteger(layoutTenantId) || layoutTenantId < 1) {
+      setCustomLayouts([]);
+      setCustomLayoutsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setCustomLayoutsLoading(true);
+    fetch(`/api/hotspot-layouts/library?adminId=${encodeURIComponent(String(layoutTenantId))}`, {
+      headers: adminApiHeaders(), cache: "no-store",
+    }).then(async response => {
+      const data = await parseApiResponse<{ layouts?: CustomLayoutRecord[] }>(response, "Custom layouts could not be loaded.");
+      if (!response.ok) throw new Error(data.error || "Custom layouts could not be loaded.");
+      return Array.isArray(data.layouts) ? data.layouts : [];
+    }).then(rows => {
+      if (!cancelled) {
+        setCustomLayouts(rows);
+        setLayoutHistoryError(null);
+      }
+    }).catch(error => {
+      if (!cancelled) setLayoutHistoryError(error instanceof Error ? error.message : "Custom layouts could not be loaded.");
+    }).finally(() => {
+      if (!cancelled) setCustomLayoutsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [layoutTenantId, layoutHistoryRefresh]);
   useEffect(() => {
     const routerId = Number(settings.routerId);
     if (!Number.isSafeInteger(routerId) || routerId < 1 || !Number.isSafeInteger(layoutTenantId) || layoutTenantId < 1) {
@@ -1994,6 +2035,23 @@ export default function HotspotSettings() {
   };
 
   const previewManagedLayout = async (layoutId: string) => {
+    if (layoutId.startsWith("custom-")) {
+      try {
+        const response = await fetch(
+          `/api/hotspot-layouts/library/${encodeURIComponent(layoutId)}/content?adminId=${encodeURIComponent(String(layoutTenantId))}`,
+          { headers: adminApiHeaders(), cache: "no-store" },
+        );
+        const data = await parseApiResponse<{ html?: string }>(response, "Custom layout preview could not be loaded.");
+        if (!response.ok || typeof data.html !== "string") throw new Error(data.error || "Custom layout preview could not be loaded.");
+        setLayoutPreviewUrls(previous => {
+          if (previous[layoutId]) URL.revokeObjectURL(previous[layoutId]);
+          return { ...previous, [layoutId]: URL.createObjectURL(new Blob([data.html!], { type: "text/html;charset=utf-8" })) };
+        });
+      } catch (error) {
+        setNotice({ type: "error", text: error instanceof Error ? error.message : "Custom layout preview could not be loaded." });
+      }
+      return;
+    }
     const layout = normalizeHotspotSettingsLayout(layoutId);
     try {
       const appearance = settings.layoutAppearances[layout];
@@ -2013,6 +2071,77 @@ export default function HotspotSettings() {
     }
   };
 
+  const selectManagedLayout = (layoutId: string) => {
+    setSelectedManagerLayoutId(layoutId);
+    if (!layoutId.startsWith("custom-")) selectPortalLayout(normalizeHotspotSettingsLayout(layoutId));
+  };
+
+  const duplicateManagedLayout = async (sourceLayoutId: string) => {
+    const name = window.prompt("Name this independent copy:");
+    if (!name?.trim()) return;
+    try {
+      let html: string;
+      if (sourceLayoutId.startsWith("custom-")) {
+        const response = await fetch(
+          `/api/hotspot-layouts/library/${encodeURIComponent(sourceLayoutId)}/content?adminId=${encodeURIComponent(String(layoutTenantId))}`,
+          { headers: adminApiHeaders(), cache: "no-store" },
+        );
+        const data = await parseApiResponse<{ html?: string }>(response, "The source copy could not be loaded.");
+        if (!response.ok || typeof data.html !== "string") throw new Error(data.error || "The source copy could not be loaded.");
+        html = data.html;
+      } else {
+        const source = normalizeHotspotSettingsLayout(sourceLayoutId);
+        html = await buildPortalHtml(
+          { ...settings, portalLayout: source },
+          brand.domain,
+          { ...settings.layoutAppearances[source], portalLayout: source },
+        );
+      }
+      const headers = new Headers(adminApiHeaders());
+      headers.set("Content-Type", "application/json");
+      const response = await fetch("/api/hotspot-layouts/library/duplicate", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          adminId: layoutTenantId,
+          sourceLayoutId,
+          name: name.trim(),
+          description: `Independent copy of ${HOTSPOT_SETTINGS_LAYOUTS.find(item => item.value === sourceLayoutId)?.label ?? customLayouts.find(item => item.id === sourceLayoutId)?.name ?? "Hotspot layout"}`,
+          html,
+        }),
+      });
+      const data = await parseApiResponse<{ layout?: CustomLayoutRecord }>(response, "The layout copy could not be saved.");
+      if (!response.ok || !data.layout) throw new Error(data.error || "The layout copy could not be saved.");
+      setCustomLayouts(previous => [data.layout!, ...previous]);
+      setSelectedManagerLayoutId(data.layout.id);
+      setNotice({ type: "success", text: `${data.layout.name} is saved as an independent tenant copy.` });
+      setLayoutHistoryRefresh(value => value + 1);
+    } catch (error) {
+      setNotice({ type: "error", text: error instanceof Error ? error.message : "The layout copy could not be saved." });
+    }
+  };
+
+  const setManagedLayoutArchived = async (layoutId: string, status: "active" | "archived") => {
+    try {
+      const headers = new Headers(adminApiHeaders());
+      headers.set("Content-Type", "application/json");
+      const response = await fetch(`/api/hotspot-layouts/library/${encodeURIComponent(layoutId)}/status`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ adminId: layoutTenantId, status }),
+      });
+      const data = await parseApiResponse<{ error?: string }>(response, "The layout status could not be changed.");
+      if (!response.ok) throw new Error(data.error || "The layout status could not be changed.");
+      setCustomLayouts(previous => previous.map(layout => layout.id === layoutId ? { ...layout, status } : layout));
+      if (status === "archived" && selectedManagerLayoutId === layoutId) {
+        setSelectedManagerLayoutId(settings.portalLayout);
+      }
+      setLayoutHistoryRefresh(value => value + 1);
+    } catch (error) {
+      setNotice({ type: "error", text: error instanceof Error ? error.message : "The layout status could not be changed." });
+    }
+  };
+
   const deployManagedLayout = async () => {
     const routerId = Number(settings.routerId);
     if (!Number.isSafeInteger(routerId) || routerId < 1 || !selectedRouterForLayout) {
@@ -2026,7 +2155,7 @@ export default function HotspotSettings() {
     setLayoutDeployBusy(true);
     setNotice(null);
     try {
-      const html = await buildPortalHtml(
+      const html = selectedManagerLayoutId.startsWith("custom-") ? undefined : await buildPortalHtml(
         settings,
         brand.domain,
         { ...settings.layoutAppearances[settings.portalLayout], portalLayout: settings.portalLayout },
@@ -2038,8 +2167,8 @@ export default function HotspotSettings() {
         headers,
         body: JSON.stringify({
           adminId: layoutTenantId,
-          layoutId: settings.portalLayout,
-          layoutVersion: settings.portalLayout === "aurora-network" ? "1.0.0" : "legacy-1",
+          layoutId: selectedManagerLayoutId,
+          layoutVersion: selectedManagerLayoutId === "aurora-network" ? "1.0.0" : "legacy-1",
           html,
           replacementConsent: true,
         }),
@@ -2060,13 +2189,42 @@ export default function HotspotSettings() {
   };
 
   const successfulLayoutDeployment = layoutHistory.find(row => row.status === "success");
+  const managerLayoutName = (id: string) =>
+    HOTSPOT_SETTINGS_LAYOUTS.find(layout => layout.value === id)?.label
+      ?? customLayouts.find(layout => layout.id === id)?.name
+      ?? id;
   const managedLayoutHistory: HotspotDeploymentHistoryEntry[] = layoutHistory.map(row => ({
     date: row.created_at,
-    layout: HOTSPOT_SETTINGS_LAYOUTS.find(layout => layout.value === row.layout_id)?.label ?? row.layout_id,
+    layout: managerLayoutName(row.layout_id),
     version: row.layout_version,
     status: row.status,
     router: selectedRouterForLayout?.name ?? `Router ${settings.routerId}`,
   }));
+  const managedLayouts = [
+    ...HOTSPOT_SETTINGS_LAYOUTS.map(layout => ({
+      id: layout.value,
+      name: hotspotSettingsLayoutLabel(layout),
+      version: layout.value === "aurora-network" ? "1.0.0" : "legacy",
+      description: layout.description,
+      availability: successfulLayoutDeployment?.layout_id === layout.value ? "active" as const : "available" as const,
+      previewUrl: layoutPreviewUrls[layout.value],
+      isBuiltIn: true,
+      canDuplicate: true,
+      canArchive: false,
+    })),
+    ...customLayouts.map(layout => ({
+      id: layout.id,
+      name: layout.name,
+      version: layout.version,
+      description: layout.description || `Independent copy of ${managerLayoutName(layout.source_layout_id)}.`,
+      availability: layout.status === "archived" ? "archived" as const
+        : successfulLayoutDeployment?.layout_id === layout.id ? "active" as const : "available" as const,
+      previewUrl: layoutPreviewUrls[layout.id],
+      isBuiltIn: false,
+      canDuplicate: layout.status === "active",
+      canArchive: layout.status === "active",
+    })),
+  ];
 
   const presets = [
     { name: "Signal Orange", colors: { bgColor: "#081416", bgColor2: "#173638", primaryColor: "#d96835", accentColor: "#f09562", cardColor: "#12292b", buttonColor: "#168c78", textColor: "#ffffff", inputBgColor: "#0b1d1f" } },
@@ -2433,7 +2591,14 @@ export default function HotspotSettings() {
               )}
             </Section>
 
-            <Section id="hotspot-appearance" icon={<Sparkles size={16} />} title="Portal appearance" description="Customize the selected layout. Selection and deployment are managed in the layout panel below.">
+            <Section
+              id="hotspot-appearance"
+              icon={<Sparkles size={16} />}
+              title="Portal appearance"
+              description={selectedManagerLayoutId.startsWith("custom-")
+                ? "Custom layouts are independent saved snapshots; edit a built-in layout and make a new copy to change its appearance."
+                : "Customize this built-in layout. Selection and deployment are managed in the layout panel below."}
+            >
               {appearanceLoading ? (
                 <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading portal appearance…</div>
               ) : (
@@ -2508,35 +2673,30 @@ export default function HotspotSettings() {
             </Section>
 
             <HotspotLayoutManager
-              layouts={HOTSPOT_SETTINGS_LAYOUTS.map((layout, index) => ({
-                id: layout.value,
-                name: hotspotSettingsLayoutLabel(layout),
-                version: layout.value === "aurora-network" ? "1.0.0" : "legacy",
-                description: layout.description,
-                availability: successfulLayoutDeployment?.layout_id === layout.value ? "active" : "available",
-                previewUrl: layoutPreviewUrls[layout.value],
-                isBuiltIn: true,
-                canDuplicate: false,
-                canArchive: false,
-              }))}
-              selectedLayoutId={settings.portalLayout}
+              layouts={managedLayouts}
+              selectedLayoutId={selectedManagerLayoutId}
               deployment={{
                 routerName: selectedRouterForLayout?.name ?? (settings.routerId ? `Router ${settings.routerId}` : "No router selected"),
                 hotspotName: selectedPortalPort?.hotspot_server_name ?? (selectedAssignedPortId ? "Assigned Hotspot service" : "Router-wide Hotspot"),
-                selectedLayout: HOTSPOT_SETTINGS_LAYOUTS.find(layout => layout.value === settings.portalLayout)?.label ?? settings.portalLayout,
+                selectedLayout: managerLayoutName(selectedManagerLayoutId),
                 installedLayout: successfulLayoutDeployment
-                  ? HOTSPOT_SETTINGS_LAYOUTS.find(layout => layout.value === successfulLayoutDeployment.layout_id)?.label ?? successfulLayoutDeployment.layout_id
+                  ? managerLayoutName(successfulLayoutDeployment.layout_id)
                   : null,
                 syncStatus: layoutHistory[0]?.status ?? "not-deployed",
                 lastSuccessfulSync: successfulLayoutDeployment?.created_at ?? null,
               }}
               history={managedLayoutHistory}
-              state={{ loading: layoutHistoryLoading, error: layoutHistoryError, busy: layoutDeployBusy }}
-              selectLayout={id => selectPortalLayout(normalizeHotspotSettingsLayout(id))}
+              state={{ loading: layoutHistoryLoading || customLayoutsLoading, error: layoutHistoryError, busy: layoutDeployBusy || !layoutTenantId }}
+              selectLayout={selectManagedLayout}
               previewLayout={(id, _viewport) => { void previewManagedLayout(id); }}
-              duplicateLayout={() => undefined}
-              archiveLayout={() => undefined}
-              restoreLayout={() => undefined}
+              duplicateLayout={id => { void duplicateManagedLayout(id); }}
+              archiveLayout={id => {
+                const name = managerLayoutName(id);
+                if (window.confirm(`Archive “${name}”? It will remain in your library and can be restored. Existing router installations will not change.`)) {
+                  void setManagedLayoutArchived(id, "archived");
+                }
+              }}
+              restoreLayout={id => { void setManagedLayoutArchived(id, "active"); }}
               confirmDeploy={deployManagedLayout}
             />
 

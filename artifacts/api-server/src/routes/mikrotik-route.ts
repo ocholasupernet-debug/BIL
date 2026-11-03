@@ -2457,21 +2457,44 @@ router.post("/router/:id/hotspot-layouts/deploy", requireAdmin(), async (req, re
   const routerId = Number(req.params.id);
   const adminId = authenticatedAdminId(req, req.body?.adminId);
   const layoutId = String(req.body?.layoutId ?? "");
-  const layoutVersion = String(req.body?.layoutVersion ?? "").slice(0, 40);
-  const portal = validateGeneratedHotspotPortal(req.body?.html);
-  const embedded = typeof req.body?.html === "string" ? findEmbeddedHotspotConfig(req.body.html) : null;
+  let layoutVersion = String(req.body?.layoutVersion ?? "").slice(0, 40);
+  let html = req.body?.html;
+  let embeddedLayoutId = layoutId;
   if (!Number.isSafeInteger(routerId) || routerId < 1) { res.status(400).json({ error: "Invalid router id." }); return; }
   if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
-  if (!["classic", "dansted-wifi", "circuit-noir", "aurora-network"].includes(layoutId) || !layoutVersion) {
-    res.status(400).json({ error: "A supported layout and version are required." });
+  const customLayoutId = /^custom-[a-f0-9]{32}$/.test(layoutId);
+  if (!["classic", "dansted-wifi", "circuit-noir", "aurora-network"].includes(layoutId) && !customLayoutId) {
+    res.status(400).json({ error: "A supported layout is required." });
     return;
   }
   if (req.body?.replacementConsent !== true) {
     res.status(400).json({ error: "Confirm replacement of the selected Hotspot profile before deployment." });
     return;
   }
+  if (customLayoutId) {
+    try {
+      const [savedLayout] = await sbSelectStrict<{
+        id: string; source_layout_id: string; version: string; status: string; package_html: string;
+      }>("isp_hotspot_layout_library", `id=eq.${encodeURIComponent(layoutId)}&admin_id=eq.${adminId}&select=id,source_layout_id,version,status,package_html&limit=1`);
+      if (!savedLayout || savedLayout.status !== "active") {
+        res.status(404).json({ error: "This custom layout is unavailable or archived for this tenant." });
+        return;
+      }
+      html = savedLayout.package_html;
+      layoutVersion = savedLayout.version;
+      embeddedLayoutId = savedLayout.source_layout_id;
+    } catch (error) {
+      res.status(503).json({ error: error instanceof Error ? error.message : "The tenant layout library is unavailable." });
+      return;
+    }
+  } else if (!layoutVersion) {
+    res.status(400).json({ error: "A layout version is required." });
+    return;
+  }
+  const portal = validateGeneratedHotspotPortal(html);
+  const embedded = typeof html === "string" ? findEmbeddedHotspotConfig(html) : null;
   if (!("content" in portal)) { res.status(400).json({ error: portal.error }); return; }
-  if (!embedded || embedded.config.portalLayout !== layoutId) {
+  if (!embedded || embedded.config.portalLayout !== embeddedLayoutId) {
     res.status(400).json({ error: "The generated portal layout does not match the selected layout." });
     return;
   }
@@ -2481,6 +2504,19 @@ router.post("/router/:id/hotspot-layouts/deploy", requireAdmin(), async (req, re
   }
   const origin = requestOrigin(req);
   if (!origin.startsWith("https://")) { res.status(400).json({ error: "Portal deployment requires an HTTPS public request origin." }); return; }
+  const md5Source = getDeployableSource("hotspot", "md5.js");
+  if (!md5Source) { res.status(503).json({ error: "The bundled Hotspot login helper is unavailable; no router files were changed." }); return; }
+  let md5Content: Buffer;
+  try {
+    md5Content = await prepareIspHotspotAsset("md5.js", md5Source.content, {
+      adminId,
+      routerId,
+      apiBase: origin,
+    });
+  } catch (error) {
+    res.status(503).json({ error: error instanceof Error ? error.message : "The Hotspot login helper could not be prepared." });
+    return;
+  }
 
   const found = await getRouterCreds(routerId, adminId);
   if (!found) { res.status(404).json({ error: "Router not found or not assigned to this administrator." }); return; }
@@ -2507,7 +2543,7 @@ router.post("/router/:id/hotspot-layouts/deploy", requireAdmin(), async (req, re
   const previousDirectory = profileTarget.htmlDirectory;
   const parentDirectory = `${previousDirectory}/bil-layouts`;
   const stageDirectory = `${parentDirectory}/${layoutId}-${Date.now()}-${randomBytes(5).toString("hex")}`;
-  const filePaths = [`${stageDirectory}/login.html`, `${stageDirectory}/rlogin.html`];
+  const filePaths = [`${stageDirectory}/login.html`, `${stageDirectory}/rlogin.html`, `${stageDirectory}/hotspot/md5.js`];
   let historyId: number | undefined;
   try {
     const [history] = await sbInsertStrict<{ id: number }>("isp_hotspot_layout_deployments", {
@@ -2528,13 +2564,15 @@ router.post("/router/:id/hotspot-layouts/deploy", requireAdmin(), async (req, re
     return;
   }
 
-  const tokens = [randomBytes(24).toString("hex"), randomBytes(24).toString("hex")];
+  const tokens = [randomBytes(24).toString("hex"), randomBytes(24).toString("hex"), randomBytes(24).toString("hex")];
+  const fileContents: Buffer[] = [portal.content, portal.content, md5Content];
+  const fileNames = ["login.html", "rlogin.html", "md5.js"];
   cleanPendingRouterFileSources();
   for (let i = 0; i < tokens.length; i += 1) {
     pendingRouterFileSources.set(tokens[i], {
-      content: portal.content,
-      contentType: "text/html; charset=utf-8",
-      fileName: i === 0 ? "login.html" : "rlogin.html",
+      content: fileContents[i],
+      contentType: i === 2 ? "application/javascript; charset=utf-8" : "text/html; charset=utf-8",
+      fileName: fileNames[i],
       expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
     });
   }
@@ -2543,6 +2581,7 @@ router.post("/router/:id/hotspot-layouts/deploy", requireAdmin(), async (req, re
   try {
     await ensureRouterFileDirectory(found.creds, `${previousDirectory}/bil-layouts`);
     await ensureRouterFileDirectory(found.creds, stageDirectory);
+    await ensureRouterFileDirectory(found.creds, `${stageDirectory}/hotspot`);
     for (let i = 0; i < filePaths.length; i += 1) {
       await deployRouterFile(found.creds, {
         destinationPath: filePaths[i],
@@ -2619,6 +2658,111 @@ router.get("/router/:id/hotspot-layouts/history", requireAdmin(), async (req, re
     res.json({ history: rows });
   } catch (error) {
     res.status(503).json({ error: error instanceof Error ? error.message : "Deployment history could not be loaded." });
+  }
+});
+
+router.get("/hotspot-layouts/library", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
+  try {
+    const layouts = await sbSelectStrict<Record<string, unknown>>(
+      "isp_hotspot_layout_library",
+      `admin_id=eq.${adminId}&select=id,source_layout_id,name,description,version,status,created_at,updated_at&order=created_at.desc`,
+    );
+    res.json({ layouts });
+  } catch (error) {
+    res.status(503).json({ error: error instanceof Error ? error.message : "The tenant layout library is unavailable." });
+  }
+});
+
+router.get("/hotspot-layouts/library/:id/content", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  const id = String(req.params.id ?? "");
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
+  if (!/^custom-[a-f0-9]{32}$/.test(id)) { res.status(400).json({ error: "Invalid custom layout id." }); return; }
+  try {
+    const [layout] = await sbSelectStrict<{ id: string; source_layout_id: string; package_html: string; status: string }>(
+      "isp_hotspot_layout_library",
+      `id=eq.${encodeURIComponent(id)}&admin_id=eq.${adminId}&select=id,source_layout_id,package_html,status&limit=1`,
+    );
+    if (!layout) { res.status(404).json({ error: "Custom layout not found for this tenant." }); return; }
+    res.json({ id: layout.id, sourceLayoutId: layout.source_layout_id, html: layout.package_html, status: layout.status });
+  } catch (error) {
+    res.status(503).json({ error: error instanceof Error ? error.message : "Custom layout content is unavailable." });
+  }
+});
+
+router.post("/hotspot-layouts/library/duplicate", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const requestedSource = String(req.body?.sourceLayoutId ?? "");
+  const name = String(req.body?.name ?? "").trim().replace(/\s+/g, " ").slice(0, 60);
+  const description = String(req.body?.description ?? "").trim().slice(0, 240);
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
+  if (!name) { res.status(400).json({ error: "A name is required for the copied layout." }); return; }
+  const builtInIds = ["classic", "dansted-wifi", "circuit-noir", "aurora-network"];
+  let sourceLayoutId = requestedSource;
+  let html: unknown = req.body?.html;
+  if (/^custom-[a-f0-9]{32}$/.test(requestedSource)) {
+    try {
+      const [source] = await sbSelectStrict<{ source_layout_id: string; package_html: string; status: string }>(
+        "isp_hotspot_layout_library",
+        `id=eq.${encodeURIComponent(requestedSource)}&admin_id=eq.${adminId}&select=source_layout_id,package_html,status&limit=1`,
+      );
+      if (!source || source.status !== "active") { res.status(404).json({ error: "The source layout is unavailable or archived." }); return; }
+      sourceLayoutId = source.source_layout_id;
+      html = source.package_html;
+    } catch (error) {
+      res.status(503).json({ error: error instanceof Error ? error.message : "The tenant layout library is unavailable." });
+      return;
+    }
+  } else if (!builtInIds.includes(requestedSource)) {
+    res.status(400).json({ error: "Choose one of the available layouts to copy." });
+    return;
+  }
+  const validated = validateGeneratedHotspotPortal(html);
+  const embedded = typeof html === "string" ? findEmbeddedHotspotConfig(html) : null;
+  if (!("content" in validated)) { res.status(400).json({ error: validated.error }); return; }
+  if (!embedded || embedded.config.portalLayout !== sourceLayoutId) {
+    res.status(400).json({ error: "The copied package does not match its source layout." });
+    return;
+  }
+  const id = `custom-${randomBytes(16).toString("hex")}`;
+  try {
+    await sbInsertStrict("isp_hotspot_layout_library", {
+      id,
+      admin_id: adminId,
+      source_layout_id: sourceLayoutId,
+      name,
+      description,
+      version: "1.0.0",
+      status: "active",
+      package_html: html as string,
+    });
+    res.status(201).json({ layout: { id, sourceLayoutId, name, description, version: "1.0.0", status: "active" } });
+  } catch (error) {
+    res.status(503).json({ error: error instanceof Error ? error.message : "The layout copy could not be saved." });
+  }
+});
+
+router.patch("/hotspot-layouts/library/:id/status", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const id = String(req.params.id ?? "");
+  const status = req.body?.status;
+  if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
+  if (!/^custom-[a-f0-9]{32}$/.test(id) || (status !== "active" && status !== "archived")) {
+    res.status(400).json({ error: "A valid custom layout and status are required." });
+    return;
+  }
+  try {
+    const updated = await sbUpdateStrict(
+      "isp_hotspot_layout_library",
+      `id=eq.${encodeURIComponent(id)}&admin_id=eq.${adminId}`,
+      { status, updated_at: new Date().toISOString() },
+    );
+    if (!updated.length) { res.status(404).json({ error: "Custom layout not found for this tenant." }); return; }
+    res.json({ ok: true, status });
+  } catch (error) {
+    res.status(503).json({ error: error instanceof Error ? error.message : "The layout status could not be changed." });
   }
 });
 
