@@ -226,6 +226,14 @@
 </section>
 
 <!-- Pricing -->
+<section id="freeAccessSection" hidden style="max-width:760px;margin:0 auto;padding:.5rem 1.25rem 1rem">
+  <div style="border:1px solid rgba(74,222,128,.35);border-radius:16px;padding:18px;background:linear-gradient(135deg,rgba(16,80,55,.92),rgba(15,35,42,.94));box-shadow:0 14px 38px rgba(0,0,0,.2);color:#fff">
+    <div style="font-size:1.05rem;font-weight:800">Free internet access</div>
+    <p style="margin:6px 0 14px;color:rgba(255,255,255,.76);font-size:.86rem;line-height:1.5">Request the free data allowance configured by this ISP.</p>
+    <button id="freeAccessButton" type="button" style="min-height:46px;width:100%;border:0;border-radius:10px;background:#39b86b;color:#062113;font-weight:800;font-size:.95rem;cursor:pointer">Get free access</button>
+    <p id="freeAccessMessage" role="status" aria-live="polite" style="display:none;margin:10px 0 0;font-size:.84rem"></p>
+  </div>
+</section>
 <section id="plansSection" style="max-width:1200px;margin:0 auto;padding:.5rem 1.25rem 5rem">
   <div style="text-align:center;margin-bottom:2.5rem">
     <p style="font-size:.6875rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(192,38,211,.7);margin-bottom:.625rem">Our Packages</p>
@@ -3145,6 +3153,57 @@ if(!portalFirstPartyRedirected){
       authenticate("resume",savedToken);
     }
   }
+})();
+</script>
+<script>
+(function(){
+  var section=document.getElementById("freeAccessSection");
+  var button=document.getElementById("freeAccessButton");
+  var message=document.getElementById("freeAccessMessage");
+  if(!section||!button)return;
+  var initialized=false;
+  function initialize(attempt){
+    var embedded=window.EMBEDDED_CONFIG||{};
+    var adminId=Number(embedded.adminId||window.PORTAL_ADMIN_ID||PORTAL_QUERY.get("adminId")||0);
+    var routerId=Number(embedded.routerId||window.PORTAL_ROUTER_ID||PORTAL_QUERY.get("routerId")||0);
+    var token=String(embedded.portalContextToken||PORTAL_QUERY.get("portalContextToken")||"");
+    if(!adminId||!routerId){
+      if(attempt<24)window.setTimeout(function(){initialize(attempt+1);},250);
+      return;
+    }
+    if(initialized)return;
+    initialized=true;
+    function endpoint(path){
+      var query="adminId="+encodeURIComponent(adminId)+"&routerId="+encodeURIComponent(routerId);
+      if(token)query+="&portalContextToken="+encodeURIComponent(token);
+      return window.apiUrl(path)+(path.indexOf("?")>=0?"&":"?")+query;
+    }
+    fetch(endpoint("/api/public/hotspot-branding"),{cache:"no-store"})
+      .then(function(response){return response.ok?response.json():null;})
+      .then(function(data){
+        var settings=data&&data.branding&&data.branding.settings;
+        if(settings&&settings.freeAccess&&settings.freeAccess.active===true)section.hidden=false;
+      }).catch(function(){});
+    button.addEventListener("click",function(){
+      if(!window.DEVICE_MAC){message.textContent="Keep this device connected to the Hotspot Wi-Fi and try again.";message.style.display="block";return;}
+      button.disabled=true;button.textContent="Setting up free access…";
+      fetch(endpoint("/api/customers/free-hotspot-access"),{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({adminId:adminId,routerId:routerId,mac_address:window.DEVICE_MAC,client_ip:window.DEVICE_IP||""})
+      }).then(function(response){return response.json().then(function(data){if(!response.ok)throw new Error(data.error||"Free access could not be set up.");return data;});})
+        .then(function(data){
+          var user=document.getElementById("loginUser");
+          var pass=document.getElementById("loginPass");
+          var form=document.getElementById("mikrotikForm");
+          if(!user||!pass||!form)throw new Error("The Hotspot sign-in form is unavailable. Reload the page.");
+          user.value=data.username;pass.value=data.password;form.requestSubmit();
+        }).catch(function(error){
+          message.textContent=error&&error.message?error.message:"Free access could not be set up. Try again.";
+          message.style.display="block";button.disabled=false;button.textContent="Get free access";
+        });
+    });
+  }
+  initialize(0);
 })();
 </script>
 </body>

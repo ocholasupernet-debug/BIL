@@ -44,6 +44,7 @@ import PPPoESetup from "./pages/admin/PPPoESetup";
 import AdminVouchers from "./pages/admin/Vouchers";
 import HotspotBinding from "./pages/admin/HotspotBinding";
 import PrepaidUsers from "./pages/admin/PrepaidUsers";
+import FreeHotspotAccess from "./pages/admin/FreeHotspotAccess";
 
 import HotspotLogin, { HotspotTroubleshootPage } from "./pages/portal/HotspotLogin";
 import PPPoELogin  from "./pages/portal/PPPoELogin";
@@ -271,7 +272,8 @@ function Router() {
       <Route path="/admin/vouchers"         component={AdminVouchers}    />
       <Route path="/admin/hotspot-binding"  component={HotspotBinding}   />
       <Route path="/admin/activation/prepaid-users" component={PrepaidUsers} />
-      <Route path="/admin/free-access" component={PrepaidUsers} />
+      <Route path="/admin/free-access/device-grant" component={PrepaidUsers} />
+      <Route path="/admin/free-access" component={FreeHotspotAccess} />
       <Route path="/admin/hotspot-settings" component={HotspotSettings} />
       <Route path="/admin/pppoe-settings"   component={PPPoESettings}   />
       <Route path="/admin/pppoe-settings/setup" component={PPPoESetup} />

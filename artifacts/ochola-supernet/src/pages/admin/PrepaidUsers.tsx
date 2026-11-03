@@ -892,10 +892,10 @@ export default function PrepaidUsers() {
   const [rechargePickerOpen, setRechargePickerOpen] = useState(false);
   const [addingVlanUser, setAddingVlanUser] = useState(false);
   const [grantingHotspotUser, setGrantingHotspotUser] = useState(
-    typeof window !== "undefined" && window.location.pathname === "/admin/free-access",
+    typeof window !== "undefined" && window.location.pathname.startsWith("/admin/free-access/"),
   );
   useEffect(() => {
-    setGrantingHotspotUser(location === "/admin/free-access");
+    setGrantingHotspotUser(location.startsWith("/admin/free-access/"));
   }, [location]);
   const [rechargeTargetId, setRechargeTargetId] = useState("");
   const [actionError, setActionError] = useState("");

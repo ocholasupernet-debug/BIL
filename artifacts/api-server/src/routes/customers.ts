@@ -9,6 +9,7 @@ import {
   sbUpdateStrict,
   sbDelete,
   sbDeleteStrict,
+  sbUpsertStrict,
   sbRpc,
   SupabaseHttpError,
 } from "../lib/supabase-client.js";
@@ -1233,6 +1234,244 @@ router.post("/customers/:id/hotspot-reconnect", requireAdmin(), async (req, res)
       error: "Could not safely reconnect this device. Check the account and router connection, then retry.",
       status: "router_unavailable",
     });
+  }
+});
+
+router.get("/customers/free-hotspot-access", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  const account = await authenticatedAccount(req);
+  if (!adminId || !account || account.role === "reseller") {
+    res.status(403).json({ error: "Free Hotspot Access is available to ISP administrators only." });
+    return;
+  }
+  try {
+    const row = (await sbSelectStrict<Record<string, unknown>>(
+      "isp_hotspot_branding", `admin_id=eq.${adminId}&select=settings&limit=1`,
+    ))[0];
+    const settings = row?.settings && typeof row.settings === "object"
+      ? row.settings as Record<string, unknown> : {};
+    const config = settings.freeAccess && typeof settings.freeAccess === "object"
+      ? settings.freeAccess as Record<string, unknown> : {};
+    const hotspotPlans = await sbSelectStrict<{ router_id?: number | null }>(
+      "isp_plans", `admin_id=eq.${adminId}&type=in.(hotspot,trial,trials)&is_active=is.true&port_id=is.null&select=router_id&limit=1000`,
+    );
+    const eligibleRouterIds = new Set(hotspotPlans.map(plan => Number(plan.router_id)).filter(id => Number.isSafeInteger(id) && id > 0));
+    res.set("Cache-Control", "no-store").json({
+      ok: true,
+      config: {
+        active: config.active === true,
+        speedDownMbps: Number(config.speedDownMbps) || 2,
+        speedUpMbps: Number(config.speedUpMbps) || 1,
+        dataLimitMb: Number(config.dataLimitMb) || 500,
+      },
+      routerCount: eligibleRouterIds.size,
+    });
+  } catch (error) {
+    logger.error({ err: error, adminId }, "[customers/free-hotspot-access] settings load failed");
+    res.status(503).json({ error: "Free Hotspot Access settings could not be loaded." });
+  }
+});
+
+router.put("/customers/free-hotspot-access", requireAdmin(), async (req, res): Promise<void> => {
+  const adminId = authenticatedAdminId(req, req.body?.adminId);
+  const account = await authenticatedAccount(req);
+  const action = String(req.body?.action ?? "");
+  const speedDownMbps = Number(req.body?.speedDownMbps);
+  const speedUpMbps = Number(req.body?.speedUpMbps);
+  const dataLimitMb = Number(req.body?.dataLimitMb);
+  if (!adminId || !account || account.role === "reseller") {
+    res.status(403).json({ error: "Free Hotspot Access is available to ISP administrators only." });
+    return;
+  }
+  if (!["activate", "deactivate"].includes(action)
+    || !Number.isFinite(speedDownMbps) || speedDownMbps < 0.1 || speedDownMbps > 1000
+    || !Number.isFinite(speedUpMbps) || speedUpMbps < 0.1 || speedUpMbps > 1000
+    || !Number.isSafeInteger(dataLimitMb) || dataLimitMb < 1 || dataLimitMb > 102400) {
+    res.status(400).json({ error: "Set upload/download speeds from 0.1 to 1000 Mbps and data from 1 to 102400 MB." });
+    return;
+  }
+  const activationId = action === "activate" ? randomUUID() : "";
+  const marker = `OCHOLA_FREE_ACCESS:${adminId}:`;
+  const limitBytesTotal = String(dataLimitMb * 1024 * 1024);
+  const rateLimit = routerRateLimit(speedDownMbps, speedUpMbps, "Mbps", "Mbps");
+  if (!rateLimit) {
+    res.status(400).json({ error: "The speed limits could not be converted for MikroTik." });
+    return;
+  }
+  try {
+    const [branding] = await sbSelectStrict<Record<string, unknown>>(
+      "isp_hotspot_branding", `admin_id=eq.${adminId}&select=portal_hostname,settings&limit=1`,
+    );
+    const oldSettings = branding?.settings && typeof branding.settings === "object"
+      ? branding.settings as Record<string, unknown> : {};
+    const config = {
+      active: action === "activate",
+      speedDownMbps,
+      speedUpMbps,
+      dataLimitMb,
+      activationId,
+    };
+    const allRouters = await sbSelectStrict<RouterRow>(
+      "isp_routers",
+      `admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&order=name.asc`,
+    );
+    const hotspotPlans = await sbSelectStrict<{ router_id?: number | null }>(
+      "isp_plans", `admin_id=eq.${adminId}&type=in.(hotspot,trial,trials)&is_active=is.true&port_id=is.null&select=router_id&limit=1000`,
+    );
+    const eligibleRouterIds = new Set(hotspotPlans.map(plan => Number(plan.router_id)).filter(id => Number.isSafeInteger(id) && id > 0));
+    const routers = action === "activate"
+      ? allRouters.filter(router => eligibleRouterIds.has(Number(router.id)))
+      : allRouters;
+    if (action === "activate" && !routers.length) {
+      res.status(400).json({ error: "No active direct Hotspot router plans were found. Add or activate a direct Hotspot plan first." });
+      return;
+    }
+    await sbUpsertStrict("isp_hotspot_branding", "admin_id", {
+      admin_id: adminId,
+      portal_hostname: branding?.portal_hostname ?? null,
+      settings: { ...oldSettings, freeAccess: config },
+      updated_at: new Date().toISOString(),
+    });
+    const failures: string[] = [];
+    for (const routerRow of routers) {
+      const routerId = Number(routerRow.id);
+      const profile = `OCHFREE${adminId}_${routerId}`;
+      const commentPrefix = `${marker}${routerId}:`;
+      const creds = routerCredentials(routerRow);
+      try {
+        const freeUsers = (await fetchHotspotUserList(creds))
+          .filter(user => user.comment.startsWith(commentPrefix));
+        if (action === "deactivate" && !freeUsers.length) continue;
+        await ensureHotspotUserProfile(creds, { name: profile, sharedUsers: 1, rateLimit });
+        for (const user of freeUsers) {
+          await reconcileHotspotUserAccess(creds, {
+            name: user.name,
+            password: user.password,
+            profile,
+            comment: action === "activate" ? `${commentPrefix}${activationId}` : user.comment,
+            enabled: action === "activate",
+            limitBytesTotal,
+            macAddress: user.macAddress || null,
+            resetCounters: action === "activate",
+          });
+        }
+      } catch (error) {
+        logger.warn({ err: error, adminId, routerId, action }, "[customers/free-hotspot-access] router update failed");
+        failures.push(routerRow.name || `Router ${routerId}`);
+      }
+    }
+    if (failures.length) {
+      res.status(503).json({
+        ok: false,
+        partial: true,
+        error: `Settings were saved, but these routers could not confirm the ${action === "activate" ? "activation/reset" : "disconnect"}: ${failures.join(", ")}.`,
+      });
+      return;
+    }
+    void logActivity({
+      adminId,
+      type: "customer",
+      action: action === "activate" ? "free_hotspot_access_activated" : "free_hotspot_access_deactivated",
+      subject: "Free Hotspot Access",
+      details: { routerCount: routers.length, speedDownMbps, speedUpMbps, dataLimitMb },
+    });
+    res.set("Cache-Control", "no-store").json({ ok: true, config, routerCount: routers.length });
+  } catch (error) {
+    logger.error({ err: error, adminId, action }, "[customers/free-hotspot-access] update failed");
+    res.status(503).json({ error: "Free Hotspot Access could not be applied. Check the tenant settings and router connections." });
+  }
+});
+
+router.post("/customers/free-hotspot-access", async (req, res): Promise<void> => {
+  const portal = req.hotspotPortalContext;
+  const adminId = Number(portal?.adminId ?? req.body?.adminId);
+  const routerId = Number(portal?.routerId ?? req.body?.routerId);
+  const macAddress = normalizeHotspotGrantMac(req.body?.mac_address);
+  if (!Number.isSafeInteger(adminId) || adminId < 1
+    || !Number.isSafeInteger(routerId) || routerId < 1
+    || Number(portal?.portId ?? 0) > 0
+    || (portal && Number(portal.resellerId) > 0 && Number(portal.resellerId) !== adminId)
+    || !macAddress) {
+    res.status(403).json({ error: "Open Free Access from this ISP's connected Hotspot network." });
+    return;
+  }
+  try {
+    const branding = (await sbSelectStrict<Record<string, unknown>>(
+      "isp_hotspot_branding", `admin_id=eq.${adminId}&select=settings&limit=1`,
+    ))[0];
+    const settings = branding?.settings && typeof branding.settings === "object"
+      ? branding.settings as Record<string, unknown> : {};
+    const config = settings.freeAccess && typeof settings.freeAccess === "object"
+      ? settings.freeAccess as Record<string, unknown> : {};
+    if (config.active !== true || !/^[a-f0-9-]{36}$/i.test(String(config.activationId ?? ""))) {
+      res.status(403).json({ error: "Free Access is not active right now." });
+      return;
+    }
+    const speedDownMbps = Number(config.speedDownMbps);
+    const speedUpMbps = Number(config.speedUpMbps);
+    const dataLimitMb = Number(config.dataLimitMb);
+    if (!Number.isFinite(speedDownMbps) || !Number.isFinite(speedUpMbps)
+      || !Number.isSafeInteger(dataLimitMb) || dataLimitMb < 1) {
+      res.status(503).json({ error: "The administrator's Free Access limits are incomplete." });
+      return;
+    }
+    const routerRow = (await sbSelectStrict<RouterRow>(
+      "isp_routers",
+      `id=eq.${routerId}&admin_id=eq.${adminId}&select=id,name,host,bridge_ip,vpn_ip,router_username,router_secret&limit=1`,
+    ))[0];
+    if (!routerRow) {
+      res.status(403).json({ error: "This Hotspot router is not assigned to the ISP account." });
+      return;
+    }
+    const directHotspotPlans = await sbSelectStrict<{ id: number }>(
+      "isp_plans",
+      `admin_id=eq.${adminId}&router_id=eq.${routerId}&port_id=is.null&type=in.(hotspot,trial,trials)&is_active=is.true&select=id&limit=1`,
+    );
+    if (!directHotspotPlans.length) {
+      res.status(403).json({ error: "This router has no active direct Hotspot service for free access." });
+      return;
+    }
+    const creds = routerCredentials(routerRow);
+    const activeClientIp = await resolveHotspotClientIpByMac(creds, macAddress);
+    if (!activeClientIp) {
+      res.status(403).json({ error: "This device is not currently connected to the selected Hotspot router." });
+      return;
+    }
+    const profile = `OCHFREE${adminId}_${routerId}`;
+    const activationId = String(config.activationId);
+    const marker = `OCHOLA_FREE_ACCESS:${adminId}:${routerId}:`;
+    const rateLimit = routerRateLimit(speedDownMbps, speedUpMbps, "Mbps", "Mbps");
+    const limitBytesTotal = dataLimitMb * 1024 * 1024;
+    if (!rateLimit) throw new Error("The speed limits could not be converted for MikroTik.");
+    await ensureHotspotUserProfile(creds, { name: profile, sharedUsers: 1, rateLimit });
+    const username = `OCHFREE${createHash("sha256").update(`${adminId}:${routerId}:${macAddress}`).digest("hex").slice(0, 18)}`;
+    const users = await fetchHotspotUserList(creds);
+    const existing = users.find(user => user.name === username && user.comment.startsWith(marker));
+    const sameActivation = existing?.comment === `${marker}${activationId}`;
+    if (sameActivation && existing && existing.bytesIn + existing.bytesOut >= limitBytesTotal) {
+      res.status(403).json({ error: "This device has used its free data allowance. Ask the administrator to activate a new allowance." });
+      return;
+    }
+    const password = randomBytes(18).toString("base64url");
+    await reconcileHotspotUserAccess(creds, {
+      name: username,
+      password,
+      profile,
+      comment: `${marker}${activationId}`,
+      enabled: true,
+      limitBytesTotal: String(limitBytesTotal),
+      macAddress,
+      resetCounters: !sameActivation,
+    });
+    res.set("Cache-Control", "no-store").json({
+      ok: true,
+      username,
+      password,
+      message: "Free access is ready. Sign in to connect this device.",
+    });
+  } catch (error) {
+    logger.error({ err: error, adminId, routerId }, "[customers/free-hotspot-access] device provisioning failed");
+    res.status(503).json({ error: "Free access could not be set up on this router. Please try again or contact the ISP administrator." });
   }
 });
 

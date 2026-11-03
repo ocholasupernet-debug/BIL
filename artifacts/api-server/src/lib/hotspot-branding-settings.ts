@@ -4,6 +4,7 @@ const SAFE_SETTINGS = new Set([
   "paymentInstructions", "supportPhone", "supportEmail", "whatsappNumber", "termsUrl",
   "privacyUrl", "maintenanceMode", "maintenanceMessage", "testimonialText", "faqText", "colors",
   "portalCards", "loyaltyCard", "portalLayout", "tawkEnabled", "layoutAppearances", "supportContacts",
+  "freeAccess",
 ]);
 
 const SAFE_PORTAL_CARD_KEYS = new Set([
@@ -99,6 +100,21 @@ export function sanitizeHotspotBrandingSettings(value: unknown): Record<string, 
           whatsapp: typeof row.whatsapp === "string" ? row.whatsapp.slice(0, 30) : "",
         }];
       });
+    } else if (key === "freeAccess") {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const access = item as Record<string, unknown>;
+      const speedDown = Number(access.speedDownMbps);
+      const speedUp = Number(access.speedUpMbps);
+      const dataLimitMb = Number(access.dataLimitMb);
+      output.freeAccess = {
+        active: access.active === true,
+        ...(Number.isFinite(speedDown) && speedDown >= 0.1 && speedDown <= 1000 ? { speedDownMbps: speedDown } : {}),
+        ...(Number.isFinite(speedUp) && speedUp >= 0.1 && speedUp <= 1000 ? { speedUpMbps: speedUp } : {}),
+        ...(Number.isSafeInteger(dataLimitMb) && dataLimitMb >= 1 && dataLimitMb <= 102400 ? { dataLimitMb } : {}),
+        ...(typeof access.activationId === "string" && /^[a-f0-9-]{36}$/i.test(access.activationId)
+          ? { activationId: access.activationId }
+          : {}),
+      };
     } else if (typeof item === "string" && item.length <= 2_000_000) {
       output[key] = item;
     }

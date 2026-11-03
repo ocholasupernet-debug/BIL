@@ -95,6 +95,42 @@ test("accepts only boolean Tawk enablement values", () => {
   assert.deepEqual(sanitizeHotspotBrandingSettings({ tawkEnabled: "true" }), {});
 });
 
+test("exposes only bounded free-access settings to public hotspot branding", () => {
+  assert.deepEqual(
+    sanitizeHotspotBrandingSettings({
+      freeAccess: {
+        active: true,
+        speedDownMbps: 8,
+        speedUpMbps: 2,
+        dataLimitMb: 1200,
+        activationId: "51c304dc-7bc8-4a2d-a39b-b2947677d112",
+        routerSecret: "discard",
+      },
+    }),
+    {
+      freeAccess: {
+        active: true,
+        speedDownMbps: 8,
+        speedUpMbps: 2,
+        dataLimitMb: 1200,
+        activationId: "51c304dc-7bc8-4a2d-a39b-b2947677d112",
+      },
+    },
+  );
+  assert.deepEqual(
+    sanitizeHotspotBrandingSettings({
+      freeAccess: {
+        active: "true",
+        speedDownMbps: 1001,
+        speedUpMbps: 0,
+        dataLimitMb: -1,
+        activationId: "not-a-uuid",
+      },
+    }),
+    { freeAccess: { active: false } },
+  );
+});
+
 test("keeps only supported per-layout appearance settings and support contacts", () => {
   assert.deepEqual(
     sanitizeHotspotBrandingSettings({
