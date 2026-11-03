@@ -378,7 +378,7 @@ export default function AdminLogin() {
         </div>
 
          <div style={{ fontSize: "0.78rem", color: "#334155", position: "relative" }}>
-          © 2024 ISPlatty · isplatty.org
+          © 2024 ISPlatty · isplatty.com
         </div>
       </div>
 
@@ -471,7 +471,7 @@ export default function AdminLogin() {
                    <span style={{
                      position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)",
                      color: "var(--isp-text-sub)", fontSize: "0.82rem", pointerEvents: "none",
-                   }}>.isplatty.org</span>
+                   }}>.isplatty.com</span>
                  </div>
                  <p style={{ margin: "6px 0 0", fontSize: "0.78rem", color: "var(--isp-text-muted)" }}>
                    Use the company name from your ISP address.
@@ -680,7 +680,7 @@ export default function AdminLogin() {
            <p style={{ marginTop: 28, textAlign: "center", fontSize: "0.9rem", color: "var(--isp-text-sub)" }}>
             {company ? (
               <>Not the right portal?{" "}
-                <a href="https://isplatty.org" style={{ color: "var(--isp-accent)", fontWeight: 600, textDecoration: "none" }}>
+                <a href="https://isplatty.com" style={{ color: "var(--isp-accent)", fontWeight: 600, textDecoration: "none" }}>
                   Visit main site
                 </a>
               </>
