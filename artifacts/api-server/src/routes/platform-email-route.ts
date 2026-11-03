@@ -72,8 +72,8 @@ router.post("/super-admin/email-settings/test", async (req: Request, res: Respon
     lastTestAtByAddress.set(rateLimitKey, now);
     await sendPlatformEmail({
       to: recipient,
-      subject: "OcholaSupernet SMTP test",
-      text: "This test message confirms that the platform SMTP settings can send email.",
+      subject: "OcholaSupernet Billing email delivery test",
+      text: "This test message confirms that OcholaSupernet Billing can send email through the configured mail account.",
     });
     res.json({ ok: true, message: `Test email sent to ${recipient}.` });
   } catch (error) {

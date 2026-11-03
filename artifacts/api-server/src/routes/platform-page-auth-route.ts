@@ -44,6 +44,7 @@ import {
   sendConfiguredWhatsAppOtp,
 } from "../services/whatsapp/whatsapp-otp-delivery.js";
 import {
+  getTenantEmailBranding,
   getPlatformEmailStatus,
   isValidEmailAddress,
   sendPlatformEmail,
@@ -150,10 +151,11 @@ async function sendPageOtp(
       !isValidEmailAddress(email)
     ) throw new Error("Gmail email delivery is not configured on the server.");
     await sendPlatformEmail({
-      fromName: "BIL Security",
+      fromName: "OcholaSupernet Billing Security",
       to: email,
-      subject: "Your BIL security verification code",
-      text: `Your six-digit BIL verification code is ${code}. It expires in five minutes and can be used once. If you did not request this code, ignore this email.`,
+      subject: "Your OcholaSupernet Billing verification code",
+      text: `Your six-digit OcholaSupernet Billing verification code is ${code}. It expires in five minutes and can be used once. If you did not request this code, ignore this email.`,
+      branding: await getTenantEmailBranding(context.admin.id),
     });
     return maskEmail(email);
   }

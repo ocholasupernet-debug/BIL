@@ -1,6 +1,6 @@
 import { createHmac, randomInt, randomUUID } from "node:crypto";
 import { sbRpc, sbSelectStrict } from "../lib/supabase-client.js";
-import { isValidEmailAddress, sendPlatformEmail } from "../lib/platform-email.js";
+import { getTenantEmailBranding, isValidEmailAddress, sendPlatformEmail } from "../lib/platform-email.js";
 import { createGatewaySettingsGrant } from "./whatsapp/whatsapp-gateway-settings-otp.js";
 
 const OTP_TTL_SECONDS = 300;
@@ -33,7 +33,13 @@ export async function issueEmailGatewaySettingsOtp(input: {
   });
   if (issued[0]?.outcome !== "issued") return { outcome: issued[0]?.outcome ?? "unavailable" };
   try {
-    await sendPlatformEmail({ fromName: "BIL Security", to: email, subject: "Payment settings verification code", text: `Your BIL payment-settings code is ${code}.\n\nIt expires in five minutes and can be used once. Do not share it.` });
+    await sendPlatformEmail({
+      fromName: "OcholaSupernet Billing Security",
+      to: email,
+      subject: "OcholaSupernet Billing payment settings verification code",
+      text: `Your OcholaSupernet Billing payment-settings code is ${code}.\n\nIt expires in five minutes and can be used once. Do not share it.`,
+      branding: await getTenantEmailBranding(input.accountId),
+    });
   } catch {
     return { outcome: "delivery_failed" };
   }

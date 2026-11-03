@@ -2,7 +2,7 @@ import { createHmac, randomBytes, randomInt, randomUUID } from "node:crypto";
 import { sbRpc } from "../lib/supabase-client.js";
 import { sendPlatformEmail } from "../lib/platform-email.js";
 
-const OTP_TTL_SECONDS = 10 * 60;
+const OTP_TTL_SECONDS = 5 * 60;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const EMAIL_CHALLENGE_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -93,14 +93,15 @@ export async function requestEmailRegistrationOtp(
 
   try {
     await sendPlatformEmail({
+      fromName: "OcholaSupernet Billing Security",
       to: normalizedEmail,
-      subject: "Your OcholaSupernet email verification code",
+      subject: "Your OcholaSupernet Billing email verification code",
       text: [
-        "Use this code to verify the email address for your OcholaSupernet sign-up:",
+        "Use this six-digit code to verify the email address for your OcholaSupernet Billing sign-up:",
         "",
         code,
         "",
-        "This code expires in 10 minutes and can only be used once.",
+        "This code expires in five minutes and can only be used once.",
         "Do not share this code. If you did not request it, you can ignore this email.",
       ].join("\n"),
     });

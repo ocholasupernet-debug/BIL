@@ -7,6 +7,8 @@ import {
 import nodemailer from "nodemailer";
 import { logger } from "./logger.js";
 import { TENANT_BASE_DOMAIN } from "./tenant-host.js";
+import { sanitizeHotspotBrandingSettings } from "./hotspot-branding-settings.js";
+import { buildPlatformEmailHtml, type PlatformEmailBranding } from "./platform-email-html.js";
 import {
   sbSelectStrict,
   sbUpsertStrict,
@@ -15,6 +17,7 @@ import {
 } from "./supabase-client.js";
 
 export type SmtpSecurity = "starttls" | "tls" | "none";
+export type PlatformEmailFromName = "OcholaSupernet Billing" | "OcholaSupernet Billing Security";
 
 export interface PlatformEmailSettings {
   enabled: boolean;
@@ -43,7 +46,7 @@ interface EncryptedEmailSettings {
 
 const EMAIL_SETTINGS_ID = "global_email";
 export const PLATFORM_EMAIL_SENDER = "ocholasupernetbilling@gmail.com";
-export const PLATFORM_EMAIL_DEFAULT_FROM_NAME = "BIL";
+export const PLATFORM_EMAIL_DEFAULT_FROM_NAME = "OcholaSupernet Billing";
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function safeTransportErrorFields(error: unknown): {
@@ -99,6 +102,29 @@ function encryptionKey(): Buffer {
 
 export function isValidEmailAddress(value: string): boolean {
   return value.length <= 254 && EMAIL_PATTERN.test(value);
+}
+
+export async function getTenantEmailBranding(adminId: number): Promise<PlatformEmailBranding> {
+  if (!Number.isSafeInteger(adminId) || adminId <= 0) return {};
+  try {
+    const rows = await sbSelectStrict<{ settings?: unknown }>(
+      "isp_hotspot_branding",
+      `admin_id=eq.${adminId}&select=settings&limit=1`,
+    );
+    const settings = sanitizeHotspotBrandingSettings(rows[0]?.settings);
+    const stringValue = (key: string, maxLength: number) => {
+      const value = settings[key];
+      return typeof value === "string" ? value.trim().slice(0, maxLength) : "";
+    };
+    return {
+      companyName: stringValue("ispName", 120) || undefined,
+      logoUrl: stringValue("logoUrl", 1_000_000) || undefined,
+      supportEmail: stringValue("supportEmail", 254) || undefined,
+      supportPhone: stringValue("supportPhone", 30) || undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 export function getPlatformEmailStatus() {
@@ -338,7 +364,8 @@ export async function sendPlatformEmail(message: {
   to: string;
   subject: string;
   text: string;
-  fromName?: "BIL" | "BIL Security";
+  fromName?: PlatformEmailFromName;
+  branding?: PlatformEmailBranding;
 }): Promise<void> {
   const password = process.env.GMAIL_APP_PASSWORD?.trim();
   if (!password) {
@@ -358,6 +385,7 @@ export async function sendPlatformEmail(message: {
     socketTimeout: 20_000,
   });
   try {
+    const rendered = buildPlatformEmailHtml(message.text, message.branding);
     await transporter.sendMail({
       from: {
         name: message.fromName ?? PLATFORM_EMAIL_DEFAULT_FROM_NAME,
@@ -366,6 +394,8 @@ export async function sendPlatformEmail(message: {
       to: message.to,
       subject: message.subject,
       text: message.text,
+      html: rendered.html,
+      ...(rendered.attachments.length ? { attachments: rendered.attachments } : {}),
     });
   } catch (error) {
     logger.warn(
@@ -386,10 +416,10 @@ export async function sendPlatformSecurityNotice(
     const recipient = process.env.EMAIL_SECURITY_ALERT_TO?.trim() || PLATFORM_EMAIL_SENDER;
     if (!getPlatformEmailStatus().configured) return;
     await sendPlatformEmail({
-      fromName: "BIL Security",
+      fromName: "OcholaSupernet Billing Security",
       to: recipient,
-      subject: `BIL security notice: ${event}`,
-      text: `${event}\n\n${details}\n\nThis message was generated automatically by BIL.`,
+      subject: `OcholaSupernet Billing security notice: ${event}`,
+      text: `${event}\n\n${details}\n\nThis message was generated automatically by OcholaSupernet Billing.`,
     });
   } catch {
     logger.warn(
@@ -410,7 +440,7 @@ export function buildRegistrationConfirmationEmail(admin: {
   is_active: boolean;
   status: string | null;
 }, domain = TENANT_BASE_DOMAIN): {
-  fromName: "BIL";
+  fromName: "OcholaSupernet Billing";
   to: string;
   subject: string;
   text: string;
@@ -442,9 +472,9 @@ export function buildRegistrationConfirmationEmail(admin: {
         "Connect your first router, configure service ports, and add your plans.",
       ];
   return {
-    fromName: "BIL",
+    fromName: "OcholaSupernet Billing",
     to: admin.email,
-    subject: "Welcome to BIL — your workspace is ready",
+    subject: "Welcome to OcholaSupernet Billing — your workspace is ready",
     text: [
       `Congratulations, ${company}!`,
       "",
@@ -486,7 +516,10 @@ export async function sendRegistrationConfirmationEmail(adminId: number): Promis
     if (!admin) return;
     const message = buildRegistrationConfirmationEmail(admin);
     if (!message) return;
-    await sendPlatformEmail(message);
+    await sendPlatformEmail({
+      ...message,
+      branding: await getTenantEmailBranding(admin.id),
+    });
   } catch {
     logger.warn(
       { adminId },
