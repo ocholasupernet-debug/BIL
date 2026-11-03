@@ -59,12 +59,14 @@ interface GatewaySettingsAccess {
   grant: string;
 }
 
-type GatewaySettingsMode = "whatsapp" | "password";
+type GatewaySettingsMode = "email" | "whatsapp" | "password";
 
 interface GatewaySettingsStatus {
   mode: GatewaySettingsMode;
   otpNumberConfigured: boolean;
   otpNumberMasked: string | null;
+  otpEmailConfigured: boolean;
+  otpEmailMasked: string | null;
   passwordConfigured: boolean;
 }
 
@@ -89,6 +91,8 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<GatewaySettingsMode>("password");
   const [otpNumberConfigured, setOtpNumberConfigured] = useState(false);
   const [otpNumberMasked, setOtpNumberMasked] = useState<string | null>(null);
+  const [otpEmailConfigured, setOtpEmailConfigured] = useState(false);
+  const [otpEmailMasked, setOtpEmailMasked] = useState<string | null>(null);
   const [passwordConfigured, setPasswordConfigured] = useState(false);
   const [requestId, setRequestId] = useState("");
   const [challengeId, setChallengeId] = useState("");
@@ -119,20 +123,22 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const requestCode = useCallback(async (id: string) => {
-    if (mode !== "whatsapp") return;
-    if (!otpNumberConfigured && !phone.trim()) {
+    if (mode === "password") return;
+    if (mode === "whatsapp" && !otpNumberConfigured && !phone.trim()) {
       setError("Enter a WhatsApp number for payment settings.");
       return;
     }
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/auth/whatsapp/gateway-settings/request-otp", {
+      const response = await fetch(mode === "email"
+        ? "/api/auth/email/gateway-settings/request-otp"
+        : "/api/auth/whatsapp/gateway-settings/request-otp", {
         method: "POST",
         headers: adminApiHeaders(),
         body: JSON.stringify({
           requestId: id,
-          ...(!otpNumberConfigured ? { phone: phone.trim() } : {}),
+          ...(mode === "whatsapp" && !otpNumberConfigured ? { phone: phone.trim() } : {}),
         }),
       });
       const data = await response.json() as { ok?: boolean; error?: string; challengeId?: string; resendAfterSeconds?: number };
@@ -143,7 +149,7 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
           rejectDisabledOtp();
           throw new Error("Payment settings authorization is unavailable.");
         }
-        throw new Error(data.error || "Could not send the WhatsApp verification code.");
+        throw new Error(data.error || "Could not send the verification code.");
       }
       setChallengeId(data.challengeId);
       setCode("");
@@ -181,12 +187,14 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
           ok?: boolean;
           error?: string;
         } & Partial<GatewaySettingsStatus>;
-        if (!response.ok || !data.ok || (data.mode !== "whatsapp" && data.mode !== "password")) {
+        if (!response.ok || !data.ok || (data.mode !== "email" && data.mode !== "whatsapp" && data.mode !== "password")) {
           throw new Error(data.error || "Payment settings verification is unavailable.");
         }
         setMode(data.mode);
         setOtpNumberConfigured(data.otpNumberConfigured === true);
         setOtpNumberMasked(typeof data.otpNumberMasked === "string" ? data.otpNumberMasked : null);
+        setOtpEmailConfigured(data.otpEmailConfigured === true);
+        setOtpEmailMasked(typeof data.otpEmailMasked === "string" ? data.otpEmailMasked : null);
         setPasswordConfigured(data.passwordConfigured === true);
         setStatusReady(true);
       })
@@ -240,7 +248,9 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/auth/whatsapp/gateway-settings/verify-otp", {
+      const response = await fetch(mode === "email"
+        ? "/api/auth/email/gateway-settings/verify-otp"
+        : "/api/auth/whatsapp/gateway-settings/verify-otp", {
         method: "POST",
         headers: adminApiHeaders(),
         body: JSON.stringify({ challengeId, requestId, code: code.trim() }),
@@ -253,12 +263,12 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
           rejectDisabledOtp();
           throw new Error("Payment settings authorization is unavailable.");
         }
-        throw new Error(data.error || "The WhatsApp verification code was not accepted.");
+        throw new Error(data.error || "The verification code was not accepted.");
       }
       finishAccess(data.grant, data.expiresInSeconds ?? 600);
     } catch (cause) {
       if (cause instanceof Error && cause.message === "Payment settings authorization is unavailable.") return;
-      setError(cause instanceof Error ? cause.message : "The WhatsApp verification code was not accepted.");
+      setError(cause instanceof Error ? cause.message : "The verification code was not accepted.");
     } finally {
       setLoading(false);
     }
@@ -317,7 +327,9 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
             <h2 id="gateway-otp-title" className="text-lg font-semibold text-white">
               {statusLoading
                 ? "Payment settings"
-                : mode === "whatsapp"
+                : mode === "email"
+                  ? "Verify payment settings by email"
+                  : mode === "whatsapp"
                   ? otpNumberConfigured ? "Verify payment settings" : "Set payment settings OTP number"
                   : passwordConfigured ? "Verify payment settings" : "Set a payment settings password"}
             </h2>
@@ -331,18 +343,25 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
                 {error && <p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}
                 <button type="button" onClick={cancel} className="mt-4 rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300">Cancel</button>
               </>
-            ) : mode === "whatsapp" ? (
+            ) : mode !== "password" ? (
               <form onSubmit={challengeId ? verifyCode : sendCode} className="mt-5 space-y-3">
-                {!challengeId && !otpNumberConfigured && (
+                {mode === "email" && !challengeId && (
+                  <p className="text-sm text-slate-400">
+                    {otpEmailConfigured
+                      ? `We’ll send a code to ${otpEmailMasked || "your account email"}.`
+                      : "Add a valid email to your account before using email verification."}
+                  </p>
+                )}
+                {mode === "whatsapp" && !challengeId && !otpNumberConfigured && (
                   <label className="block text-sm text-slate-300">WhatsApp number for payment settings
                     <input autoFocus type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={event => setPhone(event.target.value)} placeholder="+254…" className={inputClass} />
                   </label>
                 )}
-                {!challengeId && otpNumberConfigured && (
+                {mode === "whatsapp" && !challengeId && otpNumberConfigured && (
                   <p className="text-sm text-slate-400">Send a code to {otpNumberMasked || "your saved WhatsApp number"}.</p>
                 )}
                 {challengeId && (
-                  <label className="block text-sm text-slate-300">Enter WhatsApp OTP
+                  <label className="block text-sm text-slate-300">Enter {mode === "email" ? "email" : "WhatsApp"} code
                     <input autoFocus inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))} className={`${inputClass} tracking-[0.25em]`} />
                   </label>
                 )}
@@ -353,8 +372,8 @@ function GatewaySettingsOtpProvider({ children }: { children: ReactNode }) {
                     {challengeId && resendSeconds === 0 && (
                       <button type="button" onClick={() => void requestCode(requestId).catch(cause => { setError(cause instanceof Error ? cause.message : "Could not resend the code."); setResendSeconds(60); })} disabled={loading} className="rounded-lg border border-white/15 px-3 py-2 text-sm text-slate-300 disabled:opacity-50">Send another code</button>
                     )}
-                    <button type="submit" disabled={loading || statusLoading || (challengeId ? code.trim().length !== 6 : !otpNumberConfigured && !phone.trim())} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
-                      {loading ? challengeId ? "Checking…" : "Sending…" : challengeId ? "Send" : "Send code"}
+                    <button type="submit" disabled={loading || statusLoading || (challengeId ? code.trim().length !== 6 : mode === "whatsapp" && !otpNumberConfigured && !phone.trim())} className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                      {loading ? challengeId ? "Checking…" : "Sending…" : challengeId ? "Verify code" : "Send code"}
                     </button>
                   </div>
                 </div>
@@ -1799,7 +1818,7 @@ function HotspotTab() {
           <Field label="Session Timeout (hours)" hint="Max time a session stays active"><Input defaultValue="24" type="number" /></Field>
           <Field label="Idle Timeout (minutes)" hint="Disconnect after this many idle minutes"><Input defaultValue="10" type="number" /></Field>
           <Field label="WALLED Garden URLs" hint="Comma-separated — accessible without login">
-            <Input placeholder="isplatty.org, safaricom.com" />
+            <Input placeholder="isplatty.com, safaricom.com" />
           </Field>
           <Field label="DNS Domain"><Input defaultValue={`hotspot.${brand.domain}`} /></Field>
         </Grid2>
