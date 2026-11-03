@@ -292,7 +292,11 @@ export default function AdminLogin() {
   };
 
   const displayName   = company?.name ?? "ISPlatty";
-  const displayDomain = company ? `${company.subdomain}.isplatty.org` : "isplatty.org";
+  const displayDomain = hostSubdomain && typeof window !== "undefined"
+    ? window.location.hostname.toLowerCase()
+    : company
+      ? company.subdomain + ".isplatty.com"
+      : "isplatty.com";
 
   const inputStyle: React.CSSProperties = {
     width: "100%", paddingLeft: 38, paddingRight: 14,
