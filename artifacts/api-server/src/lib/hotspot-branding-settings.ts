@@ -14,7 +14,7 @@ const SAFE_PORTAL_CARD_KEYS = new Set([
 
 const SAFE_PORTAL_LAYOUTS = new Set([
   "classic", "split-horizon", "coastal-light", "signal-grid", "warm-studio", "forest-pulse",
-  "dansted-wifi",
+  "dansted-wifi", "circuit-noir",
 ]);
 const SAFE_LOYALTY_CARD_SETTINGS = {
   position: new Set(["top", "after-packages", "bottom"]),
@@ -22,7 +22,7 @@ const SAFE_LOYALTY_CARD_SETTINGS = {
   shape: new Set(["rounded", "square", "pill"]),
   size: new Set(["compact", "standard", "large"]),
 } as const;
-const SAFE_LAYOUT_KEYS = new Set(["classic", "dansted-wifi"]);
+const SAFE_LAYOUT_KEYS = new Set(["classic", "dansted-wifi", "circuit-noir"]);
 const SAFE_BACKGROUND_KEYS = new Set(["midnight", "ocean", "aurora", "forest", "sunset", "sand"]);
 const SAFE_PACKAGE_SHAPES = new Set(["rounded", "soft-square", "compact", "square", "circle", "pill", "hexagon", "octagon", "squircle"]);
 

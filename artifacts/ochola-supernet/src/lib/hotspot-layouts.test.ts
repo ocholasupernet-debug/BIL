@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   HOSTED_PORTAL_LAYOUT_CSS,
@@ -8,13 +9,17 @@ import {
   renderStaticPortalLayoutCss,
 } from "./hotspot-layouts.js";
 
-test("the portal layout list keeps Classic first and provides five alternatives", () => {
-  assert.equal(HOTSPOT_PORTAL_LAYOUTS.length, 7);
+test("the portal layout registry keeps Classic first and includes the three admin choices", () => {
+  assert.equal(HOTSPOT_PORTAL_LAYOUTS.length, 8);
   assert.equal(HOTSPOT_PORTAL_LAYOUTS[0].value, "classic");
   assert.deepEqual(
     HOTSPOT_PORTAL_LAYOUTS.slice(1).map(layout => layout.label),
-    ["Split Horizon", "Coastal Light", "Signal Grid", "Warm Studio", "Forest Pulse", "Metallic Diamond"],
+    ["Split Horizon", "Coastal Light", "Signal Grid", "Warm Studio", "Forest Pulse", "Metallic Diamond", "Circuit Noir"],
   );
+  const settings = readFileSync(new URL("../pages/admin/HotspotSettings.tsx", import.meta.url), "utf8");
+  assert.match(settings, /layout\.value === "classic" \|\| layout\.value === "dansted-wifi" \|\| layout\.value === "circuit-noir"/);
+  assert.match(settings, /type SupportedPortalLayout = "classic" \| "dansted-wifi" \| "circuit-noir"/);
+  assert.match(settings, /"circuit-noir": normalizeOne\("circuit-noir"\)/);
 });
 
 test("unknown or legacy layout values fall back to the existing Classic design", () => {
@@ -24,8 +29,8 @@ test("unknown or legacy layout values fall back to the existing Classic design",
   assert.match(renderStaticPortalLayoutCss(undefined), /data-portal-layout="classic"/);
 });
 
-test("every alternative has generated-portal and hosted-page styling", () => {
-  for (const layout of HOTSPOT_PORTAL_LAYOUTS.slice(1)) {
+test("existing style presets retain generated-portal and hosted-page styling", () => {
+  for (const layout of HOTSPOT_PORTAL_LAYOUTS.slice(1, -1)) {
     assert.match(renderStaticPortalLayoutCss(layout.value), new RegExp(`data-portal-layout="${layout.value}"`));
     assert.match(STATIC_PORTAL_LAYOUT_CSS_TEXT, new RegExp(`data-portal-layout="${layout.value}"`));
     assert.match(HOSTED_PORTAL_LAYOUT_CSS, new RegExp(`data-portal-layout="${layout.value}"`));

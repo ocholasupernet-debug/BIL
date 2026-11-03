@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en" data-portal-layout="circuit-noir">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Circuit Noir — Hotspot Portal Layout</title>
+  <style id="hotspot-layout-circuit-noir">
+    html[data-portal-layout="circuit-noir"] {
+      --cn-ink: #101916;
+      --cn-ink-soft: #19231f;
+      --cn-panel: #202b26;
+      --cn-panel-hi: #293630;
+      --cn-paper: #f3f0e5;
+      --cn-muted: #a5b1a7;
+      --cn-line: rgba(233, 240, 225, .13);
+      --cn-acid: #d3f36b;
+      --cn-orange: #ee8358;
+      --cn-radius: 1.1rem;
+      color-scheme: dark;
+      background: var(--cn-ink);
+      scroll-behavior: smooth;
+    }
+    html[data-portal-layout="circuit-noir"] body {
+      display: grid !important;
+      grid-template-columns: minmax(0, 1.02fr) minmax(390px, .98fr);
+      grid-auto-flow: row;
+      align-items: start;
+      column-gap: clamp(1.25rem, 4vw, 4.5rem);
+      row-gap: 0;
+      max-width: 1600px;
+      min-height: 100dvh;
+      margin: 0 auto;
+      padding: 0 clamp(1rem, 3.6vw, 3.5rem);
+      overflow-x: hidden;
+      color: var(--cn-paper) !important;
+      background:
+        radial-gradient(ellipse at 12% 12%, rgba(211, 243, 107, .08), transparent 30rem),
+        linear-gradient(90deg, transparent 49.94%, rgba(211, 243, 107, .075) 50%, transparent 50.06%),
+        repeating-linear-gradient(0deg, transparent 0 71px, rgba(233, 240, 225, .025) 72px),
+        var(--cn-ink) !important;
+      font-family: "Avenir Next", Avenir, "Segoe UI", ui-sans-serif, system-ui, sans-serif !important;
+    }
+    html[data-portal-layout="circuit-noir"] body::before {
+      position: fixed;
+      z-index: 80;
+      inset: 0;
+      pointer-events: none;
+      content: "";
+      opacity: .12;
+      background-image: repeating-linear-gradient(118deg, transparent 0 4px, rgba(255,255,255,.035) 5px, transparent 6px);
+    }
+    html[data-portal-layout="circuit-noir"] body > * {
+      min-width: 0;
+      grid-column: 2;
+    }
+    html[data-portal-layout="circuit-noir"] [hidden] {
+      display: none !important;
+    }
+    html[data-portal-layout="circuit-noir"] .hdr,
+    html[data-portal-layout="circuit-noir"] #portalFooter {
+      grid-column: 1 / -1 !important;
+    }
+    html[data-portal-layout="circuit-noir"] .hdr {
+      position: sticky !important;
+      top: 0;
+      z-index: 90;
+      width: calc(100% + clamp(2rem, 7.2vw, 7rem));
+      height: 72px !important;
+      margin: 0 calc(clamp(1rem, 3.6vw, 3.5rem) * -1);
+      border: 0 !important;
+      border-bottom: 1px solid var(--cn-line) !important;
+      background: rgba(16, 25, 22, .9) !important;
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+    html[data-portal-layout="circuit-noir"] .hdr-inner {
+      max-width: 1600px !important;
+      padding-inline: clamp(1rem, 3.6vw, 3.5rem) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalNameHeader {
+      color: var(--cn-paper) !important;
+      font-size: .9rem !important;
+      letter-spacing: .025em !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHeaderSubtitle {
+      color: var(--cn-muted) !important;
+      font-size: .62rem !important;
+      letter-spacing: .12em !important;
+      text-transform: uppercase;
+    }
+    html[data-portal-layout="circuit-noir"] #portalLogoIcon {
+      border: 1px solid rgba(211, 243, 107, .45);
+      border-radius: 8px !important;
+      background: var(--cn-acid) !important;
+      box-shadow: none !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalLogoIcon svg {
+      stroke: var(--cn-ink) !important;
+    }
+    html[data-portal-layout="circuit-noir"] .already-paid-link {
+      color: var(--cn-acid) !important;
+      font-size: .76rem !important;
+      letter-spacing: .02em;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHeaderPhone {
+      background: rgba(211, 243, 107, .08) !important;
+      border-color: rgba(211, 243, 107, .28) !important;
+      color: var(--cn-acid) !important;
+    }
+
+    html[data-portal-layout="circuit-noir"] #portalHero {
+      position: sticky !important;
+      top: 96px;
+      grid-column: 1 !important;
+      grid-row: 2 / span 20;
+      align-self: start;
+      min-height: min(780px, calc(100dvh - 112px));
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      margin: 0 !important;
+      padding: clamp(3rem, 8vh, 7rem) 0 4rem !important;
+      overflow: visible !important;
+      text-align: left !important;
+      animation: cn-rise .7s cubic-bezier(.2,.75,.25,1) both;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHero::after {
+      position: absolute;
+      top: 15%;
+      right: 1%;
+      width: clamp(100px, 14vw, 190px);
+      aspect-ratio: 1;
+      border: 1px solid rgba(211, 243, 107, .28);
+      border-radius: 50%;
+      box-shadow: inset 0 0 0 17px var(--cn-ink), inset 0 0 0 18px rgba(211, 243, 107, .17), inset 0 0 0 35px var(--cn-ink), inset 0 0 0 36px rgba(211, 243, 107, .12);
+      content: "";
+      pointer-events: none;
+      transform: rotate(-28deg);
+    }
+    html[data-portal-layout="circuit-noir"] #portalHero > .grid-bg,
+    html[data-portal-layout="circuit-noir"] #portalHero > .anim-pulse {
+      display: none !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHero > div[style*="max-width:44rem"] {
+      position: relative !important;
+      z-index: 1;
+      width: min(100%, 620px);
+      max-width: 620px !important;
+      margin: 0 !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalPaymentBadge {
+      margin: 0 0 2rem !important;
+      padding: .55rem .78rem !important;
+      border: 1px solid rgba(211, 243, 107, .25) !important;
+      border-radius: 4px !important;
+      background: rgba(211, 243, 107, .06) !important;
+      color: var(--cn-acid) !important;
+      font-size: .67rem !important;
+      letter-spacing: .075em;
+      text-transform: uppercase;
+    }
+    html[data-portal-layout="circuit-noir"] .dot-live {
+      background: var(--cn-acid) !important;
+      box-shadow: 0 0 0 3px rgba(211, 243, 107, .13) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHeroIcon {
+      position: absolute;
+      top: 5.5rem;
+      right: 9%;
+      opacity: .82;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHeroIcon > div {
+      animation: none !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHeroIcon > div > div {
+      display: none !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHeroIcon > div > div[style*="position:relative"] {
+      display: flex !important;
+      width: 52px !important;
+      height: 52px !important;
+      border: 1px solid rgba(211, 243, 107, .4);
+      border-radius: 14px !important;
+      background: var(--cn-ink-soft) !important;
+      box-shadow: none !important;
+      transform: rotate(45deg);
+    }
+    html[data-portal-layout="circuit-noir"] #portalHeroIcon svg {
+      transform: rotate(-45deg);
+      stroke: var(--cn-acid) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHeroTitle {
+      max-width: 10ch;
+      margin: 0 0 1.25rem !important;
+      color: var(--cn-paper) !important;
+      font-size: clamp(3rem, 6.4vw, 6.4rem) !important;
+      font-weight: 750 !important;
+      line-height: .94 !important;
+      letter-spacing: -.075em !important;
+      text-wrap: balance;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHeroTitle br {
+      display: none;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHeroTitle span {
+      color: var(--cn-acid) !important;
+      background: none !important;
+      -webkit-text-fill-color: currentColor !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalTagline {
+      max-width: 29rem !important;
+      margin: 0 0 2rem !important;
+      color: var(--cn-muted) !important;
+      font-size: clamp(.95rem, 1.25vw, 1.1rem) !important;
+      line-height: 1.75 !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalTagline strong {
+      color: var(--cn-paper) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #danstedPurchaseInstructions {
+      border: 1px solid var(--cn-line) !important;
+      border-radius: 8px !important;
+      background: var(--cn-ink-soft) !important;
+      color: var(--cn-paper) !important;
+      box-shadow: none !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHotspotAddress {
+      border-color: var(--cn-line) !important;
+      border-radius: 5px !important;
+      background: var(--cn-ink-soft) !important;
+      color: var(--cn-muted) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHero > div[style*="justify-content:center"][style*="flex-wrap:wrap"] {
+      justify-content: flex-start !important;
+      gap: .55rem !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHero > div[style*="justify-content:center"][style*="flex-wrap:wrap"] > div {
+      border: 1px solid var(--cn-line) !important;
+      border-radius: 4px !important;
+      background: rgba(255,255,255,.025) !important;
+      color: var(--cn-muted) !important;
+      font-size: .7rem !important;
+      letter-spacing: .025em;
+    }
+
+    html[data-portal-layout="circuit-noir"] #plansSection,
+    html[data-portal-layout="circuit-noir"] #portalRecoveryCards,
+    html[data-portal-layout="circuit-noir"] #loginSection,
+    html[data-portal-layout="circuit-noir"] #voucherSection,
+    html[data-portal-layout="circuit-noir"] #mpesaReconnectSection,
+    html[data-portal-layout="circuit-noir"] #communitySection,
+    html[data-portal-layout="circuit-noir"] #loyaltyPointsSection,
+    html[data-portal-layout="circuit-noir"] #portalAnnouncement,
+    html[data-portal-layout="circuit-noir"] #portalExpiryNotice {
+      grid-column: 2 !important;
+      width: 100%;
+      max-width: 760px !important;
+      margin: 0 !important;
+      padding: 2rem 0 0 !important;
+    }
+    html[data-portal-layout="circuit-noir"] #plansSection {
+      padding-top: clamp(2.2rem, 5vh, 4.5rem) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #plansSection > div:first-child {
+      margin-bottom: 1.4rem !important;
+      text-align: left !important;
+    }
+    html[data-portal-layout="circuit-noir"] #plansSection > div:first-child > p:first-child {
+      color: var(--cn-acid) !important;
+      font-size: .64rem !important;
+      letter-spacing: .18em !important;
+    }
+    html[data-portal-layout="circuit-noir"] #plansSection h2 {
+      color: var(--cn-paper) !important;
+      font-size: clamp(1.65rem, 3vw, 2.35rem) !important;
+      font-weight: 680 !important;
+      letter-spacing: -.055em !important;
+    }
+    html[data-portal-layout="circuit-noir"] #plansSection > div:first-child > p:nth-of-type(2) {
+      color: var(--cn-muted) !important;
+      font-size: .83rem !important;
+    }
+    html[data-portal-layout="circuit-noir"] #tvConnectButton,
+    html[data-portal-layout="circuit-noir"] #tvAlreadyPaidReconnect {
+      border: 1px solid rgba(211, 243, 107, .38) !important;
+      border-radius: 5px !important;
+      background: var(--cn-acid) !important;
+      color: var(--cn-ink) !important;
+      box-shadow: none !important;
+      font-weight: 800 !important;
+      letter-spacing: .025em;
+    }
+    html[data-portal-layout="circuit-noir"] #tvConnectButton:disabled {
+      opacity: .55 !important;
+    }
+    html[data-portal-layout="circuit-noir"] #mpesaBanner > div {
+      border: 1px solid rgba(211, 243, 107, .2) !important;
+      border-radius: 6px !important;
+      background: rgba(211, 243, 107, .055) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #mpesaStatusMessage {
+      color: var(--cn-paper) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #plansGrid {
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)) !important;
+      align-items: stretch;
+      gap: .8rem !important;
+    }
+    html[data-portal-layout="circuit-noir"] #plansGrid .plan-card {
+      position: relative;
+      min-height: 168px;
+      padding: 1.1rem !important;
+      border: 1px solid var(--cn-line) !important;
+      border-radius: 8px !important;
+      background:
+        linear-gradient(145deg, rgba(255,255,255,.04), transparent 58%),
+        var(--cn-ink-soft) !important;
+      box-shadow: none !important;
+      color: var(--cn-paper) !important;
+      transition: transform .22s ease, border-color .22s ease, background-color .22s ease !important;
+    }
+    html[data-portal-layout="circuit-noir"] #plansGrid .plan-card::before {
+      position: absolute;
+      top: 0;
+      left: 1rem;
+      width: 28px;
+      height: 2px;
+      background: var(--cn-acid);
+      content: "";
+      opacity: .75;
+    }
+    html[data-portal-layout="circuit-noir"] #plansGrid .plan-card:hover {
+      border-color: rgba(211, 243, 107, .65) !important;
+      background-color: var(--cn-panel) !important;
+      transform: translateY(-4px) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #plansGrid .plan-card:focus-visible {
+      outline: 2px solid var(--cn-acid);
+      outline-offset: 3px;
+    }
+    html[data-portal-layout="circuit-noir"] #plansGrid .plan-card > * {
+      color: inherit;
+    }
+
+    html[data-portal-layout="circuit-noir"] .sec-card {
+      max-width: none !important;
+      overflow: hidden;
+      border: 1px solid var(--cn-line) !important;
+      border-radius: var(--cn-radius) !important;
+      background: var(--cn-ink-soft) !important;
+      box-shadow: 0 18px 50px rgba(0,0,0,.16) !important;
+      color: var(--cn-paper) !important;
+    }
+    html[data-portal-layout="circuit-noir"] .sec-head {
+      padding: 1.25rem 1.4rem !important;
+      border-bottom: 1px solid var(--cn-line) !important;
+      background: var(--cn-panel) !important;
+      text-align: left !important;
+    }
+    html[data-portal-layout="circuit-noir"] .sec-head h2,
+    html[data-portal-layout="circuit-noir"] .sec-head h3 {
+      color: var(--cn-paper) !important;
+      letter-spacing: -.035em;
+    }
+    html[data-portal-layout="circuit-noir"] .sec-body {
+      padding: 1.35rem !important;
+      color: var(--cn-muted);
+    }
+    html[data-portal-layout="circuit-noir"] .sec-body p,
+    html[data-portal-layout="circuit-noir"] .sec-body label {
+      color: inherit;
+    }
+    html[data-portal-layout="circuit-noir"] .inp,
+    html[data-portal-layout="circuit-noir"] input,
+    html[data-portal-layout="circuit-noir"] select,
+    html[data-portal-layout="circuit-noir"] textarea {
+      border: 1px solid rgba(233, 240, 225, .17) !important;
+      border-radius: 6px !important;
+      background: #111b17 !important;
+      color: var(--cn-paper) !important;
+    }
+    html[data-portal-layout="circuit-noir"] .inp::placeholder,
+    html[data-portal-layout="circuit-noir"] input::placeholder,
+    html[data-portal-layout="circuit-noir"] textarea::placeholder {
+      color: #839087 !important;
+    }
+    html[data-portal-layout="circuit-noir"] .inp:focus,
+    html[data-portal-layout="circuit-noir"] input:focus,
+    html[data-portal-layout="circuit-noir"] select:focus,
+    html[data-portal-layout="circuit-noir"] textarea:focus {
+      border-color: var(--cn-acid) !important;
+      box-shadow: 0 0 0 3px rgba(211, 243, 107, .12) !important;
+      outline: none;
+    }
+    html[data-portal-layout="circuit-noir"] .btn,
+    html[data-portal-layout="circuit-noir"] button:not(#portalHeaderPhone) {
+      border-radius: 5px;
+      transition: transform .18s ease, background-color .18s ease, border-color .18s ease !important;
+    }
+    html[data-portal-layout="circuit-noir"] .btn-purple,
+    html[data-portal-layout="circuit-noir"] .btn-amber,
+    html[data-portal-layout="circuit-noir"] .btn-green {
+      border: 1px solid rgba(211, 243, 107, .38) !important;
+      background: var(--cn-acid) !important;
+      color: var(--cn-ink) !important;
+      box-shadow: none !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHero button,
+    html[data-portal-layout="circuit-noir"] #plansSection button,
+    html[data-portal-layout="circuit-noir"] .sec-card button,
+    html[data-portal-layout="circuit-noir"] .sec-card input[type="submit"],
+    html[data-portal-layout="circuit-noir"] .plan-connect-button {
+      border: 1px solid rgba(211, 243, 107, .4) !important;
+      border-radius: 5px !important;
+      background: var(--cn-acid) !important;
+      color: var(--cn-ink) !important;
+      box-shadow: 0 8px 20px rgba(211, 243, 107, .12) !important;
+      font-weight: 800 !important;
+      transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+    }
+    html[data-portal-layout="circuit-noir"] #portalHero button:hover:not(:disabled),
+    html[data-portal-layout="circuit-noir"] #plansSection button:hover:not(:disabled),
+    html[data-portal-layout="circuit-noir"] .sec-card button:hover:not(:disabled),
+    html[data-portal-layout="circuit-noir"] .plan-connect-button:hover:not(:disabled) {
+      filter: brightness(1.06);
+      transform: translateY(-2px);
+      box-shadow: 0 12px 26px rgba(211, 243, 107, .2) !important;
+    }
+    html[data-portal-layout="circuit-noir"] .lbl {
+      color: var(--cn-paper);
+      letter-spacing: .12em;
+    }
+    html[data-portal-layout="circuit-noir"] #portalRecoveryCards .sec-card {
+      border-color: rgba(238, 131, 88, .27) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #voucherSection .sec-head,
+    html[data-portal-layout="circuit-noir"] #loginSection .sec-head,
+    html[data-portal-layout="circuit-noir"] #portalRecoveryCards .sec-head {
+      background: linear-gradient(110deg, rgba(211,243,107,.08), transparent 72%), var(--cn-panel) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #portalFooter {
+      width: calc(100% + clamp(2rem, 7.2vw, 7rem));
+      margin: 4rem calc(clamp(1rem, 3.6vw, 3.5rem) * -1) 0 !important;
+      padding: 2rem clamp(1rem, 3.6vw, 3.5rem) !important;
+      border-top: 1px solid var(--cn-line) !important;
+      background: rgba(9, 15, 12, .7) !important;
+      color: var(--cn-muted) !important;
+      font-size: .78rem;
+    }
+    html[data-portal-layout="circuit-noir"] #portalFooter a {
+      color: var(--cn-acid);
+    }
+    html[data-portal-layout="circuit-noir"] #troubleshootModule {
+      z-index: 1000 !important;
+      background: rgba(7, 12, 9, .82) !important;
+    }
+    html[data-portal-layout="circuit-noir"] #troubleshootModule .sec-card {
+      border-color: rgba(211, 243, 107, .3) !important;
+    }
+    html[data-portal-layout="circuit-noir"] .wa-btn {
+      border: 1px solid rgba(211, 243, 107, .5);
+      background: var(--cn-acid) !important;
+      box-shadow: 0 10px 28px rgba(0,0,0,.35) !important;
+    }
+    html[data-portal-layout="circuit-noir"] .wa-btn svg {
+      fill: var(--cn-ink);
+    }
+    html[data-portal-layout="circuit-noir"] :focus-visible {
+      outline: 2px solid var(--cn-acid);
+      outline-offset: 3px;
+    }
+    @keyframes cn-rise {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @media (max-width: 900px) {
+      html[data-portal-layout="circuit-noir"] body {
+        grid-template-columns: minmax(0, 1fr) minmax(320px, .92fr);
+        column-gap: 1.5rem;
+      }
+      html[data-portal-layout="circuit-noir"] #portalHeroTitle {
+        font-size: clamp(2.8rem, 7vw, 4.5rem) !important;
+      }
+      html[data-portal-layout="circuit-noir"] #portalHeroIcon {
+        display: none !important;
+      }
+    }
+    @media (max-width: 700px) {
+      html[data-portal-layout="circuit-noir"] body {
+        display: block !important;
+        padding: 0 1rem;
+        background:
+          radial-gradient(ellipse at 85% 4%, rgba(211, 243, 107, .07), transparent 19rem),
+          repeating-linear-gradient(0deg, transparent 0 71px, rgba(233, 240, 225, .025) 72px),
+          var(--cn-ink) !important;
+      }
+      html[data-portal-layout="circuit-noir"] .hdr {
+        width: calc(100% + 2rem);
+        height: 64px !important;
+        margin-inline: -1rem;
+      }
+      html[data-portal-layout="circuit-noir"] .hdr-inner {
+        padding-inline: 1rem !important;
+      }
+      html[data-portal-layout="circuit-noir"] #portalHero {
+        position: relative !important;
+        top: auto;
+        min-height: 0;
+        margin: 0 !important;
+        padding: 3rem 0 2.6rem !important;
+      }
+      html[data-portal-layout="circuit-noir"] #portalHero::after {
+        top: 2rem;
+        right: 3%;
+        width: 88px;
+      }
+      html[data-portal-layout="circuit-noir"] #portalHeroTitle {
+        max-width: 9ch;
+        font-size: clamp(2.65rem, 13vw, 4.25rem) !important;
+      }
+      html[data-portal-layout="circuit-noir"] #portalPaymentBadge {
+        margin-bottom: 1.65rem !important;
+        max-width: calc(100% - 88px);
+      }
+      html[data-portal-layout="circuit-noir"] #portalTagline {
+        max-width: 32rem !important;
+        font-size: .94rem !important;
+      }
+      html[data-portal-layout="circuit-noir"] #plansSection,
+      html[data-portal-layout="circuit-noir"] #portalRecoveryCards,
+      html[data-portal-layout="circuit-noir"] #loginSection,
+      html[data-portal-layout="circuit-noir"] #voucherSection,
+      html[data-portal-layout="circuit-noir"] #mpesaReconnectSection,
+      html[data-portal-layout="circuit-noir"] #communitySection,
+      html[data-portal-layout="circuit-noir"] #loyaltyPointsSection,
+      html[data-portal-layout="circuit-noir"] #portalAnnouncement,
+      html[data-portal-layout="circuit-noir"] #portalExpiryNotice {
+        padding: 1rem 0 0 !important;
+      }
+      html[data-portal-layout="circuit-noir"] #plansGrid {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: .65rem !important;
+      }
+      html[data-portal-layout="circuit-noir"] #plansGrid .plan-card {
+        min-height: 148px;
+        padding: .9rem !important;
+      }
+      html[data-portal-layout="circuit-noir"] .sec-head {
+        padding: 1.1rem !important;
+      }
+      html[data-portal-layout="circuit-noir"] .sec-body {
+        padding: 1.1rem !important;
+      }
+      html[data-portal-layout="circuit-noir"] #portalFooter {
+        width: calc(100% + 2rem);
+        margin: 3rem -1rem 0 !important;
+        padding: 1.7rem 1rem !important;
+      }
+    }
+    @media (max-width: 380px) {
+      html[data-portal-layout="circuit-noir"] #plansGrid {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+      html[data-portal-layout="circuit-noir"] #portalHeroTitle {
+        font-size: 2.5rem !important;
+      }
+      html[data-portal-layout="circuit-noir"] .already-paid-link {
+        font-size: .69rem !important;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html[data-portal-layout="circuit-noir"],
+      html[data-portal-layout="circuit-noir"] *,
+      html[data-portal-layout="circuit-noir"] *::before,
+      html[data-portal-layout="circuit-noir"] *::after {
+        scroll-behavior: auto !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+    }
+  </style>
+</head>
+<body></body>
+</html>

@@ -15,6 +15,10 @@ const reactPortal = readFileSync(
   new URL("../pages/portal/HotspotLogin.tsx", import.meta.url),
   "utf8",
 );
+const circuitNoirLayout = readFileSync(
+  new URL("../../public/hotspot/layouts/circuit-noir.html", import.meta.url),
+  "utf8",
+);
 
 test("the standalone portal applies background and package shape from typography settings", () => {
   const typographyHandler = portalTemplate.match(/function applyPortalTypography\(data\)\{([\s\S]*?)\n\}/)?.[1] ?? "";
@@ -29,10 +33,32 @@ test("the generated standalone portal embeds its saved layout without a router-s
     "utf8",
   );
   assert.match(portalTemplate, /data-portal-layout="classic"/);
-  assert.match(exporter, /const layoutCss = renderStaticPortalLayoutCss\(config\.portalLayout\)/);
+  assert.match(exporter, /let layoutCss = renderStaticPortalLayoutCss\(config\.portalLayout\)/);
   assert.match(exporter, /<style id="hotspot-portal-layout">/);
   assert.match(exporter, /document\.documentElement\.setAttribute\("data-portal-layout",window\.__HOTSPOT_CONFIG__\.portalLayout\)/);
   assert.doesNotMatch(portalTemplate, /<link[^>]+portal-layouts\.css/);
+});
+
+test("Circuit Noir is a responsive, reduced-motion style pack embedded in a standalone BIL portal export", () => {
+  const exporter = readFileSync(
+    new URL("../pages/admin/HotspotSettings.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(circuitNoirLayout, /<style id="hotspot-layout-circuit-noir">/);
+  assert.match(circuitNoirLayout, /html\[data-portal-layout="circuit-noir"\]/);
+  assert.match(circuitNoirLayout, /@media\s*\(max-width:\s*700px\)/);
+  assert.match(circuitNoirLayout, /prefers-reduced-motion:\s*reduce/);
+  assert.match(exporter, /fetch\("\/hotspot\/layouts\/circuit-noir\.html"/);
+  assert.match(exporter, /config\.portalLayout === "circuit-noir"/);
+  assert.match(exporter, /circuit-noir-hotspot-login/);
+  assert.match(portalTemplate, /action="\$\(link-login-only\)"/);
+  assert.match(portalTemplate, /name="dst"\s+value="\$\(link-orig\)"/);
+  assert.match(portalTemplate, /\/api\/customers\/hotspot-login/);
+  assert.match(portalTemplate, /\$\(chap-id\)/);
+  assert.match(portalTemplate, /\$\(chap-challenge\)/);
+  assert.match(portalTemplate, /\$\(link-login-only\)/);
+  assert.match(portalTemplate, /href="\$\(link-status\)"/);
+  assert.match(portalTemplate, /\$\(if error\)[\s\S]*?Login Failed:[\s\S]*?\$\(error\)[\s\S]*?\$\(endif\)/);
 });
 
 test("Dansted and Classic remain independent across hosted hydration and static export", () => {
@@ -41,6 +67,7 @@ test("Dansted and Classic remain independent across hosted hydration and static 
   assert.equal(resolveHotspotPortalLayout("dansted-wifi", "classic", true), "dansted-wifi");
   assert.equal(resolveHotspotPortalLayout("classic", "dansted-wifi", true), "classic");
   assert.equal(resolveHotspotPortalLayout("classic", "dansted-wifi", false), "dansted-wifi");
+  assert.equal(resolveHotspotPortalLayout("circuit-noir", "classic", true), "circuit-noir");
 
   const danstedCss = renderStaticPortalLayoutCss("dansted-wifi");
   const classicCss = renderStaticPortalLayoutCss("classic");

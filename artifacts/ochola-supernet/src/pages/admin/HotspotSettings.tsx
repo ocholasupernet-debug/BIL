@@ -53,15 +53,16 @@ import {
 
 const PUBLIC_BASE_DOMAIN = "isplatty.org";
 const HOTSPOT_SETTINGS_LAYOUTS = HOTSPOT_PORTAL_LAYOUTS.filter(
-  layout => layout.value === "classic" || layout.value === "dansted-wifi",
+  layout => layout.value === "classic" || layout.value === "dansted-wifi" || layout.value === "circuit-noir",
 );
 
-function normalizeHotspotSettingsLayout(value: unknown): HotspotPortalLayout {
-  return value === "dansted-wifi" ? "dansted-wifi" : "classic";
+function normalizeHotspotSettingsLayout(value: unknown): SupportedPortalLayout {
+  return value === "dansted-wifi" || value === "circuit-noir" ? value : "classic";
 }
 
 function hotspotSettingsLayoutLabel(layout: (typeof HOTSPOT_SETTINGS_LAYOUTS)[number]): string {
-  return layout.value === "dansted-wifi" ? "Dansted · Metallic Diamond" : layout.label;
+  if (layout.value === "dansted-wifi") return "Dansted · Metallic Diamond";
+  return layout.label;
 }
 
 const DEFAULT_COLORS = {
@@ -76,7 +77,7 @@ const DEFAULT_COLORS = {
 };
 
 type ColorSettings = typeof DEFAULT_COLORS;
-type SupportedPortalLayout = "classic" | "dansted-wifi";
+type SupportedPortalLayout = "classic" | "dansted-wifi" | "circuit-noir";
 type SupportContact = { id: string; label: string; phone: string; whatsapp: string };
 type LayoutAppearance = {
   portalBackground: PortalBackground;
@@ -100,6 +101,21 @@ const DEFAULT_LAYOUT_APPEARANCES: LayoutAppearances = {
       buttonColor: "#40c965",
       textColor: "#f5f5f5",
       inputBgColor: "#34383a",
+    },
+  },
+  "circuit-noir": {
+    portalBackground: "forest",
+    portalPackageShape: "soft-square",
+    colors: {
+      ...DEFAULT_COLORS,
+      bgColor: "#07111f",
+      bgColor2: "#102b3a",
+      primaryColor: "#42e8d5",
+      accentColor: "#ffb86b",
+      cardColor: "#0c1c2e",
+      buttonColor: "#42e8d5",
+      textColor: "#effbff",
+      inputBgColor: "#091827",
     },
   },
 };
@@ -128,7 +144,11 @@ function normalizeLayoutAppearances(
       colors: { ...base.colors, ...(colors ?? {}) },
     };
   };
-  return { classic: normalizeOne("classic"), "dansted-wifi": normalizeOne("dansted-wifi") };
+  return {
+    classic: normalizeOne("classic"),
+    "dansted-wifi": normalizeOne("dansted-wifi"),
+    "circuit-noir": normalizeOne("circuit-noir"),
+  };
 }
 
 function normalizeSupportContacts(value: unknown, legacyPhone = "", legacyWhatsapp = ""): SupportContact[] {
@@ -177,7 +197,7 @@ interface HSettings {
   faqText: string;
   portalCards: HotspotPortalCardVisibility;
   loyaltyCard: HotspotLoyaltyCardSettings;
-  portalLayout: HotspotPortalLayout;
+  portalLayout: SupportedPortalLayout;
   colors: ColorSettings;
   layoutAppearances: LayoutAppearances;
   supportContacts: SupportContact[];
@@ -746,7 +766,15 @@ export async function buildPortalHtml(
     portalCards: normalizeHotspotPortalCards(settings.portalCards, settings),
   };
   const config = makeExportConfig(exportSettings, adminId, appearance.apiBase, plans, appearance, scope.portId, scope.previewOnly === true);
-  const layoutCss = renderStaticPortalLayoutCss(config.portalLayout);
+  let layoutCss = renderStaticPortalLayoutCss(config.portalLayout);
+  if (config.portalLayout === "circuit-noir") {
+    const layoutResponse = await fetch("/hotspot/layouts/circuit-noir.html", { cache: "no-store" });
+    if (!layoutResponse.ok) throw new Error("The Circuit Noir layout file could not be loaded.");
+    const layoutDocument = await layoutResponse.text();
+    const styleMatch = layoutDocument.match(/<style\s+id=["']hotspot-layout-circuit-noir["'][^>]*>([\s\S]*?)<\/style>/i);
+    if (!styleMatch?.[1]) throw new Error("The Circuit Noir layout file is missing its scoped styles.");
+    layoutCss = styleMatch[1];
+  }
   const bootstrap = `${layoutCss ? `<style id="hotspot-portal-layout">${layoutCss}</style>` : ""}<script>window.__HOTSPOT_CONFIG__=${safeEmbeddedJson(config)};document.documentElement.setAttribute("data-portal-layout",window.__HOTSPOT_CONFIG__.portalLayout);</script>`;
   const configuredTitle = escapeHtml(config.ispName);
   return template
@@ -884,6 +912,10 @@ const STYLES = `
   .hs-layout-thumb-dansted-wifi .hs-layout-thumb-header { background:#d7dadd; }
   .hs-layout-thumb-dansted-wifi .hs-layout-thumb-hero { grid-column:1/-1; width:58%; justify-self:center; background:#4b4e50; border:1px solid #aeb2b5; }
   .hs-layout-thumb-dansted-wifi .hs-layout-thumb-plans { grid-column:1/-1; background:linear-gradient(90deg,transparent 0 6%,#40c965 6% 10%,transparent 10% 47%,#40c965 47% 51%,transparent 51% 90%,#40c965 90% 94%,transparent 94%); border:1px solid #8e9598; }
+  .hs-layout-thumb-circuit-noir { grid-template-columns:.9fr 1.1fr; grid-template-rows:6px 1fr; gap:4px; background:linear-gradient(120deg,#07111f,#102b3a); border-radius:4px; }
+  .hs-layout-thumb-circuit-noir .hs-layout-thumb-header { grid-column:1/-1; background:#d3f36b; }
+  .hs-layout-thumb-circuit-noir .hs-layout-thumb-hero { grid-column:1; grid-row:2; min-height:34px; background:linear-gradient(145deg,#19231f,#293630); border:1px solid rgba(211,243,107,.45); }
+  .hs-layout-thumb-circuit-noir .hs-layout-thumb-plans { grid-column:2; grid-row:2; background:repeating-linear-gradient(0deg,#19231f 0 9px,#d3f36b 9px 11px); border:1px solid rgba(211,243,107,.35); }
   @media (max-width: 760px) { .hs-layout-picker { grid-template-columns:1fr; } }
   .hs-side-card { background:linear-gradient(155deg,var(--isp-card),var(--isp-inner-card)); }
   .hs-side-body { padding:17px 18px 19px; }
@@ -1703,7 +1735,11 @@ export default function HotspotSettings() {
       const slug = safeText(settings.ispName, "hotspot-portal").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "hotspot-portal";
       anchor.href = url;
       const portSlug = selectedPortalPort?.interface_name.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-      const layoutSlug = settings.portalLayout === "dansted-wifi" ? "dansted-wifi-hotspot-login" : "hotspot-login";
+      const layoutSlug = settings.portalLayout === "dansted-wifi"
+        ? "dansted-wifi-hotspot-login"
+        : settings.portalLayout === "circuit-noir"
+          ? "circuit-noir-hotspot-login"
+          : "hotspot-login";
       anchor.download = `${slug}${portSlug ? `-${portSlug}` : ""}-${layoutSlug}.html`;
       document.body.appendChild(anchor);
       anchor.click();
@@ -2214,7 +2250,7 @@ export default function HotspotSettings() {
               )}
             </Section>
 
-            <Section id="hotspot-appearance" icon={<Sparkles size={16} />} title="Portal appearance" description="Choose one of the two supported page layouts, then refine its background, package cards, and colors.">
+            <Section id="hotspot-appearance" icon={<Sparkles size={16} />} title="Portal appearance" description="Choose one of three page layouts, then refine its background, package cards, and colors.">
               {appearanceLoading ? (
                 <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading portal appearance…</div>
               ) : (

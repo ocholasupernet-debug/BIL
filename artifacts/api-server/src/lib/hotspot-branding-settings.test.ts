@@ -80,6 +80,10 @@ test("keeps only supported portal layout values", () => {
     { portalLayout: "dansted-wifi" },
   );
   assert.deepEqual(
+    sanitizeHotspotBrandingSettings({ portalLayout: "circuit-noir" }),
+    { portalLayout: "circuit-noir" },
+  );
+  assert.deepEqual(
     sanitizeHotspotBrandingSettings({ portalLayout: "unknown-layout" }),
     {},
   );
@@ -106,6 +110,11 @@ test("keeps only supported per-layout appearance settings and support contacts",
           portalPackageShape: "hexagon",
           colors: { buttonColor: "#40C965" },
         },
+        "circuit-noir": {
+          portalBackground: "midnight",
+          portalPackageShape: "soft-square",
+          colors: { primaryColor: "#42E8D5" },
+        },
         retired: { portalBackground: "sunset" },
       },
       supportContacts: [
@@ -117,6 +126,7 @@ test("keeps only supported per-layout appearance settings and support contacts",
       layoutAppearances: {
         classic: { portalBackground: "sand", portalPackageShape: "rounded", colors: { primaryColor: "#abcdef" } },
         "dansted-wifi": { portalBackground: "midnight", portalPackageShape: "hexagon", colors: { buttonColor: "#40c965" } },
+        "circuit-noir": { portalBackground: "midnight", portalPackageShape: "soft-square", colors: { primaryColor: "#42e8d5" } },
       },
       supportContacts: [
         { id: "one", label: "Care", phone: "0712345678", whatsapp: "254712345678" },

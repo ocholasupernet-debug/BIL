@@ -55,6 +55,14 @@ export const HOTSPOT_PORTAL_LAYOUTS = [
     panel: "#363738",
     accent: "#41d85f",
   },
+  {
+    value: "circuit-noir",
+    label: "Circuit Noir",
+    description: "A full-screen access lounge with a dramatic welcome panel and focused plan selection.",
+    background: "#101916",
+    panel: "#19231f",
+    accent: "#d3f36b",
+  },
 ] as const;
 
 export type HotspotPortalLayout = (typeof HOTSPOT_PORTAL_LAYOUTS)[number]["value"];
@@ -1710,5 +1718,62 @@ export const HOSTED_PORTAL_LAYOUT_CSS = `
       padding:8px 5px;
     }
     .hp-root[data-portal-layout="dansted-wifi"] .hp-section { padding:6px 8px 20px; }
+  }
+  .hp-root[data-portal-layout="circuit-noir"] {
+    color:#f3f0e5;
+    background:
+      radial-gradient(ellipse at 14% 8%,rgba(211,243,107,.1),transparent 34rem),
+      #101916;
+    font-family:"Avenir Next",Avenir,"Segoe UI",ui-sans-serif,system-ui,sans-serif;
+    --isp-accent:#d3f36b !important;
+    --isp-accent-glow:rgba(211,243,107,.12) !important;
+    --isp-accent-border:rgba(211,243,107,.3) !important;
+    --isp-accent-strong:#efffb0 !important;
+  }
+  .hp-root[data-portal-layout="circuit-noir"] .hp-header {
+    color:#f3f0e5;background:rgba(16,25,22,.9);
+    border-bottom:1px solid rgba(233,240,225,.13);
+  }
+  .hp-root[data-portal-layout="circuit-noir"] .hp-brand-name,
+  .hp-root[data-portal-layout="circuit-noir"] .hp-title { color:#f3f0e5; }
+  .hp-root[data-portal-layout="circuit-noir"] .hp-main.has-hero {
+    display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,1fr);
+    gap:clamp(20px,4vw,58px);max-width:1440px;padding-top:42px;
+  }
+  .hp-root[data-portal-layout="circuit-noir"] .hp-main.has-hero > .hp-hero {
+    grid-column:1;position:sticky;top:92px;align-self:start;
+    padding:clamp(24px,5vw,68px) 0;color:#f3f0e5;text-align:left;
+  }
+  .hp-root[data-portal-layout="circuit-noir"] .hp-main.has-hero > .hp-hero > *,
+  .hp-root[data-portal-layout="circuit-noir"] .hp-main.has-hero .hp-badges { text-align:left;justify-content:flex-start; }
+  .hp-root[data-portal-layout="circuit-noir"] .hp-main.has-hero > :not(.hp-hero):not(.hp-footer):not([role="alert"]) {
+    grid-column:2;width:100%;
+  }
+  .hp-root[data-portal-layout="circuit-noir"] .hp-main.has-hero > [role="alert"],
+  .hp-root[data-portal-layout="circuit-noir"] .hp-main.has-hero > .hp-footer { grid-column:1/-1; }
+  .hp-root[data-portal-layout="circuit-noir"] .hp-plan,
+  .hp-root[data-portal-layout="circuit-noir"] .hp-glass {
+    color:#f3f0e5;background:linear-gradient(145deg,#202b26,#19231f);
+    border:1px solid rgba(233,240,225,.13);border-radius:8px;
+  }
+  .hp-root[data-portal-layout="circuit-noir"] .hp-plan button,
+  .hp-root[data-portal-layout="circuit-noir"] .hp-button {
+    color:#101916;background:#d3f36b;border-radius:5px;font-weight:800;
+  }
+  .hp-root[data-portal-layout="circuit-noir"] .hp-input,
+  .hp-root[data-portal-layout="circuit-noir"] .hp-tv-input {
+    color:#f3f0e5;background:#101916;border-color:rgba(233,240,225,.2);
+  }
+  .hp-root[data-portal-layout="circuit-noir"] .hp-footer { color:#a5b1a7; }
+  @media (max-width:760px) {
+    .hp-root[data-portal-layout="circuit-noir"] .hp-main.has-hero {
+      display:flex;flex-direction:column;gap:14px;padding:20px 12px 28px;
+    }
+    .hp-root[data-portal-layout="circuit-noir"] .hp-main.has-hero > .hp-hero {
+      position:relative;top:auto;width:100%;padding:22px 8px 14px;
+    }
+    .hp-root[data-portal-layout="circuit-noir"] .hp-main.has-hero > :not(.hp-hero):not(.hp-footer):not([role="alert"]) {
+      width:100%;
+    }
   }
 `;
