@@ -684,7 +684,11 @@ export async function buildPortalHtml(
   scope: { portId?: number; previewOnly?: boolean } = {},
 ): Promise<string> {
   const adminId = getSelectedTenantId() ?? AUTH_ADMIN_ID;
-  const response = await fetch("/hotspot/login.html", { cache: "no-store" });
+  const layout = normalizeHotspotSettingsLayout(appearanceOverride.portalLayout ?? settings.portalLayout);
+  const templatePath = layout === "classic" || layout === "dansted-wifi"
+    ? `/hotspot/layouts/${layout}/login.html`
+    : "/hotspot/login.html";
+  const response = await fetch(templatePath, { cache: "no-store" });
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
   let template = await response.text();
   const resolvedAppearance = await resolvePortalAppearance(domain, adminId);
@@ -707,9 +711,7 @@ export async function buildPortalHtml(
     postLoginUrl: hotspotPostLoginDestination(settings.portalHostname, PUBLIC_BASE_DOMAIN),
     portalBackground: safePortalBackground(appearanceOverride.portalBackground ?? resolvedAppearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearanceOverride.portalPackageShape ?? resolvedAppearance.portalPackageShape),
-    portalLayout: normalizeHotspotSettingsLayout(
-      appearanceOverride.portalLayout ?? settings.portalLayout,
-    ),
+      portalLayout: layout,
   };
   const routerId = Number(settings.routerId);
   let plans: PortalPlan[] = [];
@@ -858,6 +860,24 @@ export async function buildPortalHtml(
   return template
     .replace("</head>", `${bootstrap}\n</head>`)
     .replace(/\$\(login-title\)/g, configuredTitle);
+}
+
+export async function buildPortalRloginHtml(layoutValue: unknown): Promise<string> {
+  const layout = normalizeHotspotSettingsLayout(layoutValue);
+  const path = layout === "classic" || layout === "dansted-wifi"
+    ? `/hotspot/layouts/${layout}/rlogin.html`
+    : "/hotspot/rlogin.html";
+  const response = await fetch(path, { cache: "no-store" });
+  if (!response.ok) throw new Error(`The ${layout} rlogin page could not be loaded.`);
+  const html = await response.text();
+  if (!html.includes("$(link-login-only)")) {
+    throw new Error(`The ${layout} rlogin page is missing the RouterOS login destination.`);
+  }
+  if ((layout === "classic" || layout === "dansted-wifi")
+      && !html.includes(`data-bil-layout-package="${layout}"`)) {
+    throw new Error(`The ${layout} rlogin page is not independently registered.`);
+  }
+  return html;
 }
 
 const STYLES = `
@@ -1779,6 +1799,7 @@ export default function HotspotSettings() {
          const html = await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, {
            portId: isResellerAccount ? Number(selectedAssignedPortId) : undefined,
          });
+          const rloginHtml = await buildPortalRloginHtml(settings.portalLayout);
         const headers = new Headers({ "Content-Type": "application/json" });
         let token = "";
         let role = "";
@@ -1800,6 +1821,7 @@ export default function HotspotSettings() {
           body: JSON.stringify({
             adminId,
             html,
+            rloginHtml,
             overwrite: true,
             portalFileReplacementConsent: true,
             destinationDirectory: "hotspot",
@@ -2168,6 +2190,10 @@ export default function HotspotSettings() {
         brand.domain,
         { ...settings.layoutAppearances[settings.portalLayout], portalLayout: settings.portalLayout },
       );
+      const sourceLayoutId = selectedManagerLayoutId.startsWith("custom-")
+        ? customLayouts.find(layout => layout.id === selectedManagerLayoutId)?.source_layout_id
+        : selectedManagerLayoutId;
+      const rloginHtml = await buildPortalRloginHtml(sourceLayoutId ?? settings.portalLayout);
       const headers = new Headers(adminApiHeaders());
       headers.set("Content-Type", "application/json");
       const response = await fetch(`/api/router/${routerId}/hotspot-layouts/deploy`, {
@@ -2178,6 +2204,7 @@ export default function HotspotSettings() {
           layoutId: selectedManagerLayoutId,
           layoutVersion: selectedManagerLayoutId === "aurora-network" ? "1.0.0" : "legacy-1",
           html,
+          rloginHtml,
           replacementConsent: true,
         }),
       });

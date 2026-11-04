@@ -116,3 +116,27 @@ export function validateGeneratedHotspotPortal(value: unknown): { content: Buffe
   }
   return { content };
 }
+
+export function validateGeneratedHotspotHandoff(
+  value: unknown,
+  expectedLayout?: "classic" | "dansted-wifi",
+): { content: Buffer } | { error: string } {
+  if (typeof value !== "string" || !value.trim()) {
+    return { error: "A layout-specific rlogin.html page is required." };
+  }
+  const content = Buffer.from(value, "utf8");
+  if (content.length > 512_000) return { error: "The layout-specific rlogin.html page is too large." };
+  if (!/^<!doctype html>/i.test(value.trim()) || !/<\/html\s*>/i.test(value)) {
+    return { error: "The rlogin page must be a complete HTML document." };
+  }
+  if (!value.includes("$(link-login-only)")) {
+    return { error: "The rlogin page is missing the RouterOS login destination." };
+  }
+  if (expectedLayout && !value.includes(`data-bil-layout-package="${expectedLayout}"`)) {
+    return { error: `The rlogin page does not belong to the selected ${expectedLayout} layout.` };
+  }
+  if (/(?:router[_-]?secret|router[_-]?password|payment[_-]?(?:secret|password)|session[_-]?secret|vpn[_-]?(?:private|secret|password|key))/i.test(value)) {
+    return { error: "The rlogin page contains restricted credential material." };
+  }
+  return { content };
+}
