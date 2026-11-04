@@ -78,6 +78,7 @@ import {
 import {
   findEmbeddedHotspotConfig,
   validateGeneratedHotspotHandoff,
+  validateIndependentHotspotLogin,
   validateGeneratedHotspotPortal,
 } from "../lib/hotspot-portal-deploy";
 import {
@@ -2171,6 +2172,9 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
     : null;
   const selectedLayout = portalConfig?.portalLayout;
   const requiresIndependentHandoff = selectedLayout === "classic" || selectedLayout === "dansted-wifi";
+  const packageLogin = requiresIndependentHandoff
+    ? validateIndependentHotspotLogin(req.body?.html, selectedLayout)
+    : null;
   const handoff = requiresIndependentHandoff
     ? validateGeneratedHotspotHandoff(req.body?.rloginHtml, selectedLayout)
     : req.body?.rloginHtml == null
@@ -2181,6 +2185,7 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
   if (isNaN(id)) { res.status(400).json({ error: "Invalid router id" }); return; }
   if (!adminId) { res.status(403).json({ error: "The requested administrator does not match the signed-in account." }); return; }
   if (!("content" in portal)) { res.status(400).json({ error: portal.error }); return; }
+  if (packageLogin && "error" in packageLogin) { res.status(400).json({ error: packageLogin.error }); return; }
   if (handoff && "error" in handoff) { res.status(400).json({ error: handoff.error }); return; }
   if (requiresIndependentHandoff && handoff && "content" in handoff && handoff.content.equals(portal.content)) {
     res.status(400).json({ error: "Classic and Dansted require separate login.html and rlogin.html files." });
@@ -2276,7 +2281,9 @@ router.post("/router/:id/hotspot-portal/deploy", requireAdmin(), async (req, res
   const token = randomBytes(24).toString("hex");
   const roamingToken = randomBytes(24).toString("hex");
   const packageAssetToken = requiresIndependentHandoff ? randomBytes(24).toString("hex") : null;
-  const packageAsset = requiresIndependentHandoff ? getDeployableSource("hotspot", "md5.js") : null;
+  const packageAsset = requiresIndependentHandoff
+    ? getDeployableSource("hotspot", `layouts/${String(selectedLayout)}/md5.js`)
+    : null;
   if (requiresIndependentHandoff && !packageAsset) {
     res.status(503).json({ error: "The independent Hotspot layout helper is unavailable; no router files were changed." });
     return;
@@ -2540,8 +2547,12 @@ router.post("/router/:id/hotspot-layouts/deploy", requireAdmin(), async (req, re
   }
   const portal = validateGeneratedHotspotPortal(html);
   const embedded = typeof html === "string" ? findEmbeddedHotspotConfig(html) : null;
-  if (!("content" in portal)) { res.status(400).json({ error: portal.error }); return; }
   const requiresIndependentHandoff = embedded?.config.portalLayout === "classic" || embedded?.config.portalLayout === "dansted-wifi";
+  const packageLogin = requiresIndependentHandoff
+    ? validateIndependentHotspotLogin(html, embedded?.config.portalLayout as "classic" | "dansted-wifi")
+    : null;
+  if (!("content" in portal)) { res.status(400).json({ error: portal.error }); return; }
+  if (packageLogin && "error" in packageLogin) { res.status(400).json({ error: packageLogin.error }); return; }
   const handoff = requiresIndependentHandoff
     ? validateGeneratedHotspotHandoff(req.body?.rloginHtml, embedded?.config.portalLayout as "classic" | "dansted-wifi")
     : req.body?.rloginHtml == null
@@ -2562,7 +2573,11 @@ router.post("/router/:id/hotspot-layouts/deploy", requireAdmin(), async (req, re
   }
   const origin = requestOrigin(req);
   if (!origin.startsWith("https://")) { res.status(400).json({ error: "Portal deployment requires an HTTPS public request origin." }); return; }
-  const md5Source = getDeployableSource("hotspot", "md5.js");
+  const independentPackageAsset = embeddedLayoutId === "classic" || embeddedLayoutId === "dansted-wifi";
+  const md5Source = getDeployableSource(
+    "hotspot",
+    independentPackageAsset ? `layouts/${embeddedLayoutId}/md5.js` : "md5.js",
+  );
   if (!md5Source) { res.status(503).json({ error: "The bundled Hotspot login helper is unavailable; no router files were changed." }); return; }
   let md5Content: Buffer;
   try {
@@ -2601,7 +2616,14 @@ router.post("/router/:id/hotspot-layouts/deploy", requireAdmin(), async (req, re
   const previousDirectory = profileTarget.htmlDirectory;
   const parentDirectory = `${previousDirectory}/bil-layouts`;
   const stageDirectory = `${parentDirectory}/${layoutId}-${Date.now()}-${randomBytes(5).toString("hex")}`;
-  const filePaths = [`${stageDirectory}/login.html`, `${stageDirectory}/rlogin.html`, `${stageDirectory}/hotspot/md5.js`];
+  const packageAssetDirectory = independentPackageAsset
+    ? `${stageDirectory}/hotspot/layouts/${embeddedLayoutId}`
+    : `${stageDirectory}/hotspot`;
+  const filePaths = [
+    `${stageDirectory}/login.html`,
+    `${stageDirectory}/rlogin.html`,
+    `${packageAssetDirectory}/md5.js`,
+  ];
   let historyId: number | undefined;
   try {
     const [history] = await sbInsertStrict<{ id: number }>("isp_hotspot_layout_deployments", {
@@ -2643,7 +2665,7 @@ router.post("/router/:id/hotspot-layouts/deploy", requireAdmin(), async (req, re
   try {
     await ensureRouterFileDirectory(found.creds, `${previousDirectory}/bil-layouts`);
     await ensureRouterFileDirectory(found.creds, stageDirectory);
-    await ensureRouterFileDirectory(found.creds, `${stageDirectory}/hotspot`);
+    await ensureRouterFileDirectory(found.creds, packageAssetDirectory);
     for (let i = 0; i < filePaths.length; i += 1) {
       await deployRouterFile(found.creds, {
         destinationPath: filePaths[i],

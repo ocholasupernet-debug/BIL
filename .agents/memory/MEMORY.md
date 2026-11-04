@@ -98,6 +98,7 @@
 - [Portal branding load order](portal-branding-load-order.md) — Apply each tenant’s saved company name as soon as branding loads, without waiting for typography.
 - [Hotspot preview plan source](hotspot-preview-plan-source.md) — Local previews must keep embedded plans and skip empty live API refreshes; deployed portals retain live scoped refresh.
 - [Hotspot template macro contract](hotspot-template-macro-contract.md) — Keep required RouterOS tokens in exported templates, even when local fallbacks make the preview readable.
+- [Hotspot layout file isolation](hotspot-layout-file-isolation.md) — Classic and Dansted must own separate login, rlogin, and asset files; never deploy one layout's files as the other's.
 - [Reseller Daraja bridge](reseller-daraja-bridge.md) — Use global encrypted Daraja credentials; reseller rows hold only destinations and callback settlement credits earnings atomically.
 - [Immutable billing boundary](immutable-billing-boundary.md) — Dashboard revenue comes from the append-only ledger; platform renewal payments settle invoices but never count as sales.
 - [Reseller connection approval](reseller-connection-approval.md) — Either side can clear an approved link only after non-disabled handoffs are removed; request deletion stays separate.

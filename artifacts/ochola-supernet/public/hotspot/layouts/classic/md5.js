@@ -1,3 +1,4 @@
+/* Independent classic Hotspot package helper. Keep layout assets separate. */
 /*
  * MD5 (Message-Digest Algorithm) - For MikroTik Hotspot password hashing
  * Standard implementation used by MikroTik RouterOS hotspot

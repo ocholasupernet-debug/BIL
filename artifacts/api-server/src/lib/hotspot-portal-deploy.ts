@@ -140,3 +140,16 @@ export function validateGeneratedHotspotHandoff(
   }
   return { content };
 }
+
+export function validateIndependentHotspotLogin(
+  value: unknown,
+  expectedLayout: "classic" | "dansted-wifi",
+): { ok: true } | { error: string } {
+  if (typeof value !== "string" || !value.includes(`data-portal-layout="${expectedLayout}"`)) {
+    return { error: `The login page does not belong to the selected ${expectedLayout} package.` };
+  }
+  if (!value.includes(`/hotspot/layouts/${expectedLayout}/md5.js`)) {
+    return { error: `The login page does not use its own ${expectedLayout} helper asset.` };
+  }
+  return { ok: true };
+}

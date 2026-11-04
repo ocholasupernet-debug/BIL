@@ -71,6 +71,39 @@ assert.equal(
 );
 assert.match(refreshOutput, /http-equiv="refresh"\s+content="0;url=\$\(link-login-only\)"/i);
 assert.match(refreshOutput, /<body[^>]*\bhidden\b/i);
+const builtInPackages = {};
+for (const id of ["classic", "dansted-wifi"]) {
+  const sourceDirectory = resolve(appRoot, "public/hotspot/layouts", id);
+  const outputDirectory = resolve(appRoot, "dist/public/hotspot/layouts", id);
+  const [manifestText, sourceLogin, outputLogin, sourceRlogin, outputRlogin, sourceMd5, outputMd5] = await Promise.all([
+    readFile(resolve(sourceDirectory, "manifest.json"), "utf8"),
+    readFile(resolve(sourceDirectory, "login.html"), "utf8"),
+    readFile(resolve(outputDirectory, "login.html"), "utf8"),
+    readFile(resolve(sourceDirectory, "rlogin.html"), "utf8"),
+    readFile(resolve(outputDirectory, "rlogin.html"), "utf8"),
+    readFile(resolve(sourceDirectory, "md5.js"), "utf8"),
+    readFile(resolve(outputDirectory, "md5.js"), "utf8"),
+  ]);
+  const manifest = JSON.parse(manifestText);
+  assert.equal(manifest.id, id);
+  assert.equal(manifest.entry, "login.html");
+  assert.equal(manifest.handoff, "rlogin.html");
+  assert.equal(manifest.independentFiles, true);
+  assert.equal(outputLogin, sourceLogin, `${id} login package must ship unchanged`);
+  assert.equal(outputRlogin, sourceRlogin, `${id} rlogin package must ship unchanged`);
+  assert.equal(outputMd5, sourceMd5, `${id} helper must ship from its own package`);
+  assert.match(outputLogin, new RegExp(`data-portal-layout="${id}"`));
+  assert.match(outputLogin, new RegExp(`/hotspot/layouts/${id}/md5\\.js`));
+  assert.doesNotMatch(outputLogin, /src=["']\/hotspot\/md5\.js["']/);
+  for (const macro of ["$(link-login-only)", "$(chap-id)", "$(chap-challenge)", "$(link-status)", "$(error)"]) {
+    assert.ok(outputLogin.includes(macro), `${id} login page must retain ${macro}`);
+  }
+  assert.match(outputRlogin, new RegExp(`data-bil-layout-package="${id}"`));
+  builtInPackages[id] = { login: outputLogin, rlogin: outputRlogin, md5: outputMd5 };
+}
+assert.notEqual(builtInPackages.classic.login, builtInPackages["dansted-wifi"].login);
+assert.notEqual(builtInPackages.classic.rlogin, builtInPackages["dansted-wifi"].rlogin);
+assert.notEqual(builtInPackages.classic.md5, builtInPackages["dansted-wifi"].md5);
 assert.match(
   output,
   /troubleshootConnection\(true\)/,

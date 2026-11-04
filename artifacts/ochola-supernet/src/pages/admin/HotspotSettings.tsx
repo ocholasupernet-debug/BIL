@@ -685,9 +685,9 @@ export async function buildPortalHtml(
 ): Promise<string> {
   const adminId = getSelectedTenantId() ?? AUTH_ADMIN_ID;
   const layout = normalizeHotspotSettingsLayout(appearanceOverride.portalLayout ?? settings.portalLayout);
-  const templatePath = layout === "classic" || layout === "dansted-wifi"
-    ? `/hotspot/layouts/${layout}/login.html`
-    : "/hotspot/login.html";
+  const independentPackage = layout === "classic" || layout === "dansted-wifi";
+  if (independentPackage) await verifyIndependentLayoutPackage(layout);
+  const templatePath = independentPackage ? `/hotspot/layouts/${layout}/login.html` : "/hotspot/login.html";
   const response = await fetch(templatePath, { cache: "no-store" });
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
   let template = await response.text();
@@ -864,7 +864,9 @@ export async function buildPortalHtml(
 
 export async function buildPortalRloginHtml(layoutValue: unknown): Promise<string> {
   const layout = normalizeHotspotSettingsLayout(layoutValue);
-  const path = layout === "classic" || layout === "dansted-wifi"
+  const independentPackage = layout === "classic" || layout === "dansted-wifi";
+  if (independentPackage) await verifyIndependentLayoutPackage(layout);
+  const path = independentPackage
     ? `/hotspot/layouts/${layout}/rlogin.html`
     : "/hotspot/rlogin.html";
   const response = await fetch(path, { cache: "no-store" });
@@ -878,6 +880,30 @@ export async function buildPortalRloginHtml(layoutValue: unknown): Promise<strin
     throw new Error(`The ${layout} rlogin page is not independently registered.`);
   }
   return html;
+}
+
+async function verifyIndependentLayoutPackage(layout: "classic" | "dansted-wifi"): Promise<void> {
+  const response = await fetch(`/hotspot/layouts/${layout}/manifest.json`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`The independent ${layout} package manifest is unavailable.`);
+  const manifest = await response.json() as {
+    id?: unknown;
+    entry?: unknown;
+    handoff?: unknown;
+    assets?: unknown;
+    standalone?: unknown;
+    independentFiles?: unknown;
+  };
+  if (
+    manifest.id !== layout
+    || manifest.entry !== "login.html"
+    || manifest.handoff !== "rlogin.html"
+    || manifest.standalone !== true
+    || manifest.independentFiles !== true
+    || !Array.isArray(manifest.assets)
+    || !manifest.assets.includes("md5.js")
+  ) {
+    throw new Error(`The independent ${layout} package manifest is invalid.`);
+  }
 }
 
 const STYLES = `
@@ -1621,6 +1647,9 @@ export default function HotspotSettings() {
         && (isResellerAccount || (!port.assigned_reseller_id && usesGeneratedHotspotPortal(draft.hotspotFolderPath)))
         ? await buildTargetPortal(port)
         : "";
+      const portalRloginHtml = portalHtml
+        ? await buildPortalRloginHtml(settings.portalLayout)
+        : "";
       const response = await fetch(`/api/admin/port-services/${port.id}`, {
         method: "PUT",
         headers: adminApiHeaders(),
@@ -1645,6 +1674,7 @@ export default function HotspotSettings() {
           headers: adminApiHeaders(),
           body: JSON.stringify({
             ...(portalHtml ? { portalHtml } : {}),
+            ...(portalRloginHtml ? { portalRloginHtml } : {}),
             portalFileReplacementConsent: allowHotspotReplace,
           }),
         });
