@@ -28,7 +28,6 @@ import {
   generateRouterManagementVpnScript,
   generateNetworkSetupScript,
   generateServiceSetupScript,
-  fetchRouterScriptTemplateFile,
   disableGeneratedHotspot,
   reconcileGeneratedServiceConfiguration,
   repairGeneratedServiceNetworking,
@@ -97,7 +96,6 @@ import {
   type BulkDeployMode,
 } from "../lib/bulk-hotspot-deployment.js";
 import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authorization.js";
-import { validateRouterTakeoverMainhotspot } from "../lib/router-takeover-template.js";
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
 import { planHotspotChatWalledGardenAdds } from "../lib/hotspot-chat-walled-garden.js";
 import { portServiceResourceNames, vlanServiceInterfaceName, type PortServiceResourceInput, type VlanServiceIdentityInput } from "../lib/port-service-resources.js";
@@ -3389,6 +3387,14 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     return;
   }
 
+  const requestedMode = String(req.query.mode ?? "coexist").trim().toLowerCase();
+  if (["takeover", "zero-touch", "zero_touch", "ztp_takeover", "router-takeover"].includes(requestedMode)) {
+    res.status(410).json({
+      error: "Zero-Touch script content is intentionally empty while its replacement structure is being prepared.",
+    });
+    return;
+  }
+
   const found = await getRouterCreds(id, adminId);
   if (!found) {
     res.status(404).json({ error: "Router not found for this ISP account" });
@@ -3416,54 +3422,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
     return;
   }
-  const requestedMode = String(req.query.mode ?? "coexist").trim().toLowerCase();
-  const installationMode = requestedMode === "direct" || requestedMode === "takeover"
-    ? requestedMode
-    : "coexist";
-  if (installationMode === "takeover") {
-    const rawSourceRouterId = String(req.query.sourceRouterId ?? "").trim();
-    const sourceRouterId = Number(rawSourceRouterId);
-    const sourceFileName = String(req.query.sourceTemplateFile ?? "").trim();
-    if (!/^[1-9]\d*$/.test(rawSourceRouterId) || !Number.isSafeInteger(sourceRouterId)) {
-      res.status(400).json({ error: "Select a valid numeric-ID source router for Takeover." });
-      return;
-    }
-    const sourceFilePathParts = sourceFileName.replace(/\\/g, "/").split("/");
-    if (
-      sourceFilePathParts.at(-1)?.toLowerCase() !== "mainhotspot.rsc"
-      || sourceFilePathParts.some(part => part === "." || part === "..")
-    ) {
-      res.status(400).json({ error: 'Takeover reads only the source router file named "mainhotspot.rsc".' });
-      return;
-    }
-    if (sourceRouterId === id) {
-      res.status(400).json({ error: "The Takeover source must be a different router from the new target." });
-      return;
-    }
-    try {
-      const source = await getRouterCreds(sourceRouterId, adminId);
-      if (!source) {
-        res.status(404).json({ error: "The selected source router is not available to this ISP account." });
-        return;
-      }
-      const sourceFile = await fetchRouterScriptTemplateFile(
-        source.creds,
-        sourceFileName,
-      );
-      validateRouterTakeoverMainhotspot({
-        sourceRouterId,
-        fileName: sourceFileName,
-        content: sourceFile.content,
-      });
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      res.status(422).json({
-        error: 'The selected source "mainhotspot.rsc" could not be validated for Takeover.',
-        detail,
-      });
-      return;
-    }
-  }
+  const installationMode: "direct" | "coexist" = requestedMode === "direct" ? "direct" : "coexist";
   try {
     const registrationToken = await ensureSeparateRouterRegistrationToken(
       id,
@@ -3558,10 +3517,8 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       ?? "",
     ).trim();
     const hasCompletePlatformRadius = Boolean(platformRadiusIp && platformRadiusSecret);
-    if ((installationMode === "coexist" || installationMode === "takeover") && !hasCompletePlatformRadius) {
-      const radiusWarning = installationMode === "takeover"
-        ? "OcholaSuperNet RADIUS settings are incomplete, so Takeover will not enable central Hotspot/PPPoE authentication."
-        : "Platform RADIUS settings are incomplete, so Step 3 will preserve existing RADIUS entries.";
+    if (installationMode === "coexist" && !hasCompletePlatformRadius) {
+      const radiusWarning = "Platform RADIUS settings are incomplete, so Step 3 will preserve existing RADIUS entries.";
       provisioningWarning = provisioningWarning
         ? `${provisioningWarning} ${radiusWarning}`
         : radiusWarning;
@@ -3611,7 +3568,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
     const networkScript = generateNetworkSetupScript({
       routerId: id,
-      requireInternet: installationMode === "takeover",
+      requireInternet: false,
       managementApiUsername: ROUTER_MANAGEMENT_API_USERNAME,
       managementApiPassword: found.creds.password,
     });
@@ -3621,10 +3578,10 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       bridgeName: serviceBridgeName,
       bridgePorts: serviceBridgePorts,
       portName: serviceBridgePorts[0],
-      radiusIp: (installationMode === "coexist" || installationMode === "takeover") && hasCompletePlatformRadius
+      radiusIp: installationMode === "coexist" && hasCompletePlatformRadius
         ? platformRadiusIp
         : undefined,
-      radiusSecret: (installationMode === "coexist" || installationMode === "takeover") && hasCompletePlatformRadius
+      radiusSecret: installationMode === "coexist" && hasCompletePlatformRadius
         ? platformRadiusSecret
         : undefined,
       /* The shared bridge is the single physical service wire. Bandwidth
