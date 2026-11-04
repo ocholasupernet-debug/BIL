@@ -21,7 +21,11 @@ import { logger } from "../lib/logger.js";
 import { sbDeleteStrict, sbInsertStrict, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getDeployableSource } from "../lib/portal-assets.js";
 import { addVlanIdentityToRlogin } from "../lib/vlan-hotspot-portal.js";
-import { findEmbeddedHotspotConfig } from "../lib/hotspot-portal-deploy.js";
+import {
+  findEmbeddedHotspotConfig,
+  validateGeneratedHotspotHandoff,
+  validateIndependentHotspotLogin,
+} from "../lib/hotspot-portal-deploy.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { buildHotspotChatWalledGardenCommands } from "../lib/hotspot-chat-walled-garden.js";
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
@@ -352,7 +356,9 @@ async function deployApprovedSource(
   const token = randomBytes(24).toString("hex");
   sourceEntries.set(token, {
     content: source.content,
-    contentType: "text/html; charset=utf-8",
+    contentType: destinationPath.toLowerCase().endsWith(".js")
+      ? "application/javascript; charset=utf-8"
+      : "text/html; charset=utf-8",
     fileName: sourceNameFromPath(source.source.name),
     expiresAt: Date.now() + SOURCE_TTL_MS,
   });
@@ -1636,12 +1642,25 @@ async function mapLiveRouterIdentityToVlan(
 async function executePortServiceDeployment(
   port: PortServiceRow,
   portalHtml: string,
+  portalRloginHtml: string,
   sourceOrigin: string,
   allowHotspotReplace: boolean,
   confirmedMoveFromBridge?: string,
 ): Promise<void> {
   const found = await getRouterCreds(port.router_id, port.admin_id);
   if (!found) throw new Error("Router credentials are unavailable for this port.");
+  const portalLayout = findEmbeddedHotspotConfig(portalHtml)?.config.portalLayout;
+  const independentLayout = portalLayout === "classic" || portalLayout === "dansted-wifi"
+    ? portalLayout
+    : null;
+  if (independentLayout) {
+    const login = validateIndependentHotspotLogin(portalHtml, independentLayout);
+    if ("error" in login) throw new Error(login.error);
+    const handoff = validateGeneratedHotspotHandoff(portalRloginHtml, independentLayout);
+    if (!("content" in handoff) || handoff.content.toString("utf8") === portalHtml) {
+      throw new Error("Classic and Dansted require their own separate rlogin.html file.");
+    }
+  }
 
   const scopedResellerVlan = port.hotspot_enabled
     && port.handoff_mode === "vlan_services"
@@ -1744,6 +1763,11 @@ async function executePortServiceDeployment(
   for (const directory of [...new Set([resources.hotspotDirectory, resources.pppoeDirectory])]) {
     await runRouterCommand(found.creds, ["/file/make-dir", `=dir-name=${directory}`]).catch(() => undefined);
   }
+  if (independentLayout) {
+    const packageDirectory = `${sharedPortalDirectory}/layouts`;
+    await runRouterCommand(found.creds, ["/file/make-dir", `=dir-name=${packageDirectory}`]).catch(() => undefined);
+    await runRouterCommand(found.creds, ["/file/make-dir", `=dir-name=${packageDirectory}/${independentLayout}`]).catch(() => undefined);
+  }
   const deployedDestinations = new Set<string>();
   const deploySourceOnce = async (sourcePath: string, destinationPath: string): Promise<void> => {
     if (deployedDestinations.has(destinationPath)) return;
@@ -1777,17 +1801,43 @@ async function executePortServiceDeployment(
     await deployPortalContent(
       found.creds,
       sourceOrigin,
-      addVlanIdentityToRlogin(rloginSource.content.toString("utf8")),
+      addVlanIdentityToRlogin(portalRloginHtml || rloginSource.content.toString("utf8")),
       rloginDestination,
       allowHotspotReplace,
     );
     deployedDestinations.add(rloginDestination);
+    if (independentLayout) {
+      const md5Source = getDeployableSource("hotspot", `layouts/${independentLayout}/md5.js`);
+      if (!md5Source) throw new Error("The independent Hotspot layout helper is unavailable.");
+      const md5Destination = `${sharedPortalDirectory}/layouts/${independentLayout}/md5.js`;
+      await deployPortalContent(found.creds, sourceOrigin, md5Source.content.toString("utf8"), md5Destination, allowHotspotReplace);
+      deployedDestinations.add(md5Destination);
+    }
   } else if (portalHtml && hotspotDestination) {
     await deployPortalContent(found.creds, sourceOrigin, portalHtml, hotspotDestination, allowHotspotReplace);
     deployedDestinations.add(hotspotDestination);
     const rloginDestination = `${sharedPortalDirectory}/rlogin.html`;
-    await deployPortalContent(found.creds, sourceOrigin, portalHtml, rloginDestination, allowHotspotReplace);
+    await deployPortalContent(
+      found.creds,
+      sourceOrigin,
+      portalRloginHtml || portalHtml,
+      rloginDestination,
+      allowHotspotReplace,
+    );
     deployedDestinations.add(rloginDestination);
+    if (independentLayout) {
+      const md5Source = getDeployableSource("hotspot", `layouts/${independentLayout}/md5.js`);
+      if (!md5Source) throw new Error("The independent Hotspot layout helper is unavailable.");
+      const md5Destination = `${sharedPortalDirectory}/layouts/${independentLayout}/md5.js`;
+      await deployPortalContent(
+        found.creds,
+        sourceOrigin,
+        md5Source.content.toString("utf8"),
+        md5Destination,
+        allowHotspotReplace,
+      );
+      deployedDestinations.add(md5Destination);
+    }
   } else if (hotspotSource && hotspotDestination) {
     await deploySourceOnce(hotspotSource, hotspotDestination);
     const selectedHotspotName = sourceNameFromPath(hotspotSource);
@@ -1864,9 +1914,23 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
       return;
     }
     const portalHtml = typeof req.body?.portalHtml === "string" ? req.body.portalHtml : "";
+    const portalRloginHtml = typeof req.body?.portalRloginHtml === "string" ? req.body.portalRloginHtml : "";
     if (portalHtml && (Buffer.byteLength(portalHtml, "utf8") > 2_000_000 || !/<html[\s>]/i.test(portalHtml))) {
       res.status(400).json({ ok: false, error: "The reseller portal HTML is invalid or too large." });
       return;
+    }
+    const portalLayout = findEmbeddedHotspotConfig(portalHtml)?.config.portalLayout;
+    if (portalLayout === "classic" || portalLayout === "dansted-wifi") {
+      const login = validateIndependentHotspotLogin(portalHtml, portalLayout);
+      if ("error" in login) {
+        res.status(400).json({ ok: false, error: login.error });
+        return;
+      }
+      const handoff = validateGeneratedHotspotHandoff(portalRloginHtml, portalLayout);
+      if (!("content" in handoff) || handoff.content.toString("utf8") === portalHtml) {
+        res.status(400).json({ ok: false, error: "Classic and Dansted require their own separate rlogin.html file." });
+        return;
+      }
     }
     const hotspotSource = port.hotspot_enabled
       ? normalizeApprovedAssetPath(port.hotspot_folder_path ?? port.hotspot_template_path)
@@ -1957,6 +2021,7 @@ router.post("/admin/port-services/:portId/deploy", requireAdmin(), validatePortA
     const job = executePortServiceDeployment(
       port,
       portalHtml,
+      portalRloginHtml,
       sourceOrigin,
       allowHotspotReplace,
       confirmedMoveFromBridge,

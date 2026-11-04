@@ -26,6 +26,7 @@ import {
   renderStaticPortalLayoutCss,
   type HotspotPortalLayout,
 } from "@/lib/hotspot-layouts";
+import { resolveHotspotLayoutColors } from "@/lib/hotspot-layout-appearance";
 import {
   supabase,
   ADMIN_ID as AUTH_ADMIN_ID,
@@ -601,6 +602,7 @@ function makeExportConfig(
   previewOnly = false,
 ): ExportConfig {
   const portalCards = normalizeHotspotPortalCards(settings.portalCards, settings);
+  const portalLayout = normalizeHotspotSettingsLayout(appearance.portalLayout ?? settings.portalLayout);
   return {
     adminId,
     routerId: Number.isSafeInteger(Number(settings.routerId)) && Number(settings.routerId) > 0
@@ -636,11 +638,17 @@ function makeExportConfig(
     faqText: safeText(settings.faqText, DEFAULT_SETTINGS.faqText),
     portalCards,
     loyaltyCard: normalizeHotspotLoyaltyCardSettings(settings.loyaltyCard),
-    colors: { ...DEFAULT_COLORS, ...settings.colors },
+    colors: resolveHotspotLayoutColors(
+      portalLayout,
+      normalizeHotspotSettingsLayout(settings.portalLayout),
+      settings.layoutAppearances,
+      settings.colors,
+      DEFAULT_COLORS,
+    ),
     portalBackground: safePortalBackground(appearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearance.portalPackageShape),
     tawkEnabled: settings.tawkEnabled === true,
-    portalLayout: normalizeHotspotSettingsLayout(appearance.portalLayout ?? settings.portalLayout),
+    portalLayout,
   };
 }
 
@@ -676,7 +684,11 @@ export async function buildPortalHtml(
   scope: { portId?: number; previewOnly?: boolean } = {},
 ): Promise<string> {
   const adminId = getSelectedTenantId() ?? AUTH_ADMIN_ID;
-  const response = await fetch("/hotspot/login.html", { cache: "no-store" });
+  const layout = normalizeHotspotSettingsLayout(appearanceOverride.portalLayout ?? settings.portalLayout);
+  const independentPackage = layout === "classic" || layout === "dansted-wifi";
+  if (independentPackage) await verifyIndependentLayoutPackage(layout);
+  const templatePath = independentPackage ? `/hotspot/layouts/${layout}/login.html` : "/hotspot/login.html";
+  const response = await fetch(templatePath, { cache: "no-store" });
   if (!response.ok) throw new Error("The captive-portal template could not be loaded.");
   let template = await response.text();
   const resolvedAppearance = await resolvePortalAppearance(domain, adminId);
@@ -699,9 +711,7 @@ export async function buildPortalHtml(
     postLoginUrl: hotspotPostLoginDestination(settings.portalHostname, PUBLIC_BASE_DOMAIN),
     portalBackground: safePortalBackground(appearanceOverride.portalBackground ?? resolvedAppearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearanceOverride.portalPackageShape ?? resolvedAppearance.portalPackageShape),
-    portalLayout: normalizeHotspotSettingsLayout(
-      appearanceOverride.portalLayout ?? settings.portalLayout,
-    ),
+      portalLayout: layout,
   };
   const routerId = Number(settings.routerId);
   let plans: PortalPlan[] = [];
@@ -850,6 +860,50 @@ export async function buildPortalHtml(
   return template
     .replace("</head>", `${bootstrap}\n</head>`)
     .replace(/\$\(login-title\)/g, configuredTitle);
+}
+
+export async function buildPortalRloginHtml(layoutValue: unknown): Promise<string> {
+  const layout = normalizeHotspotSettingsLayout(layoutValue);
+  const independentPackage = layout === "classic" || layout === "dansted-wifi";
+  if (independentPackage) await verifyIndependentLayoutPackage(layout);
+  const path = independentPackage
+    ? `/hotspot/layouts/${layout}/rlogin.html`
+    : "/hotspot/rlogin.html";
+  const response = await fetch(path, { cache: "no-store" });
+  if (!response.ok) throw new Error(`The ${layout} rlogin page could not be loaded.`);
+  const html = await response.text();
+  if (!html.includes("$(link-login-only)")) {
+    throw new Error(`The ${layout} rlogin page is missing the RouterOS login destination.`);
+  }
+  if ((layout === "classic" || layout === "dansted-wifi")
+      && !html.includes(`data-bil-layout-package="${layout}"`)) {
+    throw new Error(`The ${layout} rlogin page is not independently registered.`);
+  }
+  return html;
+}
+
+async function verifyIndependentLayoutPackage(layout: "classic" | "dansted-wifi"): Promise<void> {
+  const response = await fetch(`/hotspot/layouts/${layout}/manifest.json`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`The independent ${layout} package manifest is unavailable.`);
+  const manifest = await response.json() as {
+    id?: unknown;
+    entry?: unknown;
+    handoff?: unknown;
+    assets?: unknown;
+    standalone?: unknown;
+    independentFiles?: unknown;
+  };
+  if (
+    manifest.id !== layout
+    || manifest.entry !== "login.html"
+    || manifest.handoff !== "rlogin.html"
+    || manifest.standalone !== true
+    || manifest.independentFiles !== true
+    || !Array.isArray(manifest.assets)
+    || !manifest.assets.includes("md5.js")
+  ) {
+    throw new Error(`The independent ${layout} package manifest is invalid.`);
+  }
 }
 
 const STYLES = `
@@ -1593,6 +1647,9 @@ export default function HotspotSettings() {
         && (isResellerAccount || (!port.assigned_reseller_id && usesGeneratedHotspotPortal(draft.hotspotFolderPath)))
         ? await buildTargetPortal(port)
         : "";
+      const portalRloginHtml = portalHtml
+        ? await buildPortalRloginHtml(settings.portalLayout)
+        : "";
       const response = await fetch(`/api/admin/port-services/${port.id}`, {
         method: "PUT",
         headers: adminApiHeaders(),
@@ -1617,6 +1674,7 @@ export default function HotspotSettings() {
           headers: adminApiHeaders(),
           body: JSON.stringify({
             ...(portalHtml ? { portalHtml } : {}),
+            ...(portalRloginHtml ? { portalRloginHtml } : {}),
             portalFileReplacementConsent: allowHotspotReplace,
           }),
         });
@@ -1771,6 +1829,7 @@ export default function HotspotSettings() {
          const html = await buildPortalHtml(settings, brand.domain, { portalBackground, portalPackageShape }, {
            portId: isResellerAccount ? Number(selectedAssignedPortId) : undefined,
          });
+          const rloginHtml = await buildPortalRloginHtml(settings.portalLayout);
         const headers = new Headers({ "Content-Type": "application/json" });
         let token = "";
         let role = "";
@@ -1792,6 +1851,7 @@ export default function HotspotSettings() {
           body: JSON.stringify({
             adminId,
             html,
+            rloginHtml,
             overwrite: true,
             portalFileReplacementConsent: true,
             destinationDirectory: "hotspot",
@@ -2160,6 +2220,10 @@ export default function HotspotSettings() {
         brand.domain,
         { ...settings.layoutAppearances[settings.portalLayout], portalLayout: settings.portalLayout },
       );
+      const sourceLayoutId = selectedManagerLayoutId.startsWith("custom-")
+        ? customLayouts.find(layout => layout.id === selectedManagerLayoutId)?.source_layout_id
+        : selectedManagerLayoutId;
+      const rloginHtml = await buildPortalRloginHtml(sourceLayoutId ?? settings.portalLayout);
       const headers = new Headers(adminApiHeaders());
       headers.set("Content-Type", "application/json");
       const response = await fetch(`/api/router/${routerId}/hotspot-layouts/deploy`, {
@@ -2170,6 +2234,7 @@ export default function HotspotSettings() {
           layoutId: selectedManagerLayoutId,
           layoutVersion: selectedManagerLayoutId === "aurora-network" ? "1.0.0" : "legacy-1",
           html,
+          rloginHtml,
           replacementConsent: true,
         }),
       });
@@ -2656,7 +2721,14 @@ export default function HotspotSettings() {
                       </div>
                       <div className="hs-presets">
                         {presets.map(preset => (
-                          <button key={preset.name} type="button" className="hs-preset" onClick={() => update("colors", { ...preset.colors })}>
+                          <button
+                            key={preset.name}
+                            type="button"
+                            className="hs-preset"
+                            onClick={() => updateActiveLayoutAppearance({
+                              colors: { ...DEFAULT_COLORS, ...preset.colors },
+                            })}
+                          >
                             <span className="hs-swatches">
                               {[preset.colors.bgColor, preset.colors.primaryColor, preset.colors.accentColor, preset.colors.buttonColor].map(color => <i key={color} style={{ background: color }} />)}
                             </span>

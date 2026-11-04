@@ -36,3 +36,34 @@ test("existing style presets retain generated-portal and hosted-page styling", (
     assert.match(HOSTED_PORTAL_LAYOUT_CSS, new RegExp(`data-portal-layout="${layout.value}"`));
   }
 });
+
+test("Classic and Dansted have separate self-contained login and handoff files", () => {
+  const packages: Record<string, { login: string; rlogin: string; helper: string }> = {};
+  for (const id of ["classic", "dansted-wifi"]) {
+    const base = new URL(`../../public/hotspot/layouts/${id}/`, import.meta.url);
+    const manifest = JSON.parse(readFileSync(new URL("manifest.json", base), "utf8")) as {
+      id: string; entry: string; handoff: string; assets: string[]; standalone: boolean; independentFiles: boolean;
+    };
+    const login = readFileSync(new URL("login.html", base), "utf8");
+    const rlogin = readFileSync(new URL("rlogin.html", base), "utf8");
+    const helper = readFileSync(new URL("md5.js", base), "utf8");
+    assert.equal(manifest.id, id);
+    assert.equal(manifest.entry, "login.html");
+    assert.equal(manifest.handoff, "rlogin.html");
+    assert.equal(manifest.standalone, true);
+    assert.equal(manifest.independentFiles, true);
+    assert.ok(manifest.assets.includes("md5.js"));
+    assert.match(login, new RegExp(`data-portal-layout="${id}"`));
+    assert.match(login, new RegExp(`/hotspot/layouts/${id}/md5\\.js`));
+    assert.doesNotMatch(login, /src=["']\/hotspot\/md5\.js["']/);
+    for (const macro of ["$(link-login-only)", "$(chap-id)", "$(chap-challenge)", "$(link-status)", "$(error)"]) {
+      assert.ok(login.includes(macro), `${id} login page must retain ${macro}`);
+    }
+    assert.match(rlogin, new RegExp(`data-bil-layout-package="${id}"`));
+    assert.notEqual(login, rlogin);
+    packages[id] = { login, rlogin, helper };
+  }
+  assert.notEqual(packages.classic.login, packages["dansted-wifi"].login);
+  assert.notEqual(packages.classic.rlogin, packages["dansted-wifi"].rlogin);
+  assert.notEqual(packages.classic.helper, packages["dansted-wifi"].helper);
+});

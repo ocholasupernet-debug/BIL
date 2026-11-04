@@ -1,0 +1,9 @@
+{
+  "id": "dansted-wifi",
+  "version": "1.0.0",
+  "entry": "login.html",
+  "handoff": "rlogin.html",
+  "assets": ["md5.js"],
+  "standalone": true,
+  "independentFiles": true
+}
