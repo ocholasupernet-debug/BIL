@@ -2756,39 +2756,39 @@ export default function HotspotSettings() {
               ) : (
                 <>
                   <Field label="Portal background" help="This controls the main background of the generated hotspot page.">
-                    <div className="hs-choice-grid">
-                      {PORTAL_BACKGROUND_OPTIONS.map(option => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`hs-choice ${portalBackground === option.value ? "active" : ""}`}
-                          onClick={() => { setPortalBackground(option.value); updateActiveLayoutAppearance({ portalBackground: option.value }); }}
-                        >
-                          <span className="hs-choice-preview" style={{ background: option.gradient }} />
-                          <span>
-                            <strong>{option.label}</strong>
-                            <small>{option.description}</small>
-                          </span>
-                        </button>
-                      ))}
+                    <div className="hs-select-wrap">
+                      <select
+                        className="hs-select"
+                        value={portalBackground}
+                        onChange={event => {
+                          const value = event.target.value as (typeof PORTAL_BACKGROUND_OPTIONS)[number]["value"];
+                          setPortalBackground(value);
+                          updateActiveLayoutAppearance({ portalBackground: value });
+                        }}
+                      >
+                        {PORTAL_BACKGROUND_OPTIONS.map(option => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                      <ChevronDown size={14} />
                     </div>
                   </Field>
                   <Field label="Package card shape" help="This changes the silhouette of each plan card in the customer portal.">
-                    <div className="hs-choice-grid hs-shape-grid">
-                      {PORTAL_PACKAGE_SHAPE_OPTIONS.map(option => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`hs-choice ${portalPackageShape === option.value ? "active" : ""}`}
-                          onClick={() => { setPortalPackageShape(option.value); updateActiveLayoutAppearance({ portalPackageShape: option.value }); }}
-                        >
-                          <span className="hs-shape-preview" style={portalShapePreviewStyle(option.value)} />
-                          <span>
-                            <strong>{option.label}</strong>
-                            <small>{option.description}</small>
-                          </span>
-                        </button>
-                      ))}
+                    <div className="hs-select-wrap">
+                      <select
+                        className="hs-select"
+                        value={portalPackageShape}
+                        onChange={event => {
+                          const value = event.target.value as (typeof PORTAL_PACKAGE_SHAPE_OPTIONS)[number]["value"];
+                          setPortalPackageShape(value);
+                          updateActiveLayoutAppearance({ portalPackageShape: value });
+                        }}
+                      >
+                        {PORTAL_PACKAGE_SHAPE_OPTIONS.map(option => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                      <ChevronDown size={14} />
                     </div>
                   </Field>
                   <details className="hs-inline-disclosure">
