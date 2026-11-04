@@ -1194,12 +1194,12 @@ function normalisePortalPackageShape(value){
 }
 function applyPortalBackground(value){
   var backgrounds={
-    midnight:"radial-gradient(ellipse at 78% 12%,rgba(111,91,190,.42),transparent 48%),repeating-linear-gradient(0deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),repeating-linear-gradient(90deg,rgba(188,198,224,.09) 0 1px,transparent 1px 24px),linear-gradient(145deg,#111827,#20263a 58%,#111827)",
-    ocean:"radial-gradient(ellipse at 75% 8%,rgba(58,150,191,.42),transparent 48%),repeating-linear-gradient(135deg,rgba(153,218,236,.075) 0 1px,transparent 1px 12px),linear-gradient(145deg,#102735,#153f52 55%,#102735)",
-    aurora:"radial-gradient(ellipse at 22% 15%,rgba(65,183,151,.42),transparent 48%),radial-gradient(ellipse at 82% 88%,rgba(106,91,190,.34),transparent 50%),repeating-linear-gradient(0deg,rgba(213,235,239,.055) 0 1px,transparent 1px 30px),repeating-linear-gradient(90deg,rgba(213,235,239,.055) 0 1px,transparent 1px 30px),linear-gradient(145deg,#14242c,#1b3440)",
-    forest:"radial-gradient(ellipse at 80% 12%,rgba(81,154,112,.34),transparent 48%),repeating-linear-gradient(0deg,rgba(193,222,201,.085) 0 1px,transparent 1px 28px),repeating-linear-gradient(90deg,rgba(193,222,201,.085) 0 1px,transparent 1px 28px),linear-gradient(145deg,#152821,#203b30 58%,#14241f)",
-    sunset:"radial-gradient(ellipse at 78% 15%,rgba(191,105,89,.4),transparent 48%),repeating-linear-gradient(45deg,rgba(232,186,167,.055) 0 1px,transparent 1px 14px),linear-gradient(145deg,#292027,#493039 58%,#211d27)",
-    sand:"radial-gradient(ellipse at 75% 10%,rgba(190,151,93,.4),transparent 48%),repeating-linear-gradient(45deg,rgba(239,221,184,.075) 0 1px,transparent 1px 11px),repeating-linear-gradient(-45deg,rgba(239,221,184,.06) 0 1px,transparent 1px 11px),linear-gradient(145deg,#292820,#464032 58%,#25251f)"
+    midnight:"radial-gradient(ellipse at 78% 0%,rgba(83,112,255,.28),transparent 42%),repeating-linear-gradient(0deg,rgba(196,207,255,.055) 0 1px,transparent 1px 30px),repeating-linear-gradient(90deg,rgba(196,207,255,.055) 0 1px,transparent 1px 30px),linear-gradient(145deg,#0b1220,#17243d 56%,#0b1220)",
+    ocean:"radial-gradient(ellipse at 75% 0%,rgba(39,178,181,.24),transparent 42%),repeating-linear-gradient(135deg,rgba(177,231,233,.045) 0 1px,transparent 1px 16px),linear-gradient(145deg,#081a2a,#10394c 54%,#0a2436)",
+    aurora:"radial-gradient(ellipse at 18% 10%,rgba(48,190,148,.24),transparent 40%),radial-gradient(ellipse at 82% 88%,rgba(121,103,226,.20),transparent 44%),repeating-linear-gradient(0deg,rgba(209,236,230,.045) 0 1px,transparent 1px 32px),repeating-linear-gradient(90deg,rgba(209,236,230,.045) 0 1px,transparent 1px 32px),linear-gradient(145deg,#101b25,#17353a 58%,#101b25)",
+    forest:"radial-gradient(ellipse at 80% 8%,rgba(65,164,112,.22),transparent 42%),repeating-linear-gradient(0deg,rgba(193,224,205,.055) 0 1px,transparent 1px 28px),repeating-linear-gradient(90deg,rgba(193,224,205,.055) 0 1px,transparent 1px 28px),linear-gradient(145deg,#0b1c18,#18362b 58%,#0b1c18)",
+    sunset:"radial-gradient(ellipse at 78% 10%,rgba(219,132,91,.26),transparent 40%),repeating-linear-gradient(45deg,rgba(238,191,165,.045) 0 1px,transparent 1px 16px),linear-gradient(145deg,#21191e,#422b34 58%,#21191e)",
+    sand:"radial-gradient(ellipse at 75% 10%,rgba(198,164,104,.23),transparent 40%),repeating-linear-gradient(45deg,rgba(235,218,181,.055) 0 1px,transparent 1px 13px),repeating-linear-gradient(-45deg,rgba(235,218,181,.04) 0 1px,transparent 1px 13px),linear-gradient(145deg,#22231f,#3f3d32 58%,#22231f)"
   };
   PORTAL_BACKGROUND=normalisePortalBackground(value);
   document.body.setAttribute("data-portal-background",PORTAL_BACKGROUND);
