@@ -26,6 +26,7 @@ import {
   renderStaticPortalLayoutCss,
   type HotspotPortalLayout,
 } from "@/lib/hotspot-layouts";
+import { resolveHotspotLayoutColors } from "@/lib/hotspot-layout-appearance";
 import {
   supabase,
   ADMIN_ID as AUTH_ADMIN_ID,
@@ -601,6 +602,7 @@ function makeExportConfig(
   previewOnly = false,
 ): ExportConfig {
   const portalCards = normalizeHotspotPortalCards(settings.portalCards, settings);
+  const portalLayout = normalizeHotspotSettingsLayout(appearance.portalLayout ?? settings.portalLayout);
   return {
     adminId,
     routerId: Number.isSafeInteger(Number(settings.routerId)) && Number(settings.routerId) > 0
@@ -636,11 +638,17 @@ function makeExportConfig(
     faqText: safeText(settings.faqText, DEFAULT_SETTINGS.faqText),
     portalCards,
     loyaltyCard: normalizeHotspotLoyaltyCardSettings(settings.loyaltyCard),
-    colors: { ...DEFAULT_COLORS, ...settings.colors },
+    colors: resolveHotspotLayoutColors(
+      portalLayout,
+      normalizeHotspotSettingsLayout(settings.portalLayout),
+      settings.layoutAppearances,
+      settings.colors,
+      DEFAULT_COLORS,
+    ),
     portalBackground: safePortalBackground(appearance.portalBackground),
     portalPackageShape: safePortalPackageShape(appearance.portalPackageShape),
     tawkEnabled: settings.tawkEnabled === true,
-    portalLayout: normalizeHotspotSettingsLayout(appearance.portalLayout ?? settings.portalLayout),
+    portalLayout,
   };
 }
 
@@ -2656,7 +2664,14 @@ export default function HotspotSettings() {
                       </div>
                       <div className="hs-presets">
                         {presets.map(preset => (
-                          <button key={preset.name} type="button" className="hs-preset" onClick={() => update("colors", { ...preset.colors })}>
+                          <button
+                            key={preset.name}
+                            type="button"
+                            className="hs-preset"
+                            onClick={() => updateActiveLayoutAppearance({
+                              colors: { ...DEFAULT_COLORS, ...preset.colors },
+                            })}
+                          >
                             <span className="hs-swatches">
                               {[preset.colors.bgColor, preset.colors.primaryColor, preset.colors.accentColor, preset.colors.buttonColor].map(color => <i key={color} style={{ background: color }} />)}
                             </span>

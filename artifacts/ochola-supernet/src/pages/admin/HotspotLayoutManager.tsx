@@ -81,7 +81,60 @@ function formatDate(value: string): string {
     : date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-function LayoutArtwork({ index, active }: { index: number; active: boolean }) {
+function LayoutArtwork({ layoutId, index, active }: { layoutId: string; index: number; active: boolean }) {
+  if (layoutId === "classic" || layoutId === "dansted-wifi") {
+    const classic = layoutId === "classic";
+    const ink = classic ? "#263a35" : "#f4f6f5";
+    const accent = classic ? "#b85f43" : "#42c96b";
+    return (
+      <div
+        className={`hlm-art hlm-art--independent${active ? " hlm-art--active" : ""}`}
+        style={{
+          background: classic
+            ? "radial-gradient(ellipse at 10% 100%, #d9e6d8 0, transparent 55%), linear-gradient(135deg,#f5f2e9,#e6eee7)"
+            : "linear-gradient(135deg,#222629,#4b4f51 54%,#25282a)",
+          color: ink,
+          fontFamily: classic ? "Georgia,serif" : "Inter,system-ui,sans-serif",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6, font: "700 9px Inter,system-ui,sans-serif", letterSpacing: ".08em" }}>
+            <i style={{ width: 15, height: 15, borderRadius: classic ? 5 : 50, background: accent, display: "inline-block" }} />
+            OCHOLA ISP
+          </span>
+          <span style={{ width: 22, height: 4, borderRadius: 8, background: classic ? "#53675f" : "#aeb3b4" }} />
+        </div>
+        {classic ? (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr .9fr", gap: 9, alignItems: "center", flex: 1, padding: "12px 4px 4px" }}>
+            <div>
+              <span style={{ color: accent, font: "700 7px Inter,system-ui,sans-serif", letterSpacing: ".13em" }}>WELCOME ONLINE</span>
+              <div style={{ fontSize: 18, lineHeight: 1.02, fontWeight: 700, marginTop: 5 }}>Your Wi-Fi,<br />your way.</div>
+              <div style={{ width: 42, height: 2, background: accent, marginTop: 8 }} />
+            </div>
+            <div style={{ background: "rgba(255,255,255,.88)", border: "1px solid #d8dfd7", borderRadius: 9, padding: 8, boxShadow: "0 5px 12px #35443d18" }}>
+              <div style={{ font: "700 8px Inter,system-ui,sans-serif", marginBottom: 7 }}>Choose a plan</div>
+              <div style={{ height: 16, border: `1px solid ${accent}55`, borderRadius: 5, marginBottom: 4 }} />
+              <div style={{ height: 16, background: "#edf1eb", borderRadius: 5, marginBottom: 6 }} />
+              <div style={{ height: 7, background: accent, borderRadius: 5 }} />
+            </div>
+          </div>
+        ) : (
+          <div style={{ flex: 1, display: "grid", placeItems: "center", position: "relative" }}>
+            <span style={{ position: "absolute", inset: "10px 25%", border: "1px solid #c1c5c533", transform: "rotate(45deg) scale(.7)" }} />
+            <div style={{ zIndex: 1, textAlign: "center", width: "68%", padding: 9, borderRadius: 9, background: "linear-gradient(145deg,#34383a,#25282a)", border: "1px solid #aeb2b555", boxShadow: "0 8px 18px #0005" }}>
+              <div style={{ font: "700 7px Inter,system-ui,sans-serif", color: accent, letterSpacing: ".16em" }}>METALLIC DIAMOND</div>
+              <div style={{ font: "700 13px Inter,system-ui,sans-serif", margin: "4px 0 7px" }}>Connect in seconds</div>
+              <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                <span style={{ width: 36, height: 22, borderRadius: 5, background: "#44494b", border: `1px solid ${accent}88` }} />
+                <span style={{ width: 36, height: 22, borderRadius: 5, background: "#44494b", border: "1px solid #aeb2b544" }} />
+              </div>
+              <div style={{ height: 5, width: "65%", margin: "7px auto 0", background: accent, borderRadius: 5 }} />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
   const schemes = [
     { base: "#e7eee7", surface: "#fbfcf8", ink: "#24463f", accent: "#c66d4e" },
     { base: "#dfeaf0", surface: "#f8fbfc", ink: "#244459", accent: "#4c8ca7" },
@@ -370,7 +423,7 @@ export function HotspotLayoutManager({
                     key={layout.id}
                     role="listitem"
                   >
-                    <LayoutArtwork index={index} active={isSelected} />
+                    <LayoutArtwork layoutId={layout.id} index={index} active={isSelected} />
                     <div className="hlm-card-body">
                       <div className="hlm-card-top">
                         <div className="hlm-card-title">
