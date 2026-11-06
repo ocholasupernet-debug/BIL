@@ -15,6 +15,7 @@ import {
 } from "./lib/legacy-admin-entry.js";
 import { sbSelectStrict } from "./lib/supabase-client.js";
 import { injectHotspotHostConfig, isPlatformHostname, normalizeRequestHostname, resolveHotspotHostMapping, type HotspotHostMapping } from "./lib/hotspot-host-routing.js";
+import routerosInstallerV2ApiRouter, { routerosInstallerV2PublicRouter } from "./routes/routeros-installer-v2-route.js";
 
 const app: Express = express();
 
@@ -90,7 +91,10 @@ app.use((req, res, next) => {
 // context token to those API calls.
 app.use("/api", resolveVlanHotspotPortalRequest);
 
+// Independent, short-lived, tenant-bound v2 RouterOS installer delivery.
+app.use("/api", routerosInstallerV2ApiRouter);
 app.use("/api", router);
+app.use(routerosInstallerV2PublicRouter);
 
 // Support the old PHP-style admin URL as a narrow redirect only. The tenant
 // hostname is preserved, so the existing login flow continues resolving the

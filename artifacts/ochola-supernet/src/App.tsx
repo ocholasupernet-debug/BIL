@@ -22,6 +22,7 @@ import NetworkQueues from "./pages/admin/network/Queues";
 import NetworkIPPool from "./pages/admin/network/IPPool";
 import NetworkReplaceRouter from "./pages/admin/network/ReplaceRouter";
 import NetworkSelfInstall from "./pages/admin/network/SelfInstall";
+import RouterInstallerV2 from "./pages/admin/network/RouterInstallerV2";
 import NetworkFiles from "./pages/admin/network/Files";
 import NetworkBridgePorts from "./pages/admin/network/BridgePorts";
 import NetworkBridges from "./pages/admin/network/Bridges";
@@ -262,6 +263,7 @@ function Router() {
       <Route path="/admin/network/ippool"         component={NetworkIPPool}        />
       <Route path="/admin/network/replace-router" component={NetworkReplaceRouter} />
        <Route path="/admin/network/self-install" component={getAdminRole() === "reseller" ? ResellerBlockedPage : NetworkSelfInstall} />
+      <Route path="/admin/network/installer-v2" component={getAdminRole() === "reseller" ? ResellerBlockedPage : RouterInstallerV2} />
       <Route path="/admin/network/files" component={NetworkFiles} />
       <Route path="/admin/plans" component={AdminPlans} />
       <Route path="/admin/plans/roaming" component={AdminHotspotRoaming} />
