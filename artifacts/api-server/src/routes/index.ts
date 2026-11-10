@@ -51,6 +51,7 @@ import superAdminAdminsRouter from "./super-admin-admins-route.js";
 import adminDataRouter from "./admin-data-route.js";
 import superAdminDataRouter from "./super-admin-data-route.js";
 import copilotRouter from "./copilot-route.js";
+import hotspotDiagnosticsRouter from "./hotspot-diagnostics-route.js";
 
 const router: IRouter = Router();
 
@@ -70,6 +71,7 @@ router.use(provisionRouter);
 router.use(routerEnsureRouter);
 router.use(routerManualRouter);
 router.use(mikrotikRouter);
+router.use(hotspotDiagnosticsRouter);
 router.use(webhookRouter);
 router.use(logsRouter);
 router.use(bridgeRouter);

@@ -203,6 +203,7 @@ const navSections: NavSection[] = [
         name: "Network", icon: Network,
         children: [
           { name: "Routers",        href: "/admin/network/routers" },
+          { name: "Hotspot Fix & Diagnostics", href: "/admin/network/hotspot-diagnostics" },
           { name: "Self Install",   href: "/admin/network/self-install" },
           { name: "Files",          href: "/admin/network/files" },
           { name: "Resellers",      href: "/admin/network/resellers" },

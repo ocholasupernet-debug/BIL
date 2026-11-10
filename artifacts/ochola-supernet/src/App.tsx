@@ -18,6 +18,7 @@ import AdminDashboard from "./pages/admin/Dashboard";
 import Copilot from "./pages/admin/Copilot";
 import AdminCustomers from "./pages/admin/Customers";
 import NetworkRouters from "./pages/admin/network/Routers";
+import HotspotFixDiagnostics from "./pages/admin/network/HotspotFixDiagnostics";
 import NetworkQueues from "./pages/admin/network/Queues";
 import NetworkIPPool from "./pages/admin/network/IPPool";
 import NetworkReplaceRouter from "./pages/admin/network/ReplaceRouter";
@@ -248,6 +249,7 @@ function Router() {
       <Route path="/admin/customers" component={AdminCustomers} />
       <Route path="/admin/network" component={NetworkRouters} />
       <Route path="/admin/network/routers"        component={NetworkRouters}       />
+      <Route path="/admin/network/hotspot-diagnostics" component={HotspotFixDiagnostics} />
       <Route path="/admin/network/queues"         component={NetworkQueues}        />
       <Route path="/admin/network/ip-pools"       component={NetworkIPPool}        />
       <Route path="/admin/network/bridge-ports"   component={NetworkBridgePorts}   />

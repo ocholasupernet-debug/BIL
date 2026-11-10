@@ -62,6 +62,7 @@ export const ADMIN_PAGE_VISIBILITY_CATALOG: AdminVisibilitySection[] = [
       { key: "network.access-points", label: "Access Points", description: "Wireless access points." },
       { key: "network.pppoe-settings", label: "PPPoE Settings", description: "Global PPPoE settings." },
       { key: "network.hotspot-settings", label: "Hotspot Settings", description: "Global hotspot settings." },
+      { key: "network.hotspot-diagnostics", label: "Hotspot Fix & Diagnostics", description: "Read-only Hotspot checks and confirmed, narrowly scoped repairs." },
     ],
   },
   {
@@ -131,6 +132,7 @@ const ROUTE_FEATURES: Array<{ prefix: string; featureKey: string }> = [
   { prefix: "/admin/network/queues", featureKey: "network.queues" },
   { prefix: "/admin/network/wireless", featureKey: "network.wireless" },
   { prefix: "/admin/network/ppp", featureKey: "network.ppp" },
+  { prefix: "/admin/network/hotspot-diagnostics", featureKey: "network.hotspot-diagnostics" },
   { prefix: "/admin/network", featureKey: "network.routers" },
   { prefix: "/admin/access-points", featureKey: "network.access-points" },
   { prefix: "/admin/pppoe-settings", featureKey: "network.pppoe-settings" },

@@ -2,11 +2,12 @@ import React from "react";
 import { Link } from "wouter";
 import { useAdminPageVisibility } from "@/context/AdminPageVisibilityContext";
 import {
-  Server, Activity, Database, Wifi, Users, Settings2, RotateCcw, FolderOpen, Layers3, ShieldCheck, Network, TerminalSquare
+  Server, Activity, Database, Wifi, Users, Settings2, RotateCcw, FolderOpen, Layers3, ShieldCheck, Network, TerminalSquare, Stethoscope
 } from "lucide-react";
 
 const TABS = [
   { id: "routers",           label: "Routers",         href: "/admin/network/routers",           icon: Server    },
+  { id: "hotspot-diagnostics", label: "Hotspot Fix",   href: "/admin/network/hotspot-diagnostics", icon: Stethoscope },
   { id: "self-install",      label: "Self Install",    href: "/admin/network/self-install",      icon: Server    },
   { id: "installer-v2",      label: "BIL Installer v2", href: "/admin/network/installer-v2",     icon: TerminalSquare },
   { id: "files",             label: "Files",           href: "/admin/network/files",              icon: FolderOpen },
