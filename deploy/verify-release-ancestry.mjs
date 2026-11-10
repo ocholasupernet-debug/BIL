@@ -22,9 +22,10 @@ export async function verifyReleaseAncestry({
   let previousSuccess = null;
   let historyExhausted = false;
   for (let page = 1; page <= MAX_RUN_PAGES; page += 1) {
-    const runsUrl = new URL(
-      `${API_BASE}/repos/${repository}/actions/workflows/${workflowFile}/runs`,
-    );
+    const workflowPath = workflowFile.startsWith(".github/workflows/")
+      ? workflowFile
+      : `.github/workflows/${workflowFile}`;
+    const runsUrl = new URL(`${API_BASE}/repos/${repository}/actions/runs`);
     runsUrl.searchParams.set("status", "completed");
     runsUrl.searchParams.set("per_page", "100");
     runsUrl.searchParams.set("page", String(page));
@@ -37,6 +38,7 @@ export async function verifyReleaseAncestry({
     const runsData = await runsResponse.json();
     previousSuccess = (runsData.workflow_runs ?? []).find((run) =>
       String(run.id) !== String(currentRunId)
+      && run.path === workflowPath
       && run.conclusion === "success"
       && typeof run.head_sha === "string"
       && /^[a-f0-9]{40}$/i.test(run.head_sha)

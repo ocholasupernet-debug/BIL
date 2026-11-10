@@ -22,12 +22,13 @@ function response(data, status = 200) {
 
 function mockFetch(compare, runs = [{
   id: 100,
+  path: ".github/workflows/deploy.yml",
   conclusion: "success",
   head_sha: previousSha,
 }]) {
   return async (url) => {
     const value = String(url);
-    if (value.includes("/actions/workflows/")) {
+    if (value.includes("/actions/runs")) {
       return response({ workflow_runs: runs });
     }
     if (value.includes("/compare/")) return response(compare);
@@ -50,6 +51,20 @@ test("allows an intentional redeploy of the exact successful source", async () =
     fetchImpl: mockFetch({ status: "identical", ahead_by: 0, behind_by: 0 }),
   });
   assert.equal(result.comparisonStatus, "identical");
+});
+
+test("ignores successful runs from other workflows when selecting the release baseline", async () => {
+  const result = await verifyReleaseAncestry({
+    ...context,
+    fetchImpl: mockFetch(
+      { status: "ahead", ahead_by: 1, behind_by: 0 },
+      [
+        { id: 199, path: ".github/workflows/desktop-release.yml", conclusion: "success", head_sha: "c".repeat(40) },
+        { id: 100, path: ".github/workflows/deploy.yml", conclusion: "success", head_sha: previousSha },
+      ],
+    ),
+  });
+  assert.equal(result.previousSha, previousSha);
 });
 
 test("blocks a candidate that is behind the last successful release", async () => {
