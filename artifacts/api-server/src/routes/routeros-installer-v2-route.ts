@@ -38,15 +38,19 @@ apiRouter.post("/router/:id/installer-v2/enrollment", requireAdmin(), async (req
     res.status(400).json({ error: "A valid tenant router and signed-in admin are required." });
     return;
   }
-  const origin = buildInstallerV2EntryUrl(process.env.PUBLIC_APP_ORIGIN);
-  if (!origin) {
-    res.status(503).json({ error: "PUBLIC_APP_ORIGIN must be configured as the HTTPS BIL origin before issuing installer URLs." });
-    return;
-  }
   try {
     const found = await getRouterCreds(routerId, adminId);
     if (!found) {
       res.status(404).json({ error: "Router not found for this tenant." });
+      return;
+    }
+    const admins = await sbSelectStrict<{ subdomain: string | null }>(
+      "isp_admins",
+      `id=eq.${encodeURIComponent(adminId)}&is_active=is.true&select=subdomain&limit=1`,
+    );
+    const origin = buildInstallerV2EntryUrl(process.env.PUBLIC_APP_ORIGIN, admins[0]?.subdomain);
+    if (!origin) {
+      res.status(503).json({ error: "A valid company subdomain and HTTPS BIL origin are required before issuing installer URLs." });
       return;
     }
     const token = randomBytes(32).toString("base64url");

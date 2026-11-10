@@ -94,7 +94,8 @@ export default function RouterInstallerV2() {
           <h2 id="v2-preflight-title" style={{ margin: "0 0 8px", fontSize: 18 }}>Prepare a one-time preflight command</h2>
           <p style={{ margin: "0 0 16px", color: "#64748b", lineHeight: 1.5 }}>
             Choose a tenant router. The short-lived command downloads the v2 preflight file over certificate-verified HTTPS.
-            The router must already trust the site certificate.
+            The router must already trust the site certificate. Its URL includes the company subdomain and a one-use token
+            that expires after 10 minutes; keep the generated command private.
           </p>
           <label htmlFor="installer-v2-router" style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Router</label>
           <select

@@ -53,6 +53,12 @@ test("v2 entry URL requires an explicit valid HTTPS origin and uses only the sep
     "https://isplatty.org/scripts/v2/mainhotspot.rsc",
   );
   assert.equal(
+    buildInstallerV2EntryUrl("https://isplatty.com", "customer-net"),
+    "https://customer-net.isplatty.com/scripts/v2/mainhotspot.rsc",
+  );
+  assert.equal(buildInstallerV2EntryUrl("https://isplatty.com", "bad/name"), null);
+  assert.equal(buildInstallerV2EntryUrl("https://isplatty.com", "admin"), null);
+  assert.equal(
     validateInstallerV2PublicOrigin("https://host.example/path"),
     null,
   );

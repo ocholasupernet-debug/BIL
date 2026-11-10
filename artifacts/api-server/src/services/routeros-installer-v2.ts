@@ -1,3 +1,5 @@
+import { RESERVED_SUBDOMAINS } from "../lib/tenant-host.js";
+
 export const ROUTEROS_INSTALLER_V2_VERSION = "2.0.0";
 
 /**
@@ -47,6 +49,7 @@ export const ROUTEROS_INSTALLER_V2_POOL_PLAN: RouterInstallerV2PoolPlan = {
 };
 
 const SAFE_PUBLIC_ORIGIN = /^https:\/\/[a-z0-9.-]+(?::\d+)?$/i;
+const SAFE_TENANT_SUBDOMAIN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 
 /**
  * Require an explicitly configured HTTPS origin. Do not trust request
@@ -64,9 +67,22 @@ export function validateInstallerV2PublicOrigin(value: unknown): string | null {
   }
 }
 
-export function buildInstallerV2EntryUrl(publicOrigin: unknown): string | null {
+export function buildInstallerV2EntryUrl(publicOrigin: unknown, tenantSubdomain?: unknown): string | null {
   const origin = validateInstallerV2PublicOrigin(publicOrigin);
-  return origin ? `${origin}/scripts/v2/mainhotspot.rsc` : null;
+  if (!origin) return null;
+
+  let entryOrigin = origin;
+  if (tenantSubdomain !== undefined) {
+    const subdomain = String(tenantSubdomain ?? "").trim().toLowerCase();
+    const parsed = new URL(origin);
+    if (
+      !SAFE_TENANT_SUBDOMAIN.test(subdomain) ||
+      parsed.hostname !== "isplatty.com" ||
+      RESERVED_SUBDOMAINS.has(subdomain)
+    ) return null;
+    entryOrigin = `https://${subdomain}.isplatty.com`;
+  }
+  return `${entryOrigin}/scripts/v2/mainhotspot.rsc`;
 }
 
 /**
