@@ -297,7 +297,7 @@ jobs:
             }
 
             touch .env
-            upsert_env "PUBLIC_APP_ORIGIN"      "https://isplatty.org"
+            upsert_env "PUBLIC_APP_ORIGIN"      "https://isplatty.com"
             upsert_env "VITE_SUPABASE_URL"        "$VITE_SUPABASE_URL"
             upsert_env "VITE_SUPABASE_KEY"         "$VITE_SUPABASE_KEY"
             upsert_env "SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_SERVICE_ROLE_KEY"
