@@ -4,7 +4,8 @@
  * access in the shared API client. Existing VPS deployments using the global
  * service-role name remain compatible.
  */
-type BillingTable = "platform_billing_config" | "platform_billing_invoices" | "revenue_ledger";
+type BillingTable = "platform_billing_config" | "platform_billing_invoices" | "revenue_ledger"
+  | "admin_renewal_vouchers" | "admin_renewal_voucher_redemptions";
 
 function credentials(): { url: string; key: string } {
   const rawUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "").trim().replace(/\/+$/, "");
@@ -38,6 +39,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T[]> {
 
 export function billingSelect<T>(table: BillingTable, query: string): Promise<T[]> {
   return request<T>(`${table}?${query}`);
+}
+
+export function billingRpc<T>(name: string, payload: Record<string, unknown>): Promise<T> {
+  return request<T>(`rpc/${name}`, {
+    method: "POST",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify(payload),
+  }).then(rows => rows as unknown as T);
 }
 
 /** Private platform-wide settings use this isolated service-role access path. */

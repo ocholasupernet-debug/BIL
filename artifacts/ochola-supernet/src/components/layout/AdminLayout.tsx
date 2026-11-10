@@ -308,6 +308,7 @@ const SIDEBAR_COLLAPSED_W = 64;
 type PlatformBillingState = {
   eligible: boolean;
   paymentsAvailable: boolean;
+  renewalVouchersAvailable?: boolean;
   accessRestricted?: boolean;
   invoice?: {
     id?: number;
@@ -325,6 +326,9 @@ function PlatformBillingBanner({ onAccessRestrictionChange }: { onAccessRestrict
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [voucherCode, setVoucherCode] = useState("");
+  const [voucherPreview, setVoucherPreview] = useState<{ benefit: string; billingPeriod: string; amountCovered: number; dueDate: string } | null>(null);
+  const [voucherBusy, setVoucherBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const role = getAdminRole();
   const token = getAdminApiToken();
@@ -429,6 +433,49 @@ function PlatformBillingBanner({ onAccessRestrictionChange }: { onAccessRestrict
     }
   };
 
+  const validateVoucher = async () => {
+    setVoucherBusy(true);
+    setVoucherPreview(null);
+    setMessage("");
+    try {
+      const response = await fetch("/api/billing/vouchers/validate", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ code: voucherCode }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; preview?: typeof voucherPreview };
+      if (!response.ok || !data.ok || !data.preview) throw new Error(data.error || "Voucher could not be validated.");
+      setVoucherPreview(data.preview);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Voucher could not be validated.");
+    } finally {
+      setVoucherBusy(false);
+    }
+  };
+
+  const redeemVoucher = async () => {
+    if (!voucherPreview || !window.confirm(`Apply this voucher to cover KSh ${voucherPreview.amountCovered.toLocaleString("en-KE")} for ${voucherPreview.billingPeriod}? This can only be used once for this invoice.`)) return;
+    setVoucherBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/billing/vouchers/redeem", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ code: voucherCode }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; redemption?: { amountCovered: number; billingPeriod: string } };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Voucher could not be redeemed.");
+      setMessage(`Renewal confirmed. Voucher covered KSh ${Number(data.redemption?.amountCovered ?? voucherPreview.amountCovered).toLocaleString("en-KE")}.`);
+      setVoucherPreview(null);
+      setVoucherCode("");
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Voucher could not be redeemed.");
+    } finally {
+      setVoucherBusy(false);
+    }
+  };
+
   return (
     <section
       className={`platform-billing-banner${isPastDue ? " platform-billing-banner--overdue" : ""}`}
@@ -478,6 +525,26 @@ function PlatformBillingBanner({ onAccessRestrictionChange }: { onAccessRestrict
         <button type="button" onClick={() => void renew()} disabled={!state.paymentsAvailable || busy || !phone.trim()}>
           {busy ? "Waiting…" : "Pay renewal"}
         </button>
+        {state.renewalVouchersAvailable && (
+          <div style={{ display: "grid", gap: 8, width: "100%", marginTop: 8 }}>
+            <label style={{ fontSize: 12, color: "var(--isp-muted)" }} htmlFor="admin-renewal-voucher">Admin renewal voucher</label>
+            <input id="admin-renewal-voucher" value={voucherCode} onChange={event => { setVoucherCode(event.target.value); setVoucherPreview(null); }}
+              disabled={voucherBusy} autoComplete="off" placeholder="Enter renewal code" />
+            {!voucherPreview ? (
+              <button type="button" onClick={() => void validateVoucher()} disabled={voucherBusy || !voucherCode.trim()}>
+                {voucherBusy ? "Checking…" : "Preview voucher"}
+              </button>
+            ) : (
+              <div style={{ border: "1px solid var(--isp-border)", borderRadius: 8, padding: 10, fontSize: 12 }}>
+                <div><strong>{voucherPreview.benefit}</strong></div>
+                <div>Period: {voucherPreview.billingPeriod} · Covers KSh {voucherPreview.amountCovered.toLocaleString("en-KE")}</div>
+                <button type="button" onClick={() => void redeemVoucher()} disabled={voucherBusy} style={{ marginTop: 8 }}>
+                  {voucherBusy ? "Applying…" : "Confirm renewal"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );

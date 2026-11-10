@@ -1,4 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
+import { createHash } from "node:crypto";
+import { renewalVoucherError } from "../lib/admin-renewal-voucher-policy.js";
 import {
   authenticatedAccount,
   requireAdmin,
@@ -15,6 +17,8 @@ import {
   billingRevenueSummary,
   billingSelect,
   billingUpdateInvoice,
+  billingRpc,
+  platformSecureSettingsConfigured,
 } from "../lib/platform-billing-store.js";
 
 const router: IRouter = Router();
@@ -35,6 +39,10 @@ type AccountRow = {
   payment_phone: string | null;
   created_at: string | null;
 };
+
+function renewalVoucherHash(code: string): string {
+  return createHash("sha256").update(code.trim().toUpperCase(), "utf8").digest("hex");
+}
 
 function utcMonthStart(date = new Date()): string {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1))
@@ -207,6 +215,7 @@ router.get("/billing/current", requireAdmin(), async (req: Request, res: Respons
       eligible,
       accessRestricted: eligible && !!invoice && (invoice.status === "expired" || invoice.status === "failed"),
       paymentsAvailable: supabaseServiceRoleConfigured,
+      renewalVouchersAvailable: platformSecureSettingsConfigured(),
       account: { id: account.id, role: account.role, name: account.name },
       invoice,
       config: result.config,
@@ -369,6 +378,129 @@ router.post("/billing/renew", requireAdmin(), async (req: Request, res: Response
     });
   } catch (error) {
     res.status(503).json({ ok: false, error: "Could not prepare the billing payment." });
+  }
+});
+
+router.post("/billing/vouchers/validate", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+    if (!account || !["isp_admin", "reseller"].includes(account.role)) {
+      res.status(403).json({ ok: false, error: "Only eligible admin accounts can use renewal vouchers." });
+      return;
+    }
+    if (code.length < 12 || code.length > 80) {
+      res.status(400).json({ ok: false, error: "Enter a valid admin renewal voucher code." });
+      return;
+    }
+    const hash = renewalVoucherHash(code);
+    const vouchers = await billingSelect<{
+      id: number; benefit_type: string; target_admin_id: number | null;
+      status: string; expires_at: string | null; max_uses: number;
+    }>("admin_renewal_vouchers",
+      `code_hash=eq.${hash}&select=id,benefit_type,target_admin_id,status,expires_at,max_uses&limit=1`);
+    const voucher = vouchers[0];
+    if (!voucher || voucher.status !== "active") {
+      res.status(400).json({ ok: false, error: "This renewal voucher is invalid or unavailable." });
+      return;
+    }
+    if (voucher.expires_at && Date.parse(voucher.expires_at) <= Date.now()) {
+      res.status(400).json({ ok: false, error: "This renewal voucher has expired." });
+      return;
+    }
+    if (voucher.target_admin_id != null && voucher.target_admin_id !== account.id) {
+      res.status(400).json({ ok: false, error: "This voucher is not available for this admin account." });
+      return;
+    }
+    const { invoice } = await currentInvoice(account, true);
+    if (!invoice || invoice.status === "paid") {
+      res.status(409).json({ ok: false, error: "There is no unpaid monthly renewal invoice to apply this voucher to." });
+      return;
+    }
+    const redemptions = await billingSelect<{ id: number; billing_invoice_id: number }>(
+      "admin_renewal_voucher_redemptions",
+      `voucher_id=eq.${voucher.id}&select=id,billing_invoice_id&limit=${Number(voucher.max_uses)}`,
+    );
+    const policyError = renewalVoucherError({
+      status: voucher.status,
+      targetAdminId: voucher.target_admin_id,
+      expiresAt: voucher.expires_at,
+      maxUses: Number(voucher.max_uses),
+      redemptionCount: redemptions.length,
+      redeemedInvoiceIds: redemptions.map(row => Number(row.billing_invoice_id)),
+    }, account.id, Number(invoice.id));
+    if (policyError) {
+      const errors: Record<string, string> = {
+        revoked: "This renewal voucher has been revoked.",
+        expired: "This renewal voucher has expired.",
+        not_for_account: "This voucher is not available for this admin account.",
+        usage_limit: "This renewal voucher has reached its use limit.",
+        already_redeemed: "This invoice has already used a renewal voucher.",
+      };
+      res.status(409).json({ ok: false, error: errors[policyError] });
+      return;
+    }
+    res.json({
+      ok: true,
+      preview: {
+        benefit: "Covers one monthly platform renewal invoice",
+        billingPeriod: invoice.billing_period,
+        amountCovered: Number(invoice.amount_due),
+        dueDate: invoice.due_date,
+      },
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Renewal voucher validation is temporarily unavailable." });
+  }
+});
+
+router.post("/billing/vouchers/redeem", requireAdmin(), async (req, res): Promise<void> => {
+  try {
+    const account = await currentAccount(req);
+    const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
+    if (!account || !["isp_admin", "reseller"].includes(account.role) || code.length < 12 || code.length > 80) {
+      res.status(400).json({ ok: false, error: "Enter a valid admin renewal voucher code." });
+      return;
+    }
+    const { invoice } = await currentInvoice(account, true);
+    if (!invoice || !Number.isSafeInteger(Number(invoice.id))) {
+      res.status(409).json({ ok: false, error: "There is no current renewal invoice to apply this voucher to." });
+      return;
+    }
+    const result = await billingRpc<Array<{
+      result: string; redemption_id: number | null; renewal_period: string | null;
+      renewal_applied: number | string | null;
+    }>>("redeem_admin_renewal_voucher", {
+      p_code_hash: renewalVoucherHash(code),
+      p_account_id: account.id,
+      p_invoice_id: Number(invoice.id),
+    });
+    const redemption = Array.isArray(result) ? result[0] : undefined;
+    if (redemption?.result !== "redeemed") {
+      const errors: Record<string, string> = {
+        invalid_code: "This renewal voucher is invalid.",
+        revoked: "This renewal voucher has been revoked.",
+        expired: "This renewal voucher has expired.",
+        not_for_account: "This voucher is not available for this admin account.",
+        usage_limit: "This renewal voucher has reached its use limit.",
+        already_paid: "This renewal invoice has already been paid.",
+        already_redeemed: "This invoice has already used a renewal voucher.",
+        invoice_unavailable: "This renewal invoice is not available for this account.",
+        invoice_not_current: "Only the current monthly renewal invoice can use a voucher.",
+        ineligible_account: "Only eligible admin accounts can use renewal vouchers.",
+      };
+      res.status(409).json({ ok: false, error: errors[redemption?.result ?? ""] ?? "This voucher could not be redeemed." });
+      return;
+    }
+    res.json({
+      ok: true,
+      redemption: {
+        billingPeriod: redemption.renewal_period,
+        amountCovered: Number(redemption.renewal_applied),
+      },
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Renewal voucher redemption is temporarily unavailable. Refresh and check billing status." });
   }
 });
 

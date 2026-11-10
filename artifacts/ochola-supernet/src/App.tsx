@@ -71,6 +71,7 @@ import SuperAdminSystemLimits from "./pages/super-admin/SystemLimits";
 import SuperAdminImpersonate from "./pages/super-admin/Impersonate";
 import SuperAdminAuthSecurity from "./pages/super-admin/AuthSecurity";
 import SuperAdminStorage from "./pages/super-admin/Storage";
+import SuperAdminAdminRenewalVouchers from "./pages/super-admin/AdminRenewalVouchers";
 import VpnDashboard from "./pages/vpn/VpnDashboard";
 import VpnRemoteAccess from "./pages/vpn/RemoteAccess";
 import VpnList from "./pages/vpn/VpnList";
@@ -320,6 +321,7 @@ function Router() {
       <Route path="/super-admin/settings"       component={SuperAdminSystemSettings}   />
       <Route path="/super-admin/payments"       component={SuperAdminPaymentGateways}  />
       <Route path="/super-admin/payment-packages" component={SuperAdminPaymentsPackages} />
+      <Route path="/super-admin/admin-renewal-vouchers" component={SuperAdminAdminRenewalVouchers} />
       <Route path="/super-admin/routers"        component={SuperAdminRouters}          />
       <Route path="/super-admin/billing"        component={SuperAdminBillingEngine}    />
       <Route path="/super-admin/reports"        component={SuperAdminReports}          />

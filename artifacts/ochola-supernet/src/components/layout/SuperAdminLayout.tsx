@@ -6,7 +6,7 @@ import {
    LayoutDashboard, Users, ShieldCheck, Settings, CreditCard, Package,
   Router, Receipt, BarChart3, Lock, Bell, Zap, Database,
    Plug, Gauge, LogOut, Menu, ChevronRight, HardDrive,
-   Globe, LogIn, Sun, Moon, Clock, PanelLeftClose, MessageCircle, Phone,
+   Globe, LogIn, Sun, Moon, Clock, PanelLeftClose, MessageCircle, Phone, Ticket,
 } from "lucide-react";
 
 interface NavSection {
@@ -42,6 +42,7 @@ const NAV: NavSection[] = [
     label: "Billing",
     items: [
       { name: "Payments & Packages", href: "/super-admin/payment-packages", icon: Package },
+      { name: "Admin Renewal Vouchers", href: "/super-admin/admin-renewal-vouchers", icon: Ticket },
       { name: "Platform Fees & Collections", href: "/super-admin/payments", icon: CreditCard },
       { name: "Billing Engine", href: "/super-admin/billing", icon: Receipt },
       { name: "Reports", href: "/super-admin/reports", icon: BarChart3 },
@@ -78,6 +79,7 @@ const PAGE_CONTEXT: { prefix: string; title: string }[] = [
   { prefix: "/super-admin/limits", title: "System limits" },
   { prefix: "/super-admin/settings", title: "System settings" },
   { prefix: "/super-admin/payment-packages", title: "Payments and packages" },
+  { prefix: "/super-admin/admin-renewal-vouchers", title: "Admin renewal vouchers" },
   { prefix: "/super-admin/payments", title: "Platform fees and collections" },
   { prefix: "/super-admin/billing", title: "Billing engine" },
   { prefix: "/super-admin/reports", title: "Reports" },

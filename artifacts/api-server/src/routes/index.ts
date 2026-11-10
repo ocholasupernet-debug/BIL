@@ -52,6 +52,7 @@ import adminDataRouter from "./admin-data-route.js";
 import superAdminDataRouter from "./super-admin-data-route.js";
 import copilotRouter from "./copilot-route.js";
 import hotspotDiagnosticsRouter from "./hotspot-diagnostics-route.js";
+import adminRenewalVouchersRouter from "./admin-renewal-vouchers-route.js";
 
 const router: IRouter = Router();
 
@@ -80,6 +81,7 @@ router.use(settingsRouter);
 router.use(superAdminAuthRouter);
 router.use(superAdminRoutersRouter);
 router.use(superAdminBillingRouter);
+router.use(adminRenewalVouchersRouter);
 router.use(apiAuthRouter);
 router.use(registrationRouter);
 router.use(vpnManagementRouter);
