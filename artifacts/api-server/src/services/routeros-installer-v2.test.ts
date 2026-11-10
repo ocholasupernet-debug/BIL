@@ -49,6 +49,10 @@ test("v2 entry URL requires an explicit valid HTTPS origin and uses only the sep
     "https://ocholasupernet.isplatty.com/scripts/v2/mainhotspot.rsc",
   );
   assert.equal(
+    buildInstallerV2EntryUrl("https://isplatty.org"),
+    "https://isplatty.org/scripts/v2/mainhotspot.rsc",
+  );
+  assert.equal(
     validateInstallerV2PublicOrigin("https://host.example/path"),
     null,
   );

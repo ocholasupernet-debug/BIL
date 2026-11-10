@@ -102,6 +102,9 @@ jobs:
       - name: Test Gmail secret reaches PM2
         run: node --test deploy/tests/gmail-secret-release.test.mjs
 
+      - name: Test the public BIL origin reaches the VPS
+        run: node --test deploy/tests/public-app-origin.test.mjs
+
       - name: Verify application release source contract
         run: node --test deploy/tests/hotspot-release-source.test.mjs
 
@@ -294,6 +297,7 @@ jobs:
             }
 
             touch .env
+            upsert_env "PUBLIC_APP_ORIGIN"      "https://isplatty.org"
             upsert_env "VITE_SUPABASE_URL"        "$VITE_SUPABASE_URL"
             upsert_env "VITE_SUPABASE_KEY"         "$VITE_SUPABASE_KEY"
             upsert_env "SUPABASE_SERVICE_ROLE_KEY" "$SUPABASE_SERVICE_ROLE_KEY"
