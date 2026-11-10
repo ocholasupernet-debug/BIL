@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   ROUTEROS_INSTALLER_V2_APPLY_ENABLED,
   ROUTEROS_INSTALLER_V2_POOL_PLAN,
@@ -9,6 +10,18 @@ import {
   parseSupportedRouterOsRelease,
   validateInstallerV2PublicOrigin,
 } from "./routeros-installer-v2.js";
+
+const installerRouteSource = readFileSync(
+  new URL("../routes/routeros-installer-v2-route.ts", import.meta.url),
+  "utf8",
+);
+
+test("installer commands use the tenant host without issuing an enrollment token", () => {
+  assert.match(installerRouteSource, /buildInstallerV2EntryUrl\(process\.env\.PUBLIC_APP_ORIGIN,\s*admins\[0\]\?\.subdomain\)/);
+  assert.match(installerRouteSource, /const entryUrl = origin;/);
+  assert.match(installerRouteSource, /routerosInstallerV2PublicRouter\.get\("\/scripts\/v2\/mainhotspot\.rsc"/);
+  assert.doesNotMatch(installerRouteSource, /randomBytes|req\.query\.token|token_hash/);
+});
 
 test("v2 only accepts RouterOS 6.48+ and RouterOS 7 releases", () => {
   assert.equal(parseSupportedRouterOsRelease("6.47.10"), null);

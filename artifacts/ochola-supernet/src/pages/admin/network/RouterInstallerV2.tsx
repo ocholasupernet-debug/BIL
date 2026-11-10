@@ -7,7 +7,6 @@ type RouterOption = { id: number; name: string; model?: string | null; ros_versi
 type EnrollmentResponse = {
   release: string;
   routerId: number;
-  expiresAt: string;
   entryUrl: string;
   command: string;
   mode: "preflight-only";
@@ -91,11 +90,11 @@ export default function RouterInstallerV2() {
         </header>
 
         <section style={card} aria-labelledby="v2-preflight-title">
-          <h2 id="v2-preflight-title" style={{ margin: "0 0 8px", fontSize: 18 }}>Prepare a one-time preflight command</h2>
+          <h2 id="v2-preflight-title" style={{ margin: "0 0 8px", fontSize: 18 }}>Prepare a preflight command</h2>
           <p style={{ margin: "0 0 16px", color: "#64748b", lineHeight: 1.5 }}>
-            Choose a tenant router. The short-lived command downloads the v2 preflight file over certificate-verified HTTPS.
-            The router must already trust the site certificate. Its URL includes the company subdomain and a one-use token
-            that expires after 10 minutes; keep the generated command private.
+            Choose a tenant router. Its company-specific HTTPS URL is public and contains no token. Anyone can download this
+            preflight file, so only run it on a router you control; it creates a local backup and inventory but does not apply
+            configuration. The router must already trust the site certificate.
           </p>
           <label htmlFor="installer-v2-router" style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Router</label>
           <select
@@ -118,7 +117,7 @@ export default function RouterInstallerV2() {
               disabled={!routerId || busy}
               style={{ padding: "10px 14px", border: 0, borderRadius: 8, background: "#1769e0", color: "#fff", fontWeight: 700, cursor: !routerId || busy ? "not-allowed" : "pointer", opacity: !routerId || busy ? .6 : 1 }}
             >
-              {busy ? "Preparing…" : "Generate one-time command"}
+              {busy ? "Preparing…" : "Generate preflight command"}
             </button>
           </div>
           {error && <p role="alert" style={{ color: "#b42318", marginBottom: 0 }}>{error}</p>}
@@ -130,7 +129,7 @@ export default function RouterInstallerV2() {
               <div>
                 <h2 style={{ margin: 0, fontSize: 18 }}>Preflight command · v{enrollment.release}</h2>
                 <p style={{ margin: "5px 0 0", color: "#64748b", fontSize: 13 }}>
-                  Router {enrollment.routerId} · expires {new Date(enrollment.expiresAt).toLocaleString()}
+                  Router {enrollment.routerId} · company-specific installer host
                 </p>
               </div>
               <button type="button" onClick={() => void copyCommand()} style={{ padding: "9px 12px", border: "1px solid #cbd5e1", borderRadius: 8, background: "#fff", fontWeight: 600 }}>
