@@ -28,6 +28,10 @@ import {
 } from "@/lib/admin-page-visibility";
 import { Logo } from "@/components/Logo";
 import { AdminInstallButton } from "@/components/pwa/AdminInstallButton";
+import {
+  resolvePageVerificationMethods,
+  type PageAuthMethod,
+} from "@/lib/page-verification-policy";
 
 type PasswordReauthPolicyCache = {
   role: string;
@@ -67,13 +71,14 @@ function readPasswordReauthPolicyCache(): PasswordReauthPolicyCache | null {
   }
 }
 
-async function loadPasswordReauthPolicyCache(): Promise<PasswordReauthPolicyCache> {
+async function loadPasswordReauthPolicyCache(feature: string): Promise<PasswordReauthPolicyCache> {
   const key = passwordReauthPolicyCacheKey();
-  const pending = passwordReauthPolicyRequests.get(key);
+  const requestKey = `${key}:${feature}`;
+  const pending = passwordReauthPolicyRequests.get(requestKey);
   if (pending) return pending;
 
   const request = (async () => {
-    const response = await fetch("/api/auth/admin/password-recheck-policy", {
+    const response = await fetch(`/api/auth/admin/password-recheck-policy?feature=${encodeURIComponent(feature)}`, {
       cache: "no-store",
       headers: { Authorization: `Bearer ${getAdminApiToken()}` },
     });
@@ -81,29 +86,23 @@ async function loadPasswordReauthPolicyCache(): Promise<PasswordReauthPolicyCach
       ok?: boolean;
       error?: string;
       role?: string;
+      feature?: string;
+      method?: unknown;
       methods?: Record<string, unknown>;
     };
-    if (!response.ok || !data.ok || data.role !== getAdminRole() || !data.methods || typeof data.methods !== "object" || Array.isArray(data.methods)) {
+    if (!response.ok) {
       throw new Error(data.error || "Password security policy could not be checked.");
     }
-
-    const methods: Record<string, PageAuthMethod> = {};
-    const allowedMethods: PageAuthMethod[] = ["none", "password", "whatsapp", "sms", "email"];
-    for (const [feature, method] of Object.entries(data.methods)) {
-      if (typeof method !== "string" || !allowedMethods.includes(method as PageAuthMethod)) {
-        throw new Error("Page verification policy response was invalid.");
-      }
-      methods[feature] = method as PageAuthMethod;
-    }
-    const cache = { role: data.role, fetchedAt: Date.now(), methods };
+    const methods = resolvePageVerificationMethods(data, feature, getAdminRole());
+    const cache = { role: getAdminRole(), fetchedAt: Date.now(), methods };
     try { sessionStorage.setItem(key, JSON.stringify(cache)); } catch {}
     return cache;
   })();
-  passwordReauthPolicyRequests.set(key, request);
+  passwordReauthPolicyRequests.set(requestKey, request);
   try {
     return await request;
   } finally {
-    if (passwordReauthPolicyRequests.get(key) === request) passwordReauthPolicyRequests.delete(key);
+    if (passwordReauthPolicyRequests.get(requestKey) === request) passwordReauthPolicyRequests.delete(requestKey);
   }
 }
 
@@ -550,7 +549,6 @@ function PlatformBillingBanner({ onAccessRestrictionChange }: { onAccessRestrict
   );
 }
 
-type PageAuthMethod = "none" | "password" | "whatsapp" | "sms" | "email";
 type PagePasswordStatus = "unknown" | "checking" | "missing" | "configured";
 const ROUTER_PAGE_AUTH_FEATURE = "network.routers";
 
@@ -986,7 +984,7 @@ export function AdminLayout({
     }
     const check = async () => {
       try {
-        const policyCache = await loadPasswordReauthPolicyCache();
+        const policyCache = await loadPasswordReauthPolicyCache(feature);
         if (cancelled) return;
         const method = policyCache.methods[feature];
         if (!method) throw new Error("Page verification policy response was incomplete.");
