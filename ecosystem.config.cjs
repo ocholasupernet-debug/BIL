@@ -66,6 +66,7 @@ module.exports = {
         NODE_ENV: "production",
         PORT: process.env.APP_PORT || "8080",
         SERVE_STATIC: "true",
+        PUBLIC_APP_ORIGIN: process.env.PUBLIC_APP_ORIGIN || "https://isplatty.com",
         VITE_SUPABASE_URL:    process.env.VITE_SUPABASE_URL || "",
         VITE_SUPABASE_KEY:    process.env.VITE_SUPABASE_KEY || "",
         SUPABASE_URL:         process.env.SUPABASE_URL || "",
