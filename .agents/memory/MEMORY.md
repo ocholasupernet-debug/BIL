@@ -86,6 +86,7 @@
 - [Onboarding deployment modes](onboarding-deployment-modes.md) — Greenfield, Brownfield, and Zero-Touch need separate safety boundaries with legacy aliases normalized centrally.
 - [Unified script compiler migration](unified-script-compiler-migration.md) — Introduce a new RouterOS compiler behind existing installer boundaries; retire old families only after hardware validation.
 - [Self Install script scope](self-install-script-scope.md) — Use a one-time bootstrap to fetch/import mainhotspot.rsc; keep the management .ovpn recovery download separate.
+- [Self Install bundle delivery](self-install-bundle-delivery.md) — Serve the combined credential-bearing mainhotspot.rsc through a short-lived protected tenant link, never a permanent token-free URL.
 - [Prepaid session enforcement](prepaid-session-enforcement.md) — Preserve valid sessions, and keep paid Hotspot accounts pending until RouterOS setup is confirmed.
 - [Prepaid user time adjustment](prepaid-user-time-adjustment.md) — Adjust existing expiry per user and reconcile live access; do not bulk-change unverified affected accounts.
 - [Prepaid user display identity](prepaid-user-display-identity.md) — Show one scoped row per verified prepaid identity without deleting linked customer records.

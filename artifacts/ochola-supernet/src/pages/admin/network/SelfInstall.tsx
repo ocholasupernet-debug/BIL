@@ -91,7 +91,7 @@ type FinishResult = {
 };
 
 type SelfInstallStep = {
-  id: "network" | "vpn" | "services";
+  id: "mainhotspot";
   order: number;
   title: string;
   fileName: string;
@@ -524,8 +524,8 @@ export default function SelfInstall() {
     try {
       const result = await fetchSelfInstallSteps();
       setNotice(result.warning
-        ? "The three steps are ready. Resolve the VPS warning before running Step 2."
-        : "The ordered Self Install steps are ready. Run Step 1 first, then Step 2, then Step 3.");
+        ? "The combined script is ready. Resolve the VPS warning before running it."
+        : "The combined Self Install script is ready to copy.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install steps.");
     } finally {
@@ -554,7 +554,7 @@ export default function SelfInstall() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-       setNotice(`Step ${step.order} is ready. Run it in the MikroTik terminal before moving to the next step.`);
+      setNotice("The mainhotspot.rsc command is ready to run in the MikroTik terminal.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
     } finally {
@@ -576,7 +576,7 @@ export default function SelfInstall() {
       if (!step) throw new Error("That Self Install step is not available.");
       await navigator.clipboard.writeText(step.command);
       setCopiedStep(step.id);
-       setNotice(`Step ${step.order} was copied. Run it in the MikroTik terminal, wait for it to complete, then continue.`);
+      setNotice("The single mainhotspot.rsc command was copied. It runs the tagged sections in order.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not copy the Self Install script.");
     } finally {
@@ -589,7 +589,7 @@ export default function SelfInstall() {
       String(live.router?.status ?? router.status).toLowerCase(),
     )) return;
     if (!window.confirm(
-      `Push the three generated setup files to ${router.name}? Same-named setup files will be replaced. The files will not be imported or run. They contain setup configuration and VPN credentials; remove them from RouterOS after use.`,
+      `Push mainhotspot.rsc to ${router.name}? A same-named file will be replaced. It will not be imported or run.`,
     )) return;
 
     setBusy("uploading");
@@ -634,7 +634,7 @@ export default function SelfInstall() {
     && INCOMPLETE_INSTALL_STATUSES.has(String(live?.router?.status ?? router.status).toLowerCase()),
   );
   const canPushInstallFiles = Boolean(
-    mode !== "zero-touch" && incompleteInstall && live?.connected && scriptSteps.length === 3 && busy === "",
+    mode !== "zero-touch" && incompleteInstall && live?.connected && scriptSteps.length === 1 && busy === "",
   );
 
   const checklist = useMemo(() => [
@@ -655,7 +655,7 @@ export default function SelfInstall() {
           </div>
           <p style={{ margin: "0.35rem 0 0", color: "var(--isp-text-muted)", fontSize: "0.8rem", maxWidth: 720, lineHeight: 1.55 }}>
              Register a MikroTik router, generate the ordered management and service scripts, and verify the live RouterOS API connection.
-             The three files separate the network engine, management VPN/API, and Hotspot/PPPoE customer service layer.
+             One tagged file contains the network engine, management VPN/API, and Hotspot/PPPoE customer service sections.
           </p>
         </div>
 
@@ -810,7 +810,7 @@ export default function SelfInstall() {
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
                     {mode === "zero-touch"
                       ? "This script is intentionally empty while its replacement structure is being prepared."
-                      : <>Self Install is deliberately ordered into independent router-terminal steps. Run <strong style={{ color: "var(--isp-text)" }}>Step 1</strong>, wait for it to finish, then run <strong style={{ color: "var(--isp-text)" }}>Step 2</strong> and <strong style={{ color: "var(--isp-text)" }}>Step 3</strong>. Nothing imports the files automatically as one combined configuration.</>}
+                       : <>Self Install downloads one tagged file named <strong style={{ color: "var(--isp-text)" }}>mainhotspot.rsc</strong> and runs its network, VPN/API, and customer-service sections in order.</>}
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <button
@@ -820,7 +820,7 @@ export default function SelfInstall() {
                     style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: 0, borderRadius: 8, background: canGenerateSteps ? "var(--isp-accent)" : "var(--isp-section)", color: canGenerateSteps ? "#fff" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: canGenerateSteps ? "pointer" : "not-allowed" }}
                    >
                       {busy === "script" ? <Loader2 size={15} style={{ animation: "self-install-spin 1.1s linear infinite" }} /> : <TerminalSquare size={15} />}
-                       {mode === "zero-touch" ? "Script content pending" : "Generate ordered steps"}
+                        {mode === "zero-touch" ? "Script content pending" : "Generate mainhotspot.rsc"}
                    </button>
                      {mode !== "zero-touch" && <button
                       type="button"
@@ -829,7 +829,7 @@ export default function SelfInstall() {
                       style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-section)", color: canGenerateSteps ? "var(--isp-text)" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: canGenerateSteps ? "pointer" : "not-allowed" }}
                     >
                       <RefreshCw size={15} />
-                      Refresh steps
+                      Refresh script
                     </button>}
                  </div>
                   {mode === "zero-touch" && (
@@ -860,7 +860,7 @@ export default function SelfInstall() {
                         Direct file transfer
                       </div>
                       <div style={{ marginTop: "0.3rem", color: "var(--isp-text-muted)", fontSize: "0.71rem", lineHeight: 1.5 }}>
-                        When RouterOS API is connected, send the three ordered setup files to the router&apos;s root directory. This does not import or run them. The action replaces same-named setup files only.
+                         When RouterOS API is connected, send the combined mainhotspot.rsc file to the router&apos;s root directory. This does not import or run it.
                       </div>
                       <button
                         type="button"
@@ -875,9 +875,9 @@ export default function SelfInstall() {
                           ? "Pushing setup files…"
                           : !live?.connected
                             ? "Waiting for RouterOS API"
-                            : scriptSteps.length !== 3
-                              ? "Generate ordered steps first"
-                              : "Push all 3 setup files"}
+                            : scriptSteps.length !== 1
+                              ? "Generate the script first"
+                              : "Push mainhotspot.rsc"}
                       </button>
                     </div>
                   )}
@@ -941,7 +941,7 @@ export default function SelfInstall() {
                     <TerminalSquare size={14} style={{ color: selectedMode.tone }} /> Router-side checklist
                   </div>
                      <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.1rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.7 }}>
-                       <li>Run the three commands in order: network, VPN/API, then services.</li>
+                       <li>Copy and run the single mainhotspot.rsc command. Its tagged sections execute in order.</li>
                        <li>The final services file creates the selected Hotspot bridge, DHCP, walled garden, PPPoE, and service NAT.</li>
                       <li>It waits for the management tunnel to reach a running state.</li>
                       <li>Return here after the VPN is up so the next configuration step can be added.</li>

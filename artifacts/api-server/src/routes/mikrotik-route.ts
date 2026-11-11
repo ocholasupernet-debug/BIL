@@ -63,7 +63,6 @@ import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
 import { routerManagementOvpnCredentials, routerManagementVpnContract } from "../lib/router-management-vpn";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import { routerHealthApiAccountOrder } from "../lib/router-health-api-account-order.js";
-import { buildRouterFileImportCommand } from "../lib/self-install-step-command.js";
 import {
   provisionRouterManagementOpenVpn,
   provisionRouterManagementOpenVpnPair,
@@ -88,6 +87,8 @@ import {
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { readPlatformRadiusSettings } from "../lib/platform-radius.js";
+import { buildSelfInstallBundle } from "../lib/self-install-bundle.js";
+import { TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
 import {
@@ -115,6 +116,7 @@ import {
 } from "../lib/router-live-session-entitlement.js";
 
 const router: IRouter = Router();
+export const selfInstallBundlePublicRouter: IRouter = Router();
 
 function generatedVlanNames(port: VlanServiceIdentityInput & Pick<PortServiceResourceInput, "interface_name" | "bridge_name">) {
   const legacy = Boolean(port.bridge_name?.startsWith("OCHOLA_RS")) && !port.interface_name.startsWith("OCHOLA_RS");
@@ -223,8 +225,7 @@ const managedResetPlans = new Map<string, ManagedResetStoredPlan>();
 const managedResetJobs = new Map<string, ManagedResetJob>();
 const MANAGED_RESET_TTL_MS = 15 * 60 * 1000;
 const SELF_INSTALL_FILE_GROUPS = [
-  ["networksetup.rsc", "vpnsetup.rsc", "servicessetup.rsc"],
-  ["brownfield-network.rsc", "brownfield-vpn.rsc", "brownfield-services.rsc"],
+  ["mainhotspot.rsc"],
 ] as const;
 const INCOMPLETE_ROUTER_STATUSES = new Set([
   "setup",
@@ -451,6 +452,26 @@ router.get("/router-file-source/:token", (req, res): void => {
     .set("Content-Length", String(source.content.length))
     .set("Content-Disposition", `inline; filename="${source.fileName.replace(/[^A-Za-z0-9._-]/g, "_")}"`)
     .set("Cache-Control", "no-store, no-cache, must-revalidate")
+    .send(source.content);
+});
+
+/* The combined Self Install source is a short-lived capability link. */
+selfInstallBundlePublicRouter.get("/scripts/mainhotspot.rsc", (req, res): void => {
+  cleanPendingRouterFileSources();
+  const token = typeof req.query.token === "string" ? req.query.token : "";
+  const source = pendingRouterFileSources.get(token);
+  if (!source || source.expiresAt <= Date.now()) {
+    pendingRouterFileSources.delete(token);
+    res.status(404).send("Self Install source expired");
+    return;
+  }
+  source.fetchAttempts = (source.fetchAttempts ?? 0) + 1;
+  if (source.fetchAttempts >= (source.maxFetchAttempts ?? 1)) pendingRouterFileSources.delete(token);
+  res
+    .type("text/plain")
+    .set("Content-Disposition", 'attachment; filename="mainhotspot.rsc"')
+    .set("Cache-Control", "no-store, no-cache, must-revalidate")
+    .set("X-Content-Type-Options", "nosniff")
     .send(source.content);
 });
 
@@ -3608,38 +3629,24 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       portalFileUrls,
     });
 
-    /*
-     * Begin Self Install with three short-lived sources. The network engine,
-     * management plane, and customer service layer are intentionally separate
-     * so each ordered step can be reviewed, copied, downloaded, or retried
-     * independently. The service script uses an opaque short-lived source URL
-     * because it may contain the platform RADIUS shared secret.
-     */
-    const networkFileName = installationMode === "coexist"
-      ? "brownfield-network.rsc"
-      : "networksetup.rsc";
-    const vpnFileName = installationMode === "coexist"
-      ? "brownfield-vpn.rsc"
-      : "vpnsetup.rsc";
-    const serviceFileName = installationMode === "coexist"
-      ? "brownfield-services.rsc"
-      : "servicessetup.rsc";
-    createPublicRouterFileSource(id, networkFileName, {
-      content: Buffer.from(networkScript, "utf8"),
+    const tenantRows = await sbSelectStrict<{ subdomain?: string | null }>(
+      "isp_admins",
+      `id=eq.${adminId}&is_active=is.true&select=subdomain&limit=1`,
+    );
+    const tenantSubdomain = String(tenantRows[0]?.subdomain ?? "").trim().toLowerCase();
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(tenantSubdomain)) {
+      throw new Error("A valid tenant subdomain is required for the Self Install script URL.");
+    }
+    const fileName = "mainhotspot.rsc";
+    const bundle = buildSelfInstallBundle([
+      { tag: "Network", content: networkScript },
+      { tag: "Management VPN and API", content: vpnScript },
+      { tag: "Hotspot and PPPoE Services", content: serviceScript },
+    ]);
+    const sourceToken = createPendingRouterFileSource({
+      content: Buffer.from(bundle, "utf8"),
       contentType: "text/plain; charset=utf-8",
-      fileName: networkFileName,
-      maxFetchAttempts: 3,
-    });
-    createPublicRouterFileSource(id, vpnFileName, {
-      content: Buffer.from(vpnScript, "utf8"),
-      contentType: "text/plain; charset=utf-8",
-      fileName: vpnFileName,
-      maxFetchAttempts: 3,
-    });
-    const serviceSourceToken = createPendingRouterFileSource({
-      content: Buffer.from(serviceScript, "utf8"),
-      contentType: "text/plain; charset=utf-8",
-      fileName: serviceFileName,
+      fileName,
       maxFetchAttempts: 3,
     });
     for (const file of portalFileContents) {
@@ -3652,38 +3659,19 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         maxFetchAttempts: 3,
       });
     }
-    const networkSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${networkFileName}`;
-    const vpnSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${vpnFileName}`;
-    const serviceSourceUrl = `${sourceOrigin}/api/router-file-source/${serviceSourceToken}`;
-    const stepCommand = (sourceUrl: string, fileName: string, verified = false): string =>
-      buildRouterFileImportCommand({ sourceUrl, fileName, verified });
+    const sourceUrl = `https://${tenantSubdomain}.${TENANT_BASE_DOMAIN}/scripts/mainhotspot.rsc?token=${encodeURIComponent(sourceToken)}`;
+    const command = `:do { /tool fetch url="${sourceUrl}" dst-path="mainhotspot.rsc" mode=https check-certificate=no; :delay 2s; /import "mainhotspot.rsc"; /file remove "mainhotspot.rsc"; :put "OcholaSupernet Self Install completed." } on-error={ :put ("OcholaSupernet Self Install failed: " . $error) }`;
     res.json({
       routerId: id,
       warning: provisioningWarning || undefined,
       steps: [
         {
-          id: "network",
+          id: "mainhotspot",
           order: 1,
-          title: "Create the management API user and configure the network",
-          fileName: networkFileName,
-          description: "Create or repair the enabled ocholasupernet system user first, then apply firewall and NAT rules. Run Step 1 from a RouterOS account allowed to manage system users.",
-          command: stepCommand(networkSourceUrl, networkFileName),
-        },
-        {
-          id: "vpn",
-          order: 2,
-          title: "Configure the management VPN and API",
-          fileName: vpnFileName,
-          description: "After Step 1 completes, install CA trust, create the management VPN/API access, and register the router.",
-          command: stepCommand(vpnSourceUrl, vpnFileName),
-        },
-        {
-          id: "services",
-          order: 3,
-          title: "Configure Hotspot and PPPoE services",
-          fileName: serviceFileName,
-          description: `After Step 2 completes, create ${serviceBridgeName}, Hotspot DHCP/profile/server, the portal walled garden, PPPoE, and customer NAT.`,
-          command: stepCommand(serviceSourceUrl, serviceFileName, true),
+          title: "Configure router management, VPN, Hotspot, and PPPoE",
+          fileName,
+          description: "Downloads one tagged bundle, then runs network, management VPN/API, and customer-service sections in order. The bundle stops if a section fails.",
+          command,
         },
       ],
     });

@@ -2,7 +2,7 @@ import React from "react";
 import { AlertTriangle, Check, CheckCircle2, Clipboard, Download, ShieldCheck, TerminalSquare } from "lucide-react";
 import "./SelfInstallStepsResult.css";
 
-type StepId = "network" | "vpn" | "services";
+type StepId = "mainhotspot";
 
 type SelfInstallStep = {
   id: StepId;
@@ -32,10 +32,10 @@ export function SelfInstallStepsResult({
     <section className="self-install-result" aria-labelledby="self-install-result-heading">
       <header className="self-install-result__header">
         <div>
-          <p className="self-install-result__eyebrow">Router configuration · Step output</p>
-          <h3 id="self-install-result-heading">Your setup commands are ready</h3>
+          <p className="self-install-result__eyebrow">Router configuration · One combined file</p>
+          <h3 id="self-install-result-heading">Your setup command is ready</h3>
           <p className="self-install-result__intro">
-            Run each command in the MikroTik terminal, wait for it to finish, then continue to the next step.
+            Copy one command. It downloads and runs the tagged sections in order.
           </p>
         </div>
         <span className="self-install-result__ready">
@@ -49,14 +49,14 @@ export function SelfInstallStepsResult({
           <ShieldCheck size={18} aria-hidden="true" />
         </span>
         <span>
-          <strong>Router profile created</strong>
-          <span>Three ordered configuration steps are ready. Each command fetches and imports one step only.</span>
+            <strong>Router profile created</strong>
+            <span>One protected, short-lived bundle contains the complete ordered setup.</span>
         </span>
       </div>
 
       <div className="self-install-result__list-heading">
-        <h4>Run these steps in order</h4>
-        <span>Router terminal · one command at a time</span>
+        <h4>Run this command in RouterOS</h4>
+        <span>One fetch · one import</span>
       </div>
 
       <div className="self-install-result__steps">
@@ -66,7 +66,7 @@ export function SelfInstallStepsResult({
               <div className="self-install-result__step-title">
                 <span className="self-install-result__number">{String(step.order).padStart(2, "0")}</span>
                 <span>
-                  <strong>Step {step.order}: {step.title}</strong>
+                  <strong>{step.title}</strong>
                   <code>{step.fileName}</code>
                 </span>
               </div>
@@ -114,12 +114,12 @@ export function SelfInstallStepsResult({
 
       <div className="self-install-result__warning">
         <AlertTriangle size={16} aria-hidden="true" />
-        <span><strong>Run the commands in order.</strong> Stop if a step reports an error; resolve it before continuing.</span>
+        <span><strong>The bundle runs its tagged sections in order.</strong> It stops if a section reports an error.</span>
       </div>
 
       <p className="self-install-result__footnote" aria-live="polite">
         <CheckCircle2 size={14} aria-hidden="true" />
-        Your tenant-owned router profile is ready. Each step remains separate for safe, ordered setup.
+        Your tenant-owned router profile is ready. The downloaded bundle is temporary and removed after import.
       </p>
     </section>
   );
