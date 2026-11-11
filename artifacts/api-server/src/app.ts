@@ -96,6 +96,21 @@ app.use("/api", routerosInstallerV2ApiRouter);
 app.use("/api", router);
 app.use(routerosInstallerV2PublicRouter);
 
+// The old public bundle URL no longer serves router credentials. Make it
+// useful when opened in a browser by sending admins to the protected UI, but
+// never return HTML to RouterOS fetch clients that may import the response.
+app.get("/scripts/mainhotspot.rsc", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const acceptsHtml = /(?:^|,)\s*text\/html(?:[;,]|$)/i.test(req.get("accept") ?? "");
+  if (!acceptsHtml) {
+    res.status(410).type("text/plain").send(
+      "This public script download was removed. Sign in to the admin Self Install page to download the protected bundle.\n",
+    );
+    return;
+  }
+  res.redirect(302, "/admin/network/self-install");
+});
+
 // Support the old PHP-style admin URL as a narrow redirect only. The tenant
 // hostname is preserved, so the existing login flow continues resolving the
 // correct ISP; custom Hotspot domains such as ocholasupernet.com are excluded.
