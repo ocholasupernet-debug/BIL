@@ -22,6 +22,7 @@ import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
 import { pushSelfInstallFiles, type SelfInstallFilePushResult } from "@/lib/self-install-file-push";
+import { SelfInstallStepsResult } from "./SelfInstallStepsResult";
 
 type InstallMode = "greenfield" | "brownfield" | "zero-touch";
 type BackendInstallMode = "direct" | "coexist" | "takeover";
@@ -843,48 +844,14 @@ export default function SelfInstall() {
                     </div>
                   )}
                   {mode !== "zero-touch" && scriptSteps.length > 0 && (
-                    <div style={{ marginTop: "0.8rem", display: "grid", gap: "0.7rem" }}>
-                      {scriptSteps.map(step => (
-                        <div key={step.id} style={{ border: "1px solid var(--isp-border)", borderRadius: 9, padding: "0.8rem", background: "var(--isp-card)" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.75rem", flexWrap: "wrap" }}>
-                            <div>
-                              <div style={{ color: "var(--isp-text)", fontSize: "0.8rem", fontWeight: 800 }}>
-                                Step {step.order}: {step.title}
-                              </div>
-                              <div style={{ marginTop: "0.25rem", color: "var(--isp-text-muted)", fontSize: "0.7rem", lineHeight: 1.5 }}>
-                                {step.description} File: <code>{step.fileName}</code>
-                              </div>
-                            </div>
-                            <div style={{ display: "flex", gap: "0.45rem", flexWrap: "wrap" }}>
-                              <button
-                                type="button"
-                                onClick={() => void downloadSelfInstallStep(step.id)}
-                                disabled={busy !== ""}
-                                style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.48rem 0.7rem", border: "1px solid var(--isp-border)", borderRadius: 7, background: "var(--isp-section)", color: "var(--isp-text)", fontFamily: "inherit", fontWeight: 700, fontSize: "0.7rem", cursor: busy === "" ? "pointer" : "not-allowed" }}
-                              >
-                                <Download size={13} /> Download command
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void copySelfInstallStep(step.id)}
-                                disabled={busy !== ""}
-                                style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.48rem 0.7rem", border: 0, borderRadius: 7, background: "var(--isp-accent)", color: "#fff", fontFamily: "inherit", fontWeight: 750, fontSize: "0.7rem", cursor: busy === "" ? "pointer" : "not-allowed" }}
-                              >
-                                {copiedStep === step.id ? <Check size={13} /> : <Clipboard size={13} />}
-                                {copiedStep === step.id ? "Copied" : "Copy command"}
-                              </button>
-                            </div>
-                          </div>
-                          <textarea
-                            readOnly
-                            value={step.command}
-                            aria-label={`Self Install Step ${step.order} command`}
-                            spellCheck={false}
-                            rows={5}
-                            style={{ ...inputStyle, marginTop: "0.65rem", minHeight: 100, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: "0.7rem", lineHeight: 1.45 }}
-                          />
-                        </div>
-                      ))}
+                    <div style={{ marginTop: "0.8rem" }}>
+                      <SelfInstallStepsResult
+                        steps={scriptSteps}
+                        copiedStep={copiedStep}
+                        busy={busy}
+                        onCopy={stepId => void copySelfInstallStep(stepId)}
+                        onDownload={stepId => void downloadSelfInstallStep(stepId)}
+                      />
                     </div>
                   )}
                   {mode !== "zero-touch" && incompleteInstall && (
