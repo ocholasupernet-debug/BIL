@@ -518,8 +518,8 @@ export default function SelfInstall() {
     try {
       const result = await fetchSelfInstallSteps();
       setNotice(result.warning
-        ? "The authenticated bundle is ready. Resolve the VPS warning before importing it."
-        : "Download the authenticated bundle, upload it to the router, then import it.");
+        ? "The protected fetch command is ready. Resolve the VPS warning before running it."
+        : "The protected fetch-and-import command is ready. Run it on the router within five minutes.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install steps.");
     } finally {
@@ -548,7 +548,7 @@ export default function SelfInstall() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-       setNotice("Downloaded mainhotspot.rsc. Upload it to the router, then run the import command.");
+       setNotice("Downloaded mainhotspot.rsc as a manual fallback. Upload it to the router and run /import mainhotspot.rsc.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
     } finally {
@@ -570,7 +570,7 @@ export default function SelfInstall() {
       if (!step) throw new Error("That Self Install step is not available.");
       await navigator.clipboard.writeText(step.command);
       setCopiedStep(step.id);
-       setNotice("Copied the import command. Upload mainhotspot.rsc to the router before running it.");
+       setNotice("Copied the protected fetch-and-import command. Run it on the router within five minutes.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not copy the Self Install script.");
     } finally {

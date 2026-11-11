@@ -17,6 +17,19 @@ test("RouterOS fetch/import command runs as one block and preserves the file on 
   assert.ok(command.indexOf('/import "networksetup.rsc"') < command.indexOf("/file remove"));
 });
 
+test("Self Install bundle command fetches its protected tenant URL before importing", () => {
+  const command = buildRouterFileImportCommand({
+    sourceUrl: "https://tenant.isplatty.com/api/router-file-source/one-time-token",
+    fileName: "mainhotspot.rsc",
+    verified: true,
+  });
+
+  assert.match(command, /url="https:\/\/tenant\.isplatty\.com\/api\/router-file-source\/one-time-token"/);
+  assert.match(command, /dst-path="mainhotspot\.rsc" mode=https check-certificate=yes/);
+  assert.ok(command.indexOf("/tool fetch") < command.indexOf('/import "mainhotspot.rsc"'));
+  assert.ok(command.indexOf('/import "mainhotspot.rsc"') < command.indexOf("/file remove"));
+});
+
 test("Self Install commands report all step states and skip completed steps", () => {
   const command = buildSelfInstallStepCommand({
     routerId: 104,

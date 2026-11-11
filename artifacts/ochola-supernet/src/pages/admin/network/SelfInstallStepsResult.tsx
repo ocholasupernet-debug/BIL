@@ -32,10 +32,10 @@ export function SelfInstallStepsResult({
     <section className="self-install-result" aria-labelledby="self-install-result-heading">
       <header className="self-install-result__header">
         <div>
-          <p className="self-install-result__eyebrow">Router configuration · Authenticated download</p>
+          <p className="self-install-result__eyebrow">Router configuration · Protected fetch</p>
           <h3 id="self-install-result-heading">Your setup file is ready</h3>
           <p className="self-install-result__intro">
-            Download the file, upload it to the router, then run the import command.
+            Copy and run the command to fetch this router's setup bundle and import it.
           </p>
         </div>
         <span className="self-install-result__ready">
@@ -49,14 +49,14 @@ export function SelfInstallStepsResult({
           <ShieldCheck size={18} aria-hidden="true" />
         </span>
         <span>
-            <strong>No public script URL</strong>
-            <span>The fetch URL has been removed. Download the setup file from this signed-in admin page.</span>
+            <strong>Short-lived tenant download</strong>
+            <span>The command uses a protected link for this router. It expires after five minutes.</span>
         </span>
       </div>
 
       <div className="self-install-result__list-heading">
-        <h4>Import after uploading the file</h4>
-        <span>One local import command</span>
+        <h4>Fetch and import</h4>
+        <span>One RouterOS command</span>
       </div>
 
       <div className="self-install-result__steps">
@@ -95,12 +95,12 @@ export function SelfInstallStepsResult({
                     type="button"
                     onClick={() => onCopy(step.id)}
                     disabled={busy !== ""}
-                    aria-label="Copy RouterOS import command"
+                    aria-label="Copy RouterOS fetch and import command"
                   >
                     {copiedStep === step.id
                       ? <Check size={14} aria-hidden="true" />
                       : <Clipboard size={14} aria-hidden="true" />}
-                    {copiedStep === step.id ? "Copied" : "Copy import command"}
+                    {copiedStep === step.id ? "Copied" : "Copy fetch/import command"}
                   </button>
                 </div>
               </div>
@@ -114,12 +114,12 @@ export function SelfInstallStepsResult({
 
       <div className="self-install-result__warning">
         <AlertTriangle size={16} aria-hidden="true" />
-        <span><strong>Upload mainhotspot.rsc first.</strong> The file contains router credentials; keep it private and remove it after installation.</span>
+        <span><strong>Keep the command private.</strong> It contains a short-lived link to a bundle with router credentials. If it expires, generate a fresh command.</span>
       </div>
 
       <p className="self-install-result__footnote" aria-live="polite">
         <CheckCircle2 size={14} aria-hidden="true" />
-        After upload, run the import command. The bundle executes network, VPN/API, and service setup in order, stopping on errors.
+        The command downloads and imports the bundle, then removes the local file after a successful import. Setup runs in order and stops on errors.
       </p>
     </section>
   );

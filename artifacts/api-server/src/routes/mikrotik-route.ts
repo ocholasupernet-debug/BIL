@@ -67,6 +67,7 @@ import {
   provisionRouterManagementOpenVpn,
   provisionRouterManagementOpenVpnPair,
 } from "../lib/router-vpn-provisioning.js";
+import { buildRouterFileImportCommand } from "../lib/self-install-step-command.js";
 import {
   readRouterManagementCaCertificate,
   ROUTER_MANAGEMENT_API_USERNAME,
@@ -3605,6 +3606,23 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       { tag: "Management VPN and API", content: vpnScript },
       { tag: "Hotspot and PPPoE Services", content: serviceScript },
     ]);
+    const bundleSourceOrigin = requestOrigin(req);
+    if (!bundleSourceOrigin.startsWith("https://")) {
+      res.status(503).json({ error: "Self Install bundle fetch requires the signed-in tenant HTTPS hostname." });
+      return;
+    }
+    const bundleSourceToken = createPendingRouterFileSource({
+      content: Buffer.from(bundle, "utf8"),
+      contentType: "text/plain; charset=utf-8",
+      fileName,
+      maxFetchAttempts: 3,
+    });
+    const bundleSourceUrl = `${bundleSourceOrigin}/api/router-file-source/${bundleSourceToken}`;
+    const command = buildRouterFileImportCommand({
+      sourceUrl: bundleSourceUrl,
+      fileName,
+      verified: true,
+    });
     for (const file of portalFileContents) {
       createPublicRouterFileSource(id, file.routeName, {
         content: file.content,
@@ -3615,7 +3633,6 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         maxFetchAttempts: 3,
       });
     }
-    const command = `/import "${fileName}"`;
     res.set("Cache-Control", "no-store, no-cache, must-revalidate")
       .set("X-Content-Type-Options", "nosniff")
       .json({
@@ -3628,7 +3645,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
           order: 1,
           title: "Configure router management, VPN, Hotspot, and PPPoE",
           fileName,
-          description: "Download this authenticated bundle, upload it to the router, then import it. Its network, management VPN/API, and customer-service sections run in order and stop on errors.",
+          description: "Run the command to fetch this router's protected setup bundle from the signed-in tenant hostname, then import it. Its network, management VPN/API, and customer-service sections run in order and stop on errors.",
           command,
         },
       ],
