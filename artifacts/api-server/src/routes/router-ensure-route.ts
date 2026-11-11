@@ -3,7 +3,8 @@
  *
  * Creates a router record for an admin if one with the given name doesn't
  * already exist, then returns it. Uses the Supabase service-role key
- * (SUPABASE_SERVICE_KEY) if available — which bypasses Row-Level Security.
+ * (SUPABASE_SERVICE_ROLE_KEY, with the legacy alias as fallback) — which
+ * bypasses Row-Level Security.
  * Falls back to the anon key and handles 409 conflicts by fetching the
  * existing row.
  *
@@ -21,6 +22,7 @@ import { provisionRouterManagementOpenVpnPair } from "../lib/router-vpn-provisio
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 import { getTenantSubdomain } from "../lib/tenant-host.js";
 import { isSafeRouterName, nextOrdinalRouterName, routerNameBase } from "../lib/router-name-policy.js";
+import { getSupabaseServiceKey } from "../lib/supabase-service-key.js";
 
 const router: IRouter = Router();
 
@@ -32,7 +34,7 @@ function resolveSupabaseUrl(): string {
 }
 const SUPABASE_URL = resolveSupabaseUrl();
 /* Prefer service-role key (bypasses RLS); fall back to anon key */
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+const SERVICE_KEY = getSupabaseServiceKey();
 const ANON_KEY    = process.env.VITE_SUPABASE_KEY ?? "";
 const BEST_KEY    = SERVICE_KEY || ANON_KEY;
 

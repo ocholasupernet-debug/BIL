@@ -8,6 +8,7 @@ import {
 } from "./router-management-vpn.js";
 import { ensureRouterManagementOvpnCredentials } from "./router-management-credentials.js";
 import { encryptVpnSecret, decryptVpnSecret, type EncryptedSecret } from "./vpn-crypto.js";
+import { getSupabaseServiceKey } from "./supabase-service-key.js";
 import { runVpsScript, vpsSshConfigured } from "./vps-ssh.js";
 import { generateVpsOvpnSetupScript } from "./vpn-utils.js";
 
@@ -33,11 +34,7 @@ const rawSupabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL
 const SUPABASE_URL = rawSupabaseUrl
   ? (rawSupabaseUrl.startsWith("http") ? rawSupabaseUrl : `https://${rawSupabaseUrl}`).replace(/\/+$/, "")
   : "";
-const SUPABASE_KEY = (
-  process.env.SUPABASE_SERVICE_KEY
-  || process.env.SUPABASE_SERVICE_ROLE_KEY
-  || ""
-).trim();
+const SUPABASE_KEY = getSupabaseServiceKey();
 const locks = new Map<number, Promise<RouterVpnProvisioningResult>>();
 
 function headers(extra: Record<string, string> = {}): Record<string, string> {
