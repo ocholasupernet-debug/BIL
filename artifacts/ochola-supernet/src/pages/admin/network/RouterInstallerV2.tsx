@@ -1,74 +1,9 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React from "react";
+import { ArrowRight, ShieldCheck } from "lucide-react";
 import { AdminLayout } from "@/components/layout/AdminLayout";
-import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
 import { NetworkTabs } from "./NetworkTabs";
 
-type RouterOption = { id: number; name: string; model?: string | null; ros_version?: string | null };
-type EnrollmentResponse = {
-  release: string;
-  routerId: number;
-  entryUrl: string;
-  command: string;
-  mode: "preflight-only";
-  warning: string;
-};
-
 export default function RouterInstallerV2() {
-  const [routers, setRouters] = useState<RouterOption[]>([]);
-  const [routerId, setRouterId] = useState("");
-  const [enrollment, setEnrollment] = useState<EnrollmentResponse | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  const loadRouters = useCallback(async () => {
-    const token = getAdminApiToken();
-    const response = await fetch(`/api/routers?adminId=${encodeURIComponent(String(ADMIN_ID))}&includeSetup=true`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    if (!response.ok) throw new Error("Router list could not be loaded.");
-    const rows = await response.json() as RouterOption[];
-    setRouters(Array.isArray(rows) ? rows : []);
-  }, []);
-
-  useEffect(() => {
-    void loadRouters().catch((reason: unknown) => {
-      setError(reason instanceof Error ? reason.message : "Router list could not be loaded.");
-    });
-  }, [loadRouters]);
-
-  const issueCommand = async () => {
-    if (!routerId) return;
-    setBusy(true);
-    setError("");
-    setEnrollment(null);
-    setCopied(false);
-    try {
-      const token = getAdminApiToken();
-      const response = await fetch(`/api/router/${encodeURIComponent(routerId)}/installer-v2/enrollment`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ adminId: ADMIN_ID }),
-      });
-      const result = await response.json() as EnrollmentResponse & { error?: string };
-      if (!response.ok) throw new Error(result.error || "Could not prepare the v2 preflight command.");
-      setEnrollment(result);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not prepare the v2 preflight command.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const copyCommand = async () => {
-    if (!enrollment?.command) return;
-    await navigator.clipboard.writeText(enrollment.command);
-    setCopied(true);
-  };
-
   const card: React.CSSProperties = {
     background: "var(--isp-card, #fff)",
     border: "1px solid var(--isp-border, #e5e7eb)",
@@ -83,65 +18,52 @@ export default function RouterInstallerV2() {
         <NetworkTabs active="installer-v2" />
         <header>
           <div style={{ fontSize: 12, color: "#64748b", marginBottom: 5 }}>Network / RouterOS</div>
-          <h1 style={{ margin: 0, fontSize: 26, color: "var(--isp-text, #172b3a)" }}>OCHOLASUPERNET Installer v2</h1>
-          <p style={{ margin: "8px 0 0", color: "#64748b", lineHeight: 1.5 }}>
-            Separate from Self Install. This release only backs up and inventories a router; it does not apply configuration.
+          <h1 style={{ margin: 0, fontSize: 26, color: "var(--isp-text, #172b3a)" }}>
+            OCHOLASUPERNET Router Setup
+          </h1>
+          <p style={{ margin: "8px 0 0", color: "#64748b", lineHeight: 1.5, maxWidth: 760 }}>
+            Use the authenticated Self Install flow for router configuration. It generates setup steps for the selected
+            tenant router instead of exposing router credentials through a public script URL.
           </p>
         </header>
 
-        <section style={card} aria-labelledby="v2-preflight-title">
-          <h2 id="v2-preflight-title" style={{ margin: "0 0 8px", fontSize: 18 }}>Prepare a preflight command</h2>
-          <p style={{ margin: "0 0 16px", color: "#64748b", lineHeight: 1.5 }}>
-            Choose a tenant router. Its company-specific HTTPS URL is public and contains no token. Anyone can download this
-            preflight file, so only run it on a router you control; it creates a local backup and inventory but does not apply
-            configuration. The router must already trust the site certificate.
-          </p>
-          <label htmlFor="installer-v2-router" style={{ display: "block", fontWeight: 600, marginBottom: 6 }}>Router</label>
-          <select
-            id="installer-v2-router"
-            value={routerId}
-            onChange={event => { setRouterId(event.target.value); setEnrollment(null); }}
-            style={{ width: "100%", maxWidth: 520, padding: 10, borderRadius: 8, border: "1px solid #cbd5e1", background: "#fff" }}
-          >
-            <option value="">Select a router</option>
-            {routers.map(router => (
-              <option key={router.id} value={router.id}>
-                {router.name}{router.model ? ` · ${router.model}` : ""}{router.ros_version ? ` · RouterOS ${router.ros_version}` : ""}
-              </option>
-            ))}
-          </select>
-          <div style={{ marginTop: 14 }}>
-            <button
-              type="button"
-              onClick={() => void issueCommand()}
-              disabled={!routerId || busy}
-              style={{ padding: "10px 14px", border: 0, borderRadius: 8, background: "#1769e0", color: "#fff", fontWeight: 700, cursor: !routerId || busy ? "not-allowed" : "pointer", opacity: !routerId || busy ? .6 : 1 }}
-            >
-              {busy ? "Preparing…" : "Generate preflight command"}
-            </button>
-          </div>
-          {error && <p role="alert" style={{ color: "#b42318", marginBottom: 0 }}>{error}</p>}
-        </section>
-
-        {enrollment && (
-          <section style={card} aria-live="polite">
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-              <div>
-                <h2 style={{ margin: 0, fontSize: 18 }}>Preflight command · v{enrollment.release}</h2>
-                <p style={{ margin: "5px 0 0", color: "#64748b", fontSize: 13 }}>
-                  Router {enrollment.routerId} · company-specific installer host
-                </p>
-              </div>
-              <button type="button" onClick={() => void copyCommand()} style={{ padding: "9px 12px", border: "1px solid #cbd5e1", borderRadius: 8, background: "#fff", fontWeight: 600 }}>
-                {copied ? "Copied" : "Copy command"}
-              </button>
+        <section style={card} aria-labelledby="router-setup-title">
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+            <ShieldCheck size={22} aria-hidden="true" style={{ color: "var(--isp-accent, #1769e0)", flexShrink: 0, marginTop: 2 }} />
+            <div>
+              <h2 id="router-setup-title" style={{ margin: "0 0 8px", fontSize: 18 }}>
+                Secure, tenant-specific installation
+              </h2>
+              <p style={{ margin: "0 0 12px", color: "#64748b", lineHeight: 1.55 }}>
+                Self Install checks router ownership, then prepares ordered network, management VPN, and Hotspot/PPPoE
+                steps for that router. Follow the on-screen order and verify each step before continuing.
+              </p>
+              <p style={{ margin: "0 0 16px", color: "#64748b", lineHeight: 1.55 }}>
+                The public token-free <code>mainhotspot.rsc</code> remains preflight-only; it does not add router
+                configuration. Actual setup requires the authenticated flow.
+              </p>
+              <a
+                href="/admin/network/self-install"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  minHeight: 42,
+                  padding: "10px 15px",
+                  borderRadius: 8,
+                  background: "#1769e0",
+                  color: "#fff",
+                  textDecoration: "none",
+                  fontWeight: 700,
+                }}
+              >
+                Open Self Install
+                <ArrowRight size={16} aria-hidden="true" />
+              </a>
             </div>
-            <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", padding: 14, background: "#101923", color: "#e2e8f0", borderRadius: 8, margin: "14px 0", fontSize: 12 }}>
-              {enrollment.command}
-            </pre>
-            <p style={{ margin: 0, color: "#854d0e", lineHeight: 1.5 }}>{enrollment.warning}</p>
-          </section>
-        )}
+          </div>
+        </section>
       </main>
     </AdminLayout>
   );
