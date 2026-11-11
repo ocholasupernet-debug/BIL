@@ -7515,6 +7515,10 @@ export interface RouterServiceSetupOptions {
   portName?: string;
   /** Platform RADIUS endpoint used by Takeover and isolated Coexistence profiles. */
   radiusIp?: string;
+  /** Platform RADIUS authentication port. */
+  radiusAuthenticationPort?: number;
+  /** Platform RADIUS accounting port. */
+  radiusAccountingPort?: number;
   /** Shared secret for the platform RADIUS endpoint. */
   radiusSecret?: string;
   /**
@@ -7587,6 +7591,14 @@ function generateCoexistenceServiceSetupScript(
   const radiusSecret = options.radiusSecret
     ? validatePlatformRadiusSecret(options.radiusSecret)
     : "";
+  const radiusAuthenticationPort = Number(options.radiusAuthenticationPort ?? 1812);
+  const radiusAccountingPort = Number(options.radiusAccountingPort ?? 1813);
+  if (
+    !Number.isInteger(radiusAuthenticationPort) || radiusAuthenticationPort < 1 || radiusAuthenticationPort > 65535
+    || !Number.isInteger(radiusAccountingPort) || radiusAccountingPort < 1 || radiusAccountingPort > 65535
+  ) {
+    throw new Error("Platform RADIUS ports must be whole numbers between 1 and 65535.");
+  }
   if ((radiusIp && !radiusSecret) || (!radiusIp && radiusSecret)) {
     throw new Error("Coexistence RADIUS configuration must include both address and secret.");
   }
@@ -7799,7 +7811,7 @@ ${ownedOrConflict(
     blocks.push(`# 7. Append the platform RADIUS profile without removing any existing entries
 :if ([:len [/radius find where service=${routerOsString("hotspot,ppp")} && address=${routerOsString(radiusIp)} && disabled=no]] = 0) do={
     :do {
-        /radius add service=${routerOsString("hotspot,ppp")} address=${routerOsString(radiusIp)} secret=${routerOsString(radiusSecret)} authentication-port=1812 accounting-port=1813 comment=${routerOsString(radiusComment)}
+        /radius add service=${routerOsString("hotspot,ppp")} address=${routerOsString(radiusIp)} secret=${routerOsString(radiusSecret)} authentication-port=${radiusAuthenticationPort} accounting-port=${radiusAccountingPort} comment=${routerOsString(radiusComment)}
     } on-error={
         :set coexistError ("${tag}: platform RADIUS profile could not be added: " . $error)
         :error $coexistError
@@ -7936,6 +7948,14 @@ export function generateServiceSetupScript(
     throw new Error("Takeover RADIUS configuration must include both address and secret.");
   }
   const takeoverRadiusEnabled = Boolean(takeoverRadiusIp && takeoverRadiusSecret);
+  const takeoverRadiusAuthenticationPort = Number(options.radiusAuthenticationPort ?? 1812);
+  const takeoverRadiusAccountingPort = Number(options.radiusAccountingPort ?? 1813);
+  if (
+    !Number.isInteger(takeoverRadiusAuthenticationPort) || takeoverRadiusAuthenticationPort < 1 || takeoverRadiusAuthenticationPort > 65535
+    || !Number.isInteger(takeoverRadiusAccountingPort) || takeoverRadiusAccountingPort < 1 || takeoverRadiusAccountingPort > 65535
+  ) {
+    throw new Error("Platform RADIUS ports must be whole numbers between 1 and 65535.");
+  }
   const takeoverHotspotDnsName = options.installationMode === "takeover"
     ? portalHostnames[0]
     : undefined;
@@ -7988,7 +8008,7 @@ export function generateServiceSetupScript(
   const takeoverRadiusSetup = takeoverRadiusEnabled
     ? `:if ([:len [/radius find where service=${routerOsString("hotspot,ppp")} && address=${routerOsString(takeoverRadiusIp)} && disabled=no]] = 0) do={
     :do {
-        /radius add service=${routerOsString("hotspot,ppp")} address=${routerOsString(takeoverRadiusIp)} secret=${routerOsString(takeoverRadiusSecret)} authentication-port=1812 accounting-port=1813 comment=${routerOsString(`OcholaSuperNet Takeover RADIUS ${routerTag}`)}
+        /radius add service=${routerOsString("hotspot,ppp")} address=${routerOsString(takeoverRadiusIp)} secret=${routerOsString(takeoverRadiusSecret)} authentication-port=${takeoverRadiusAuthenticationPort} accounting-port=${takeoverRadiusAccountingPort} comment=${routerOsString(`OcholaSuperNet Takeover RADIUS ${routerTag}`)}
     } on-error={
         :set serviceError ("${tag}: OcholaSuperNet RADIUS profile could not be added: " . $error)
         :error $serviceError

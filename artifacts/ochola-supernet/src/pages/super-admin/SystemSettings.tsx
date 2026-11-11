@@ -45,9 +45,6 @@ export default function SuperAdminSystemSettings() {
     domain: "isplatty.org",
     adminEmail: "admin@isplatty.org",
     supportEmail: "support@isplatty.org",
-    radiusHost: "127.0.0.1",
-    radiusPort: "1812",
-    radiusSecret: "",
     taxRate: "16",
     currency: "KES",
     timezone: "Africa/Nairobi",
@@ -83,6 +80,20 @@ export default function SuperAdminSystemSettings() {
   const [emailSaved, setEmailSaved] = useState(false);
   const [emailTestMessage, setEmailTestMessage] = useState("");
   const [emailError, setEmailError] = useState("");
+  const [radiusCfg, setRadiusCfg] = useState({
+    enabled: false,
+    host: "",
+    authenticationPort: "1812",
+    accountingPort: "1813",
+    secret: "",
+    hasSecret: false,
+    configured: false,
+    source: "none",
+  });
+  const [radiusLoading, setRadiusLoading] = useState(true);
+  const [radiusSaving, setRadiusSaving] = useState(false);
+  const [radiusSaved, setRadiusSaved] = useState(false);
+  const [radiusError, setRadiusError] = useState("");
   const set = (k: keyof typeof cfg, v: string | boolean) => { setCfg(f => ({ ...f, [k]: v })); setSaved(false); };
   const save = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
   const updateEmailCfg = (changes: Partial<typeof emailCfg>) => {
@@ -113,6 +124,41 @@ export default function SuperAdminSystemSettings() {
       }
     };
     void loadVisibility();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadRadiusSettings = async () => {
+      try {
+        const response = await fetch("/api/super-admin/radius-settings", {
+          headers: superAdminHeaders(),
+          cache: "no-store",
+        });
+        const data = await response.json() as {
+          settings?: {
+            enabled?: boolean; host?: string; authenticationPort?: number;
+            accountingPort?: number; hasSecret?: boolean; configured?: boolean; source?: string;
+          };
+          error?: string;
+        };
+        if (!response.ok) throw new Error(data.error || "RADIUS settings could not be loaded.");
+        if (!cancelled && data.settings) {
+          setRadiusCfg(current => ({
+            ...current,
+            ...data.settings,
+            authenticationPort: String(data.settings?.authenticationPort ?? 1812),
+            accountingPort: String(data.settings?.accountingPort ?? 1813),
+            secret: "",
+          }));
+        }
+      } catch (error) {
+        if (!cancelled) setRadiusError(error instanceof Error ? error.message : "RADIUS settings could not be loaded.");
+      } finally {
+        if (!cancelled) setRadiusLoading(false);
+      }
+    };
+    void loadRadiusSettings();
     return () => { cancelled = true; };
   }, []);
 
@@ -246,6 +292,47 @@ export default function SuperAdminSystemSettings() {
     }
   };
 
+  const saveRadiusSettings = async () => {
+    setRadiusSaving(true);
+    setRadiusError("");
+    try {
+      const response = await fetch("/api/super-admin/radius-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...superAdminHeaders() },
+        body: JSON.stringify({
+          enabled: radiusCfg.enabled,
+          host: radiusCfg.host,
+          authenticationPort: radiusCfg.authenticationPort,
+          accountingPort: radiusCfg.accountingPort,
+          secret: radiusCfg.secret,
+        }),
+      });
+      const data = await response.json() as {
+        settings?: {
+          enabled?: boolean; host?: string; authenticationPort?: number;
+          accountingPort?: number; hasSecret?: boolean; configured?: boolean; source?: string;
+        };
+        error?: string;
+      };
+      if (!response.ok) throw new Error(data.error || "RADIUS settings could not be saved.");
+      if (data.settings) {
+        setRadiusCfg(current => ({
+          ...current,
+          ...data.settings,
+          authenticationPort: String(data.settings?.authenticationPort ?? current.authenticationPort),
+          accountingPort: String(data.settings?.accountingPort ?? current.accountingPort),
+          secret: "",
+        }));
+      }
+      setRadiusSaved(true);
+      setTimeout(() => setRadiusSaved(false), 3000);
+    } catch (error) {
+      setRadiusError(error instanceof Error ? error.message : "RADIUS settings could not be saved.");
+    } finally {
+      setRadiusSaving(false);
+    }
+  };
+
   return (
     <SuperAdminLayout>
       <div style={{ maxWidth: 820 }}>
@@ -301,7 +388,7 @@ export default function SuperAdminSystemSettings() {
               <p style={{ color: C.muted, fontSize: "0.8rem", lineHeight: 1.55, margin: "0 0 16px" }}>
                 One shared sender for the platform. Registration confirmations go to the new account; gateway-change and Super Admin sign-in alerts go to the security email. SMTP passwords are encrypted and never returned to this page.
               </p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0 16px" }}>
                 <Field label="SMTP Host">
                   <input style={inp} value={emailCfg.host} placeholder="smtp.your-provider.com" onChange={e => updateEmailCfg({ host: e.target.value })} />
                 </Field>
@@ -378,13 +465,52 @@ export default function SuperAdminSystemSettings() {
 
         {/* RADIUS */}
         <Card title="RADIUS Server" icon={Server}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
-            <Field label="RADIUS Host" hint="IP address of your FreeRADIUS server"><input style={inp} value={cfg.radiusHost} onChange={e => set("radiusHost", e.target.value)} /></Field>
-            <Field label="RADIUS Port"><input style={inp} value={cfg.radiusPort} onChange={e => set("radiusPort", e.target.value)} /></Field>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <Field label="RADIUS Secret"><input style={inp} type="password" value={cfg.radiusSecret} onChange={e => set("radiusSecret", e.target.value)} placeholder="Shared secret" /></Field>
-            </div>
-          </div>
+          {radiusLoading ? (
+            <p role="status" style={{ display: "flex", alignItems: "center", gap: 8, color: C.sub, fontSize: 13 }}><Loader2 size={15} className="animate-spin" /> Loading secure RADIUS settings…</p>
+          ) : (
+            <>
+              <p style={{ color: C.sub, fontSize: 13, lineHeight: 1.55, marginTop: 0 }}>
+                These settings are encrypted at rest and used by new Self Install service scripts. Existing router RADIUS entries are never removed.
+              </p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+                <Field label="RADIUS Host" hint="Hostname or IP reachable from tenant routers">
+                  <input style={inp} value={radiusCfg.host} placeholder="radius.example.com" onChange={e => setRadiusCfg(current => ({ ...current, host: e.target.value }))} />
+                </Field>
+                <Field label="Authentication Port">
+                  <input style={inp} type="number" min="1" max="65535" value={radiusCfg.authenticationPort} onChange={e => setRadiusCfg(current => ({ ...current, authenticationPort: e.target.value }))} />
+                </Field>
+                <Field label="Accounting Port">
+                  <input style={inp} type="number" min="1" max="65535" value={radiusCfg.accountingPort} onChange={e => setRadiusCfg(current => ({ ...current, accountingPort: e.target.value }))} />
+                </Field>
+                <Field label="Shared Secret">
+                  <input
+                    style={inp}
+                    type="password"
+                    autoComplete="new-password"
+                    value={radiusCfg.secret}
+                    placeholder={radiusCfg.hasSecret ? "Saved — leave blank to keep it" : "Enter RADIUS shared secret"}
+                    onChange={e => setRadiusCfg(current => ({ ...current, secret: e.target.value }))}
+                  />
+                </Field>
+              </div>
+              {radiusCfg.hasSecret && <p style={{ color: "#86efac", fontSize: 12, marginTop: -4 }}>A shared secret is saved securely; it is never returned to this page.</p>}
+              {radiusCfg.source === "environment" && <p style={{ color: C.sub, fontSize: 12 }}>Using the existing server environment configuration until these settings are saved here.</p>}
+              <label style={{ display: "flex", alignItems: "center", gap: 9, color: C.text, fontSize: "0.82rem", margin: "8px 0 16px", cursor: "pointer" }}>
+                <input type="checkbox" checked={radiusCfg.enabled} onChange={e => setRadiusCfg(current => ({ ...current, enabled: e.target.checked }))} />
+                Enable platform RADIUS for newly generated Self Install scripts
+              </label>
+              {radiusError && <p role="alert" style={{ display: "flex", alignItems: "center", gap: 7, color: "#fca5a5", fontSize: 13 }}><AlertCircle size={14} /> {radiusError}</p>}
+              <button
+                type="button"
+                onClick={() => void saveRadiusSettings()}
+                disabled={radiusSaving}
+                style={{ display: "flex", alignItems: "center", gap: 8, background: radiusSaved ? "#065f46" : C.accent, border: "none", borderRadius: 9, padding: "9px 15px", color: "white", fontWeight: 700, fontSize: "0.8rem", cursor: radiusSaving ? "wait" : "pointer", opacity: radiusSaving ? 0.7 : 1 }}
+              >
+                {radiusSaving ? <Loader2 size={14} className="animate-spin" /> : radiusSaved ? <CheckCircle2 size={14} /> : <Save size={14} />}
+                {radiusSaving ? "Saving…" : radiusSaved ? "RADIUS Saved" : "Save RADIUS Settings"}
+              </button>
+            </>
+          )}
         </Card>
 
         {/* SMS settings are managed in their dedicated platform integration page. */}

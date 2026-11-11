@@ -210,10 +210,12 @@ test("Takeover routes Hotspot and PPPoE through Ochola RADIUS and the current po
     routerId: 104,
     radiusIp: "10.8.5.1",
     radiusSecret: "radius-test-secret",
+    radiusAuthenticationPort: 18120,
+    radiusAccountingPort: 18130,
     portalHostnames: ["come.isplatty.org"],
   });
 
-  assert.match(script, /\/radius add service="hotspot,ppp" address="10\.8\.5\.1"/);
+  assert.match(script, /\/radius add service="hotspot,ppp" address="10\.8\.5\.1" secret="radius-test-secret" authentication-port=18120 accounting-port=18130/);
   assert.match(script, /ip hotspot profile add name="hsprof"[^\n]*dns-name="come\.isplatty\.org"[^\n]*use-radius=yes/);
   assert.match(script, /ppp profile add name="ochola-services-104-pppoe-profile"[^\n]*use-radius=yes/);
   assert.match(script, /OcholaSuperNet RADIUS is configured for Hotspot and PPPoE/);

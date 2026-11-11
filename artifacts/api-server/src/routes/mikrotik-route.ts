@@ -87,6 +87,7 @@ import {
 } from "../lib/hotspot-portal-target.js";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
+import { readPlatformRadiusSettings } from "../lib/platform-radius.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
 import {
@@ -3506,19 +3507,26 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       .split(",")
       .map(port => port.trim())
       .filter(Boolean);
-    const platformRadiusIp = String(
-      req.query.radiusIp
-      ?? process.env["RADIUS_SERVER_IP"]
-      ?? "",
-    ).trim();
-    const platformRadiusSecret = String(
-      process.env["RADIUS_SHARED_SECRET"]
-      ?? process.env["RADIUS_SECRET"]
-      ?? "",
-    ).trim();
-    const hasCompletePlatformRadius = Boolean(platformRadiusIp && platformRadiusSecret);
+    let platformRadius = {
+      enabled: false,
+      host: "",
+      authenticationPort: 1812,
+      accountingPort: 1813,
+      secret: "",
+    };
+    try {
+      platformRadius = (await readPlatformRadiusSettings()).settings;
+    } catch (error) {
+      logger.warn(
+        { routerId: id, error: error instanceof Error ? error.message : String(error) },
+        "[self-install] platform RADIUS settings unavailable; preserving existing router entries",
+      );
+    }
+    const hasCompletePlatformRadius = Boolean(
+      platformRadius.enabled && platformRadius.host && platformRadius.secret,
+    );
     if (installationMode === "coexist" && !hasCompletePlatformRadius) {
-      const radiusWarning = "Platform RADIUS settings are incomplete, so Step 3 will preserve existing RADIUS entries.";
+      const radiusWarning = "Platform RADIUS is not enabled or its settings are incomplete, so Step 3 will preserve existing RADIUS entries.";
       provisioningWarning = provisioningWarning
         ? `${provisioningWarning} ${radiusWarning}`
         : radiusWarning;
@@ -3579,11 +3587,13 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       bridgePorts: serviceBridgePorts,
       portName: serviceBridgePorts[0],
       radiusIp: installationMode === "coexist" && hasCompletePlatformRadius
-        ? platformRadiusIp
+        ? platformRadius.host
         : undefined,
       radiusSecret: installationMode === "coexist" && hasCompletePlatformRadius
-        ? platformRadiusSecret
+        ? platformRadius.secret
         : undefined,
+      radiusAuthenticationPort: platformRadius.authenticationPort,
+      radiusAccountingPort: platformRadius.accountingPort,
       /* The shared bridge is the single physical service wire. Bandwidth
          queues remain opt-in until a tenant supplies an aggregate speed. */
       maxPortSpeedMbps: Number.isFinite(Number(req.query.maxPortSpeedMbps))
@@ -3599,10 +3609,11 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
 
     /*
-     * Begin Self Install with three public sources. The network engine,
+     * Begin Self Install with three short-lived sources. The network engine,
      * management plane, and customer service layer are intentionally separate
      * so each ordered step can be reviewed, copied, downloaded, or retried
-     * independently.
+     * independently. The service script uses an opaque short-lived source URL
+     * because it may contain the platform RADIUS shared secret.
      */
     const networkFileName = installationMode === "coexist"
       ? "brownfield-network.rsc"
@@ -3625,7 +3636,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       fileName: vpnFileName,
       maxFetchAttempts: 3,
     });
-    createPublicRouterFileSource(id, serviceFileName, {
+    const serviceSourceToken = createPendingRouterFileSource({
       content: Buffer.from(serviceScript, "utf8"),
       contentType: "text/plain; charset=utf-8",
       fileName: serviceFileName,
@@ -3643,7 +3654,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     }
     const networkSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${networkFileName}`;
     const vpnSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${vpnFileName}`;
-    const serviceSourceUrl = `${sourceOrigin}/api/router-file-source/${id}/${serviceFileName}`;
+    const serviceSourceUrl = `${sourceOrigin}/api/router-file-source/${serviceSourceToken}`;
     const stepCommand = (sourceUrl: string, fileName: string, verified = false): string =>
       buildRouterFileImportCommand({ sourceUrl, fileName, verified });
     res.json({
