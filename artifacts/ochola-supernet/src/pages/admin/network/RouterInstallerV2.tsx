@@ -83,7 +83,7 @@ export default function RouterInstallerV2() {
         <NetworkTabs active="installer-v2" />
         <header>
           <div style={{ fontSize: 12, color: "#64748b", marginBottom: 5 }}>Network / RouterOS</div>
-          <h1 style={{ margin: 0, fontSize: 26, color: "var(--isp-text, #172b3a)" }}>BIL Installer v2</h1>
+          <h1 style={{ margin: 0, fontSize: 26, color: "var(--isp-text, #172b3a)" }}>OCHOLASUPERNET Installer v2</h1>
           <p style={{ margin: "8px 0 0", color: "#64748b", lineHeight: 1.5 }}>
             Separate from Self Install. This release only backs up and inventories a router; it does not apply configuration.
           </p>

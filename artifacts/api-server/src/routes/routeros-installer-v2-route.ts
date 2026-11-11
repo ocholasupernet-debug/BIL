@@ -34,11 +34,11 @@ apiRouter.post("/router/:id/installer-v2/enrollment", requireAdmin(), async (req
     );
     const origin = buildInstallerV2EntryUrl(process.env.PUBLIC_APP_ORIGIN, admins[0]?.subdomain);
     if (!origin) {
-      res.status(503).json({ error: "A valid company subdomain and HTTPS BIL origin are required before issuing installer URLs." });
+      res.status(503).json({ error: "A valid company subdomain and HTTPS OcholaSupernet origin are required before issuing installer URLs." });
       return;
     }
     const entryUrl = origin;
-    const command = `:do { /tool fetch url="${entryUrl}" dst-path="mainhotspot-v2.rsc" mode=https check-certificate=yes; :delay 2s; /import "mainhotspot-v2.rsc" } on-error={ :put ("BIL v2 preflight download/import failed: " . $error) }`;
+    const command = `:do { /tool fetch url="${entryUrl}" dst-path="mainhotspot-v2.rsc" mode=https check-certificate=yes; :delay 2s; /import "mainhotspot-v2.rsc" } on-error={ :put ("OCHOLASUPERNET v2 preflight download/import failed: " . $error) }`;
     res.set("Cache-Control", "no-store").json({
       release: ROUTEROS_INSTALLER_V2_VERSION,
       routerId,

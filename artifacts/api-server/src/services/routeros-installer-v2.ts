@@ -90,27 +90,27 @@ export function buildInstallerV2EntryUrl(publicOrigin: unknown, tenantSubdomain?
  * remain unavailable until non-production RouterOS validation is completed.
  */
 export function buildInstallerV2PreflightScript(): string {
-  return `# BIL RouterOS installer v${ROUTEROS_INSTALLER_V2_VERSION} — PRE-FLIGHT ONLY
+  return `# OCHOLASUPERNET RouterOS installer v${ROUTEROS_INSTALLER_V2_VERSION} — PRE-FLIGHT ONLY
 # This release does not alter WAN, bridges, Hotspot, PPPoE, VPN, users or firewall.
 # Keep the output private; RouterOS backups contain configuration secrets.
 :local rosVersion [/system resource get version]
 :local rosMajor [:pick $rosVersion 0 1]
 :local rosMinor [:tonum [:pick $rosVersion 2 4]]
 :if (($rosMajor != "6") && ($rosMajor != "7")) do={ :error ("Unsupported RouterOS version: " . $rosVersion) }
-:if (($rosMajor = "6") && ($rosMinor < 48)) do={ :error ("BIL v2 requires RouterOS 6.48 or later; found " . $rosVersion) }
-:put ("BIL v2 preflight: RouterOS " . $rosVersion)
+:if (($rosMajor = "6") && ($rosMinor < 48)) do={ :error ("OCHOLASUPERNET v2 requires RouterOS 6.48 or later; found " . $rosVersion) }
+:put ("OCHOLASUPERNET v2 preflight: RouterOS " . $rosVersion)
 :put ("Board: " . [/system resource get board-name])
 :put ("Identity: " . [/system identity get name])
 :put "Creating a local backup and default RouterOS export; no configuration will be applied."
 :put "The backup file contains configuration secrets; keep both files private."
-:if ([:len [/file find where name="bil-v2-preflight.backup"]] > 0) do={ :error "bil-v2-preflight.backup already exists; rename it before retrying so the previous checkpoint is preserved." }
-:if ([:len [/file find where name="bil-v2-preflight.rsc"]] > 0) do={ :error "bil-v2-preflight.rsc already exists; rename it before retrying so the previous export is preserved." }
-/system backup save name="bil-v2-preflight"
+:if ([:len [/file find where name="ocholasupernet-v2-preflight.backup"]] > 0) do={ :error "ocholasupernet-v2-preflight.backup already exists; rename it before retrying so the previous checkpoint is preserved." }
+:if ([:len [/file find where name="ocholasupernet-v2-preflight.rsc"]] > 0) do={ :error "ocholasupernet-v2-preflight.rsc already exists; rename it before retrying so the previous export is preserved." }
+/system backup save name="ocholasupernet-v2-preflight"
 :delay 2s
-/export file="bil-v2-preflight"
+/export file="ocholasupernet-v2-preflight"
 :delay 2s
-:if ([:len [/file find where name="bil-v2-preflight.backup"]] = 0) do={ :error "The RouterOS backup was not verified; no configuration changes were made." }
-:if ([:len [/file find where name="bil-v2-preflight.rsc"]] = 0) do={ :error "The RouterOS export was not verified; no configuration changes were made." }
+:if ([:len [/file find where name="ocholasupernet-v2-preflight.backup"]] = 0) do={ :error "The RouterOS backup was not verified; no configuration changes were made." }
+:if ([:len [/file find where name="ocholasupernet-v2-preflight.rsc"]] = 0) do={ :error "The RouterOS export was not verified; no configuration changes were made." }
 :put "DISCOVERY: interfaces"
 /interface print
 :put "DISCOVERY: bridge and bridge ports"
@@ -131,7 +131,7 @@ export function buildInstallerV2PreflightScript(): string {
 /ip firewall filter print
 /ip firewall nat print
 /ip service print
-:put "BIL v2 preflight finished. No service configuration was applied."
+:put "OCHOLASUPERNET v2 preflight finished. No service configuration was applied."
 :put "The v2 apply gate is closed pending non-production RouterOS 6/7 validation.";
 `;
 }

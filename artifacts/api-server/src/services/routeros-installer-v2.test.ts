@@ -84,6 +84,8 @@ test("v2 remains non-applying until the same-address design is device-validated"
 
 test("preflight script backs up and inventories without applying network changes or exposing credentials", () => {
   const script = buildInstallerV2PreflightScript();
+  assert.match(script, /OCHOLASUPERNET RouterOS installer/);
+  assert.doesNotMatch(script, /\bBIL\b|bil-v2-preflight/);
   assert.match(script, /PRE-FLIGHT ONLY/);
   assert.match(script, /RouterOS 6\.48 or later/);
   assert.match(script, /\/system backup save/);
