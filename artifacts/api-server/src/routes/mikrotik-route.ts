@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { randomBytes } from "crypto";
+import { lookup } from "node:dns/promises";
 import { isIspHotspotTawkEnabled, prepareIspHotspotAsset } from "../lib/isp-hotspot-asset.js";
 import { preserveCumulativeUsage } from "../lib/prepaid-usage.js";
 import { routerApiTransport } from "../lib/router-api-port.js";
@@ -87,7 +88,6 @@ import {
 } from "../lib/hotspot-portal-target.js";
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
-import { readPlatformRadiusSettings } from "../lib/platform-radius.js";
 import { buildSelfInstallBundle } from "../lib/self-install-bundle.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
@@ -99,6 +99,14 @@ import {
 } from "../lib/bulk-hotspot-deployment.js";
 import { hasHotspotFileMutationConfirmation } from "../lib/hotspot-file-authorization.js";
 import { normalizePortalHostname } from "../lib/portal-hostname.js";
+import {
+  configuredHotspotPaymentHosts,
+  generateHotspotSetupScript,
+  resolveHotspotSetupAdminId,
+} from "../lib/hotspot-setup-script.js";
+import { logActivity } from "../lib/activity-log.js";
+import { readPlatformRadiusSettings } from "../lib/platform-radius.js";
+import { paymentCollectionMode, paymentGateway, servicePaymentConfigMap } from "../lib/payment-routing.js";
 import { planHotspotChatWalledGardenAdds } from "../lib/hotspot-chat-walled-garden.js";
 import { portServiceResourceNames, vlanServiceInterfaceName, type PortServiceResourceInput, type VlanServiceIdentityInput } from "../lib/port-service-resources.js";
 import { buildVlanHandoffScript } from "../lib/vlan-handoff-script.js";
@@ -3503,26 +3511,8 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       .split(",")
       .map(port => port.trim())
       .filter(Boolean);
-    let platformRadius = {
-      enabled: false,
-      host: "",
-      authenticationPort: 1812,
-      accountingPort: 1813,
-      secret: "",
-    };
-    try {
-      platformRadius = (await readPlatformRadiusSettings()).settings;
-    } catch (error) {
-      logger.warn(
-        { routerId: id, error: error instanceof Error ? error.message : String(error) },
-        "[self-install] platform RADIUS settings unavailable; preserving existing router entries",
-      );
-    }
-    const hasCompletePlatformRadius = Boolean(
-      platformRadius.enabled && platformRadius.host && platformRadius.secret,
-    );
-    if (installationMode === "coexist" && !hasCompletePlatformRadius) {
-      const radiusWarning = "Platform RADIUS is not enabled or its settings are incomplete, so the services section will preserve existing RADIUS entries.";
+    if (installationMode === "coexist") {
+      const radiusWarning = "Shared RADIUS is not embedded in the downloaded script. A Super Admin must explicitly provision selected routers after installation.";
       provisioningWarning = provisioningWarning
         ? `${provisioningWarning} ${radiusWarning}`
         : radiusWarning;
@@ -3582,14 +3572,8 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       bridgeName: serviceBridgeName,
       bridgePorts: serviceBridgePorts,
       portName: serviceBridgePorts[0],
-      radiusIp: installationMode === "coexist" && hasCompletePlatformRadius
-        ? platformRadius.host
-        : undefined,
-      radiusSecret: installationMode === "coexist" && hasCompletePlatformRadius
-        ? platformRadius.secret
-        : undefined,
-      radiusAuthenticationPort: platformRadius.authenticationPort,
-      radiusAccountingPort: platformRadius.accountingPort,
+      radiusIp: undefined,
+      radiusSecret: undefined,
       /* The shared bridge is the single physical service wire. Bandwidth
          queues remain opt-in until a tenant supplies an aggregate speed. */
       maxPortSpeedMbps: Number.isFinite(Number(req.query.maxPortSpeedMbps))
@@ -4962,6 +4946,224 @@ router.delete("/router/:id/ppp/active/:sessionId", async (req, res): Promise<voi
     await disconnectPPPActive(found.creds, sessionId);
     res.json({ ok: true, message: "Session disconnected" });
   } catch (err) { routerErrorResponse(res, err); }
+});
+
+/* ─── GET /api/router/:id/hotspotsetup.rsc ───────────────────────────────── */
+/* Generates a standalone Hotspot script from read-only live RouterOS inventory. */
+router.get("/router/:id/hotspotsetup.rsc", requireAdmin(), async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid router id." }); return; }
+  const adminId = resolveHotspotSetupAdminId(req.authUser?.uid, req.query.adminId);
+  if (!Number.isSafeInteger(adminId) || adminId <= 0) {
+    res.status(403).json({ error: "A valid ISP account is required for this router." });
+    return;
+  }
+  const found = await getRouterCreds(id, adminId);
+  if (!found) { res.status(404).json({ error: "Router not found in this ISP account." }); return; }
+
+  try {
+    const [routerRows, bridges, addresses, pools, dhcpServers, dhcpNetworks, dnsRows, hotspotServers, pppProfiles, pppServers, natRows, branding, paymentRows] =
+      await Promise.all([
+        sbSelectStrict<{ bridge_interface?: string | null; main_bridge_interface?: string | null }>(
+          "isp_routers", `id=eq.${id}&admin_id=eq.${adminId}&select=bridge_interface,main_bridge_interface&limit=1`,
+        ),
+        runRouterCommand(found.creds, ["/interface/bridge/print", "=.proplist=name"]),
+        runRouterCommand(found.creds, ["/ip/address/print", "=.proplist=address,interface,disabled"]),
+        runRouterCommand(found.creds, ["/ip/pool/print", "=.proplist=name,ranges"]),
+        runRouterCommand(found.creds, ["/ip/dhcp-server/print", "=.proplist=name,interface,address-pool,disabled"]),
+        runRouterCommand(found.creds, ["/ip/dhcp-server/network/print", "=.proplist=address,gateway"]),
+        runRouterCommand(found.creds, ["/ip/dns/print", "=.proplist=servers,allow-remote-requests"]),
+        runRouterCommand(found.creds, ["/ip/hotspot/print", "=.proplist=name,interface,profile,disabled"]),
+        runRouterCommand(found.creds, ["/ppp/profile/print", "=.proplist=name,remote-address"]),
+        runRouterCommand(found.creds, ["/interface/pppoe-server/server/print", "=.proplist=profile,disabled"]),
+        runRouterCommand(found.creds, ["/ip/firewall/nat/print", "=.proplist=chain,action,src-address"]),
+        sbSelectStrict<{ portal_hostname?: string | null }>(
+          "isp_hotspot_branding", `admin_id=eq.${adminId}&select=portal_hostname&limit=1`,
+        ),
+        sbSelectStrict<{
+          payment_gateway?: string | null;
+          payment_gateway_config?: unknown;
+          payment_collection_mode?: string | null;
+          payment_service_config?: unknown;
+        }>(
+          "isp_admins",
+          `id=eq.${adminId}&select=payment_gateway,payment_gateway_config,payment_collection_mode,payment_service_config&limit=1`,
+        ),
+      ]);
+    const activeHotspots = hotspotServers.filter(row => row.disabled !== "true");
+    const savedBridge = routerRows[0]?.bridge_interface || routerRows[0]?.main_bridge_interface || "";
+    const hotspotBridge = [...new Set(activeHotspots.map(row => row.interface).filter(Boolean))];
+    const bridgeName = hotspotBridge.length === 1 ? hotspotBridge[0] : hotspotBridge.length === 0 ? savedBridge : "";
+    if (!bridgeName || !bridges.some(row => row.name === bridgeName)) {
+      throw new Error("Could not verify one existing Hotspot bridge from RouterOS and the saved router profile.");
+    }
+    const bridgeAddresses = addresses.filter(row => row.interface === bridgeName && row.disabled !== "true" && /^\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}$/.test(row.address || ""));
+    if (bridgeAddresses.length !== 1) throw new Error("The Hotspot bridge must have exactly one verified IPv4 gateway address.");
+    const gatewayCidr = bridgeAddresses[0].address!;
+    const cidrMatch = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(gatewayCidr);
+    if (!cidrMatch) throw new Error("RouterOS returned an invalid Hotspot gateway address.");
+    const prefix = Number(cidrMatch[2]);
+    const size = 2 ** (32 - prefix);
+    const gatewayNumber = ipv4AddressNumber(cidrMatch[1]);
+    if (gatewayNumber === null) throw new Error("RouterOS returned an invalid Hotspot gateway address.");
+    const networkStart = Math.floor(gatewayNumber / size) * size;
+    const network = `${Math.floor(networkStart / 16777216)}.${Math.floor(networkStart / 65536) % 256}.${Math.floor(networkStart / 256) % 256}.${networkStart % 256}/${prefix}`;
+    const targetSubnetRange = parseIpv4Ranges(network)[0];
+    const overlappingDhcpNetworks = dhcpNetworks.filter(row => {
+      if (!row.address) return false;
+      const configuredRange = parseIpv4Ranges(row.address)[0];
+      return configuredRange && ipv4RangesOverlap(targetSubnetRange, configuredRange);
+    });
+    if (overlappingDhcpNetworks.some(row => row.address !== network)) {
+      throw new Error("An existing DHCP network overlaps the Hotspot subnet; resolve it before generating setup.");
+    }
+    if (overlappingDhcpNetworks.length > 1) {
+      throw new Error("Multiple DHCP network entries match the Hotspot subnet; resolve them before generating setup.");
+    }
+    const gatewayIp = cidrMatch[1];
+    if (overlappingDhcpNetworks.length === 1 && overlappingDhcpNetworks[0].gateway !== gatewayIp) {
+      throw new Error("The existing DHCP network gateway differs from the verified bridge address.");
+    }
+    const dhcpOnBridge = dhcpServers.filter(row => row.interface === bridgeName && row.disabled !== "true");
+    if (dhcpOnBridge.length > 1) throw new Error("Multiple active DHCP servers use the Hotspot bridge; resolve the router configuration first.");
+    let dhcpPoolName = dhcpOnBridge[0]?.["address-pool"] || "";
+    if (!dhcpPoolName) {
+      const candidates = pools.filter(pool => {
+        const ranges = String(pool.ranges || "");
+        return ranges && !/^192\.168\.185\.5-192\.168\.190\.254$/.test(ranges)
+          && ranges.includes(cidrMatch[1].split(".").slice(0, 3).join("."));
+      });
+      if (candidates.length !== 1) throw new Error("Could not identify one existing DHCP pool for the Hotspot subnet; no script was generated.");
+      dhcpPoolName = candidates[0].name || "";
+    }
+    const selectedPool = pools.find(pool => pool.name === dhcpPoolName);
+    if (!selectedPool?.ranges) throw new Error("The Hotspot DHCP pool has no verifiable address range.");
+    const activePppProfiles = new Set(pppServers.filter(row => row.disabled !== "true").map(row => row.profile).filter(Boolean));
+    const pppProfilePools = pppProfiles
+      .filter(profile => activePppProfiles.has(profile.name || ""))
+      .map(profile => profile["remote-address"])
+      .filter(Boolean);
+    const pppoeRanges = [
+      "192.168.185.5-192.168.190.254",
+      ...pools.filter(pool => pppProfilePools.includes(pool.name || "")).map(pool => String(pool.ranges || "")),
+    ].filter(Boolean);
+    const dnsServers = dnsRows[0]?.["allow-remote-requests"] === "true"
+      ? [cidrMatch[1]]
+      : String(dnsRows[0]?.servers || "").split(",").map(value => value.trim()).filter(Boolean);
+    const apiOrigin = new URL(managementScriptSourceOrigin(req));
+    if (apiOrigin.protocol !== "https:") throw new Error("A verified HTTPS BIL API origin is required before generating the script.");
+    const allowlist: Array<{ host: string; source: string; kind?: "host" | "address" }> = [
+      { host: apiOrigin.hostname, source: "BIL API origin" },
+    ];
+    const portalHost = normalizePortalHostname(branding[0]?.portal_hostname);
+    if (portalHost) allowlist.push({ host: portalHost, source: "Saved tenant Hotspot portal" });
+    const paymentSettings = paymentRows[0];
+    const sharedGatewayConfig = (() => {
+      const raw = paymentSettings?.payment_gateway_config;
+      if (typeof raw === "string") {
+        try { return JSON.parse(raw) as Record<string, unknown>; } catch { return {}; }
+      }
+      return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    })();
+    const serviceHotspotConfig = servicePaymentConfigMap(paymentSettings?.payment_service_config).hotspot;
+    const activeGateway = paymentCollectionMode(paymentSettings?.payment_collection_mode) === "separate"
+      ? serviceHotspotConfig?.gatewayId || ""
+      : paymentGateway(paymentSettings?.payment_gateway);
+    const activeGatewayConfig = paymentCollectionMode(paymentSettings?.payment_collection_mode) === "separate"
+      ? serviceHotspotConfig?.config
+      : sharedGatewayConfig[activeGateway];
+    allowlist.push(...configuredHotspotPaymentHosts(activeGateway, activeGatewayConfig));
+    const configuredVpsHosts = [...new Set([
+      ...(process.env.VPS_HOSTS || "").split(","),
+      process.env.ROUTER_OPENVPN_ENDPOINT,
+      process.env.VPS_HOST,
+    ].map(vpnEndpointHost).filter(Boolean))];
+    for (const configuredVps of configuredVpsHosts) {
+      if (/^(?:\d{1,3}\.){3}\d{1,3}$/.test(configuredVps)) {
+        if (!isPrivateIp(configuredVps)) allowlist.push({ host: configuredVps, source: "Configured VPS endpoint", kind: "address" });
+      } else if (/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/i.test(configuredVps)) {
+        const resolved = await lookup(configuredVps).catch(() => null);
+        if (resolved && !isPrivateIp(resolved.address)) {
+          allowlist.push({ host: configuredVps, source: "Configured VPS endpoint" });
+          allowlist.push({ host: resolved.address, source: "Verified VPS DNS address", kind: "address" });
+        }
+      }
+    }
+    const existingHotspot = activeHotspots.find(row => row.interface === bridgeName);
+    const hasNat = natRows.some(row => row.chain === "srcnat" && row.action === "masquerade" && row["src-address"] === network);
+    let radiusReady = false;
+    const radiusState = await readPlatformRadiusSettings().catch(() => null);
+    const radiusConfig = radiusState?.settings;
+    const radiusDiscovery = radiusState?.vpsDiscovery;
+    const routerSynced = radiusDiscovery?.routerSync.some(item =>
+      item.routerId === id && (item.status === "added" || item.status === "already-synced"),
+    ) === true;
+    if (
+      radiusConfig?.enabled && radiusConfig.secret
+      && radiusDiscovery?.installed && radiusDiscovery.running && radiusDiscovery.configurationValid
+      && radiusDiscovery.authenticationListening && radiusDiscovery.accountingListening
+      && radiusDiscovery.endpointVerified && radiusDiscovery.secretSynchronized === true
+      && routerSynced && radiusDiscovery.radiusHost
+    ) {
+      try {
+        const radiusRows = await runRouterCommand(found.creds, [
+          "/radius/print",
+          "=.proplist=address,secret,authentication-port,accounting-port,service,disabled",
+        ]);
+        radiusReady = radiusRows.some(row =>
+          row.address === radiusDiscovery.radiusHost
+          && row.secret === radiusConfig.secret
+          && row["authentication-port"] === String(radiusConfig.authenticationPort)
+          && row["accounting-port"] === String(radiusConfig.accountingPort)
+          && row.disabled !== "true"
+          && String(row.service || "").split(",").map(value => value.trim()).includes("hotspot"),
+        );
+      } catch {
+        /* RADIUS discovery must fail closed; local Hotspot authentication remains the default. */
+        radiusReady = false;
+      }
+    }
+    const script = generateHotspotSetupScript({
+      routerId: id,
+      bridgeName,
+      gatewayCidr,
+      dhcpPoolName,
+      dhcpPoolRange: selectedPool.ranges,
+      pppoePoolRanges: pppoeRanges,
+      dhcpServerExists: dhcpOnBridge.length === 1,
+      dhcpNetworkExists: overlappingDhcpNetworks.length === 1,
+      dhcpDnsServers: dnsServers,
+      hotspotServerName: existingHotspot?.name,
+      hotspotProfileName: existingHotspot?.profile,
+      hotspotNatExists: hasNat,
+      radiusReady,
+      allowlist,
+    });
+    const isPreview = req.query.preview === "1";
+    await logActivity({
+      adminId,
+      type: "router",
+      action: isPreview ? "hotspotsetup_previewed" : "hotspotsetup_downloaded",
+      subject: found.row.name,
+      details: { routerId: id, allowlistSources: allowlist.map(item => item.source) },
+    });
+    res.setHeader("Cache-Control", "no-store");
+    if (isPreview) {
+      res.json({
+        script,
+        allowlistSources: allowlist.map(item => ({ host: item.host, source: item.source })),
+        router: { bridgeName, gatewayCidr, subnet: network, dhcpPoolName, dhcpPoolRange: selectedPool.ranges },
+        radiusReady,
+      });
+      return;
+    }
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="hotspotsetup-${id}.rsc"`);
+    res.send(script);
+  } catch (error) {
+    logger.warn({ routerId: id, error: error instanceof Error ? error.message : String(error) }, "Hotspot setup script generation failed");
+    res.status(409).json({ error: error instanceof Error ? error.message : "Router inventory could not be verified." });
+  }
 });
 
 export default router;

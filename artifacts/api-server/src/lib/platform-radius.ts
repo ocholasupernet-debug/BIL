@@ -10,6 +10,7 @@ import {
   platformSecureSettingsUpsert,
 } from "./platform-billing-store.js";
 import { logger } from "./logger.js";
+import type { RadiusDiscovery } from "./radius-discovery.js";
 
 export interface PlatformRadiusSettings {
   enabled: boolean;
@@ -19,10 +20,23 @@ export interface PlatformRadiusSettings {
   secret: string;
 }
 
-export interface PublicPlatformRadiusSettings extends Omit<PlatformRadiusSettings, "secret"> {
+export interface PublicPlatformRadiusSettings extends Omit<
+  PlatformRadiusSettings,
+  "secret" | "host" | "authenticationPort" | "accountingPort"
+> {
+  host: string;
+  authenticationPort: number | null;
+  accountingPort: number | null;
   hasSecret: boolean;
   configured: boolean;
   source: "database" | "environment" | "none";
+  vpsDiscovery: RadiusDiscovery | null;
+  secretSynchronized: boolean;
+}
+
+interface StoredRadiusEnvelope {
+  settings: PlatformRadiusSettings;
+  vpsDiscovery: RadiusDiscovery | null;
 }
 
 interface EncryptedRadiusSettings {
@@ -93,11 +107,14 @@ export function normalizePlatformRadiusSettings(
   return settings;
 }
 
-function encryptSettings(settings: PlatformRadiusSettings): Omit<EncryptedRadiusSettings, "id"> {
+function encryptSettings(
+  settings: PlatformRadiusSettings,
+  vpsDiscovery: RadiusDiscovery | null,
+): Omit<EncryptedRadiusSettings, "id"> {
   const iv = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
   const ciphertext = Buffer.concat([
-    cipher.update(JSON.stringify(settings), "utf8"),
+    cipher.update(JSON.stringify({ settings, vpsDiscovery }), "utf8"),
     cipher.final(),
   ]);
   return {
@@ -107,14 +124,27 @@ function encryptSettings(settings: PlatformRadiusSettings): Omit<EncryptedRadius
   };
 }
 
-function decryptSettings(record: EncryptedRadiusSettings): PlatformRadiusSettings {
+function decryptSettings(record: EncryptedRadiusSettings): StoredRadiusEnvelope {
   const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(record.iv, "base64"));
   decipher.setAuthTag(Buffer.from(record.auth_tag, "base64"));
   const plaintext = Buffer.concat([
     decipher.update(Buffer.from(record.ciphertext, "base64")),
     decipher.final(),
   ]).toString("utf8");
-  return normalizePlatformRadiusSettings(JSON.parse(plaintext) as unknown);
+  const parsed = JSON.parse(plaintext) as unknown;
+  const value = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+  // Preserve compatibility with the original encrypted settings object.
+  if (value.settings && typeof value.settings === "object") {
+    return {
+      settings: normalizePlatformRadiusSettings(value.settings),
+      vpsDiscovery: (value.vpsDiscovery && typeof value.vpsDiscovery === "object"
+        ? value.vpsDiscovery
+        : null) as RadiusDiscovery | null,
+    };
+  }
+  return { settings: normalizePlatformRadiusSettings(parsed), vpsDiscovery: null };
 }
 
 function environmentSettings(): PlatformRadiusSettings {
@@ -132,6 +162,7 @@ function environmentSettings(): PlatformRadiusSettings {
 export async function readPlatformRadiusSettings(): Promise<{
   settings: PlatformRadiusSettings;
   source: PublicPlatformRadiusSettings["source"];
+  vpsDiscovery: RadiusDiscovery | null;
 }> {
   if (platformSecureSettingsConfigured()) {
     let rows: EncryptedRadiusSettings[];
@@ -148,7 +179,8 @@ export async function readPlatformRadiusSettings(): Promise<{
     }
     if (rows[0]) {
       try {
-        return { settings: decryptSettings(rows[0]), source: "database" };
+        const stored = decryptSettings(rows[0]);
+        return { ...stored, source: "database" };
       } catch (error) {
         logger.error(
           { errorType: error instanceof Error ? error.name : "unknown" },
@@ -162,6 +194,7 @@ export async function readPlatformRadiusSettings(): Promise<{
   return {
     settings: envSettings,
     source: envSettings.enabled ? "environment" : "none",
+    vpsDiscovery: null,
   };
 }
 
@@ -170,10 +203,27 @@ export async function savePlatformRadiusSettings(input: unknown): Promise<Platfo
     throw new Error("Secure platform settings require Supabase service-role configuration.");
   }
   const current = await readPlatformRadiusSettings();
-  const settings = normalizePlatformRadiusSettings(input, current.settings.secret);
+  const discovery = current.vpsDiscovery;
+  if (!discovery?.endpointVerified || !discovery.radiusHost
+    || !discovery.authenticationPort || !discovery.accountingPort) {
+    throw new Error("Run a successful configured VPS RADIUS check before saving an endpoint.");
+  }
+  const safeInput = input && typeof input === "object" && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : {};
+  const { secret: _ignoredSecret, ...settingsInput } = safeInput;
+  const settings = normalizePlatformRadiusSettings({
+    ...settingsInput,
+    host: discovery.radiusHost,
+    authenticationPort: discovery.authenticationPort,
+    accountingPort: discovery.accountingPort,
+  }, current.settings.secret);
+  if (settings.enabled && current.vpsDiscovery?.secretSynchronized !== true) {
+    throw new Error("Provision the shared secret to selected routers before enabling platform RADIUS.");
+  }
   const saved = await platformSecureSettingsUpsert<EncryptedRadiusSettings>("id", {
     id: SETTINGS_ID,
-    ...encryptSettings(settings),
+    ...encryptSettings(settings, current.vpsDiscovery),
     updated_at: new Date().toISOString(),
   });
   if (!saved[0]) {
@@ -182,15 +232,70 @@ export async function savePlatformRadiusSettings(input: unknown): Promise<Platfo
   return settings;
 }
 
+export function generatePlatformRadiusSecret(): string {
+  return randomBytes(48).toString("base64url");
+}
+
+export async function createOrRotatePlatformRadiusSecret(
+  rotate: boolean,
+): Promise<string> {
+  if (!platformSecureSettingsConfigured()) {
+    throw new Error("Secure platform settings require Supabase service-role configuration.");
+  }
+  const current = await readPlatformRadiusSettings();
+  if (rotate && !current.settings.secret) {
+    throw new Error("Create the initial RADIUS secret before rotating it.");
+  }
+  if (!rotate && current.settings.secret) {
+    throw new Error("A RADIUS secret already exists. Use the explicit rotation action.");
+  }
+  const secret = generatePlatformRadiusSecret();
+  const settings = { ...current.settings, secret, enabled: false };
+  const discovery = current.vpsDiscovery
+    ? { ...current.vpsDiscovery, secretSynchronized: false }
+    : null;
+  const saved = await platformSecureSettingsUpsert<EncryptedRadiusSettings>("id", {
+    id: SETTINGS_ID,
+    ...encryptSettings(settings, discovery),
+    updated_at: new Date().toISOString(),
+  });
+  if (!saved[0]) throw new Error("RADIUS secret could not be saved securely.");
+  return secret;
+}
+
+export async function savePlatformRadiusDiscovery(
+  discovery: RadiusDiscovery,
+): Promise<void> {
+  if (!platformSecureSettingsConfigured()) {
+    throw new Error("Secure platform settings require Supabase service-role configuration.");
+  }
+  const current = await readPlatformRadiusSettings();
+  const saved = await platformSecureSettingsUpsert<EncryptedRadiusSettings>("id", {
+    id: SETTINGS_ID,
+    ...encryptSettings(current.settings, discovery),
+    updated_at: new Date().toISOString(),
+  });
+  if (!saved[0]) throw new Error("RADIUS discovery status could not be saved.");
+}
+
 export function publicPlatformRadiusSettings(
   settings: PlatformRadiusSettings,
   source: PublicPlatformRadiusSettings["source"],
+  vpsDiscovery: RadiusDiscovery | null = null,
 ): PublicPlatformRadiusSettings {
   const { secret, ...publicSettings } = settings;
+  const endpointVerified = vpsDiscovery?.endpointVerified === true;
   return {
     ...publicSettings,
+    host: endpointVerified ? vpsDiscovery.radiusHost ?? "" : "",
+    authenticationPort: endpointVerified ? vpsDiscovery.authenticationPort : null,
+    accountingPort: endpointVerified ? vpsDiscovery.accountingPort : null,
     hasSecret: secret.length > 0,
-    configured: settings.enabled && Boolean(settings.host && secret),
+    configured: endpointVerified
+      && vpsDiscovery.secretSynchronized === true
+      && Boolean(vpsDiscovery.radiusHost && secret),
     source,
+    vpsDiscovery,
+    secretSynchronized: vpsDiscovery?.secretSynchronized === true,
   };
 }

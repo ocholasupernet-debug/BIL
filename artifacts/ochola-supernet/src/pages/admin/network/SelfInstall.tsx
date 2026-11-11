@@ -323,6 +323,7 @@ export default function SelfInstall() {
   const [bundleContent, setBundleContent] = useState("");
   const [scriptWarning, setScriptWarning] = useState("");
   const [copiedStep, setCopiedStep] = useState<SelfInstallStep["id"] | null>(null);
+  const [hotspotPreview, setHotspotPreview] = useState("");
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     const rawId = Number(query.get("reconfigure"));
@@ -556,6 +557,62 @@ export default function SelfInstall() {
     }
   };
 
+  const downloadHotspotSetup = async () => {
+    if (!router) return;
+    setBusy("script");
+    setError("");
+    setNotice("");
+    try {
+      const token = getAdminApiToken();
+      const response = await fetch(
+        `/api/router/${router.id}/hotspotsetup.rsc?adminId=${encodeURIComponent(String(ADMIN_ID))}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(typeof payload.error === "string" ? payload.error : `Hotspot setup generation failed (${response.status}).`);
+      }
+      const blob = await response.blob();
+      if (!blob.size) throw new Error("The generated hotspotsetup.rsc file was empty.");
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `hotspotsetup-${router.id}.rsc`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setNotice("Downloaded hotspotsetup.rsc. Review it, back up the router, and test it on non-production equipment before importing.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not generate hotspotsetup.rsc.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const previewHotspotSetup = async () => {
+    if (!router) return;
+    setBusy("script");
+    setError("");
+    setNotice("");
+    try {
+      const token = getAdminApiToken();
+      const response = await fetch(
+        `/api/router/${router.id}/hotspotsetup.rsc?adminId=${encodeURIComponent(String(ADMIN_ID))}&preview=1`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : `Preview failed (${response.status}).`);
+      if (typeof payload.script !== "string" || !payload.script.trim()) throw new Error("The generated preview was empty.");
+      setHotspotPreview(payload.script);
+      setNotice("Preview generated from read-only router inventory. No router changes were made.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not preview hotspotsetup.rsc.");
+    } finally {
+      setBusy("");
+    }
+  };
+
   const copySelfInstallStep = async (stepId: SelfInstallStep["id"]) => {
     if (!router) return;
     setBusy("script");
@@ -761,7 +818,34 @@ export default function SelfInstall() {
                       ? "This script is intentionally empty while its replacement structure is being prepared."
                        : <>Download the tagged <strong style={{ color: "var(--isp-text)" }}>mainhotspot.rsc</strong> file from this signed-in page, upload it to the router, then import its ordered network, VPN/API, and customer-service sections.</>}
                  </div>
+                  {mode !== "zero-touch" && (
+                    <div style={{ marginTop: "0.4rem", color: "var(--isp-text-muted)", fontSize: "0.7rem", lineHeight: 1.5 }}>
+                      The standalone Hotspot allowlist uses the configured API, tenant portal, active payment gateway, and verified VPS hosts. Add future VPS hosts to the comma-separated <code>VPS_HOSTS</code> environment setting; secrets are never written into the script.
+                    </div>
+                  )}
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
+                    {mode !== "zero-touch" && (
+                      <button
+                        type="button"
+                        onClick={() => void downloadHotspotSetup()}
+                        disabled={!router || busy !== ""}
+                        style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-section)", color: router && busy === "" ? "var(--isp-text)" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: router && busy === "" ? "pointer" : "not-allowed" }}
+                      >
+                        <TerminalSquare size={15} />
+                        Download hotspotsetup.rsc
+                      </button>
+                    )}
+                    {mode !== "zero-touch" && (
+                      <button
+                        type="button"
+                        onClick={() => void previewHotspotSetup()}
+                        disabled={!router || busy !== ""}
+                        style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: "1px solid var(--isp-border)", borderRadius: 8, background: "var(--isp-section)", color: router && busy === "" ? "var(--isp-text)" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: router && busy === "" ? "pointer" : "not-allowed" }}
+                      >
+                        <TerminalSquare size={15} />
+                        Preview hotspotsetup.rsc
+                      </button>
+                    )}
                    <button
                      type="button"
                       onClick={() => void refreshSelfInstallSteps()}
@@ -781,6 +865,12 @@ export default function SelfInstall() {
                       Refresh script
                     </button>}
                  </div>
+                  {hotspotPreview && (
+                    <details style={{ marginTop: "0.8rem", border: "1px solid var(--isp-border)", borderRadius: 8, padding: "0.65rem" }}>
+                      <summary style={{ color: "var(--isp-text)", cursor: "pointer", fontSize: "0.75rem", fontWeight: 750 }}>Review generated Hotspot script</summary>
+                      <pre style={{ margin: "0.65rem 0 0", maxHeight: 340, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word", color: "var(--isp-text-muted)", fontSize: "0.68rem", lineHeight: 1.5 }}>{hotspotPreview}</pre>
+                    </details>
+                  )}
                   {mode === "zero-touch" && (
                     <div role="status" style={{ marginTop: "0.75rem", color: "var(--isp-text-muted)", fontSize: "0.72rem" }}>
                       The command area is blank by design. No Zero-Touch script can be copied, downloaded, or sent to a router.
