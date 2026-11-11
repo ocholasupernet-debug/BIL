@@ -2,18 +2,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildRouterFileImportCommand, buildSelfInstallStepCommand } from "./self-install-step-command.js";
 
-test("RouterOS fetch/import command runs as one block and preserves the file on import failure", () => {
+test("RouterOS fetch/import command reports the exact failing stage and error", () => {
   const command = buildRouterFileImportCommand({
     sourceUrl: "https://come.isplatty.org/api/router-file-source/104/networksetup.rsc",
     fileName: "networksetup.rsc",
   });
 
   assert.equal(command.split("\n").length, 1);
-  assert.match(command, /^:do \{/);
+  assert.match(command, /^:local ocholaStage "fetch"; :onerror fetchError in=\{/);
   assert.match(command, /\/tool fetch .*dst-path="networksetup\.rsc"/);
   assert.match(command, /\/import "networksetup\.rsc"/);
   assert.match(command, /\/file remove \[find where name="networksetup\.rsc"\]/);
-  assert.match(command, /Import step failed: /);
+  assert.match(command, /:set ocholaStage "fetch"/);
+  assert.match(command, /:set ocholaStage "import"/);
+  assert.match(command, /:set ocholaStage "cleanup"/);
+  assert.match(command, /\[OCHOLA\] " \. \$ocholaStage \. " failed: " \. \$fetchError/);
+  assert.doesNotMatch(command, /\$error\b/);
   assert.ok(command.indexOf('/import "networksetup.rsc"') < command.indexOf("/file remove"));
 });
 
@@ -26,6 +30,7 @@ test("Self Install bundle command fetches its protected tenant URL before import
 
   assert.match(command, /url="https:\/\/tenant\.isplatty\.com\/api\/router-file-source\/one-time-token"/);
   assert.match(command, /dst-path="mainhotspot\.rsc" mode=https check-certificate=yes/);
+  assert.match(command, /:onerror fetchError in=/);
   assert.ok(command.indexOf("/tool fetch") < command.indexOf('/import "mainhotspot.rsc"'));
   assert.ok(command.indexOf('/import "mainhotspot.rsc"') < command.indexOf("/file remove"));
 });

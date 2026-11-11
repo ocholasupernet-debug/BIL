@@ -23,7 +23,7 @@ export function buildRouterFileImportCommand({
   fileName,
   verified = false,
 }: RouterFileImportCommandOptions): string {
-  return `:do { /tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}; :delay 2s; :put "[OCHOLA] Download finished; importing ${fileName}"; /import "${fileName}"; /file remove [find where name="${fileName}"]; :put "[OCHOLA] Imported ${fileName} successfully." } on-error={ :put ("[OCHOLA] Import step failed: " . $error) }`;
+  return `:local ocholaStage "fetch"; :onerror fetchError in={ :set ocholaStage "fetch"; /tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}; :delay 2s; :put "[OCHOLA] Download finished; importing ${fileName}"; :set ocholaStage "import"; /import "${fileName}"; :set ocholaStage "cleanup"; /file remove [find where name="${fileName}"]; :put "[OCHOLA] Imported ${fileName} successfully." } do={ :error ("[OCHOLA] " . $ocholaStage . " failed: " . $fetchError) }`;
 }
 
 const STEP_DESCRIPTORS = [
