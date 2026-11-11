@@ -5,14 +5,12 @@ import {
   Check,
   CheckCircle2,
   Clipboard,
-  Download,
   ExternalLink,
   Globe2,
   Loader2,
   Network,
   RefreshCw,
   Router as RouterIcon,
-  Server,
   ShieldCheck,
   TerminalSquare,
   Wifi,
@@ -21,7 +19,6 @@ import {
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { NetworkTabs } from "./NetworkTabs";
 import { ADMIN_ID, getAdminApiToken } from "@/lib/supabase";
-import { pushSelfInstallFiles, type SelfInstallFilePushResult } from "@/lib/self-install-file-push";
 import { SelfInstallStepsResult } from "./SelfInstallStepsResult";
 
 type InstallMode = "greenfield" | "brownfield" | "zero-touch";
@@ -102,6 +99,7 @@ type SelfInstallStep = {
 type SelfInstallStepsResponse = {
   routerId: number;
   warning?: string;
+  bundleContent: string;
   steps: SelfInstallStep[];
 };
 
@@ -134,13 +132,6 @@ const MODE_OPTIONS: Array<{
     tone: "#fb923c",
   },
 ];
-
-const INCOMPLETE_INSTALL_STATUSES = new Set([
-  "setup",
-  "awaiting_connection",
-  "awaiting_sync",
-  "awaiting_ports",
-]);
 
 const panel: React.CSSProperties = {
   background: "var(--isp-card)",
@@ -324,14 +315,14 @@ export default function SelfInstall() {
   const [vpnInfo, setVpnInfo] = useState<VpnInfo | null>(null);
   const [installStatus, setInstallStatus] = useState<InstallStatus | null>(null);
   const [finished, setFinished] = useState<FinishResult["router"] | null>(null);
-  const [busy, setBusy] = useState<"creating" | "loading" | "finishing" | "script" | "uploading" | "">("");
+  const [busy, setBusy] = useState<"creating" | "loading" | "finishing" | "script" | "">("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [reconfigureId, setReconfigureId] = useState<number | null>(null);
   const [scriptSteps, setScriptSteps] = useState<SelfInstallStep[]>([]);
+  const [bundleContent, setBundleContent] = useState("");
   const [scriptWarning, setScriptWarning] = useState("");
   const [copiedStep, setCopiedStep] = useState<SelfInstallStep["id"] | null>(null);
-  const [filePushProgress, setFilePushProgress] = useState<SelfInstallFilePushResult | null>(null);
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     const rawId = Number(query.get("reconfigure"));
@@ -371,9 +362,9 @@ export default function SelfInstall() {
 
   useEffect(() => {
     setScriptSteps([]);
+    setBundleContent("");
     setScriptWarning("");
     setCopiedStep(null);
-    setFilePushProgress(null);
   }, [mode, router?.id]);
 
   const refreshStatus = useCallback(async () => {
@@ -508,8 +499,11 @@ export default function SelfInstall() {
     }
     const payload = await response.json().catch(() => ({})) as SelfInstallStepsResponse;
     const steps = Array.isArray(payload.steps) ? payload.steps as SelfInstallStep[] : [];
-    if (steps.length === 0) throw new Error("The generated Self Install steps were empty.");
+    if (steps.length === 0 || typeof payload.bundleContent !== "string" || !payload.bundleContent.trim()) {
+      throw new Error("The generated mainhotspot.rsc bundle was empty.");
+    }
     setScriptSteps(steps);
+    setBundleContent(payload.bundleContent);
     setScriptWarning(payload.warning || "");
     setCopiedStep(null);
     return payload;
@@ -524,8 +518,8 @@ export default function SelfInstall() {
     try {
       const result = await fetchSelfInstallSteps();
       setNotice(result.warning
-        ? "The combined script is ready. Resolve the VPS warning before running it."
-        : "The combined Self Install script is ready to copy.");
+        ? "The authenticated bundle is ready. Resolve the VPS warning before importing it."
+        : "Download the authenticated bundle, upload it to the router, then import it.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install steps.");
     } finally {
@@ -540,21 +534,21 @@ export default function SelfInstall() {
     setNotice("");
     try {
        const generated = scriptSteps.length > 0
-         ? { steps: scriptSteps }
+         ? { steps: scriptSteps, bundleContent }
          : await fetchSelfInstallSteps();
        const steps = generated.steps;
       const step = steps.find(item => item.id === stepId);
       if (!step) throw new Error("That Self Install step is not available.");
-      const blob = new Blob([step.command], { type: "text/plain;charset=utf-8" });
+       const blob = new Blob([generated.bundleContent], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `step-${step.order}-${step.fileName.replace(/\.rsc$/i, "")}-command-${router.id}.rsc`;
+       link.download = `mainhotspot-${router.id}.rsc`;
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      setNotice("The mainhotspot.rsc command is ready to run in the MikroTik terminal.");
+       setNotice("Downloaded mainhotspot.rsc. Upload it to the router, then run the import command.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
     } finally {
@@ -569,52 +563,16 @@ export default function SelfInstall() {
     setNotice("");
     try {
        const generated = scriptSteps.length > 0
-         ? { steps: scriptSteps }
+         ? { steps: scriptSteps, bundleContent }
          : await fetchSelfInstallSteps();
        const steps = generated.steps;
       const step = steps.find(item => item.id === stepId);
       if (!step) throw new Error("That Self Install step is not available.");
       await navigator.clipboard.writeText(step.command);
       setCopiedStep(step.id);
-      setNotice("The single mainhotspot.rsc command was copied. It runs the tagged sections in order.");
+       setNotice("Copied the import command. Upload mainhotspot.rsc to the router before running it.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not copy the Self Install script.");
-    } finally {
-      setBusy("");
-    }
-  };
-
-  const pushGeneratedInstallFiles = async () => {
-    if (mode === "zero-touch" || !router || !live?.connected || !INCOMPLETE_INSTALL_STATUSES.has(
-      String(live.router?.status ?? router.status).toLowerCase(),
-    )) return;
-    if (!window.confirm(
-      `Push mainhotspot.rsc to ${router.name}? A same-named file will be replaced. It will not be imported or run.`,
-    )) return;
-
-    setBusy("uploading");
-    setError("");
-    setNotice("");
-    setFilePushProgress(null);
-    try {
-      const generated = await fetchSelfInstallSteps();
-      const result = await pushSelfInstallFiles(
-        router.id,
-        ADMIN_ID,
-        generated.steps.map(step => step.fileName),
-        getAdminApiToken(),
-        progress => setFilePushProgress(progress),
-      );
-      setFilePushProgress(result);
-      if (result.status === "failed" || result.failed.length > 0 || result.error) {
-        setError(result.error || `Self Install file transfer finished with ${result.failed.length} failed file(s).`);
-      } else {
-        setNotice(
-          `${result.deployed.length} setup file(s) pushed${result.skipped.length ? `; ${result.skipped.length} already existed` : ""}. The scripts were not run.`,
-        );
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not push the Self Install files.");
     } finally {
       setBusy("");
     }
@@ -628,15 +586,6 @@ export default function SelfInstall() {
   const pageStep = finished ? 4 : router ? (connected ? 3 : 2) : 1;
   const endpointReady = Boolean(tunnel?.connectTo && !tunnel.connectTo.startsWith("SET_"));
   const canGenerateSteps = mode !== "zero-touch" && endpointReady && busy === "";
-  const incompleteInstall = Boolean(
-    router
-    && !finished
-    && INCOMPLETE_INSTALL_STATUSES.has(String(live?.router?.status ?? router.status).toLowerCase()),
-  );
-  const canPushInstallFiles = Boolean(
-    mode !== "zero-touch" && incompleteInstall && live?.connected && scriptSteps.length === 1 && busy === "",
-  );
-
   const checklist = useMemo(() => [
     { label: "Tenant-owned router profile", ok: Boolean(router) },
     { label: "VPS management endpoint available", ok: endpointReady },
@@ -810,7 +759,7 @@ export default function SelfInstall() {
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
                     {mode === "zero-touch"
                       ? "This script is intentionally empty while its replacement structure is being prepared."
-                       : <>Self Install downloads one tagged file named <strong style={{ color: "var(--isp-text)" }}>mainhotspot.rsc</strong> and runs its network, VPN/API, and customer-service sections in order.</>}
+                       : <>Download the tagged <strong style={{ color: "var(--isp-text)" }}>mainhotspot.rsc</strong> file from this signed-in page, upload it to the router, then import its ordered network, VPN/API, and customer-service sections.</>}
                  </div>
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <button
@@ -854,59 +803,6 @@ export default function SelfInstall() {
                       />
                     </div>
                   )}
-                  {mode !== "zero-touch" && incompleteInstall && (
-                    <div style={{ marginTop: "0.8rem", padding: "0.8rem", borderRadius: 9, border: "1px solid rgba(59,130,246,0.22)", background: "rgba(37,99,235,0.05)" }}>
-                      <div style={{ color: "var(--isp-text)", fontSize: "0.78rem", fontWeight: 800 }}>
-                        Direct file transfer
-                      </div>
-                      <div style={{ marginTop: "0.3rem", color: "var(--isp-text-muted)", fontSize: "0.71rem", lineHeight: 1.5 }}>
-                         When RouterOS API is connected, send the combined mainhotspot.rsc file to the router&apos;s root directory. This does not import or run it.
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void pushGeneratedInstallFiles()}
-                        disabled={!canPushInstallFiles}
-                        style={{ marginTop: "0.7rem", display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.56rem 0.85rem", border: 0, borderRadius: 8, background: canPushInstallFiles ? "var(--isp-accent)" : "var(--isp-section)", color: canPushInstallFiles ? "#fff" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.75rem", cursor: canPushInstallFiles ? "pointer" : "not-allowed" }}
-                      >
-                        {busy === "uploading"
-                          ? <Loader2 size={14} style={{ animation: "self-install-spin 1s linear infinite" }} />
-                          : <Server size={14} />}
-                        {busy === "uploading"
-                          ? "Pushing setup files…"
-                          : !live?.connected
-                            ? "Waiting for RouterOS API"
-                            : scriptSteps.length !== 1
-                              ? "Generate the script first"
-                              : "Push mainhotspot.rsc"}
-                      </button>
-                    </div>
-                  )}
-                  {mode !== "zero-touch" && filePushProgress && (
-                    <div style={{ marginTop: "0.7rem", padding: "0.75rem 0.85rem", borderRadius: 8, border: `1px solid ${filePushProgress.failed.length || filePushProgress.status === "failed" || filePushProgress.error ? "rgba(248,113,113,0.3)" : "rgba(74,222,128,0.25)"}`, background: filePushProgress.failed.length || filePushProgress.status === "failed" || filePushProgress.error ? "rgba(248,113,113,0.05)" : "rgba(74,222,128,0.05)" }}>
-                      <div style={{ color: filePushProgress.failed.length || filePushProgress.status === "failed" || filePushProgress.error ? "#fca5a5" : "#86efac", fontSize: "0.74rem", fontWeight: 800 }}>
-                        Self Install file transfer {["queued", "running"].includes(filePushProgress.status) ? filePushProgress.status : filePushProgress.failed.length || filePushProgress.status === "failed" || filePushProgress.error ? "finished with errors" : "complete"}
-                      </div>
-                      <div style={{ marginTop: "0.3rem", color: "var(--isp-text-muted)", fontSize: "0.69rem" }}>
-                        {filePushProgress.deployed.length} uploaded · {filePushProgress.skipped.length} skipped · {filePushProgress.failed.length} failed · {filePushProgress.processed} of {filePushProgress.total} processed
-                      </div>
-                      {filePushProgress.error && (
-                        <div style={{ marginTop: "0.35rem", color: "#fca5a5", fontSize: "0.68rem" }}>{filePushProgress.error}</div>
-                      )}
-                      {[...filePushProgress.deployed, ...filePushProgress.skipped, ...filePushProgress.failed].length > 0 && (
-                        <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.1rem", color: "var(--isp-text-muted)", fontSize: "0.68rem", lineHeight: 1.55 }}>
-                          {filePushProgress.deployed.map(file => (
-                            <li key={`deployed:${file.destinationPath}`}>{file.destinationPath}: {file.replaced ? "replaced" : "uploaded"}</li>
-                          ))}
-                          {filePushProgress.skipped.map(file => (
-                            <li key={`skipped:${file.destinationPath}`}>{file.destinationPath}: {file.reason || "skipped"}</li>
-                          ))}
-                          {filePushProgress.failed.map(file => (
-                            <li key={`failed:${file.destinationPath}`} style={{ color: "#fca5a5" }}>{file.destinationPath}: {file.error || "transfer failed"}</li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
                  {!endpointReady && (
                    <div style={{ marginTop: "0.55rem", color: "#fbbf24", fontSize: "0.7rem" }}>Generate the connection profile first so the VPS endpoint and tunnel credentials are ready.</div>
                  )}
@@ -941,7 +837,7 @@ export default function SelfInstall() {
                     <TerminalSquare size={14} style={{ color: selectedMode.tone }} /> Router-side checklist
                   </div>
                      <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.1rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.7 }}>
-                       <li>Copy and run the single mainhotspot.rsc command. Its tagged sections execute in order.</li>
+                       <li>Download and upload mainhotspot.rsc, then run <code>/import mainhotspot.rsc</code>.</li>
                        <li>The final services file creates the selected Hotspot bridge, DHCP, walled garden, PPPoE, and service NAT.</li>
                       <li>It waits for the management tunnel to reach a running state.</li>
                       <li>Return here after the VPN is up so the next configuration step can be added.</li>

@@ -32,10 +32,10 @@ export function SelfInstallStepsResult({
     <section className="self-install-result" aria-labelledby="self-install-result-heading">
       <header className="self-install-result__header">
         <div>
-          <p className="self-install-result__eyebrow">Router configuration · One combined file</p>
-          <h3 id="self-install-result-heading">Your setup command is ready</h3>
+          <p className="self-install-result__eyebrow">Router configuration · Authenticated download</p>
+          <h3 id="self-install-result-heading">Your setup file is ready</h3>
           <p className="self-install-result__intro">
-            Copy one command. It downloads and runs the tagged sections in order.
+            Download the file, upload it to the router, then run the import command.
           </p>
         </div>
         <span className="self-install-result__ready">
@@ -49,14 +49,14 @@ export function SelfInstallStepsResult({
           <ShieldCheck size={18} aria-hidden="true" />
         </span>
         <span>
-            <strong>Router profile created</strong>
-            <span>One protected, short-lived bundle contains the complete ordered setup.</span>
+            <strong>No public script URL</strong>
+            <span>The fetch URL has been removed. Download the setup file from this signed-in admin page.</span>
         </span>
       </div>
 
       <div className="self-install-result__list-heading">
-        <h4>Run this command in RouterOS</h4>
-        <span>One fetch · one import</span>
+        <h4>Import after uploading the file</h4>
+        <span>One local import command</span>
       </div>
 
       <div className="self-install-result__steps">
@@ -85,22 +85,22 @@ export function SelfInstallStepsResult({
                     type="button"
                     onClick={() => onDownload(step.id)}
                     disabled={busy !== ""}
-                    aria-label={`Download Step ${step.order} command`}
+                    aria-label="Download mainhotspot.rsc"
                   >
                     <Download size={14} aria-hidden="true" />
-                    Download
+                    Download RSC
                   </button>
                   <button
                     className="self-install-result__button self-install-result__button--primary"
                     type="button"
                     onClick={() => onCopy(step.id)}
                     disabled={busy !== ""}
-                    aria-label={`Copy Step ${step.order} command`}
+                    aria-label="Copy RouterOS import command"
                   >
                     {copiedStep === step.id
                       ? <Check size={14} aria-hidden="true" />
                       : <Clipboard size={14} aria-hidden="true" />}
-                    {copiedStep === step.id ? "Copied" : "Copy command"}
+                    {copiedStep === step.id ? "Copied" : "Copy import command"}
                   </button>
                 </div>
               </div>
@@ -114,12 +114,12 @@ export function SelfInstallStepsResult({
 
       <div className="self-install-result__warning">
         <AlertTriangle size={16} aria-hidden="true" />
-        <span><strong>The bundle runs its tagged sections in order.</strong> It stops if a section reports an error.</span>
+        <span><strong>Upload mainhotspot.rsc first.</strong> The file contains router credentials; keep it private and remove it after installation.</span>
       </div>
 
       <p className="self-install-result__footnote" aria-live="polite">
         <CheckCircle2 size={14} aria-hidden="true" />
-        Your tenant-owned router profile is ready. The downloaded bundle is temporary and removed after import.
+        After upload, run the import command. The bundle executes network, VPN/API, and service setup in order, stopping on errors.
       </p>
     </section>
   );

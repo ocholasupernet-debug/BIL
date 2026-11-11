@@ -9,7 +9,6 @@ import router from "./routes";
 import { logger } from "./lib/logger";
 import { resolveVlanHotspotPortalRequest } from "./lib/api-auth.js";
 import { TENANT_BASE_DOMAINS } from "./lib/tenant-host.js";
-import { selfInstallBundlePublicRouter } from "./routes/mikrotik-route.js";
 import {
   resolveCanonicalAdminLoginRedirect,
   resolveLegacyAdminEntry,
@@ -95,7 +94,6 @@ app.use("/api", resolveVlanHotspotPortalRequest);
 // Independent, short-lived, tenant-bound v2 RouterOS installer delivery.
 app.use("/api", routerosInstallerV2ApiRouter);
 app.use("/api", router);
-app.use(selfInstallBundlePublicRouter);
 app.use(routerosInstallerV2PublicRouter);
 
 // Support the old PHP-style admin URL as a narrow redirect only. The tenant

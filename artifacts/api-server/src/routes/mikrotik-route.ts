@@ -88,7 +88,6 @@ import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { readPlatformRadiusSettings } from "../lib/platform-radius.js";
 import { buildSelfInstallBundle } from "../lib/self-install-bundle.js";
-import { TENANT_BASE_DOMAIN } from "../lib/tenant-host.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
 import {
@@ -116,7 +115,6 @@ import {
 } from "../lib/router-live-session-entitlement.js";
 
 const router: IRouter = Router();
-export const selfInstallBundlePublicRouter: IRouter = Router();
 
 function generatedVlanNames(port: VlanServiceIdentityInput & Pick<PortServiceResourceInput, "interface_name" | "bridge_name">) {
   const legacy = Boolean(port.bridge_name?.startsWith("OCHOLA_RS")) && !port.interface_name.startsWith("OCHOLA_RS");
@@ -452,26 +450,6 @@ router.get("/router-file-source/:token", (req, res): void => {
     .set("Content-Length", String(source.content.length))
     .set("Content-Disposition", `inline; filename="${source.fileName.replace(/[^A-Za-z0-9._-]/g, "_")}"`)
     .set("Cache-Control", "no-store, no-cache, must-revalidate")
-    .send(source.content);
-});
-
-/* The combined Self Install source is a short-lived capability link. */
-selfInstallBundlePublicRouter.get("/scripts/mainhotspot.rsc", (req, res): void => {
-  cleanPendingRouterFileSources();
-  const token = typeof req.query.token === "string" ? req.query.token : "";
-  const source = pendingRouterFileSources.get(token);
-  if (!source || source.expiresAt <= Date.now()) {
-    pendingRouterFileSources.delete(token);
-    res.status(404).send("Self Install source expired");
-    return;
-  }
-  source.fetchAttempts = (source.fetchAttempts ?? 0) + 1;
-  if (source.fetchAttempts >= (source.maxFetchAttempts ?? 1)) pendingRouterFileSources.delete(token);
-  res
-    .type("text/plain")
-    .set("Content-Disposition", 'attachment; filename="mainhotspot.rsc"')
-    .set("Cache-Control", "no-store, no-cache, must-revalidate")
-    .set("X-Content-Type-Options", "nosniff")
     .send(source.content);
 });
 
@@ -3388,15 +3366,7 @@ router.get("/router/:id/vpn-info", requireAdmin(), async (req, res): Promise<voi
 });
 
 /* ─── GET /api/router/:id/self-install-script ───────────────────────────── */
-/**
- * Generates the ordered, independently executable RouterOS steps for Self
- * Install.
- *
- * This is intentionally limited to the management OVPN client, CA trust,
- * plain RouterOS API enablement, live tunnel discovery, and the completion
- * callback. It does not change firewall, NAT, bridge, user, hotspot, billing,
- * queue, or customer-service configuration.
- */
+/** Generates the credential-bearing Self Install bundle for an authenticated admin. */
 router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): Promise<void> => {
   const id = parseInt(String(req.params.id), 10);
   if (isNaN(id)) {
@@ -3471,7 +3441,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
        * independent scripts.
        */
       openVpnCredentials = routerManagementOvpnCredentials(found.row.name);
-      provisioningWarning = `The router management VPN credentials could not be persisted yet. The three Brownfield scripts were generated; finish VPS VPN readiness before running Step 2. (${reason})`;
+      provisioningWarning = `The router management VPN credentials could not be persisted yet. The Brownfield bundle was generated; finish VPS VPN readiness before importing it. (${reason})`;
       logger.warn({ routerId: id, error: reason }, "[self-install] Brownfield script generation continued without credential persistence");
     }
     let backupTunnelRouterIp: string;
@@ -3494,7 +3464,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         }
         provisioningWarning = provisioningWarning
           ? `${provisioningWarning} The VPS management VPN is not fully reconciled yet.`
-          : "The VPS management VPN is not fully reconciled yet. The three Brownfield scripts were generated, but Step 2 will work only after the VPS VPN services are ready.";
+          : "The VPS management VPN is not fully reconciled yet. The Brownfield bundle was generated, but its VPN section will work only after the VPS VPN services are ready.";
         backupTunnelRouterIp = routerManagementBackupIp(tunnelRouterIp);
       } else {
         backupTunnelRouterIp = provisioning.backup.assignedIp;
@@ -3504,7 +3474,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       const reason = error instanceof Error ? error.message : String(error);
       provisioningWarning = provisioningWarning
         ? `${provisioningWarning} The VPS management VPN could not be reconciled yet. (${reason})`
-        : `The VPS management VPN could not be reconciled yet. The three Brownfield scripts were still generated; finish VPS VPN readiness before running Step 2. (${reason})`;
+        : `The VPS management VPN could not be reconciled yet. The Brownfield bundle was still generated; finish VPS VPN readiness before importing it. (${reason})`;
       backupTunnelRouterIp = routerManagementBackupIp(tunnelRouterIp);
       logger.warn({ routerId: id, error: reason }, "[self-install] Brownfield script generation continued without VPS reconciliation");
     }
@@ -3547,7 +3517,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       platformRadius.enabled && platformRadius.host && platformRadius.secret,
     );
     if (installationMode === "coexist" && !hasCompletePlatformRadius) {
-      const radiusWarning = "Platform RADIUS is not enabled or its settings are incomplete, so Step 3 will preserve existing RADIUS entries.";
+      const radiusWarning = "Platform RADIUS is not enabled or its settings are incomplete, so the services section will preserve existing RADIUS entries.";
       provisioningWarning = provisioningWarning
         ? `${provisioningWarning} ${radiusWarning}`
         : radiusWarning;
@@ -3629,26 +3599,12 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       portalFileUrls,
     });
 
-    const tenantRows = await sbSelectStrict<{ subdomain?: string | null }>(
-      "isp_admins",
-      `id=eq.${adminId}&is_active=is.true&select=subdomain&limit=1`,
-    );
-    const tenantSubdomain = String(tenantRows[0]?.subdomain ?? "").trim().toLowerCase();
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(tenantSubdomain)) {
-      throw new Error("A valid tenant subdomain is required for the Self Install script URL.");
-    }
     const fileName = "mainhotspot.rsc";
     const bundle = buildSelfInstallBundle([
       { tag: "Network", content: networkScript },
       { tag: "Management VPN and API", content: vpnScript },
       { tag: "Hotspot and PPPoE Services", content: serviceScript },
     ]);
-    const sourceToken = createPendingRouterFileSource({
-      content: Buffer.from(bundle, "utf8"),
-      contentType: "text/plain; charset=utf-8",
-      fileName,
-      maxFetchAttempts: 3,
-    });
     for (const file of portalFileContents) {
       createPublicRouterFileSource(id, file.routeName, {
         content: file.content,
@@ -3659,22 +3615,24 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         maxFetchAttempts: 3,
       });
     }
-    const sourceUrl = `https://${tenantSubdomain}.${TENANT_BASE_DOMAIN}/scripts/mainhotspot.rsc?token=${encodeURIComponent(sourceToken)}`;
-    const command = `:do { /tool fetch url="${sourceUrl}" dst-path="mainhotspot.rsc" mode=https check-certificate=no; :delay 2s; /import "mainhotspot.rsc"; /file remove "mainhotspot.rsc"; :put "OcholaSupernet Self Install completed." } on-error={ :put ("OcholaSupernet Self Install failed: " . $error) }`;
-    res.json({
+    const command = `/import "${fileName}"`;
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate")
+      .set("X-Content-Type-Options", "nosniff")
+      .json({
       routerId: id,
       warning: provisioningWarning || undefined,
+      bundleContent: bundle,
       steps: [
         {
           id: "mainhotspot",
           order: 1,
           title: "Configure router management, VPN, Hotspot, and PPPoE",
           fileName,
-          description: "Downloads one tagged bundle, then runs network, management VPN/API, and customer-service sections in order. The bundle stops if a section fails.",
+          description: "Download this authenticated bundle, upload it to the router, then import it. Its network, management VPN/API, and customer-service sections run in order and stop on errors.",
           command,
         },
       ],
-    });
+      });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     logger.error({ routerId: id, installationMode, error: reason }, "[self-install] script generation failed");
@@ -3686,10 +3644,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
 });
 
 /* ─── POST /api/router/:id/self-install-files/deploy ─────────────────────── */
-/**
- * Pushes the three generated Self Install scripts to an incomplete router.
- * This endpoint only transfers files; it never imports or executes them.
- */
+/** Legacy direct-transfer endpoint; Self Install now uses authenticated download and local import. */
 router.post("/router/:id/self-install-files/deploy", requireAdmin(), async (req, res): Promise<void> => {
   const id = Number.parseInt(String(req.params.id), 10);
   const adminId = authenticatedAdminId(req, req.body?.adminId);
