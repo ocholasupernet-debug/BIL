@@ -153,6 +153,7 @@ interface PendingRouterFileSource {
 const pendingRouterFileSources = new Map<string, PendingRouterFileSource>();
 const publicRouterFileSources = new Map<string, PendingRouterFileSource>();
 const ROUTER_FILE_SOURCE_TTL_MS = 5 * 60 * 1000;
+const SELF_INSTALL_BUNDLE_SOURCE_TTL_MS = 10 * 60 * 1000;
 type BulkDeployJobStatus = "queued" | "running" | "complete" | "failed";
 interface BulkDeployJob {
   id: string;
@@ -407,12 +408,15 @@ function contentTypeForFile(fileName: string): string {
   return contentTypes[extension ?? ""] ?? "application/octet-stream";
 }
 
-function createPendingRouterFileSource(source: Omit<PendingRouterFileSource, "expiresAt">): string {
+function createPendingRouterFileSource(
+  source: Omit<PendingRouterFileSource, "expiresAt">,
+  ttlMs = ROUTER_FILE_SOURCE_TTL_MS,
+): string {
   cleanPendingRouterFileSources();
   const token = randomBytes(32).toString("base64url");
   pendingRouterFileSources.set(token, {
     ...source,
-    expiresAt: Date.now() + ROUTER_FILE_SOURCE_TTL_MS,
+    expiresAt: Date.now() + ttlMs,
   });
   return token;
 }
@@ -3616,7 +3620,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       contentType: "text/plain; charset=utf-8",
       fileName,
       maxFetchAttempts: 3,
-    });
+    }, SELF_INSTALL_BUNDLE_SOURCE_TTL_MS);
     const bundleSourceUrl = `${bundleSourceOrigin}/api/router-file-source/${bundleSourceToken}`;
     const command = buildRouterFileImportCommand({
       sourceUrl: bundleSourceUrl,

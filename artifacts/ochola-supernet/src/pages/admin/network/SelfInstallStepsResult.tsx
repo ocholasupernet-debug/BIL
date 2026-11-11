@@ -50,7 +50,7 @@ export function SelfInstallStepsResult({
         </span>
         <span>
             <strong>Short-lived tenant download</strong>
-            <span>The command uses a protected link for this router. It expires after five minutes.</span>
+            <span>The command uses a protected link for this router. It expires after ten minutes.</span>
         </span>
       </div>
 
