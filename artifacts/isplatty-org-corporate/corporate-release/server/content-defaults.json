@@ -1,0 +1,72 @@
+{
+  "homepage": {
+    "headline": "Connecting People.",
+    "accentHeadline": "Powering Businesses.",
+    "description": "Reliable networking, Wi-Fi, fiber and IT support—planned, installed and configured for your home or business.",
+    "eyebrow": "Network engineering for homes and businesses",
+    "image": "/images/installation.jpg",
+    "primaryLabel": "Request a Service",
+    "secondaryLabel": "Explore services"
+  },
+  "contact": {"phone":"","email":"","whatsapp":"","address":"","hours":"","coverageAreas":[]},
+  "services": [
+    {"id":"networking","code":"L2/L3","title":"Networking & Cabling","icon":"network","image":"/images/cabling.jpg","short":"LAN and WAN design, structured cabling and hands-on router and switch troubleshooting.","items":["LAN / WAN planning and setup","Structured cabling and patch panels","Router and switch troubleshooting","VLANs and network segmentation"]},
+    {"id":"wifi","code":"802.11","title":"Home & Office Wi-Fi","icon":"wifi","image":"/images/access-point.jpg","short":"Wi-Fi that reaches the rooms you actually use, indoors and outdoors.","items":["Home and office Wi-Fi setup","Outdoor Wi-Fi links","Coverage extension and access points","Dead-zone and interference checks"]},
+    {"id":"mikrotik","code":"RouterOS","title":"MikroTik Configuration","icon":"router","image":"/images/router-switch.jpg","short":"Clean, documented RouterOS configs for hotspots, PPPoE and bandwidth control.","items":["Initial configuration and hardening","Hotspot setup","PPPoE server and client","Bandwidth management and queues","Ongoing maintenance"]},
+    {"id":"fiber","code":"GPON","title":"Fiber Installation","icon":"cable","image":"/images/fiber-splicing.jpg","short":"Fiber runs, fusion splicing and OLT/ONU setup, with careful fault-finding.","items":["Fiber installation","Fusion splicing","OLT / ONU configuration","Fiber troubleshooting"]},
+    {"id":"isp","code":"Backbone","title":"ISP Infrastructure","icon":"server","image":"/images/outdoor.jpg","short":"Support for small and growing providers: distribution, links and core layout.","items":["Distribution and backhaul planning","Point-to-point wireless links","Core and edge equipment setup","Subscriber provisioning flow"]},
+    {"id":"cctv","code":"IP Video","title":"CCTV & Security","icon":"shield","image":"/images/cctv.jpg","short":"Camera placement, recording and remote viewing over a properly sized network.","items":["IP camera installation","NVR / recorder setup","Remote viewing configuration","PoE and network sizing"]},
+    {"id":"it","code":"Helpdesk","title":"IT Support","icon":"wrench","image":"/images/technician.jpg","short":"Practical help with devices, printers, accounts and the everyday things that stall work.","items":["Workstation and device setup","Printer and peripheral issues","Basic security hygiene","On-call troubleshooting"]},
+    {"id":"other","code":"Other","title":"Something else","icon":"radio","image":"","short":"Not sure which category fits? Describe the problem and we will route it.","items":[]}
+  ],
+  "projects": [
+    {"id":"rack","img":"/images/installation.jpg","tag":"Rack & switching","title":"Patching a rack-mounted switch","note":"Stock photograph of rack patching work. Not an ISPLATTY employee or client site.","isSample":true},
+    {"id":"fiber","img":"/images/fiber-splicing.jpg","tag":"Fiber","title":"Outdoor fiber fusion splicing","note":"Public-domain photograph of field splicing, illustrating the service type.","isSample":true},
+    {"id":"wifi","img":"/images/access-point.jpg","tag":"Wi-Fi","title":"Ceiling-mounted access point","note":"Stock photograph of an access point, not a customer installation.","isSample":true},
+    {"id":"routing","img":"/images/router-switch.jpg","tag":"Routing","title":"Router and switch equipment","note":"Stock photograph illustrating routing and switching hardware.","isSample":true},
+    {"id":"cctv","img":"/images/cctv.jpg","tag":"CCTV","title":"Wall-mounted surveillance camera","note":"Stock photograph illustrating security camera equipment.","isSample":true},
+    {"id":"cabling","img":"/images/cabling.jpg","tag":"Cabling","title":"Structured cabling and patch panel","note":"Stock photograph illustrating cabling and network equipment.","isSample":true}
+  ],
+  "pages": {
+    "services":{"title":"Every layer of your connection, handled by hand.","intro":"Pick a service to start a request with it preselected, or describe the problem and we will route it."},
+    "customer-care":{"title":"Something not working? Start here.","intro":"Use any available channel below. The inquiry form is always open and gives you a reference number for follow-up."},
+    "about":{"title":"Complex connectivity, made approachable.","intro":"ISPLATTY.ORG is a hands-on networking and Wi-Fi engineering partner for homes and growing businesses."},
+    "projects":{"title":"A sample portfolio of the work we take on.","intro":"Illustrative photographs are marked Sample. They are not completed client projects and do not depict our staff."},
+    "coverage":{"title":"Where we work.","intro":"Service availability depends on location and site conditions. Every location is confirmed before work is scheduled."},
+    "contact":{"title":"Let us talk about your network.","intro":"Send a request and you will receive a reference number immediately. Unavailable channels are clearly marked."}
+  },
+  "aboutBody": [
+    "Good connectivity is invisible. Getting there takes careful cable runs, sensible configuration and someone willing to explain the trade-offs. That is the job we set out to do.",
+    "We cover the full path: fiber and wireless links, routing and switching, Wi-Fi, cameras and the everyday IT that sits on top. One partner, one conversation.",
+    "Every engagement ends with a handover you can actually use: what was installed, how it is configured, and how to reach us."
+  ],
+  "whyChoose": [
+    {"title":"Hands on the hardware","body":"The people who plan your network are the ones who crimp, splice and configure it."},
+    {"title":"Plain-language explanations","body":"You will know what was installed, why, and what to do if something changes."},
+    {"title":"Documented handover","body":"Credentials, port maps and config notes are handed over, not kept hostage."},
+    {"title":"Right-sized, not oversold","body":"We recommend what the site needs today, with a clear path for growth."}
+  ],
+  "faq": [
+    {"title":"How fast will you respond?","body":"We review requests personally. Response times depend on volume and location and are confirmed when we reply."},
+    {"title":"Do you work on equipment you did not install?","body":"Yes. Inherited routers, switches and MikroTik setups are common. Share models and symptoms if you can."},
+    {"title":"What should I include in a support request?","body":"Your location, what changed, when it started, which devices are affected and any error lights or messages."},
+    {"title":"Is pricing fixed?","body":"Pricing depends on scope and site conditions. We confirm costs with you before any work begins."}
+  ],
+  "privacy": [
+    {"title":"Information you send us","body":"When you submit an inquiry we receive the details you enter: name, email, optional phone and location, the service you select, your message and your consent confirmation."},
+    {"title":"Why we use it","body":"Only to review and respond to your request, follow up on that request, and keep a record of the conversation. We do not sell inquiry details."},
+    {"title":"Spam protection","body":"The form uses a short-lived security token and a hidden field to filter automated submissions. Basic technical request data may be processed by the server to operate and protect the site."},
+    {"title":"Storage and retention","body":"Inquiry records are stored by the systems that run this website. Specific retention periods have not yet been finalised and will be stated here once set."},
+    {"title":"Your choices","body":"You can ask us to access, correct or delete the details you submitted by sending a request through the inquiry form and quoting your reference number."},
+    {"title":"Administrative security","body":"Administrative access is restricted. Authentication uses secure session cookies and technical security records to protect the corporate website."},
+    {"title":"Changes","body":"This notice will be updated as our operations are formalised. The current version on this page applies."}
+  ],
+  "terms": [
+    {"title":"Using this site","body":"This website provides general information about our networking, Wi-Fi, fiber, security and IT services. Please use it lawfully and do not attempt to disrupt it."},
+    {"title":"Inquiries are not contracts","body":"Submitting a request does not create a service agreement. Scope, pricing, schedule and any warranties are agreed separately in writing before work begins."},
+    {"title":"Information on the site","body":"Service descriptions are general and may change. Sample portfolio images are illustrative and do not depict completed client projects."},
+    {"title":"Coverage","body":"Listed coverage areas, where shown, are indicative. Availability is confirmed for each site individually."},
+    {"title":"Third-party links","body":"Where external channels such as WhatsApp are offered, their own terms and privacy practices apply."},
+    {"title":"Changes","body":"These terms may be revised. The version published on this page applies to your use of the site."}
+  ]
+}

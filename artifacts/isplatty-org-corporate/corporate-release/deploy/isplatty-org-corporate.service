@@ -1,0 +1,30 @@
+[Unit]
+Description=ISPLATTY.ORG corporate website and administrator
+After=network.target postgresql@17-isplattyorg.service
+Requires=postgresql@17-isplattyorg.service
+
+[Service]
+Type=simple
+User=isplatty-org
+Group=isplatty-org
+WorkingDirectory=/var/www/isplatty-org/current
+Environment=NODE_ENV=production
+ExecStart=/var/www/isplatty-org/runtime/node24/bin/node --env-file=/etc/isplatty-org/site.env server/index.mjs
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=15
+MemoryMax=350M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/www/isplatty-org/shared/uploads
+
+[Install]
+WantedBy=multi-user.target

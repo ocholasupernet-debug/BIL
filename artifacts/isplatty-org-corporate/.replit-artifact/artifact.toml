@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/isplatty-org/"
+title = "ISPLATTY.ORG Corporate Website"
+description = "Corporate public website and isolated administrator content manager for ISPLATTY.ORG."
+version = "1.0.0"
+id = "artifacts/isplatty-org-corporate"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/isplatty-org/" ]
+localPort = 23927
+
+[services.development]
+run = "pnpm --filter @workspace/isplatty-org-corporate run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/isplatty-org-corporate", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/isplatty-org-corporate/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23927"
+BASE_PATH = "/isplatty-org/"
