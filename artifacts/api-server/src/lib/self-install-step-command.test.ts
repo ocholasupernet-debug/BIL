@@ -51,6 +51,9 @@ test("Self Install commands report all step states and skip completed steps", ()
   assert.match(command, /find where name="ochola-self-install-104-step-3-done\.txt"/);
   assert.match(command, /Step 3\/3 SKIPPED - already completed/);
   assert.match(command, /check-certificate=yes/);
+  assert.match(command, /:onerror ocholaCaughtError in=\{/);
+  assert.match(command, /\[\" \. \$ocholaStepStage \. \"\] \" \. \$ocholaCaughtError/);
+  assert.doesNotMatch(command, /\$error\b/);
 });
 
 test("Self Install commands preserve failed downloads and write retry markers", () => {
@@ -69,4 +72,7 @@ test("Self Install commands preserve failed downloads and write retry markers", 
   assert.match(command, /file print file="ochola-self-install-42-step-2-done"/);
   assert.match(command, /Step 2\/3 COMPLETED successfully/);
   assert.match(command, /check-certificate=no/);
+  assert.match(command, /:onerror ocholaCaughtError in=\{/);
+  assert.match(command, /:set ocholaStepStage \"import\"/);
+  assert.doesNotMatch(command, /\$error\b/);
 });

@@ -68,21 +68,23 @@ export function buildSelfInstallStepCommand({
   return `# OcholaSupernet Self Install Step ${stepOrder}/3 - ${stepId}
 # A completed step is skipped on retry. Failed steps remain available for diagnosis.
 :local ocholaStepError ""
+:local ocholaStepStage "fetch"
 :put "[OCHOLA] Current Self Install status:"
 ${statusSummary}
 :if ([:len [/file find where name="${doneFile}"]] > 0) do={
     :put "[OCHOLA] Step ${stepOrder}/3 SKIPPED - already completed."
 } else={
     :put "[OCHOLA] Step ${stepOrder}/3 STARTING - downloading and importing ${fileName}."
-    :do {
+    :onerror ocholaCaughtError in={
+        :set ocholaStepStage "fetch"
         /tool fetch url="${sourceUrl}" dst-path="${fileName}" mode=https check-certificate=${verified ? "yes" : "no"}
         :delay 2s
+        :set ocholaStepStage "import"
         /import "${fileName}"
+        :set ocholaStepStage "cleanup"
         /file remove "${fileName}"
-    } on-error={
-        :do { :set ocholaStepError $error } on-error={
-            :set ocholaStepError "RouterOS returned an unspecified error"
-        }
+    } do={
+        :set ocholaStepError ("[" . $ocholaStepStage . "] " . $ocholaCaughtError)
     }
     :if ([:len $ocholaStepError] > 0) do={
         :do { /file remove [find where name="${doneFile}"] } on-error={}
