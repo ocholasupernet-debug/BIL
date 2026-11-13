@@ -4,7 +4,7 @@ import { buildRouterFileImportCommand, buildSelfInstallStepCommand } from "./sel
 
 test("RouterOS fetch/import command reports the exact failing stage and error", () => {
   const command = buildRouterFileImportCommand({
-    sourceUrl: "https://come.isplatty.org/api/router-file-source/104/networksetup.rsc",
+    sourceUrl: "https://come.isplatty.com/api/router-file-source/104/networksetup.rsc",
     fileName: "networksetup.rsc",
   });
 
@@ -40,7 +40,7 @@ test("Self Install commands report all step states and skip completed steps", ()
     routerId: 104,
     stepId: "services",
     stepOrder: 3,
-    sourceUrl: "https://come.isplatty.org/api/router-file-source/104/servicessetup.rsc",
+    sourceUrl: "https://come.isplatty.com/api/router-file-source/104/servicessetup.rsc",
     fileName: "servicessetup.rsc",
     verified: true,
   });

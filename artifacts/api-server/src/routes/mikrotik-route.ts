@@ -89,6 +89,7 @@ import {
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { buildSelfInstallBundle } from "../lib/self-install-bundle.js";
+import { buildSelfInstallTenantOrigin, moveSelfInstallHostnameToCom } from "../lib/self-install-origin.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
 import {
@@ -3499,10 +3500,23 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       return;
     }
 
-    const origin = managementScriptSourceOrigin(req);
+    let selfInstallOrigin = managementScriptSourceOrigin(req);
+    if (process.env.NODE_ENV === "production") {
+      const tenantRows = await sbSelectStrict<{ subdomain: string | null }>(
+        "isp_admins",
+        `id=eq.${adminId}&is_active=is.true&select=subdomain&limit=1`,
+      );
+      const tenantOrigin = buildSelfInstallTenantOrigin(tenantRows[0]?.subdomain);
+      if (!tenantOrigin) {
+        res.status(409).json({ error: "This ISP does not have a valid isplatty.com tenant hostname for Self Install." });
+        return;
+      }
+      selfInstallOrigin = tenantOrigin;
+    }
+    const origin = selfInstallOrigin;
     const caCertificateUrl = `${origin}/api/vpn/ca.crt`;
     const backendRegistrationUrl = `${origin}/api/isp/router/register/${encodeURIComponent(registrationToken)}`;
-    const sourceOrigin = managementScriptSourceOrigin(req);
+    const sourceOrigin = selfInstallOrigin;
     const serviceBridgeName = String(
       req.query.bridgeName
       ?? (installationMode === "coexist" ? "br-ochola-coexist" : "hotspot-bridge"),
@@ -3522,7 +3536,9 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       "isp_hotspot_branding",
       `admin_id=eq.${adminId}&select=portal_hostname&limit=1`,
     );
-    const customPortalHostname = normalizePortalHostname(portalBrandingRows[0]?.portal_hostname);
+    const customPortalHostname = normalizePortalHostname(portalBrandingRows[0]?.portal_hostname)
+      ? moveSelfInstallHostnameToCom(normalizePortalHostname(portalBrandingRows[0]?.portal_hostname))
+      : null;
     const defaultPortalFiles = [
       { routeName: "hotspot-login.html", fileName: "login.html", sourceName: "login.html" },
       { routeName: "hotspot-rlogin.html", fileName: "rlogin.html", sourceName: "rlogin.html" },
@@ -3594,7 +3610,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       { tag: "Management VPN and API", content: vpnScript },
       { tag: "Hotspot and PPPoE Services", content: serviceScript },
     ]);
-    const bundleSourceOrigin = requestOrigin(req);
+    const bundleSourceOrigin = sourceOrigin;
     if (!bundleSourceOrigin.startsWith("https://")) {
       res.status(503).json({ error: "Self Install bundle fetch requires the signed-in tenant HTTPS hostname." });
       return;
