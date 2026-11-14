@@ -430,6 +430,15 @@ export default function LoadBalancing() {
     next.wans.push(defaultWan(position, unusedInterface));
   });
 
+  const setWanPortEnabled = (interfaceName: string, enabled: boolean) => updateConfig(next => {
+    const existing = next.wans.find(wan => wan.interfaceName === interfaceName);
+    if (existing) {
+      existing.enabled = enabled;
+    } else if (enabled) {
+      next.wans.push(defaultWan(next.wans.length + 1, interfaceName));
+    }
+  });
+
   const removeWan = (position: number) => updateConfig(next => {
     if (next.wans.length <= 1) return;
     next.wans = next.wans
@@ -587,10 +596,10 @@ export default function LoadBalancing() {
 
   const styles = `
     .lw-page { max-width: 1440px; display: grid; gap: 16px; color: var(--isp-text); }
-    .lw-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; padding: 22px 24px; background: linear-gradient(125deg, rgba(37,99,235,.14), var(--isp-card) 54%, rgba(15,157,120,.07)); overflow: hidden; position: relative; }
-    .lw-hero:after { content: ""; position: absolute; width: 260px; height: 260px; right: -95px; top: -120px; border: 1px solid var(--isp-accent-border); border-radius: 50%; box-shadow: 0 0 0 28px rgba(37,99,235,.035), 0 0 0 56px rgba(37,99,235,.025); pointer-events: none; }
+    .lw-hero { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; padding: 18px 20px; background: var(--isp-card); overflow: hidden; position: relative; }
+    .lw-hero:after { content: none; }
     .lw-eyebrow { display: flex; align-items: center; gap: 8px; color: var(--isp-accent); font-size: 11px; font-weight: 850; letter-spacing: .1em; text-transform: uppercase; }
-    .lw-title { margin: 8px 0 6px; font-size: clamp(22px, 3vw, 30px); line-height: 1.08; font-weight: 850; letter-spacing: -.04em; }
+    .lw-title { margin: 3px 0 5px; font-size: clamp(22px, 3vw, 28px); line-height: 1.08; font-weight: 800; letter-spacing: -.035em; }
     .lw-subtitle { max-width: 720px; margin: 0; color: var(--isp-text-muted); font-size: 13px; line-height: 1.65; }
     .lw-router-select { min-width: 230px; position: relative; z-index: 1; }
     .lw-router-select label, .lw-modal label { display: block; color: var(--isp-text-muted); font-size: 10px; font-weight: 850; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 6px; }
@@ -637,6 +646,7 @@ export default function LoadBalancing() {
     .lw-span-2 { grid-column: span 2; }
     .lw-secret-note { margin-top: 6px; color: var(--isp-text-muted); font-size: 10px; }
     .lw-status { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border: 1px solid rgba(34,197,94,.22); border-radius: 999px; color: #15803d; background: rgba(34,197,94,.08); font-size: 10px; font-weight: 800; }
+    .lw-status.is-down { color: #b91c1c; border-color: rgba(239,68,68,.24); background: rgba(239,68,68,.08); }
     .lw-status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
     .lw-table-wrap { overflow-x: auto; }
     .lw-table { width: 100%; min-width: 610px; border-collapse: collapse; font-size: 12px; }
@@ -644,6 +654,34 @@ export default function LoadBalancing() {
     .lw-table td { padding: 10px 12px; color: var(--isp-text); border-bottom: 1px solid var(--isp-border-subtle); vertical-align: middle; }
     .lw-table tr:last-child td { border-bottom: 0; }
     .lw-empty { padding: 22px 12px; color: var(--isp-text-muted); text-align: center; font-size: 12px; }
+    .lw-port-section { overflow: hidden; }
+    .lw-port-section-head { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 13px 16px; color: #fff; background: #1677eb; }
+    .lw-port-section-head .lw-section-title, .lw-port-section-head .lw-section-title svg { color: #fff; }
+    .lw-port-section-head .lw-section-note { color: rgba(255,255,255,.86); }
+    .lw-router-version { flex: 0 0 auto; padding: 5px 9px; border: 1px solid rgba(255,255,255,.36); border-radius: 6px; color: #fff; background: rgba(255,255,255,.12); font-size: 10px; font-weight: 800; }
+    .lw-port-intro { margin: 0 0 12px; padding: 10px 12px; border-left: 4px solid #20b8dc; color: var(--isp-text-muted); background: color-mix(in srgb, #20b8dc 11%, var(--isp-card)); font-size: 12px; line-height: 1.45; }
+    .lw-port-table-wrap { overflow-x: auto; border: 1px solid var(--isp-border); border-radius: 7px; }
+    .lw-port-table { width: 100%; min-width: 630px; border-collapse: collapse; font-size: 12px; }
+    .lw-port-table th { padding: 8px 10px; color: var(--isp-text); background: var(--isp-inner-card); border: 1px solid var(--isp-border); font-size: 10px; letter-spacing: .045em; text-align: left; text-transform: uppercase; }
+    .lw-port-table td { padding: 7px 10px; border: 1px solid var(--isp-border); vertical-align: middle; }
+    .lw-port-table tr:last-child td { border-bottom: 0; }
+    .lw-port-checkbox { width: 17px; height: 17px; accent-color: #1677eb; cursor: pointer; }
+    .lw-port-name { color: var(--isp-accent-strong); font-family: var(--font-mono); font-weight: 800; }
+    .lw-port-status-copy { display: block; margin-top: 3px; color: var(--isp-text-muted); font-size: 10px; }
+    .lw-mode-panel { display: grid; gap: 10px; min-width: 0; margin: 15px 0 0; padding: 0; border: 0; }
+    .lw-mode-title { margin: 0; font-size: 12px; font-weight: 850; }
+    .lw-mode-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+    .lw-mode-option { display: flex; gap: 9px; align-items: flex-start; padding: 10px 11px; border: 1px solid var(--isp-border); border-radius: 7px; background: var(--isp-card); cursor: pointer; }
+    .lw-mode-option.is-selected { border-color: #1677eb; box-shadow: 0 0 0 2px rgba(22,119,235,.1); }
+    .lw-mode-option input { margin: 2px 0 0; accent-color: #1677eb; }
+    .lw-mode-option strong { display: block; font-size: 12px; }
+    .lw-mode-option span { display: block; margin-top: 3px; color: var(--isp-text-muted); font-size: 10px; line-height: 1.4; }
+    .lw-port-safety { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid rgba(32,184,220,.32); border-radius: 7px; color: #075985; background: #e7f8fc; font-size: 11px; line-height: 1.45; }
+    .lw-port-safety svg { flex: 0 0 auto; margin-top: 1px; }
+    .lw-port-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+    .lw-section-head { background: #1677eb; color: #fff; }
+    .lw-section-head .lw-section-title, .lw-section-head .lw-section-title svg { color: #fff; }
+    .lw-section-head .lw-section-note { color: rgba(255,255,255,.84); }
     .lw-preview { position: sticky; top: 14px; }
     .lw-preview-meta { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 13px; }
     .lw-metric { padding: 10px; border: 1px solid var(--isp-border); border-radius: 9px; background: var(--isp-inner-card); }
@@ -662,8 +700,27 @@ export default function LoadBalancing() {
     .lw-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 15px; }
     @keyframes lw-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
     @media (max-width: 980px) { .lw-grid { grid-template-columns: 1fr; } .lw-preview { position: static; } }
-    @media (max-width: 720px) { .lw-hero { flex-direction: column; padding: 18px; } .lw-router-select { width: 100%; } .lw-general-grid, .lw-wan-body { grid-template-columns: 1fr 1fr; } .lw-span-2 { grid-column: span 2; } .lw-section-head { align-items: flex-start; flex-direction: column; } .lw-toolbar { width: 100%; justify-content: flex-start; } }
-    @media (max-width: 480px) { .lw-general-grid, .lw-wan-body { grid-template-columns: 1fr; } .lw-span-2 { grid-column: span 1; } .lw-section-body { padding: 13px; } }
+    @media (max-width: 720px) { .lw-hero { flex-direction: column; padding: 16px; } .lw-router-select { width: 100%; } .lw-general-grid, .lw-wan-body { grid-template-columns: 1fr 1fr; } .lw-span-2 { grid-column: span 2; } .lw-section-head { align-items: flex-start; flex-direction: column; } .lw-port-section-head { align-items: flex-start; } .lw-toolbar { width: 100%; justify-content: flex-start; } }
+    @media (max-width: 560px) {
+      .lw-mode-options { grid-template-columns: 1fr; }
+      .lw-port-actions > button { flex: 1 1 100%; }
+      .lw-port-table-wrap { overflow: visible; border: 0; }
+      .lw-port-table, .lw-port-table tbody { display: block; min-width: 0; }
+      .lw-port-table thead { display: none; }
+      .lw-port-table tbody { display: grid; gap: 7px; }
+      .lw-port-table tr { display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: start; padding: 5px; border: 1px solid var(--isp-border); border-radius: 7px; background: var(--isp-card); }
+      .lw-port-table td { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 6px; border: 0; }
+      .lw-port-table td:nth-child(1) { grid-column: 1; grid-row: 1 / span 4; justify-content: center; }
+      .lw-port-table td:nth-child(2) { grid-column: 2; grid-row: 1; }
+      .lw-port-table td:nth-child(3) { grid-column: 2; grid-row: 2; }
+      .lw-port-table td:nth-child(4) { grid-column: 2; grid-row: 3; }
+      .lw-port-table td:nth-child(5) { grid-column: 2; grid-row: 4; }
+      .lw-port-table td:nth-child(4)::before, .lw-port-table td:nth-child(5)::before { min-width: 48px; color: var(--isp-text-muted); font-family: inherit; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+      .lw-port-table td:nth-child(4)::before { content: "Address"; }
+      .lw-port-table td:nth-child(5)::before { content: "Gateway"; }
+      .lw-port-table td.lw-empty { display: block; grid-column: 1 / -1; grid-row: auto; }
+    }
+    @media (max-width: 480px) { .lw-general-grid, .lw-wan-body { grid-template-columns: 1fr; } .lw-span-2 { grid-column: span 1; } .lw-section-body { padding: 13px; } .lw-port-section-head { flex-direction: column; } }
   `;
 
   return (
@@ -673,9 +730,9 @@ export default function LoadBalancing() {
         <section className="isp-card lw-hero">
           <div>
             <div className="lw-eyebrow"><Network size={15} /> Network policy / multi-WAN</div>
-            <h1 className="lw-title">Load balancing that is safe to change.</h1>
+            <h1 className="lw-title">Load Balance</h1>
             <p className="lw-subtitle">
-              Shape customer traffic across static or PPPoE uplinks, keep failover explicit, and inspect the exact RouterOS changes before they touch a live MikroTik.
+              Review your internet ports, choose how the links work together, and preview RouterOS changes before applying them.
             </p>
           </div>
           <div className="lw-router-select">
@@ -692,6 +749,95 @@ export default function LoadBalancing() {
         {routersError && <Notice kind="error">Router list could not be loaded. Refresh the page and try again.</Notice>}
         {loadError && <Notice kind="error">{loadError}</Notice>}
         {message && <Notice kind={message.kind}>{message.text}</Notice>}
+
+        {!loading && config && interfaces && (
+          <section className="isp-card lw-port-section">
+            <div className="lw-port-section-head">
+              <div>
+                <div className="lw-section-title"><PlugZap size={17} /> Internet ports on this router</div>
+                <p className="lw-section-note">Select the physical ports connected to your internet links.</p>
+              </div>
+              <span className="lw-router-version">RouterOS {config.routerOsVersion === "auto" ? "auto-detect" : config.routerOsVersion}</span>
+            </div>
+            <div className="lw-section-body">
+              <p className="lw-port-intro">Select the physical ports connected to your internet links. Add at least two uplinks for balancing or failover. Changes stay in the draft until you preview and confirm.</p>
+              <div className="lw-port-table-wrap">
+                <table className="lw-port-table">
+                  <thead>
+                    <tr><th scope="col">Use</th><th scope="col">Port</th><th scope="col">Status</th><th scope="col">Address</th><th scope="col">Gateway</th></tr>
+                  </thead>
+                  <tbody>
+                    {physicalInterfaces.length === 0 ? (
+                      <tr><td colSpan={5} className="lw-empty">No physical Ethernet or SFP ports were reported by this router.</td></tr>
+                    ) : physicalInterfaces.map(port => {
+                      const assignedWan = config.wans.find(wan => wan.interfaceName === port.name);
+                      const portAddresses = interfaces.addresses
+                        .filter(address => address.interface === port.name)
+                        .map(address => address.address);
+                      const bridge = bridgePorts.find(item => item.interface === port.name);
+                      return (
+                        <tr key={port.name}>
+                          <td>
+                            <input
+                              className="lw-port-checkbox"
+                              type="checkbox"
+                              checked={Boolean(assignedWan?.enabled)}
+                              onChange={event => setWanPortEnabled(port.name, event.target.checked)}
+                              aria-label={`Use ${port.name} as an internet uplink`}
+                            />
+                          </td>
+                          <td><span className="lw-port-name">{port.name}</span></td>
+                          <td>
+                            <span className={`lw-status ${port.running && !port.disabled ? "" : "is-down"}`}>
+                              <span className="lw-status-dot" /> {port.running && !port.disabled ? "Link up" : "No link"}
+                            </span>
+                            <span className="lw-port-status-copy">
+                              {assignedWan
+                                ? `${assignedWan.name || `WAN ${assignedWan.position}`} · ${assignedWan.enabled ? "selected uplink" : "disabled"}`
+                                : bridge ? `In bridge · ${bridge.bridge}` : "Available router port"}
+                            </span>
+                          </td>
+                          <td className="lw-port-mono" data-label="Address">{portAddresses.join(", ") || "None"}</td>
+                          <td className="lw-port-mono" data-label="Gateway">{assignedWan?.gateway || "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <fieldset className="lw-mode-panel">
+                <legend className="lw-mode-title">How should the links work together?</legend>
+                <div className="lw-mode-options">
+                  <label className={`lw-mode-option ${config.mode === "weighted" ? "is-selected" : ""}`}>
+                    <input type="radio" name="lw-mode-choice" value="weighted" checked={config.mode === "weighted"} onChange={() => updateConfig(next => { next.mode = "weighted"; })} />
+                    <span><strong>Share the load</strong><span>Spread new connections across active uplinks using their weights.</span></span>
+                  </label>
+                  <label className={`lw-mode-option ${config.mode === "failover" ? "is-selected" : ""}`}>
+                    <input type="radio" name="lw-mode-choice" value="failover" checked={config.mode === "failover"} onChange={() => updateConfig(next => { next.mode = "failover"; })} />
+                    <span><strong>Backup only</strong><span>Keep one primary uplink and use the others only when it fails.</span></span>
+                  </label>
+                </div>
+              </fieldset>
+
+              <div className="lw-check-row" style={{ marginTop: 12 }}>
+                <div className="lw-check-copy"><strong>Enable multi-WAN policy</strong><span>This only updates the draft. RouterOS changes still require preview and confirmation.</span></div>
+                <Toggle checked={config.enabled} onChange={checked => updateConfig(next => { next.enabled = checked; })} label="Enable multi-WAN policy" />
+              </div>
+
+              <div className="lw-port-safety" role="note">
+                <ShieldCheck size={15} />
+                <span><strong>Safe preview first.</strong> This is only a draft. RouterOS is not changed until you generate a preview, review it, and confirm the router name.</span>
+              </div>
+              <div className="lw-port-actions" style={{ marginTop: 12 }}>
+                <button type="button" className="lw-btn lw-btn-primary" onClick={() => void previewChanges()} disabled={previewing || !config.enabled || localIssues.length > 0 || Boolean(loadError)}>
+                  {previewing ? <Loader2 size={14} /> : <Activity size={14} />} {previewing ? "Generating preview…" : "Preview load balancing"}
+                </button>
+                <button type="button" className="lw-btn" onClick={() => void loadRouterData(config.routerId)} disabled={loading}><RefreshCw size={14} /> Refresh ports</button>
+              </div>
+            </div>
+          </section>
+        )}
 
         {!routersLoading && routers.length === 0 && !routersError && (
           <section className="isp-card lw-loading">
@@ -730,13 +876,6 @@ export default function LoadBalancing() {
                         </select>
                       </div>
                       <div className="lw-field">
-                        <label style={fieldLabel} htmlFor="lw-mode">Traffic policy</label>
-                        <select id="lw-mode" className="lw-select" value={config.mode} onChange={event => updateConfig(next => { next.mode = event.target.value as BalancingMode; })}>
-                          <option value="weighted">Weighted connection split</option>
-                          <option value="failover">Failover only</option>
-                        </select>
-                      </div>
-                      <div className="lw-field">
                         <label style={fieldLabel} htmlFor="lw-routeros">RouterOS version</label>
                         <select id="lw-routeros" className="lw-select" value={config.routerOsVersion} onChange={event => updateConfig(next => { next.routerOsVersion = event.target.value as RouterOsVersion; })}>
                           <option value="auto">Detect automatically</option>
@@ -746,10 +885,6 @@ export default function LoadBalancing() {
                       </div>
                     </div>
                     <div style={{ display: "grid", gap: 9, marginTop: 14 }}>
-                      <div className="lw-check-row">
-                        <div className="lw-check-copy"><strong>Enable multi-WAN policy</strong><span>Keep disabled while you are assembling or inspecting a draft.</span></div>
-                        <Toggle checked={config.enabled} onChange={checked => updateConfig(next => { next.enabled = checked; })} label="Enable multi-WAN policy" />
-                      </div>
                       <div className="lw-check-row">
                         <div className="lw-check-copy"><strong>Allow bridge firewall handling</strong><span>Permit the generated rules to account for customer traffic arriving through a bridge.</span></div>
                         <Toggle checked={config.allowBridgeFirewall} onChange={checked => updateConfig(next => { next.allowBridgeFirewall = checked; })} label="Allow bridge firewall handling" />
@@ -1077,9 +1212,6 @@ export default function LoadBalancing() {
                     </div>
                   )}
                   <div style={{ display: "grid", gap: 8, marginTop: 15 }}>
-                    <button type="button" className="lw-btn lw-btn-primary" onClick={() => void previewChanges()} disabled={previewing || !config.enabled || localIssues.length > 0 || Boolean(loadError)}>
-                      {previewing ? <Loader2 size={14} /> : <Activity size={14} />} {previewing ? "Generating preview…" : "Generate change preview"}
-                    </button>
                     <button type="button" className="lw-btn" onClick={() => { if (preview?.ok && preview.errors.length === 0) setApplyOpen(true); }} disabled={!preview?.ok || preview.errors.length > 0 || applying}>
                       <Save size={14} /> Review and apply
                     </button>
