@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { R2_ENV_KEYS } from "../../../deploy/validate-r2-env.mjs";
-import { runR2CredentialPreflight } from "../scripts/r2-credential-preflight.mjs";
+import {
+  R2_ENV_KEYS,
+  runR2CredentialPreflight,
+} from "../scripts/r2-credential-preflight.mjs";
 
 const validEnv = () => ({
   CLOUDFLARE_R2_ACCOUNT_ID: "a".repeat(32),
