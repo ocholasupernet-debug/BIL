@@ -1,7 +1,15 @@
 import { HeadBucketCommand, S3Client } from "@aws-sdk/client-s3";
 import path from "node:path";
-import { R2_ENV_KEYS } from "../../../deploy/validate-r2-env.mjs";
 import { fileURLToPath } from "node:url";
+
+export const R2_ENV_KEYS = Object.freeze([
+  "CLOUDFLARE_R2_ACCOUNT_ID",
+  "CLOUDFLARE_R2_ACCESS_KEY_ID",
+  "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+  "CLOUDFLARE_R2_ENDPOINT",
+  "CLOUDFLARE_R2_BUCKET_BIL",
+  "CLOUDFLARE_R2_BUCKET_ISPLATTY",
+]);
 
 const EXPECTED_BUCKETS = Object.freeze([
   { label: "BIL", envKey: "CLOUDFLARE_R2_BUCKET_BIL", name: "bil-storage" },
