@@ -133,6 +133,7 @@ export interface MigrationPlan {
   sourceExtensions: string[];
   missingDestinationExtensions: string[];
   extensionVersionMismatches: string[];
+  compatibleExtensionVersionDifferences: string[];
   destinationConflicts: string[];
   toolFailure?: MigrationToolFailure | null;
   sourceSchemaFingerprint: string;
@@ -566,7 +567,9 @@ async function inspectDatabase(client: MigrationDatabaseClient): Promise<Databas
   `);
   schemaParts.push(types.rows);
   schemaParts.push(conflicts);
-  schemaParts.push(extensionVersions);
+  // Extension versions are bound into planFingerprint separately. They are
+  // not public-schema objects and must not make public-schema verification
+  // fail when an explicitly reviewed compatible destination version is newer.
   const schemaFingerprint = createHash("sha256").update(JSON.stringify(schemaParts)).digest("hex");
   const publicObjects: PublicSchemaObjects = {
     tables: tableResult.rows
@@ -628,6 +631,11 @@ function planFingerprint(
   return createHash("sha256").update(payload).digest("hex");
 }
 
+function isExtensionTocEntry(line: string): boolean {
+  return /\bEXTENSION\s+-\s+\S+/.test(line)
+    || /\bCOMMENT\s+-\s+EXTENSION\b/.test(line);
+}
+
 function publicSchemaTocEntries(catalogText: string): string[] {
   return catalogText.split(/\r?\n/)
     .map((line) => line.trim())
@@ -636,6 +644,7 @@ function publicSchemaTocEntries(catalogText: string): string[] {
       && !line.startsWith(";")
       && !/\bSCHEMA\s+-\s+public(?:\s|$)/.test(line)
       && !/\bCOMMENT\s+-\s+SCHEMA\s+public(?:\s|$)/.test(line)
+      && !isExtensionTocEntry(line)
     ))
     .map((line) => line.replace(/\s+\S+$/, "").trim());
 }
@@ -958,6 +967,7 @@ async function createVerifiedSourceBackup(
     const restoreLines = catalogLines.filter((line) => (
       !/\bSCHEMA\s+-\s+public(?:\s|$)/.test(line)
       && !/\bCOMMENT\s+-\s+SCHEMA\s+public(?:\s|$)/.test(line)
+      && !isExtensionTocEntry(line)
     ));
     const restoreToc = restoreLines.join("\n");
     if (
@@ -1131,15 +1141,26 @@ export async function inspectSupabaseMigration(
       return [item.slice(0, separator), item.slice(separator + 1)] as const;
     }),
   );
-  const extensionVersionMismatches = source.extensionVersions.flatMap((item) => {
+  const extensionVersionMismatches: string[] = [];
+  const compatibleExtensionVersionDifferences: string[] = [];
+  for (const item of source.extensionVersions) {
     const separator = item.lastIndexOf(":");
     const name = item.slice(0, separator);
     const sourceVersion = item.slice(separator + 1);
     const destinationVersion = destinationExtensionVersions.get(name);
-    return destinationVersion && destinationVersion !== sourceVersion
-      ? [`${name}: source ${sourceVersion}, destination ${destinationVersion}`]
-      : [];
-  });
+    if (!destinationVersion || destinationVersion === sourceVersion) continue;
+
+    const difference = `${name}: source ${sourceVersion}, destination ${destinationVersion}`;
+    // Supabase Vault v0.3.1 -> v0.3.2 preserves the public function signatures;
+    // its SQL update only hardens create_secret/update_secret search_path.
+    // Keep the destination's newer extension untouched and never generalize
+    // this allowlist to other extensions or version pairs.
+    if (name === "supabase_vault" && sourceVersion === "0.3.1" && destinationVersion === "0.3.2") {
+      compatibleExtensionVersionDifferences.push(difference);
+    } else {
+      extensionVersionMismatches.push(difference);
+    }
+  }
   let schemaManifest: string[] = [];
   let toolFailure: MigrationToolFailure | null = null;
   if (!options.skipSchemaManifest) {
@@ -1181,6 +1202,7 @@ export async function inspectSupabaseMigration(
     sourceExtensions: source.extensions,
     missingDestinationExtensions,
     extensionVersionMismatches,
+    compatibleExtensionVersionDifferences,
     destinationConflicts: destination.conflicts,
     toolFailure,
     sourceSchemaFingerprint: source.schemaFingerprint,

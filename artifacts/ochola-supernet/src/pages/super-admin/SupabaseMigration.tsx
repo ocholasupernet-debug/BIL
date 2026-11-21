@@ -40,6 +40,7 @@ interface MigrationPlan {
   sourceExtensions: string[];
   missingDestinationExtensions: string[];
   extensionVersionMismatches: string[];
+  compatibleExtensionVersionDifferences: string[];
   destinationConflicts: string[];
   toolFailure?: {
     errorCode: string;
@@ -271,7 +272,6 @@ export default function SuperAdminSupabaseMigration() {
     } catch {
       setError("The preflight request failed. Verify the server is available and try again.");
     } finally {
-      clearConnections();
       setBusy(false);
     }
   };
@@ -281,6 +281,7 @@ export default function SuperAdminSupabaseMigration() {
     setError("");
     setBusy(true);
     setJob(null);
+    let accepted = false;
     try {
       const response = await fetch("/api/super-admin/supabase-migration/run", {
         method: "POST",
@@ -300,6 +301,7 @@ export default function SuperAdminSupabaseMigration() {
         setError(humanError(data.error, data.diagnostic));
         return;
       }
+      accepted = true;
       setJobId(data.jobId);
       setJob({
         id: data.jobId,
@@ -315,7 +317,10 @@ export default function SuperAdminSupabaseMigration() {
     } catch {
       setError("The migration request failed before a job could be confirmed.");
     } finally {
-      clearConnections();
+      if (accepted) {
+        clearConnections();
+        setConfirmation("");
+      }
       setBusy(false);
     }
   };
@@ -467,6 +472,17 @@ export default function SuperAdminSupabaseMigration() {
               {busy ? "Checking…" : "Validate and preview"}
             </button>
             <span>Only the fixed source and destination project IDs are accepted.</span>
+            <button
+              className="bil-migration-clear"
+              type="button"
+              onClick={() => {
+                clearConnections();
+                setConfirmation("");
+              }}
+              disabled={busy || (!sourceDatabaseUrl && !destinationDatabaseUrl && !sourceRootCertificate && !destinationRootCertificate)}
+            >
+              Clear in-memory connection data
+            </button>
           </div>
         </section>
 
@@ -482,7 +498,7 @@ export default function SuperAdminSupabaseMigration() {
               </span>
               <div>
                 <h2>{plan.ok ? "Preflight ready for review" : "Preflight found blockers"}</h2>
-                <p>Source and destination credentials were cleared from the form after inspection.</p>
+                <p>Connection strings and certificates remain masked in this page’s memory only. They are not saved in browser storage; clear them here or leave this page to discard them.</p>
               </div>
             </div>
             <div className="bil-migration-summary">
@@ -552,35 +568,17 @@ export default function SuperAdminSupabaseMigration() {
                 Neither project will be upgraded or downgraded automatically; this difference blocks copying until compatibility is reviewed.
               </p>
             )}
+            {plan.compatibleExtensionVersionDifferences.length > 0 && (
+              <p className="bil-migration-note">
+                <strong>Reviewed compatible extension difference:</strong> {plan.compatibleExtensionVersionDifferences.join("; ")}.
+                The destination’s existing extension stays unchanged. The public-schema restore excludes extension install/update entries.
+              </p>
+            )}
 
             {plan.ok && (
               <div className="bil-migration-confirm">
                 <h3>2. Confirm the destination before copying</h3>
-                <p>Re-enter both connection strings for this one-time request, then type the destination project ID. This does not switch production.</p>
-                <div className="bil-migration-grid">
-                  <label>
-                    <span>Source connection again</span>
-                    <input
-                      type="password"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={sourceDatabaseUrl}
-                      onChange={(event) => setSourceDatabaseUrl(event.target.value)}
-                      aria-label="Re-enter source database connection string"
-                    />
-                  </label>
-                  <label>
-                    <span>Destination connection again</span>
-                    <input
-                      type="password"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={destinationDatabaseUrl}
-                      onChange={(event) => setDestinationDatabaseUrl(event.target.value)}
-                      aria-label="Re-enter destination database connection string"
-                    />
-                  </label>
-                </div>
+                <p>The masked connection values above are sent only with this one-time request. Type the destination project ID to authorize the copy; this does not switch production.</p>
                 <label className="bil-migration-confirm-label">
                   <span>Type the destination project ID to authorize the copy</span>
                   <input
@@ -682,6 +680,7 @@ export default function SuperAdminSupabaseMigration() {
         .bil-migration-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:16px;}
         .bil-migration-actions button,.bil-migration-run{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:8px;background:${C.accent};color:white;font-size:.76rem;font-weight:750;padding:10px 14px;cursor:pointer;}
         .bil-migration-actions button:disabled,.bil-migration-run:disabled{opacity:.45;cursor:not-allowed;}
+         .bil-migration-actions .bil-migration-clear{background:transparent;border:1px solid rgba(148,163,184,.24);color:${C.sub};}
         .bil-migration-actions span{color:${C.muted};font-size:.67rem;}
         .bil-migration-error{display:flex;align-items:center;gap:9px;padding:12px 14px;margin:16px 0;border:1px solid rgba(248,113,113,.28);border-radius:10px;background:rgba(127,29,29,.14);color:${C.red};font-size:.76rem;}
         .bil-migration-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:4px 0 16px;}

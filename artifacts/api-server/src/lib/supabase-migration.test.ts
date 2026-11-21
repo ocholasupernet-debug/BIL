@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -153,7 +153,7 @@ class FakeChild extends EventEmitter {
 }
 
 function createSuccessfulSpawn(
-  state: { restored: boolean; failBackupVerification?: boolean },
+  state: { restored: boolean; failBackupVerification?: boolean; restoredToc?: string },
   captured: Array<{ command: string; args: string[]; env: NodeJS.ProcessEnv }>,
   toolMajor = 16,
 ): MigrationSpawn {
@@ -191,6 +191,8 @@ function createSuccessfulSpawn(
           "2; 0 0 COMMENT - SCHEMA public postgres",
           "3; 1259 16384 TABLE public isp_admins postgres",
           "4; 0 16384 TABLE DATA public isp_admins postgres",
+          "5; 0 0 EXTENSION - supabase_vault",
+          "6; 0 0 COMMENT - EXTENSION supabase_vault",
           "",
         ].join("\n"));
         child.emit("close", 0);
@@ -198,9 +200,15 @@ function createSuccessfulSpawn(
     } else if (isRestoreCommand && args.includes("/dev/null")) {
       queueMicrotask(() => child.emit("close", state.failBackupVerification ? 1 : 0));
     } else if (isRestoreCommand && args.includes("--dbname")) {
+      const listIndex = args.indexOf("--use-list");
+      const tocPath = listIndex >= 0 ? args[listIndex + 1] : undefined;
       queueMicrotask(() => {
-        state.restored = true;
-        child.emit("close", 0);
+        void (tocPath ? readFile(tocPath, "utf8") : Promise.resolve(""))
+          .then((restoreToc) => {
+            state.restoredToc = restoreToc;
+            state.restored = true;
+            child.emit("close", 0);
+          });
       });
     } else {
       queueMicrotask(() => child.emit("close", 1));
@@ -298,6 +306,7 @@ test("preflight manifest comes from a schema-only PostgreSQL archive and omits o
   });
   assert.ok(plan.schemaManifest.some((entry) => entry.includes("TABLE public isp_admins")));
   assert.equal(plan.schemaManifest.some((entry) => entry.includes("SCHEMA - public")), false);
+  assert.equal(plan.schemaManifest.some((entry) => entry.includes("EXTENSION")), false);
   assert.equal(plan.schemaManifest.some((entry) => entry.endsWith(" postgres")), false);
   const schemaDump = captured.find((item) => item.args.includes("--schema-only"));
   assert.ok(schemaDump);
@@ -330,7 +339,7 @@ test("preflight reports the installed PostgreSQL client major instead of a gener
   assert.equal(captured.some((item) => item.args.includes("--schema-only")), false);
 });
 
-test("preflight keeps the Vault extension version mismatch as a blocker", async () => {
+test("preflight allows the reviewed Vault 0.3.1 to 0.3.2 transition without changing the extension", async () => {
   const plan = await inspectSupabaseMigration(sourceUrl, destinationUrl, {
     clientFactory: createClientFactory({
       sourceExtensionVersion: "0.3.1",
@@ -338,11 +347,40 @@ test("preflight keeps the Vault extension version mismatch as a blocker", async 
     }),
     skipSchemaManifest: true,
   });
-  assert.equal(plan.canMigrate, false);
-  assert.deepEqual(plan.extensionVersionMismatches, [
+  assert.equal(plan.canMigrate, true);
+  assert.deepEqual(plan.extensionVersionMismatches, []);
+  assert.deepEqual(plan.compatibleExtensionVersionDifferences, [
     "supabase_vault: source 0.3.1, destination 0.3.2",
   ]);
   assert.deepEqual(plan.missingDestinationExtensions, []);
+});
+
+test("preflight keeps reverse and unknown extension version transitions blocked", async () => {
+  const reverse = await inspectSupabaseMigration(sourceUrl, destinationUrl, {
+    clientFactory: createClientFactory({
+      sourceExtensionVersion: "0.3.2",
+      destinationExtensionVersion: "0.3.1",
+    }),
+    skipSchemaManifest: true,
+  });
+  assert.equal(reverse.canMigrate, false);
+  assert.deepEqual(reverse.compatibleExtensionVersionDifferences, []);
+  assert.deepEqual(reverse.extensionVersionMismatches, [
+    "supabase_vault: source 0.3.2, destination 0.3.1",
+  ]);
+
+  const unknown = await inspectSupabaseMigration(sourceUrl, destinationUrl, {
+    clientFactory: createClientFactory({
+      sourceExtensionVersion: "0.3.1",
+      destinationExtensionVersion: "0.3.3",
+    }),
+    skipSchemaManifest: true,
+  });
+  assert.equal(unknown.canMigrate, false);
+  assert.deepEqual(unknown.compatibleExtensionVersionDifferences, []);
+  assert.deepEqual(unknown.extensionVersionMismatches, [
+    "supabase_vault: source 0.3.1, destination 0.3.3",
+  ]);
 });
 
 test("preflight blocks a non-empty destination and reports only object names", async () => {
@@ -356,14 +394,22 @@ test("preflight blocks a non-empty destination and reports only object names", a
 });
 
 test("migration verifies a durable source backup before any destination write", async () => {
-  const state = { restored: false };
+  const state: { restored: boolean; restoredToc?: string } = { restored: false };
   const captured: Array<{ command: string; args: string[]; env: NodeJS.ProcessEnv }> = [];
   const plan = await inspectSupabaseMigration(sourceUrl, destinationUrl, {
-    clientFactory: createClientFactory({ state }),
+    clientFactory: createClientFactory({
+      state,
+      sourceExtensionVersion: "0.3.1",
+      destinationExtensionVersion: "0.3.2",
+    }),
     skipSchemaManifest: true,
   });
   const result = await runSupabasePublicMigration(sourceUrl, destinationUrl, plan.fingerprint, {
-    clientFactory: createClientFactory({ state }),
+    clientFactory: createClientFactory({
+      state,
+      sourceExtensionVersion: "0.3.1",
+      destinationExtensionVersion: "0.3.2",
+    }),
     spawn: createSuccessfulSpawn(state, captured),
     skipSchemaManifest: true,
     sourceRootCertificate,
@@ -372,6 +418,12 @@ test("migration verifies a durable source backup before any destination write", 
     allowTemporaryBackupDirectory: true,
   });
   const backup = result.sourceBackup;
+  assert.equal(result.plan.canMigrate, true);
+  assert.deepEqual(result.plan.compatibleExtensionVersionDifferences, [
+    "supabase_vault: source 0.3.1, destination 0.3.2",
+  ]);
+  assert.equal(result.verification.verified, true);
+  assert.equal(result.verification.schemaMatches, true);
   assert.ok(backup);
   const backupPath = join(testBackupDirectory, "supabase-migration", backup.artifactName);
   const backupInfo = await stat(backupPath);
@@ -398,6 +450,7 @@ test("migration verifies a durable source backup before any destination write", 
   assert.equal(sourceDump?.env.PGOPTIONS, "-c default_transaction_read_only=on");
   assert.equal(sourceDump?.env.PGSSLMODE, "verify-full");
   assert.equal(state.restored, true);
+  assert.equal(state.restoredToc?.includes("EXTENSION"), false);
 });
 
 test("migration stops before destination restore when source backup verification fails", async () => {

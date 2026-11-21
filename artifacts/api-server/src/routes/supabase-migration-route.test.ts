@@ -46,6 +46,7 @@ const plan: MigrationPlan = {
   sourceExtensions: ["plpgsql"],
   missingDestinationExtensions: [],
   extensionVersionMismatches: [],
+  compatibleExtensionVersionDifferences: [],
   destinationConflicts: [],
   toolFailure: null,
   schemaManifest: ["1; 1259 20000 TABLE public isp_admins"],
@@ -242,6 +243,36 @@ test("preflight exposes the specific PostgreSQL client version blocker", async (
     assert.equal(body.toolFailure?.diagnostic?.toolMajor, 16);
     assert.equal(body.toolFailure?.diagnostic?.requiredMajor, 17);
     assert.ok(body.blockers?.includes("postgres_client_version_mismatch"));
+  });
+});
+
+test("preflight returns the reviewed Vault version difference as non-blocking", async () => {
+  const router = createSupabaseMigrationRouter({
+    isSuperAdminTokenActive: () => true,
+    inspect: async () => ({
+      ...plan,
+      compatibleExtensionVersionDifferences: [
+        "supabase_vault: source 0.3.1, destination 0.3.2",
+      ],
+    }),
+  });
+  await withServer(router, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/super-admin/supabase-migration/preflight`, {
+      method: "POST",
+      headers: sameOriginHeaders(baseUrl),
+      body: JSON.stringify({ sourceDatabaseUrl, destinationDatabaseUrl }),
+    });
+    const body = await response.json() as {
+      ok: boolean;
+      compatibleExtensionVersionDifferences?: string[];
+      blockers?: string[];
+    };
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.compatibleExtensionVersionDifferences, [
+      "supabase_vault: source 0.3.1, destination 0.3.2",
+    ]);
+    assert.equal(body.blockers?.includes("destination_extension_versions_differ"), false);
   });
 });
 

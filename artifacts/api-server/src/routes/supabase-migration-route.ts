@@ -214,6 +214,7 @@ export function createSupabaseMigrationRouter(
         sourceExtensions: plan.sourceExtensions,
         missingDestinationExtensions: plan.missingDestinationExtensions,
         extensionVersionMismatches: plan.extensionVersionMismatches,
+        compatibleExtensionVersionDifferences: plan.compatibleExtensionVersionDifferences,
         destinationConflicts: plan.destinationConflicts,
         toolFailure: plan.toolFailure ?? null,
         blockers: planBlockers(plan),
