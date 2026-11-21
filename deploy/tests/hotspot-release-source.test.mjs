@@ -116,9 +116,11 @@ test("the default release source keeps WAHA and prepaid migrations without runni
   assert.ok(routeIndex.includes("wahaGatewayRouter"));
 
   const workflow = source(".github/workflows/deploy.yml");
-  assert.ok(workflow.includes(
-    "DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup }}",
-  ));
+  assert.ok(
+    workflow.includes(
+      "DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup || inputs.application_only_release }}",
+    ),
+  );
   for (const name of ["WAHA_BASE_URL", "WAHA_API_KEY", "WAHA_SESSION_ID", "WAHA_DEFAULT_COUNTRY_CODE"]) {
     assert.ok(workflow.includes(name + ": ${{ secrets." + name + " }}"), `${name} secret is not mapped`);
   }
