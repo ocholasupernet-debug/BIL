@@ -64,6 +64,7 @@ import SuperAdminSecurityLogs from "./pages/super-admin/SecurityLogs";
 import SuperAdminNotifications from "./pages/super-admin/Notifications";
 import SuperAdminAutomation from "./pages/super-admin/Automation";
 import SuperAdminBackups from "./pages/super-admin/Backups";
+import SuperAdminSupabaseMigration from "./pages/super-admin/SupabaseMigration";
 import SuperAdminApiIntegrations from "./pages/super-admin/ApiIntegrations";
 import SuperAdminWhatsApp from "./pages/super-admin/WhatsApp";
 import SuperAdminSMS from "./pages/super-admin/SMS";
@@ -331,6 +332,7 @@ function Router() {
       <Route path="/super-admin/sms"            component={SuperAdminSMS}              />
       <Route path="/super-admin/automation"     component={SuperAdminAutomation}       />
       <Route path="/super-admin/backups"        component={SuperAdminBackups}          />
+      <Route path="/super-admin/supabase-migration" component={SuperAdminSupabaseMigration} />
       <Route path="/super-admin/api"            component={SuperAdminApiIntegrations}  />
       <Route path="/super-admin/limits"         component={SuperAdminSystemLimits}     />
       <Route path="/super-admin/impersonate"    component={SuperAdminImpersonate}      />

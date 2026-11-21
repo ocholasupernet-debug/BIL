@@ -33,6 +33,11 @@ on:
         required: false
         default: false
         type: boolean
+      application_only_release:
+        description: "Deploy app code while preserving VPS .env and skipping database, Nginx, and router changes"
+        required: false
+        default: false
+        type: boolean
       sync_router_configuration_ids:
         description: "Optional comma-separated router IDs for the confirmed queue and Hotspot TTL sync"
         required: false
@@ -67,6 +72,16 @@ jobs:
     steps:
       - name: Check out the release
         uses: actions/checkout@v4
+
+      - name: Require app-only mode on scoped migration release branches
+        if: startsWith(github.ref, 'refs/heads/deploy/supabase-migration-app-only-')
+        env:
+          APP_ONLY_RELEASE: ${{ inputs.application_only_release }}
+        run: |
+          if [ "$APP_ONLY_RELEASE" != "true" ]; then
+            echo "ERROR: scoped migration release branches require application_only_release=true."
+            exit 1
+          fi
 
       - name: Test router-management VPN bootstrap decisions
         run: bash deploy/tests/bootstrap-router-management-vpn.test.sh
@@ -108,6 +123,15 @@ jobs:
       - name: Verify application release source contract
         run: node --test deploy/tests/hotspot-release-source.test.mjs
 
+      - name: Test application-only release guard
+        run: node --test deploy/tests/application-only-release.test.mjs
+
+      - name: Verify app-only build still targets BIL source
+        if: inputs.application_only_release
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+        run: node deploy/verify-supabase-build-target.mjs
+
       - name: Build release artifacts on the runner
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
@@ -130,6 +154,7 @@ jobs:
             --exclude='./.agents' \
             --exclude='./screenshots' \
             --exclude='./attached_assets' \
+            --exclude='./data/backups' \
             --exclude='./.env' \
             --exclude='*/.env' \
             --exclude='./node_modules' \
@@ -187,7 +212,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,VITE_TURNSTILE_SITE_KEY,TURNSTILE_SECRET,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,SYNC_ROUTER_CONFIGURATION_IDS,SYNC_ROUTER_ADMIN_ID,SYNC_ROUTER_AUTH_VERSION,INSPECT_API_ERRORS,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE,GMAIL_APP_PASSWORD_B64
+          envs: ${{ inputs.application_only_release && 'APP_ONLY_RELEASE,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS' || 'VITE_SUPABASE_URL,VITE_SUPABASE_KEY,VITE_TURNSTILE_SITE_KEY,TURNSTILE_SECRET,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,SYNC_ROUTER_CONFIGURATION_IDS,SYNC_ROUTER_ADMIN_ID,SYNC_ROUTER_AUTH_VERSION,INSPECT_API_ERRORS,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE,GMAIL_APP_PASSWORD_B64' }}
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -266,6 +291,9 @@ jobs:
             tar -xzf /tmp/ocholasupernet-release.tgz -C .
             rm -f /tmp/ocholasupernet-release.tgz
 
+            if [ "${APP_ONLY_RELEASE:-false}" = "true" ]; then
+              echo "Application-only release: skipping VPS .env writes, WhatsApp sync, and Nginx configuration."
+            else
             # Inject Supabase credentials and the encryption key into .env so PM2 always has them
             # (safe even if already set — idempotent upsert)
             upsert_env() {
@@ -338,12 +366,14 @@ jobs:
             # unnecessary dependency and can fail before the application
             # deployment starts on minimal VPS images.
             bash deploy/configure-nginx.sh
+            fi
 
             # This release changes application source only; package manifests
             # and the lockfile are unchanged, so avoid a fragile registry
             # install on the VPS. deploy.sh still fails explicitly if the
             # required workspace binaries are absent.
             DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP="${DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP:-false}" \
+            DEPLOY_APP_ONLY="${APP_ONLY_RELEASE:-false}" \
             DEPLOY_PORTAL_REFRESH_ONLY="${DEPLOY_PORTAL_REFRESH_ONLY:-false}" \
             DEPLOY_FROM_ARCHIVE=1 \
             DEPLOY_SKIP_INSTALL=1 \
@@ -366,6 +396,10 @@ jobs:
               exit 1
             fi
             echo "=== API health check passed ==="
+            if [ "${APP_ONLY_RELEASE:-false}" = "true" ]; then
+              echo "=== Application-only release finished; router actions were not run ==="
+              exit 0
+            fi
             if [ -n "${SYNC_ROUTER_CONFIGURATION_IDS:-}" ] || [ -n "${SYNC_ROUTER_ADMIN_ID:-}" ] || [ -n "${SYNC_ROUTER_AUTH_VERSION:-}" ]; then
               if [ -z "${SYNC_ROUTER_CONFIGURATION_IDS:-}" ] || [ -z "${SYNC_ROUTER_ADMIN_ID:-}" ] || [ -z "${SYNC_ROUTER_AUTH_VERSION:-}" ]; then
                 echo "ERROR: router configuration sync requires router IDs and the owning administrator session values."
@@ -527,9 +561,10 @@ jobs:
           SYNC_ROUTER_ADMIN_ID: ${{ inputs.sync_router_admin_id }}
           SYNC_ROUTER_AUTH_VERSION: ${{ inputs.sync_router_auth_version }}
           INSPECT_API_ERRORS: ${{ inputs.inspect_api_errors }}
-          DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup }}
-          DEPLOY_SKIP_ROUTER_ONESHOTS: ${{ github.event_name == 'push' || inputs.skip_router_oneshots }}
+          DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup || inputs.application_only_release }}
+          DEPLOY_SKIP_ROUTER_ONESHOTS: ${{ github.event_name == 'push' || inputs.skip_router_oneshots || inputs.application_only_release }}
           DEPLOY_PORTAL_REFRESH_ONLY: ${{ inputs.portal_refresh_only }}
+          APP_ONLY_RELEASE: ${{ inputs.application_only_release }}
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
           WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN }}
           WHATSAPP_APP_SECRET: ${{ secrets.WHATSAPP_APP_SECRET }}

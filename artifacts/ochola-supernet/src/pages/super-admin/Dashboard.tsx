@@ -299,6 +299,20 @@ export default function SuperAdminDashboard() {
           </div>
         </div>
 
+        <Link
+          className="sa-migration-launch"
+          href="/super-admin/supabase-migration"
+          aria-label="Supabase Migration: open migration preflight workspace"
+        >
+          <span className="sa-migration-launch-icon"><Database size={20} /></span>
+          <span className="sa-migration-launch-copy">
+            <span className="sa-migration-launch-kicker">Data &amp; Migration</span>
+            <strong>Supabase Migration</strong>
+            <span>Review the source, destination, and public-schema preflight. No migration runs automatically.</span>
+          </span>
+          <span className="sa-migration-launch-action">Open workspace <ArrowUpRight size={16} /></span>
+        </Link>
+
         {hasError && (
           <div className="dashboard-error" role="alert">
             <AlertTriangle size={15} />

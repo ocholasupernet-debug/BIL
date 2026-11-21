@@ -4934,3 +4934,76 @@ table:not([role="grid"]) td [data-technical="true"] {
   .dashboard-page .dashboard-stat-value { font-size: 1rem; }
   .dashboard-page .dashboard-stat-arrow { width: 12px; height: 12px; }
 }
+
+.sa-migration-launch {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 15px;
+  padding: 16px 18px;
+  border: 1px solid var(--isp-accent-border);
+  border-left: 4px solid var(--isp-accent);
+  border-radius: 11px;
+  color: var(--isp-text);
+  background:
+    linear-gradient(110deg, var(--isp-accent-glow), transparent 72%),
+    var(--sa-panel-strong);
+  box-shadow: var(--shadow-card);
+  text-decoration: none;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+.sa-migration-launch:hover {
+  border-color: var(--isp-accent);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+.sa-migration-launch-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--isp-accent-border);
+  border-radius: 10px;
+  color: var(--isp-accent-strong);
+  background: var(--isp-accent-glow);
+}
+.sa-migration-launch-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+.sa-migration-launch-kicker {
+  color: var(--isp-accent-strong);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.sa-migration-launch-copy strong { font-size: 0.98rem; }
+.sa-migration-launch-copy > span:last-child {
+  color: var(--isp-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+.sa-migration-launch-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  color: var(--isp-accent-strong);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+@media (max-width: 520px) {
+  .sa-migration-launch { align-items: flex-start; gap: 10px; padding: 12px; }
+  .sa-migration-launch-icon { width: 36px; height: 36px; }
+  .sa-migration-launch-action { display: none; }
+}
+.sa-migration-launch:focus-visible {
+  outline: 2px solid var(--isp-accent);
+  outline-offset: 3px;
+}

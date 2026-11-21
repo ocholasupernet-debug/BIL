@@ -7,6 +7,7 @@ set -e
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
+source "$PROJECT_DIR/deploy/postgresql-client17.sh"
 
 # Resolve the document root used by the active isplatty.org web server.
 # PUBLIC_HTML remains an explicit override for non-standard installations.
@@ -110,37 +111,7 @@ NODE
 }
 
 ensure_pg_dump_available() {
-  if command -v pg_dump >/dev/null 2>&1; then
-    echo "      ✓ PostgreSQL backup client available: $(pg_dump --version)"
-    return 0
-  fi
-
-  echo "      ! pg_dump is missing; attempting to install the PostgreSQL client..."
-  if command -v apt-get >/dev/null 2>&1; then
-    if [ "$(id -u)" -eq 0 ]; then
-      if ! apt-get update -qq || ! DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client; then
-        echo "      ! PostgreSQL client installation failed; backups will remain unavailable."
-        return 0
-      fi
-    elif command -v sudo >/dev/null 2>&1; then
-      if ! sudo apt-get update -qq || ! sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client; then
-        echo "      ! PostgreSQL client installation failed; backups will remain unavailable."
-        return 0
-      fi
-    else
-      echo "      ! Cannot install PostgreSQL client without root or sudo; backups will remain unavailable."
-      return 0
-    fi
-  else
-    echo "      ! apt-get is unavailable; install the PostgreSQL client to enable backups."
-    return 0
-  fi
-
-  if command -v pg_dump >/dev/null 2>&1; then
-    echo "      ✓ PostgreSQL backup client installed: $(pg_dump --version)"
-  else
-    echo "      ! PostgreSQL client installation did not provide pg_dump; backups will remain unavailable."
-  fi
+  ensure_postgresql17_client
 }
 
 # 1. Use the release delivered by GitHub Actions, or pull latest code when
@@ -195,6 +166,16 @@ load_deploy_env() {
     set +a
   fi
 }
+
+case "${DEPLOY_APP_ONLY:-false}" in
+  1|true|TRUE|yes|YES)
+    echo "Application-only release requested; skipping database migrations and infrastructure changes."
+    PUBLIC_HTML="$PUBLIC_HTML" \
+    DEPLOY_FROM_ARCHIVE="${DEPLOY_FROM_ARCHIVE:-0}" \
+      bash "$PROJECT_DIR/deploy/app-only-release.sh"
+    exit 0
+    ;;
+esac
 
 apply_supabase_migration() {
   local migration_file="$PROJECT_DIR/artifacts/api-server/migrations/2026_admin_initial_password_setup.sql"

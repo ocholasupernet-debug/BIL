@@ -3,6 +3,7 @@ dist/
 tmp/
 out-tsc/
 *.tsbuildinfo
+/data/backups/
 .expo
 .expo-shared
 

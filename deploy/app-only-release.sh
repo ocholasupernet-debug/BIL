@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+PUBLIC_HTML="${PUBLIC_HTML:-}"
+cd "$PROJECT_DIR"
+
+if [ "${DEPLOY_FROM_ARCHIVE:-0}" != "1" ]; then
+  echo "Application-only release requires an archive delivered by the deployment workflow." >&2
+  exit 1
+fi
+
+if [ ! -s "$PROJECT_DIR/.env" ]; then
+  echo "Application-only release requires the existing VPS .env; refusing to create or replace it." >&2
+  exit 1
+fi
+if [ ! -s "$PROJECT_DIR/artifacts/ochola-supernet/dist/public/index.html" ]; then
+  echo "Application-only release is missing the prebuilt frontend." >&2
+  exit 1
+fi
+if [ ! -s "$PROJECT_DIR/artifacts/api-server/dist/index.mjs" ]; then
+  echo "Application-only release is missing the prebuilt API." >&2
+  exit 1
+fi
+if [ -z "$PUBLIC_HTML" ] || [ ! -d "$PUBLIC_HTML" ]; then
+  echo "Application-only release could not resolve the existing web root." >&2
+  exit 1
+fi
+
+BUILD_OUTPUT="$PROJECT_DIR/artifacts/ochola-supernet/dist/public"
+if ! pm2 describe ocholanet-api >/dev/null 2>&1; then
+  echo "Application-only release requires the existing PM2 process; refusing to start a new process with unknown settings." >&2
+  exit 1
+fi
+
+mkdir -p "$PROJECT_DIR/logs"
+pm2 reload ocholanet-api
+
+api_ready=false
+for attempt in $(seq 1 30); do
+  if curl --fail --silent --show-error --max-time 5 \
+    http://127.0.0.1:8080/api/healthz >/dev/null
+  then
+    api_ready=true
+    break
+  fi
+  sleep 2
+done
+
+if [ "$api_ready" != "true" ]; then
+  echo "Application-only release API health check failed." >&2
+  pm2 status || true
+  exit 1
+fi
+
+if [ "$(readlink -f "$BUILD_OUTPUT")" != "$(readlink -f "$PUBLIC_HTML")" ]; then
+  rsync -a --delete "$BUILD_OUTPUT/" "$PUBLIC_HTML/"
+fi
+
+echo "Application-only release passed its local API health check."
