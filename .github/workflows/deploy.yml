@@ -66,7 +66,7 @@ permissions:
 
 jobs:
   deploy:
-    if: ${{ !inputs.staff_host_repair }}
+    if: ${{ !startsWith(github.ref, 'refs/heads/deploy/staff-host-reachability-') && !inputs.staff_host_repair }}
     name: SSH Deploy
     runs-on: ubuntu-latest
 
@@ -547,7 +547,7 @@ jobs:
           GMAIL_APP_PASSWORD_B64: ${{ steps.encode_runtime_ssh.outputs.GMAIL_APP_PASSWORD_B64 }}
 
   staff-host-repair:
-    if: ${{ inputs.staff_host_repair }}
+    if: ${{ inputs.staff_host_repair && startsWith(github.ref, 'refs/heads/deploy/staff-host-reachability-') && github.event_name == 'workflow_dispatch' }}
     name: Restore Staff host reachability
     runs-on: ubuntu-latest
     steps:

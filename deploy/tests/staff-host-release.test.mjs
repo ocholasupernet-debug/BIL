@@ -34,8 +34,8 @@ test("Staff TLS repair is host-specific and never changes application or databas
 test("Staff release workflow is manual, branch-scoped, and bypasses the general deploy job", async () => {
   const workflow = await read(".github/workflows/deploy.yml");
   assert.match(workflow, /staff_host_repair:\n\s+description:/);
-  assert.match(workflow, /deploy:\n\s+if: \$\{\{ !inputs\.staff_host_repair \}\}/);
-  assert.match(workflow, /staff-host-repair:\n\s+if: \$\{\{ inputs\.staff_host_repair \}\}/);
+  assert.match(workflow, /deploy:\n\s+if: \$\{\{ !startsWith\(github\.ref, 'refs\/heads\/deploy\/staff-host-reachability-'\) && !inputs\.staff_host_repair \}\}/);
+  assert.match(workflow, /staff-host-repair:\n\s+if: \$\{\{ inputs\.staff_host_repair && startsWith\(github\.ref, 'refs\/heads\/deploy\/staff-host-reachability-'\) && github\.event_name == 'workflow_dispatch' \}\}/);
   assert.match(workflow, /refs\/heads\/deploy\/staff-host-reachability-\*/);
   assert.match(workflow, /workflow_dispatch/);
   assert.doesNotMatch(workflow, /staff-host-repair:[\s\S]*?on:\n\s+push:/);
