@@ -118,7 +118,7 @@ test("the default release source keeps WAHA and prepaid migrations without runni
   const workflow = source(".github/workflows/deploy.yml");
   assert.ok(
     workflow.includes(
-      "DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup || inputs.application_only_release }}",
+        "DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup || inputs.application_only_release || inputs.supabase_target_cutover }}",
     ),
   );
   for (const name of ["WAHA_BASE_URL", "WAHA_API_KEY", "WAHA_SESSION_ID", "WAHA_DEFAULT_COUNTRY_CODE"]) {
