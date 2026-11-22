@@ -44,7 +44,63 @@ type EmployeeProfile = {
   email: string | null;
   status: string;
   auth_version: number;
+  account_type: "employee" | "technician";
 };
+
+type TechnicianGuideRow = {
+  id: string;
+  slug: string;
+  title: string;
+  summary: string;
+  category: string;
+  brands: string[];
+  models: string[];
+  firmware_notes: string;
+  symptom_tags: string[];
+  likely_causes: string[];
+  safe_checks: string[];
+  escalate_when: string[];
+  warnings: string[];
+  steps: Array<{ title: string; instruction: string; check?: string; caution?: string }>;
+  diagrams: Array<{ kind: string; caption: string; labels: string[] }>;
+  image_url: string | null;
+  image_caption: string;
+  customer_script: string;
+  manual_url: string | null;
+  status: "draft" | "published" | "archived";
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type TechnicianModelRow = {
+  id: string;
+  brand: string;
+  model: string;
+  device_type: string;
+  hardware_revisions: string[];
+  firmware_variants: string[];
+  notes: string;
+  warning: string;
+  manual_url: string | null;
+  image_url: string | null;
+  image_caption: string;
+  diagram: { kind: string; caption: string; labels: string[] } | null;
+  status: "draft" | "published" | "archived";
+  created_by: string;
+  updated_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+const TECHNICIAN_CATEGORIES = new Set([
+  "setup", "ports", "wireless", "recovery", "connectivity", "fiber", "customer-care",
+]);
+const TECHNICIAN_DIAGRAM_KINDS = new Set([
+  "router-ports", "pon-leds", "connection-path", "decision-tree", "wifi-coverage",
+]);
+const TECHNICIAN_STATUSES = new Set(["draft", "published", "archived"]);
 
 type EmployeeSession = {
   id: string;
@@ -140,7 +196,7 @@ async function requireEmployee(req: Request, res: Response): Promise<EmployeePro
     }
     const employees = await sbSelectStrict<EmployeeProfile>(
       "employee_profiles",
-      `id=eq.${encodeURIComponent(session.employee_id)}&status=eq.active&select=id,username,display_name,email,status,auth_version&limit=1`,
+      `id=eq.${encodeURIComponent(session.employee_id)}&status=eq.active&select=id,username,display_name,email,status,auth_version,account_type&limit=1`,
     );
     const employee = employees[0];
     if (!employee || employee.auth_version !== session.auth_version) {
@@ -153,6 +209,22 @@ async function requireEmployee(req: Request, res: Response): Promise<EmployeePro
     res.status(503).json({ ok: false, error: "Staff access could not be verified." });
     return null;
   }
+}
+
+async function requireTechnician(req: Request, res: Response): Promise<EmployeeProfile | null> {
+  const employee = await requireEmployee(req, res);
+  if (!employee) return null;
+  if (employee.account_type !== "technician") {
+    res.status(403).json({ ok: false, error: "Technician Learning Center access is required." });
+    return null;
+  }
+  return employee;
+}
+
+function requirePayrollEmployee(employee: EmployeeProfile, res: Response): boolean {
+  if (employee.account_type === "employee") return true;
+  res.status(403).json({ ok: false, error: "This Staff account cannot access payroll features." });
+  return false;
 }
 
 function safeRpcObject(value: unknown): Record<string, unknown> {
@@ -284,6 +356,7 @@ router.post("/employee/signup", async (req: Request, res: Response): Promise<voi
   const password = typeof req.body?.password === "string" ? req.body.password : "";
   const confirmation = typeof req.body?.confirmPassword === "string" ? req.body.confirmPassword : "";
   const emailVerificationToken = req.body?.emailVerificationToken;
+  const accountType = req.body?.accountType;
   if (!email || fullName.length < 2 || fullName.length > 120 || /[\u0000-\u001f\u007f]/.test(fullName)) {
     res.status(400).json({ ok: false, error: "Enter your full name and a valid email address." });
     return;
@@ -300,6 +373,10 @@ router.post("/employee/signup", async (req: Request, res: Response): Promise<voi
     res.status(400).json({ ok: false, error: "Verify your email address before submitting your Staff request." });
     return;
   }
+  if (accountType !== "employee" && accountType !== "technician") {
+    res.status(400).json({ ok: false, error: "Choose an available Staff account type." });
+    return;
+  }
   try {
     await employeeAuth.completeSignup({
       email,
@@ -307,6 +384,7 @@ router.post("/employee/signup", async (req: Request, res: Response): Promise<voi
       fullName,
       phone,
       passwordHash: await hashEmployeePassword(password),
+      accountType,
     });
     res.status(202).json({
       ok: true,
@@ -327,7 +405,7 @@ router.get("/employee/admin/signups", async (req: Request, res: Response): Promi
   try {
     const signups = await sbSelectStrict<Record<string, unknown>>(
       "employee_signup_requests",
-      "status=eq.pending_approval&select=id,full_name,phone,email,status,email_verified_at,created_at&order=created_at.asc",
+      "status=eq.pending_approval&select=id,full_name,phone,email,account_type,status,email_verified_at,created_at&order=created_at.asc",
     );
     res.json({ ok: true, signups });
   } catch {
@@ -454,7 +532,7 @@ router.get("/employee/admin/employees", async (req: Request, res: Response): Pro
   try {
     const employees = await sbSelectStrict<Record<string, unknown>>(
       "employee_profiles",
-      "select=id,employee_number,username,display_name,email,phone,status,fixed_monthly_salary,created_at&order=created_at.desc",
+      "select=id,employee_number,username,display_name,email,phone,status,account_type,fixed_monthly_salary,created_at&order=created_at.desc",
     );
     res.json({ ok: true, employees });
   } catch {
@@ -544,7 +622,7 @@ router.post("/employee/login", async (req: Request, res: Response): Promise<void
   try {
     const employees = await sbSelectStrict<EmployeeProfile>(
       "employee_profiles",
-      `or=(username.eq.${encodeURIComponent(identity)},email.eq.${encodeURIComponent(identity)})&status=eq.active&select=id,username,display_name,email,status,auth_version&limit=1`,
+      `or=(username.eq.${encodeURIComponent(identity)},email.eq.${encodeURIComponent(identity)})&status=eq.active&select=id,username,display_name,email,status,auth_version,account_type&limit=1`,
     );
     const employee = employees[0];
     if (!employee) {
@@ -609,7 +687,7 @@ router.post("/employee/login/verify-otp", async (req: Request, res: Response): P
     }
     const employees = await sbSelectStrict<EmployeeProfile>(
       "employee_profiles",
-      `id=eq.${encodeURIComponent(employeeId)}&status=eq.active&select=id,username,display_name,email,status,auth_version&limit=1`,
+      `id=eq.${encodeURIComponent(employeeId)}&status=eq.active&select=id,username,display_name,email,status,auth_version,account_type&limit=1`,
     );
     const employee = employees[0];
     if (!employee) {
@@ -625,7 +703,7 @@ router.post("/employee/login/verify-otp", async (req: Request, res: Response): P
     });
     employeeLoginAttempts.delete(createHash("sha256").update(`${req.ip || "unknown"}:${email}`).digest("hex"));
     setSessionCookie(res, token);
-    res.json({ ok: true, employee: { id: employee.id, username: employee.username, displayName: employee.display_name } });
+    res.json({ ok: true, employee: { id: employee.id, username: employee.username, displayName: employee.display_name, accountType: employee.account_type } });
   } catch {
     res.status(503).json({ ok: false, error: "Staff sign-in is temporarily unavailable." });
   }
@@ -657,13 +735,14 @@ router.post("/employee/logout", async (req: Request, res: Response): Promise<voi
 router.get("/employee/me", async (req: Request, res: Response): Promise<void> => {
   if (!enabled(res)) return;
   const employee = await requireEmployee(req, res);
-  if (employee) res.json({ ok: true, employee: { id: employee.id, username: employee.username, displayName: employee.display_name } });
+  if (employee) res.json({ ok: true, employee: { id: employee.id, username: employee.username, displayName: employee.display_name, accountType: employee.account_type } });
 });
 
 router.get("/employee/dashboard", async (req: Request, res: Response): Promise<void> => {
   if (!enabled(res)) return;
   const employee = await requireEmployee(req, res);
   if (!employee) return;
+  if (!requirePayrollEmployee(employee, res)) return;
   try {
     const snapshot = await sbRpc<unknown>("employee_dashboard_snapshot", { p_employee_id: employee.id });
     res.json({ ok: true, dashboard: safeRpcObject(snapshot) });
@@ -676,6 +755,7 @@ router.get("/employee/destinations", async (req: Request, res: Response): Promis
   if (!enabled(res)) return;
   const employee = await requireEmployee(req, res);
   if (!employee) return;
+  if (!requirePayrollEmployee(employee, res)) return;
   try {
     const destinations = await sbSelectStrict<{
       id: string;
@@ -701,6 +781,7 @@ router.post("/employee/destinations/change-request", async (req: Request, res: R
   }
   const employee = await requireEmployee(req, res);
   if (!employee) return;
+  if (!requirePayrollEmployee(employee, res)) return;
   const normalized = normalizePayoutDestination(req.body?.destinationType, req.body?.destinationDetails);
   if (!normalized) {
     res.status(400).json({ ok: false, error: "Enter valid payout destination details." });
@@ -731,6 +812,7 @@ router.post("/employee/withdrawals", async (req: Request, res: Response): Promis
   }
   const employee = await requireEmployee(req, res);
   if (!employee) return;
+  if (!requirePayrollEmployee(employee, res)) return;
   const amount = req.body?.amount;
   const destinationId = typeof req.body?.destinationId === "string" ? req.body.destinationId : "";
   const idempotencyKey = String(req.get("idempotency-key") || req.body?.idempotencyKey || "");
@@ -759,6 +841,7 @@ router.post("/employee/withdrawals/:id/cancel", async (req: Request, res: Respon
   }
   const employee = await requireEmployee(req, res);
   if (!employee) return;
+  if (!requirePayrollEmployee(employee, res)) return;
   const id = Array.isArray(req.params.id) ? req.params.id[0] ?? "" : req.params.id;
   if (!/^[0-9a-f-]{36}$/i.test(id)) {
     res.status(400).json({ ok: false, error: "Invalid withdrawal request." });
@@ -1239,6 +1322,434 @@ router.post("/employee/admin/withdrawals/:id/record-payment", async (req: Reques
     res.json({ ok: true, withdrawal: safeRpcObject(result) });
   } catch {
     res.status(409).json({ ok: false, error: "Only an approved payout can be recorded as paid." });
+  }
+});
+
+function cleanText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maxLength || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(normalized)) return null;
+  return normalized;
+}
+
+function cleanStringArray(value: unknown, maxItems: number, maxLength: number): string[] | null {
+  if (!Array.isArray(value) || value.length > maxItems) return null;
+  const values: string[] = [];
+  for (const item of value) {
+    const normalized = cleanText(item, maxLength);
+    if (!normalized) return null;
+    if (!values.includes(normalized)) values.push(normalized);
+  }
+  return values;
+}
+
+function cleanManualUrl(value: unknown): string | null | undefined {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string" || value.length > 2048) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || !url.hostname || url.username || url.password) return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function cleanDiagrams(value: unknown): Array<{ kind: string; caption: string; labels: string[] }> | null {
+  if (!Array.isArray(value) || value.length > 12) return null;
+  const diagrams: Array<{ kind: string; caption: string; labels: string[] }> = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const record = item as Record<string, unknown>;
+    const kind = cleanText(record.kind, 40);
+    const caption = cleanText(record.caption, 500);
+    const labels = cleanStringArray(record.labels, 20, 160);
+    if (!kind || !TECHNICIAN_DIAGRAM_KINDS.has(kind) || !caption || !labels) return null;
+    diagrams.push({ kind, caption, labels });
+  }
+  return diagrams;
+}
+
+function cleanSteps(value: unknown): TechnicianGuideRow["steps"] | null {
+  if (!Array.isArray(value) || value.length > 40) return null;
+  const steps: TechnicianGuideRow["steps"] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const record = item as Record<string, unknown>;
+    const title = cleanText(record.title, 160);
+    const instruction = cleanText(record.instruction, 3000);
+    const check = record.check === undefined ? undefined : cleanText(record.check, 1200);
+    const caution = record.caution === undefined ? undefined : cleanText(record.caution, 1200);
+    if (!title || !instruction || (record.check !== undefined && !check) || (record.caution !== undefined && !caution)) return null;
+    steps.push({ title, instruction, ...(check ? { check } : {}), ...(caution ? { caution } : {}) });
+  }
+  return steps;
+}
+
+function normalizeGuideInput(value: unknown, base?: TechnicianGuideRow): Omit<TechnicianGuideRow, "id" | "created_by" | "updated_by" | "created_at" | "updated_at"> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = { ...(base ? guideRowInput(base) : {}), ...(value as Record<string, unknown>) } as Record<string, unknown>;
+  const slug = cleanText(input.slug, 120);
+  const title = cleanText(input.title, 180);
+  const summary = cleanText(input.summary, 1000);
+  const category = cleanText(input.category, 40);
+  const brands = cleanStringArray(input.brands, 30, 100);
+  const models = cleanStringArray(input.models, 60, 160);
+  const firmwareNotes = cleanText(input.firmwareNotes ?? input.firmware_notes, 2000);
+  const symptomTags = cleanStringArray(input.symptomTags ?? input.symptom_tags, 40, 100);
+  const likelyCauses = cleanStringArray(input.likelyCauses ?? input.likely_causes, 30, 500);
+  const safeChecks = cleanStringArray(input.safeChecks ?? input.safe_checks, 40, 1200);
+  const escalateWhen = cleanStringArray(input.escalateWhen ?? input.escalate_when, 30, 1200);
+  const warnings = cleanStringArray(input.warnings, 30, 1200);
+  const steps = cleanSteps(input.steps);
+  const diagrams = cleanDiagrams(input.diagrams);
+  const customerScript = cleanText(input.customerScript ?? input.customer_script, 4000);
+  const manualUrl = cleanManualUrl(input.manualUrl ?? input.manual_url);
+  const imageUrl = cleanManualUrl(input.imageUrl ?? input.image_url);
+  const imageCaption = typeof (input.imageCaption ?? input.image_caption) === "string"
+    ? String(input.imageCaption ?? input.image_caption).trim().slice(0, 500)
+    : "";
+  const status = cleanText(input.status, 20);
+  if (
+    !slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ||
+    !title || !summary || !category || !TECHNICIAN_CATEGORIES.has(category) ||
+    !brands || !models || !firmwareNotes || !symptomTags || !likelyCauses ||
+    !safeChecks || !escalateWhen || !warnings || !steps || !diagrams ||
+    !customerScript || manualUrl === undefined || imageUrl === undefined ||
+    typeof (input.imageCaption ?? input.image_caption) !== "string" ||
+    String(input.imageCaption ?? input.image_caption).length > 500 ||
+    !status || !TECHNICIAN_STATUSES.has(status)
+  ) return null;
+  return {
+    slug, title, summary, category, brands, models,
+    firmware_notes: firmwareNotes,
+    symptom_tags: symptomTags,
+    likely_causes: likelyCauses,
+    safe_checks: safeChecks,
+    escalate_when: escalateWhen,
+    warnings, steps, diagrams,
+    customer_script: customerScript,
+    manual_url: manualUrl,
+    image_url: imageUrl,
+    image_caption: imageCaption,
+    status: status as TechnicianGuideRow["status"],
+  };
+}
+
+function guideRowInput(row: TechnicianGuideRow): Record<string, unknown> {
+  return {
+    slug: row.slug, title: row.title, summary: row.summary, category: row.category,
+    brands: row.brands, models: row.models, firmwareNotes: row.firmware_notes,
+    symptomTags: row.symptom_tags, likelyCauses: row.likely_causes, safeChecks: row.safe_checks,
+    escalateWhen: row.escalate_when, warnings: row.warnings, steps: row.steps, diagrams: row.diagrams,
+    customerScript: row.customer_script, manualUrl: row.manual_url,
+    imageUrl: row.image_url, imageCaption: row.image_caption, status: row.status,
+  };
+}
+
+function guideForClient(row: TechnicianGuideRow) {
+  return {
+    id: row.id, slug: row.slug, title: row.title, summary: row.summary, category: row.category,
+    brands: row.brands, models: row.models, firmwareNotes: row.firmware_notes,
+    symptomTags: row.symptom_tags, likelyCauses: row.likely_causes, safeChecks: row.safe_checks,
+    escalateWhen: row.escalate_when, warnings: row.warnings, steps: row.steps, diagrams: row.diagrams,
+    customerScript: row.customer_script, manualUrl: row.manual_url,
+    imageUrl: row.image_url, imageCaption: row.image_caption, status: row.status, updatedAt: row.updated_at,
+  };
+}
+
+function normalizeModelInput(value: unknown, base?: TechnicianModelRow): Omit<TechnicianModelRow, "id" | "created_by" | "updated_by" | "created_at" | "updated_at"> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = { ...(base ? modelRowInput(base) : {}), ...(value as Record<string, unknown>) } as Record<string, unknown>;
+  const brand = cleanText(input.brand, 100);
+  const model = cleanText(input.model, 160);
+  const deviceType = cleanText(input.deviceType ?? input.device_type, 120);
+  const hardwareRevisions = cleanStringArray(input.hardwareRevisions ?? input.hardware_revisions, 30, 120);
+  const firmwareVariants = cleanStringArray(input.firmwareVariants ?? input.firmware_variants, 30, 120);
+  const notes = cleanText(input.notes, 2000);
+  const warning = cleanText(input.warning, 2000);
+  const manualUrl = cleanManualUrl(input.manualUrl ?? input.manual_url);
+  const imageUrl = cleanManualUrl(input.imageUrl ?? input.image_url);
+  const imageCaption = typeof (input.imageCaption ?? input.image_caption) === "string"
+    ? String(input.imageCaption ?? input.image_caption).trim().slice(0, 500)
+    : "";
+  const diagram = input.diagram === null || input.diagram === undefined
+    ? null
+    : cleanDiagrams([input.diagram])?.[0] ?? undefined;
+  const status = cleanText(input.status, 20);
+  if (
+    !brand || !model || !deviceType || !hardwareRevisions || !firmwareVariants ||
+    !notes || !warning || manualUrl === undefined || imageUrl === undefined || diagram === undefined ||
+    typeof (input.imageCaption ?? input.image_caption) !== "string" ||
+    String(input.imageCaption ?? input.image_caption).length > 500 ||
+    !status || !TECHNICIAN_STATUSES.has(status)
+  ) return null;
+  return {
+    brand, model, device_type: deviceType, hardware_revisions: hardwareRevisions,
+    firmware_variants: firmwareVariants, notes, warning, manual_url: manualUrl,
+    image_url: imageUrl, image_caption: imageCaption, diagram, status: status as TechnicianModelRow["status"],
+  };
+}
+
+function modelRowInput(row: TechnicianModelRow): Record<string, unknown> {
+  return {
+    brand: row.brand, model: row.model, deviceType: row.device_type,
+    hardwareRevisions: row.hardware_revisions, firmwareVariants: row.firmware_variants,
+    notes: row.notes, warning: row.warning, manualUrl: row.manual_url,
+    imageUrl: row.image_url, imageCaption: row.image_caption, diagram: row.diagram, status: row.status,
+  };
+}
+
+function modelForClient(row: TechnicianModelRow) {
+  return {
+    id: row.id, brand: row.brand, model: row.model, deviceType: row.device_type,
+    hardwareRevisions: row.hardware_revisions, firmwareVariants: row.firmware_variants,
+    notes: row.notes, warning: row.warning, manualUrl: row.manual_url,
+    imageUrl: row.image_url, imageCaption: row.image_caption, diagram: row.diagram,
+    status: row.status, updatedAt: row.updated_at,
+  };
+}
+
+function filterLearningGuides(rows: TechnicianGuideRow[], req: Request): TechnicianGuideRow[] {
+  const query = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase().slice(0, 120) : "";
+  const brand = typeof req.query.brand === "string" ? req.query.brand.trim().toLowerCase().slice(0, 100) : "";
+  const model = typeof req.query.model === "string" ? req.query.model.trim().toLowerCase().slice(0, 160) : "";
+  const category = typeof req.query.category === "string" ? req.query.category : "";
+  return rows.filter((row) => {
+    const searchText = [
+      row.slug, row.title, row.summary, row.category, row.firmware_notes, row.customer_script,
+      ...row.brands, ...row.models, ...row.symptom_tags, ...row.likely_causes,
+      ...row.safe_checks, ...row.warnings,
+    ].join(" ").toLowerCase();
+    return (!query || searchText.includes(query)) &&
+      (!brand || row.brands.some((item) => item.toLowerCase() === brand || item.toLowerCase() === "all")) &&
+      (!model || row.models.some((item) =>
+        item.toLowerCase() === "all models" ||
+        item.toLowerCase() === model ||
+        model.includes(item.toLowerCase()),
+      )) &&
+      (!category || row.category === category);
+  });
+}
+
+router.get("/employee/learning/guides", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!await requireTechnician(req, res)) return;
+  try {
+    const rows = await sbSelectStrict<TechnicianGuideRow>(
+      "technician_learning_guides",
+      "status=eq.published&select=*&order=updated_at.desc&limit=500",
+    );
+    res.json({ ok: true, guides: filterLearningGuides(rows, req).map(guideForClient) });
+  } catch {
+    res.status(503).json({ ok: false, error: "Published Technician Learning Center guides are unavailable." });
+  }
+});
+
+router.get("/employee/learning/guides/:slug", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!await requireTechnician(req, res)) return;
+  const slug = Array.isArray(req.params.slug) ? req.params.slug[0] : req.params.slug;
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    res.status(400).json({ ok: false, error: "Choose a valid guide." });
+    return;
+  }
+  try {
+    const rows = await sbSelectStrict<TechnicianGuideRow>(
+      "technician_learning_guides",
+      `slug=eq.${encodeURIComponent(slug)}&status=eq.published&select=*&limit=1`,
+    );
+    if (!rows[0]) {
+      res.status(404).json({ ok: false, error: "This guide is not published or no longer exists." });
+      return;
+    }
+    res.json({ ok: true, guide: guideForClient(rows[0]) });
+  } catch {
+    res.status(503).json({ ok: false, error: "This Technician guide is unavailable." });
+  }
+});
+
+router.get("/employee/learning/models", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!await requireTechnician(req, res)) return;
+  const query = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase().slice(0, 120) : "";
+  try {
+    const rows = await sbSelectStrict<TechnicianModelRow>(
+      "technician_device_models",
+      "status=eq.published&select=*&order=brand.asc,model.asc&limit=500",
+    );
+    const models = rows
+      .filter((row) => !query || `${row.brand} ${row.model} ${row.device_type} ${row.hardware_revisions.join(" ")} ${row.firmware_variants.join(" ")}`.toLowerCase().includes(query))
+      .map(modelForClient);
+    res.json({ ok: true, models });
+  } catch {
+    res.status(503).json({ ok: false, error: "Published device models are unavailable." });
+  }
+});
+
+router.get("/employee/admin/learning/guides", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  const status = typeof req.query.status === "string" ? req.query.status : "all";
+  if (status !== "all" && !TECHNICIAN_STATUSES.has(status)) {
+    res.status(400).json({ ok: false, error: "Choose a valid guide status." });
+    return;
+  }
+  try {
+    const query = status === "all" ? "select=*&order=updated_at.desc&limit=500"
+      : `status=eq.${status}&select=*&order=updated_at.desc&limit=500`;
+    const rows = await sbSelectStrict<TechnicianGuideRow>("technician_learning_guides", query);
+    res.json({ ok: true, guides: rows.map(guideForClient) });
+  } catch {
+    res.status(503).json({ ok: false, error: "Technician guide management is unavailable." });
+  }
+});
+
+router.post("/employee/admin/learning/guides", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  const guide = normalizeGuideInput(req.body);
+  if (!guide) {
+    res.status(400).json({ ok: false, error: "Complete the guide fields using valid text, model tags, steps, and diagram labels." });
+    return;
+  }
+  try {
+    const rows = await sbInsertStrict<TechnicianGuideRow>("technician_learning_guides", {
+      ...guide, created_by: "super_admin", updated_by: "super_admin",
+    });
+    if (!rows[0]) throw new Error("Guide was not saved.");
+    res.status(201).json({ ok: true, guide: guideForClient(rows[0]) });
+  } catch {
+    res.status(409).json({ ok: false, error: "The guide could not be saved. Check for a duplicate slug and retry." });
+  }
+});
+
+router.patch("/employee/admin/learning/guides/:id", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  if (!/^[0-9a-f-]{36}$/i.test(id)) {
+    res.status(400).json({ ok: false, error: "Choose a valid guide." });
+    return;
+  }
+  try {
+    const existing = await sbSelectStrict<TechnicianGuideRow>(
+      "technician_learning_guides",
+      `id=eq.${encodeURIComponent(id)}&select=*&limit=1`,
+    );
+    if (!existing[0]) {
+      res.status(404).json({ ok: false, error: "This guide no longer exists." });
+      return;
+    }
+    const guide = normalizeGuideInput(req.body, existing[0]);
+    if (!guide) {
+      res.status(400).json({ ok: false, error: "The guide update contains invalid or oversized fields." });
+      return;
+    }
+    const rows = await sbUpdateStrict<TechnicianGuideRow>(
+      "technician_learning_guides",
+      `id=eq.${encodeURIComponent(id)}`,
+      { ...guide, updated_by: "super_admin", updated_at: new Date().toISOString() },
+    );
+    if (!rows[0]) {
+      res.status(404).json({ ok: false, error: "This guide no longer exists." });
+      return;
+    }
+    res.json({ ok: true, guide: guideForClient(rows[0]) });
+  } catch {
+    res.status(409).json({ ok: false, error: "The guide could not be updated." });
+  }
+});
+
+router.get("/employee/admin/learning/models", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  const status = typeof req.query.status === "string" ? req.query.status : "all";
+  if (status !== "all" && !TECHNICIAN_STATUSES.has(status)) {
+    res.status(400).json({ ok: false, error: "Choose a valid device status." });
+    return;
+  }
+  try {
+    const query = status === "all" ? "select=*&order=brand.asc,model.asc&limit=500"
+      : `status=eq.${status}&select=*&order=brand.asc,model.asc&limit=500`;
+    const rows = await sbSelectStrict<TechnicianModelRow>("technician_device_models", query);
+    res.json({ ok: true, models: rows.map(modelForClient) });
+  } catch {
+    res.status(503).json({ ok: false, error: "Device model management is unavailable." });
+  }
+});
+
+router.post("/employee/admin/learning/models", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  const model = normalizeModelInput(req.body);
+  if (!model) {
+    res.status(400).json({ ok: false, error: "Complete the model fields using valid names, revision details, warning, and diagram." });
+    return;
+  }
+  try {
+    const rows = await sbInsertStrict<TechnicianModelRow>("technician_device_models", {
+      ...model, created_by: "super_admin", updated_by: "super_admin",
+    });
+    if (!rows[0]) throw new Error("Device model was not saved.");
+    res.status(201).json({ ok: true, model: modelForClient(rows[0]) });
+  } catch {
+    res.status(409).json({ ok: false, error: "The device model could not be saved. Check for an existing brand/model pair." });
+  }
+});
+
+router.patch("/employee/admin/learning/models/:id", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  if (!/^[0-9a-f-]{36}$/i.test(id)) {
+    res.status(400).json({ ok: false, error: "Choose a valid device model." });
+    return;
+  }
+  try {
+    const existing = await sbSelectStrict<TechnicianModelRow>(
+      "technician_device_models",
+      `id=eq.${encodeURIComponent(id)}&select=*&limit=1`,
+    );
+    if (!existing[0]) {
+      res.status(404).json({ ok: false, error: "This device model no longer exists." });
+      return;
+    }
+    const model = normalizeModelInput(req.body, existing[0]);
+    if (!model) {
+      res.status(400).json({ ok: false, error: "The device model update contains invalid or oversized fields." });
+      return;
+    }
+    const rows = await sbUpdateStrict<TechnicianModelRow>(
+      "technician_device_models",
+      `id=eq.${encodeURIComponent(id)}`,
+      { ...model, updated_by: "super_admin", updated_at: new Date().toISOString() },
+    );
+    if (!rows[0]) {
+      res.status(404).json({ ok: false, error: "This device model no longer exists." });
+      return;
+    }
+    res.json({ ok: true, model: modelForClient(rows[0]) });
+  } catch {
+    res.status(409).json({ ok: false, error: "The device model could not be updated." });
   }
 });
 

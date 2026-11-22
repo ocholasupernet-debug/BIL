@@ -5,6 +5,7 @@ export type EmployeePortalEmployee = {
   employee_number: string;
   username: string;
   display_name: string;
+  account_type: "employee" | "technician";
   email: string | null;
   phone: string | null;
   status: "invited" | "active" | "suspended" | "terminated";
@@ -50,6 +51,7 @@ export type StaffSignupRequest = {
   full_name: string;
   phone: string;
   email: string;
+  account_type: "employee" | "technician";
   email_verified_at: string;
   created_at: string;
 };
@@ -103,7 +105,7 @@ export function useEmployeeLoginVerifyOtp() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (input: { challengeId: string; email: string; code: string; turnstileToken: string }) =>
-      request<ApiResult<{ employee: { id: string; username: string; displayName: string } }>>(
+      request<ApiResult<{ employee: { id: string; username: string; displayName: string; accountType: "employee" | "technician" } }>>(
         "/api/employee/login/verify-otp", { method: "POST", body: JSON.stringify(input) },
       ),
     onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal"] }),
@@ -132,7 +134,7 @@ export function useSubmitStaffSignup() {
   return useMutation({
     mutationFn: (input: {
       fullName: string; phone: string; email: string; password: string; confirmPassword: string;
-      emailVerificationToken: string; turnstileToken: string;
+      emailVerificationToken: string; turnstileToken: string; accountType: "employee" | "technician";
     }) => request<ApiResult<{ status: "pending_approval"; message: string }>>(
       "/api/employee/signup", { method: "POST", body: JSON.stringify(input) },
     ),
@@ -160,7 +162,7 @@ export function useEmployeeMe() {
   return useQuery({
     queryKey: ["employee-portal", "me"],
     retry: false,
-    queryFn: () => request<ApiResult<{ employee: { id: string; username: string; displayName: string } }>>("/api/employee/me"),
+    queryFn: () => request<ApiResult<{ employee: { id: string; username: string; displayName: string; accountType: "employee" | "technician" } }>>("/api/employee/me"),
   });
 }
 

@@ -166,6 +166,7 @@ export function createEmployeeAuthService(dependencies: {
     fullName: string;
     phone: string;
     passwordHash: string;
+    accountType: "employee" | "technician";
   }): Promise<"accepted" | "not_eligible"> {
     const email = normalizeStaffEmail(input.email);
     if (
@@ -179,6 +180,7 @@ export function createEmployeeAuthService(dependencies: {
       p_full_name: input.fullName,
       p_phone: input.phone,
       p_password_hash: input.passwordHash,
+      p_account_type: input.accountType,
     });
     return result?.outcome === "accepted" ? "accepted" : "not_eligible";
   }

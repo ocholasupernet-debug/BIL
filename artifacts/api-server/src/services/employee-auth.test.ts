@@ -70,11 +70,13 @@ test("signup verification stores only hashes and creates a transient one-time ac
     fullName: "Example Staff",
     phone: "254712345678",
     passwordHash: `scrypt$${"a".repeat(22)}$${"b".repeat(86)}`,
+    accountType: "technician",
   });
   assert.equal(outcome, "accepted");
   const completeArgs = rpcCalls[2]?.args ?? {};
   assert.notEqual(completeArgs.p_action_token_hash, actionToken);
   assert.equal(completeArgs.p_password_hash, `scrypt$${"a".repeat(22)}$${"b".repeat(86)}`);
+  assert.equal(completeArgs.p_account_type, "technician");
   assert.equal(JSON.stringify(rpcCalls).includes("013579"), false);
 });
 

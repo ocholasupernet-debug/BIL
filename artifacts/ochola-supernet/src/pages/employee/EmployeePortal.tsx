@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import {
   ArrowDownToLine, ArrowRight, ArrowUpRight, BadgeCheck, Banknote, BriefcaseBusiness,
-  Check, ChevronRight, CircleAlert, Clock3, CreditCard, Eye, EyeOff, FileText,
+  BookOpen, Check, ChevronRight, CircleAlert, Clock3, CreditCard, Eye, EyeOff, FileText,
   Landmark, LockKeyhole, LogOut, Menu, Pencil, RefreshCw, ShieldCheck, UserRound, Users,
   Wallet, X,
 } from "lucide-react";
@@ -208,6 +208,7 @@ export function StaffSignupPage() {
   const [challengeId, setChallengeId] = useState("");
   const [code, setCode] = useState("");
   const [emailVerificationToken, setEmailVerificationToken] = useState("");
+  const [accountType, setAccountType] = useState<"employee" | "technician">("employee");
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
@@ -270,12 +271,14 @@ export function StaffSignupPage() {
       confirmPassword,
       emailVerificationToken,
       turnstileToken,
+      accountType,
     }, {
       onSuccess: (result) => {
         setStep("pending");
         setEmailVerificationToken("");
         setPassword("");
         setConfirmPassword("");
+        setAccountType("employee");
         setTurnstileToken("");
         setMessage(result.message);
       },
@@ -319,6 +322,7 @@ export function StaffSignupPage() {
         <button type="button" className="ep-text-button" onClick={() => { setStep("email"); setCode(""); setMessage(""); setTurnstileToken(""); setTurnstileReset((value) => value + 1); }}>Use a different email</button>
       </form>}
       {step === "details" && <form className="ep-form" onSubmit={createRequest}>
+        <label>Account type<select value={accountType} onChange={(event) => setAccountType(event.target.value as "employee" | "technician")}><option value="employee">Employee — payroll and pay history</option><option value="technician">Technician — router and fiber learning guides</option></select></label>
         <label>Full name<input value={fullName} onChange={(event) => setFullName(event.target.value)} autoComplete="name" required minLength={2} maxLength={120} placeholder="Your full name" /></label>
         <label>Phone number<input type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} autoComplete="tel" required placeholder="+254 7… or 07…" /></label>
         <label>Verified email<input type="email" value={email} readOnly /></label>
@@ -400,14 +404,19 @@ function EmployeeDashboard() {
   const [, setLocation] = useLocation();
   const me = useEmployeeMe();
   const logout = useEmployeeLogout();
-  useEffect(() => { if (!me.isLoading && !me.data?.employee) setLocation("/staff/login"); }, [me.isLoading, me.data, setLocation]);
+  useEffect(() => {
+    if (me.isLoading) return;
+    if (!me.data?.employee) setLocation("/staff/login");
+    else if (me.data.employee.accountType === "technician") setLocation("/staff/learning");
+  }, [me.isLoading, me.data, setLocation]);
   if (me.isLoading || !me.data?.employee) return <PortalFrame><LoadingBlock label="Returning to sign in" /></PortalFrame>;
+  if (me.data.employee.accountType === "technician") return <PortalFrame><LoadingBlock label="Opening the Technician Learning Center" /></PortalFrame>;
   const doLogout = () => logout.mutate(undefined, { onSuccess: () => setLocation("/staff/login"), onError: () => setLocation("/staff/login") });
   return <EmployeeDashboardData employee={me.data.employee} onLogout={doLogout} />;
 }
 
 function EmployeeDashboardData({ employee, onLogout }: {
-  employee: { id: string; username: string; displayName: string }; onLogout: () => void;
+  employee: { id: string; username: string; displayName: string; accountType: "employee" | "technician" }; onLogout: () => void;
 }) {
   const dashboardQuery = useEmployeeDashboard();
   const destinationsQuery = useEmployeeDestinations();
@@ -563,6 +572,7 @@ function AdminAccessGate() {
 }
 
 function AdminPortal() {
+  const [, setLocation] = useLocation();
   const [view, setView] = useState<AdminView>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [dialog, setDialog] = useState<"employee" | "settings" | null>(null);
@@ -677,7 +687,7 @@ function AdminPortal() {
   const filteredEmployees = (employees.data ?? []).filter((employee) => `${employee.display_name} ${employee.username} ${employee.employee_number} ${employee.email ?? ""}`.toLowerCase().includes(search.toLowerCase()));
   const failText = allErrors.length ? errorText(allErrors[0]) : "";
   return <PortalFrame kind="admin"><div className="ep-admin-layout">
-    <aside className={`ep-sidebar ep-admin-sidebar ${menuOpen ? "is-open" : ""}`}><div className="ep-sidebar-brand"><BrandMark /></div><div className="ep-admin-identity"><span className="ep-admin-emblem"><ShieldCheck size={18} /></span><span><b>People operations</b><small>SUPER ADMIN AREA</small></span></div><p className="ep-nav-label">STAFF FINANCE</p><nav>{menuItems.map(({ id, label, icon: Icon }) => <button key={id} className={`ep-nav-item ${view === id ? "active" : ""}`} onClick={() => { setView(id); setMenuOpen(false); }}><Icon size={17} />{label}<ChevronRight className="ep-nav-arrow" size={15} />{id === "withdrawals" && summaryData?.pending_withdrawal_count ? <i className="ep-nav-count">{summaryData.pending_withdrawal_count}</i> : id === "signups" && pendingSignups.data?.length ? <i className="ep-nav-count">{pendingSignups.data.length}</i> : null}</button>)}</nav><div className="ep-sidebar-bottom"><div className="ep-secure-card"><LockKeyhole size={16} /><span><b>Restricted access</b><small>Super Admin controls</small></span></div></div></aside>
+    <aside className={`ep-sidebar ep-admin-sidebar ${menuOpen ? "is-open" : ""}`}><div className="ep-sidebar-brand"><BrandMark /></div><div className="ep-admin-identity"><span className="ep-admin-emblem"><ShieldCheck size={18} /></span><span><b>People operations</b><small>SUPER ADMIN AREA</small></span></div><p className="ep-nav-label">STAFF FINANCE</p><nav>{menuItems.map(({ id, label, icon: Icon }) => <button key={id} className={`ep-nav-item ${view === id ? "active" : ""}`} onClick={() => { setView(id); setMenuOpen(false); }}><Icon size={17} />{label}<ChevronRight className="ep-nav-arrow" size={15} />{id === "withdrawals" && summaryData?.pending_withdrawal_count ? <i className="ep-nav-count">{summaryData.pending_withdrawal_count}</i> : id === "signups" && pendingSignups.data?.length ? <i className="ep-nav-count">{pendingSignups.data.length}</i> : null}</button>)}<button className="ep-nav-item" onClick={() => setLocation("/employee/admin/learning")}><BookOpen size={17} />Technician Learning Center<ChevronRight className="ep-nav-arrow" size={15} /></button></nav><div className="ep-sidebar-bottom"><div className="ep-secure-card"><LockKeyhole size={16} /><span><b>Restricted access</b><small>Super Admin controls</small></span></div></div></aside>
     <section className="ep-admin-main"><header className="ep-work-header"><div className="ep-header-left"><button className="ep-menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle navigation">{menuOpen ? <X size={19} /> : <Menu size={19} />}</button><div><p className="ep-header-kicker">ISPLATTY · PEOPLE OPERATIONS</p><h1>{menuItems.find((item) => item.id === view)?.label}</h1></div></div><span className="ep-admin-status"><span /> Admin workspace</span></header>
       <main className="ep-content ep-admin-content">
         {notice && <div className="ep-notice-inline"><Notice tone={notice.includes("saved") || notice.includes("approved") || notice.includes("recorded") || notice.includes("created") ? "success" : "info"}>{notice}</Notice><button onClick={() => setNotice("")} aria-label="Dismiss notice"><X size={15} /></button></div>}
@@ -973,7 +983,7 @@ function EmployeeTable({ employees, onEditContact }: {
   employees: EmployeePortalEmployee[];
   onEditContact: (employee: EmployeePortalEmployee) => void;
 }) {
-  return <div className="ep-table-wrap"><table className="ep-table ep-admin-table"><thead><tr><th>Staff member</th><th>Account</th><th>Portal</th><th>Monthly salary</th><th>Status</th><th>Contact</th></tr></thead><tbody>{employees.map((employee) => <tr key={employee.id}><td><strong>{employee.display_name}</strong><small>{employee.employee_number}</small></td><td>{employee.username}<small>{employee.email || employee.phone || "No contact details"}</small></td><td className="ep-mono">staff.isplatty.com</td><td className="ep-amount">{money(employee.fixed_monthly_salary)}</td><td><StatusPill status={employee.status} /></td><td><button className="ep-text-button" onClick={() => onEditContact(employee)} aria-label={`Edit contact for ${employee.display_name}`}><Pencil size={14} /> Edit</button></td></tr>)}</tbody></table><div className="ep-mobile-rows">{employees.map((employee) => <article key={`mobile-${employee.id}`}><div><strong>{employee.display_name}</strong><small>{employee.employee_number} · {employee.username}</small></div><StatusPill status={employee.status} /><small>Shared Staff portal · {money(employee.fixed_monthly_salary)}/month</small><button className="ep-text-button" onClick={() => onEditContact(employee)}><Pencil size={14} /> Update contact email</button></article>)}</div></div>;
+  return <div className="ep-table-wrap"><table className="ep-table ep-admin-table"><thead><tr><th>Staff member</th><th>Account</th><th>Type</th><th>Portal</th><th>Monthly salary</th><th>Status</th><th>Contact</th></tr></thead><tbody>{employees.map((employee) => <tr key={employee.id}><td><strong>{employee.display_name}</strong><small>{employee.employee_number}</small></td><td>{employee.username}<small>{employee.email || employee.phone || "No contact details"}</small></td><td>{employee.account_type === "technician" ? "Technician" : "Employee"}</td><td className="ep-mono">staff.isplatty.com</td><td className="ep-amount">{money(employee.fixed_monthly_salary)}</td><td><StatusPill status={employee.status} /></td><td><button className="ep-text-button" onClick={() => onEditContact(employee)} aria-label={`Edit contact for ${employee.display_name}`}><Pencil size={14} /> Edit</button></td></tr>)}</tbody></table><div className="ep-mobile-rows">{employees.map((employee) => <article key={`mobile-${employee.id}`}><div><strong>{employee.display_name}</strong><small>{employee.employee_number} · {employee.username} · {employee.account_type === "technician" ? "Technician" : "Employee"}</small></div><StatusPill status={employee.status} /><small>Shared Staff portal · {money(employee.fixed_monthly_salary)}/month</small><button className="ep-text-button" onClick={() => onEditContact(employee)}><Pencil size={14} /> Update contact email</button></article>)}</div></div>;
 }
 
 function StaffSignupQueue({ requests, loading, busy, onReview }: {
@@ -992,11 +1002,11 @@ function StaffSignupQueue({ requests, loading, busy, onReview }: {
         <div className="ep-signup-request-details">
           <strong>{request.full_name}</strong>
           <span>{request.email}</span>
-          <small>{request.phone} · Email verified {dateTime(request.email_verified_at)} · Requested {dateTime(request.created_at)}</small>
+          <small>{request.account_type === "technician" ? "Technician access" : "Employee payroll access"} · {request.phone} · Email verified {dateTime(request.email_verified_at)} · Requested {dateTime(request.created_at)}</small>
         </div>
         <div className="ep-signup-request-actions">
           <button className="ep-button ep-button-danger ep-small-button" disabled={busy} onClick={() => onReview(request, "reject")}>Reject</button>
-          <button className="ep-button ep-button-primary ep-small-button" disabled={busy} onClick={() => onReview(request, "approve")}>Approve Staff access</button>
+          <button className="ep-button ep-button-primary ep-small-button" disabled={busy} onClick={() => onReview(request, "approve")}>Approve {request.account_type === "technician" ? "Technician" : "Employee"}</button>
         </div>
       </article>)}
     </div> : <EmptyState title="No pending Staff requests" text="Email-verified requests will appear here for Super Admin review." />}

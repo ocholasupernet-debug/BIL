@@ -38,6 +38,8 @@ export type TechnicianLearningGuide = {
   warnings: string[];
   steps: TechnicianGuideStep[];
   diagrams: TechnicianDiagram[];
+  imageUrl: string | null;
+  imageCaption: string;
   customerScript: string;
   manualUrl: string | null;
   status: "draft" | "published" | "archived";
@@ -54,6 +56,8 @@ export type TechnicianDeviceModel = {
   notes: string;
   warning: string;
   manualUrl: string | null;
+  imageUrl: string | null;
+  imageCaption: string;
   diagram: TechnicianDiagram | null;
   status: "draft" | "published" | "archived";
   updatedAt: string;

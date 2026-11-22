@@ -50,7 +50,7 @@ import FreeHotspotAccess from "./pages/admin/FreeHotspotAccess";
 
 import HotspotLogin, { HotspotTroubleshootPage } from "./pages/portal/HotspotLogin";
 import PPPoELogin  from "./pages/portal/PPPoELogin";
-import SuperAdminLogin from "./pages/super-admin/Login";
+import SuperAdminLogin, { isSuperAdminLoggedIn } from "./pages/super-admin/Login";
 import SuperAdminDashboard from "./pages/super-admin/Dashboard";
 import SuperAdminAdmins from "./pages/super-admin/Admins";
 import SuperAdminRoles from "./pages/super-admin/Roles";
@@ -93,9 +93,36 @@ import NetworkLoadBalancing from "./pages/admin/network/LoadBalancing";
 import AdminRegister from "./pages/admin/AdminRegister";
 import VisualCheckHarness from "./visual/VisualCheckHarness";
 import { EmployeeActivatePage, EmployeeAdminPage, EmployeeDashboardPage, EmployeeLoginPage, StaffSignupPage } from "./pages/employee/EmployeePortal";
+import TechnicianLearning from "./pages/technician/TechnicianLearning";
+import TechnicianLearningAdmin from "./pages/admin/TechnicianLearningAdmin";
+import { useEmployeeMe } from "@workspace/api-client-react";
 
 function RoleAwareDashboard() {
   return getAdminRole() === "reseller" ? <ResellerWorkspace /> : <AdminDashboard />;
+}
+
+function TechnicianLearningStaffRoute() {
+  const [, setLocation] = useLocation();
+  const me = useEmployeeMe();
+  useEffect(() => {
+    if (me.isLoading) return;
+    if (!me.data?.employee) setLocation("/staff/login");
+    else if (me.data.employee.accountType !== "technician") setLocation("/staff/dashboard");
+  }, [me.isLoading, me.data, setLocation]);
+  if (me.isLoading || !me.data?.employee || me.data.employee.accountType !== "technician") {
+    return <div role="status" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Checking Technician access…</div>;
+  }
+  return <TechnicianLearning />;
+}
+
+function TechnicianLearningAdminRoute() {
+  const [, setLocation] = useLocation();
+  const [authorized] = useState(() => isSuperAdminLoggedIn());
+  useEffect(() => {
+    if (!authorized) setLocation("/super-admin/login");
+  }, [authorized, setLocation]);
+  if (!authorized) return null;
+  return <TechnicianLearningAdmin />;
 }
 
 function TenantAdminLoginRoute() {
@@ -246,6 +273,8 @@ function Router() {
       <Route path="/staff/login" component={EmployeeLoginPage} />
       <Route path="/staff/signup" component={StaffSignupPage} />
       <Route path="/staff/dashboard" component={EmployeeDashboardPage} />
+      <Route path="/staff/learning" component={TechnicianLearningStaffRoute} />
+      <Route path="/employee/admin/learning" component={TechnicianLearningAdminRoute} />
       <Route path="/employee/activate" component={() => <Redirect to="/staff/activate" />} />
       <Route path="/employee/login" component={() => <Redirect to="/staff/login" />} />
       <Route path="/employee/dashboard" component={() => <Redirect to="/staff/dashboard" />} />
