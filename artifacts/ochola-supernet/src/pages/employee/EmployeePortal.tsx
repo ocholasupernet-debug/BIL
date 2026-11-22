@@ -99,25 +99,27 @@ function LoadingBlock({ label = "Loading your portal" }: { label?: string }) {
   </div>;
 }
 
-function DisabledPortal() {
-  return <PortalFrame><section className="ep-unavailable">
+function DisabledPortal({ kind }: { kind: "employee" | "admin" }) {
+  return <PortalFrame kind={kind}><section className="ep-unavailable">
     <span className="ep-unavailable-icon"><BriefcaseBusiness size={24} /></span>
     <p className="ep-eyebrow">EMPLOYEE FINANCE</p>
-    <h1>Portal access is not enabled</h1>
-    <p>Your employee finance portal is currently unavailable. No account or balance information can be shown right now.</p>
-    <p className="ep-muted">Please contact your ISPlatty administrator for assistance.</p>
+    <h1>{kind === "admin" ? "Employee finance isn’t enabled yet" : "Portal access is not enabled"}</h1>
+    {kind === "admin"
+      ? <p>Super Admin access does not turn on employee finance. The employee database must be set up and verified before this workspace can be enabled.</p>
+      : <><p>Your employee finance portal is currently unavailable. No account or balance information can be shown right now.</p>
+        <p className="ep-muted">Please contact your ISPlatty administrator for assistance.</p></>}
   </section></PortalFrame>;
 }
 
-function PortalGate({ children }: { children: React.ReactNode }) {
+function PortalGate({ children, kind = "employee" }: { children: React.ReactNode; kind?: "employee" | "admin" }) {
   const status = useEmployeePortalStatus();
-  if (status.isLoading) return <PortalFrame><LoadingBlock label="Checking portal availability" /></PortalFrame>;
-  if (status.isError) return <PortalFrame><section className="ep-unavailable">
+  if (status.isLoading) return <PortalFrame kind={kind}><LoadingBlock label="Checking portal availability" /></PortalFrame>;
+  if (status.isError) return <PortalFrame kind={kind}><section className="ep-unavailable">
     <span className="ep-unavailable-icon"><CircleAlert size={24} /></span><p className="ep-eyebrow">SERVICE STATUS</p>
     <h1>We could not check portal access</h1><p>{errorText(status.error)}</p>
     <button className="ep-button ep-button-secondary" onClick={() => void status.refetch()}><RefreshCw size={16} /> Try again</button>
   </section></PortalFrame>;
-  if (!status.data?.enabled) return <DisabledPortal />;
+  if (!status.data?.enabled) return <DisabledPortal kind={kind} />;
   return <>{children}</>;
 }
 
@@ -385,7 +387,7 @@ function AdminAccessGate() {
     <p>Employee administration is restricted to an authenticated Super Admin session. No administration data is loaded until you sign in.</p>
     <button className="ep-button ep-button-primary" onClick={() => setLocation("/super-admin/login")}>Go to Super Admin sign in <ArrowRight size={16} /></button>
   </section></PortalFrame>;
-  return <PortalGate><AdminPortal /></PortalGate>;
+  return <PortalGate kind="admin"><AdminPortal /></PortalGate>;
 }
 
 function AdminPortal() {
@@ -511,6 +513,14 @@ function AdminOverview({ summary, isError, onOpen, onCreate, withdrawals, onRevi
   const pending = withdrawals.filter((item) => item.status === "pending");
   return <><div className="ep-admin-welcome"><div><p className="ep-eyebrow">FINANCE OPERATIONS</p><h2>Employee accounts, at a glance.</h2><p>Review workforce access and keep withdrawal decisions traceable.</p></div><button className="ep-button ep-button-primary" onClick={onCreate}><UserRound size={16} /> Add employee</button></div>
     <div className="ep-admin-stat-grid"><AdminStat label="Employee accounts" value={summary?.employee_count} detail={`${summary?.active_employee_count ?? "—"} active`} icon={Users} /><AdminStat label="Waiting for review" value={summary?.pending_withdrawal_count} detail="Withdrawal requests" icon={Clock3} urgent={(summary?.pending_withdrawal_count ?? 0) > 0} /><AdminStat label="Total withdrawn" value={money(summary?.total_withdrawn)} detail="Recorded as paid" icon={ArrowDownToLine} /><AdminStat label="Withdrawn today" value={money(summary?.withdrawn_today)} detail="Recorded today" icon={Banknote} /></div>
+    {summary?.employee_count === 0 && <section className="ep-admin-panel ep-admin-start" aria-labelledby="employee-setup-title">
+      <div className="ep-section-heading"><div><p className="ep-eyebrow">GETTING STARTED</p><h3 id="employee-setup-title">Set up employee finance</h3></div></div>
+      <ol>
+        <li><button onClick={onCreate}><Users size={19} aria-hidden="true" /><span><b>Invite an employee</b><small>Set up their account and registered payout destination.</small></span><ArrowRight size={16} aria-hidden="true" /></button></li>
+        <li><button onClick={() => onOpen("payroll")}><Banknote size={19} aria-hidden="true" /><span><b>Review payroll</b><small>Set salaries and preview earnings before posting.</small></span><ArrowRight size={16} aria-hidden="true" /></button></li>
+        <li><button onClick={() => onOpen("settings")}><Landmark size={19} aria-hidden="true" /><span><b>Set withdrawal rules</b><small>Choose allowed destinations and set request limits.</small></span><ArrowRight size={16} aria-hidden="true" /></button></li>
+      </ol>
+    </section>}
     <div className="ep-admin-overview-grid"><section className="ep-admin-panel"><div className="ep-section-heading"><div><p className="ep-eyebrow">NEEDS ATTENTION</p><h3>Pending withdrawals</h3></div><button className="ep-text-button" onClick={() => onOpen("withdrawals")}>Review queue <ArrowRight size={15} /></button></div>{pending.length ? <WithdrawalList withdrawals={pending.slice(0, 4)} onReview={onReview} onRecord={() => undefined} compact /> : <div className="ep-quiet-empty"><span><Check size={18} /></span><div><b>Nothing waiting for review</b><small>New employee requests will appear here.</small></div></div>}</section>
       <section className="ep-admin-side-panel"><span className="ep-admin-side-icon"><ShieldCheck size={20} /></span><p className="ep-eyebrow">PAYOUT SAFETY</p><h3>Request controls are not disbursement controls.</h3><p>Live disbursements are currently disabled. An approved request still needs an external payment and a recorded reference.</p><button className="ep-text-button" onClick={() => onOpen("settings")}>View payout controls <ArrowRight size={15} /></button></section></div>
   </>;
