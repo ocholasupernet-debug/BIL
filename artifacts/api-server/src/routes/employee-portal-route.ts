@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getMpesaSettings } from "../lib/settings-store.js";
@@ -41,8 +42,19 @@ type EmployeeSession = {
   auth_version: number;
 };
 
+function employeePortalEnabled(): boolean {
+  const configured = process.env.EMPLOYEE_PORTAL_ENABLED;
+  if (configured !== undefined) return configured === "true";
+  if (process.env.NODE_ENV !== "production") return false;
+  try {
+    return readFileSync("/var/lib/ocholasupernet/employee-portal.enabled", "utf8") === "enabled\n";
+  } catch {
+    return false;
+  }
+}
+
 function enabled(res: Response): boolean {
-  if (process.env.EMPLOYEE_PORTAL_ENABLED === "true") return true;
+  if (employeePortalEnabled()) return true;
   res.status(404).json({ ok: false, error: "The employee portal is not enabled." });
   return false;
 }
@@ -175,7 +187,7 @@ function recordEmployeeLoginFailure(req: Request, username: string): void {
 router.get("/employee/status", (req: Request, res: Response): void => {
   res.json({
     ok: true,
-    enabled: process.env.EMPLOYEE_PORTAL_ENABLED === "true",
+    enabled: employeePortalEnabled(),
     portal: isEmployeeAdminHost(requestHost(req)) ? "admin" :
       employeeSubdomainForHost(requestHost(req)) ? "employee" : "unmatched",
   });

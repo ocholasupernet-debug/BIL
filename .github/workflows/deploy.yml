@@ -43,6 +43,11 @@ on:
         required: false
         default: false
         type: boolean
+      employee_portal_enable:
+        description: "Enable employee access after its schema has been applied and verified"
+        required: false
+        default: false
+        type: boolean
       sync_router_configuration_ids:
         description: "Optional comma-separated router IDs for the confirmed queue and Hotspot TTL sync"
         required: false
@@ -102,6 +107,26 @@ jobs:
             exit 1
           fi
           bash -n deploy/restore-employee-admin-https.sh
+
+      - name: Guard employee portal activation
+        if: inputs.employee_portal_enable || startsWith(github.ref, 'refs/heads/deploy/employee-portal-enable-')
+        shell: bash
+        env:
+          APP_ONLY_RELEASE: ${{ inputs.application_only_release }}
+          ENABLE_EMPLOYEE_PORTAL: ${{ inputs.employee_portal_enable }}
+          TARGET_CUTOVER: ${{ inputs.supabase_target_cutover }}
+          INSPECT_ONLY: ${{ inputs.inspect_api_errors }}
+          PORTAL_REFRESH_ONLY: ${{ inputs.portal_refresh_only }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ||
+                "$GITHUB_REF" != refs/heads/deploy/employee-portal-enable-* ||
+                "$APP_ONLY_RELEASE" != true || "$ENABLE_EMPLOYEE_PORTAL" != true ||
+                "$TARGET_CUTOVER" == true || "$INSPECT_ONLY" == true ||
+                "$PORTAL_REFRESH_ONLY" == true ]]; then
+            echo "Employee portal activation requires a manual, scoped, app-only release."
+            exit 1
+          fi
+          bash -n deploy/enable-employee-portal.sh
 
       - name: Test router-management VPN bootstrap decisions
         run: bash deploy/tests/bootstrap-router-management-vpn.test.sh
@@ -503,6 +528,9 @@ jobs:
             fi
             echo "=== API health check passed ==="
             if [ "${APP_ONLY_RELEASE:-false}" = "true" ]; then
+              if [ "${{ inputs.employee_portal_enable }}" = "true" ]; then
+                bash deploy/enable-employee-portal.sh
+              fi
               echo "=== Application-only release finished; router actions were not run ==="
               exit 0
             fi

@@ -229,6 +229,22 @@ test("employee admin HTTPS repair is manual, exact-host only, and precedes appli
   assert.doesNotMatch(script, /--insecure|curl -k|\.env|pm2|supabase/i);
 });
 
+test("employee activation follows app health and checks both schema availability and authentication", () => {
+  const workflow = source(".github/workflows/deploy.yml");
+  const guard = workflow.split("- name: Guard employee portal activation")[1].split("\n      - name:")[0];
+  assert.match(guard, /"\$GITHUB_EVENT_NAME" != workflow_dispatch/);
+  assert.match(guard, /"\$GITHUB_REF" != refs\/heads\/deploy\/employee-portal-enable-\*/);
+  assert.match(guard, /"\$APP_ONLY_RELEASE" != true.*"\$ENABLE_EMPLOYEE_PORTAL" != true/);
+  assert.match(guard, /"\$TARGET_CUTOVER" == true/);
+  assert.ok(workflow.indexOf('echo "=== API health check passed ==="') <
+    workflow.indexOf("bash deploy/enable-employee-portal.sh"));
+  const activate = source("deploy/enable-employee-portal.sh");
+  assert.ok(activate.indexOf("/rpc/employee_admin_summary") < activate.indexOf('mv -T -- "$pending" "$marker"'));
+  assert.match(activate, /trap cleanup EXIT/);
+  assert.match(activate, /"\$auth_status" == 401/);
+  assert.doesNotMatch(activate, /pm2 |nginx |pg_restore|psql|--insecure|curl -k/);
+});
+
 test("Gmail app password is encoded before SSH transfer and decoded only on the VPS", () => {
   const workflow = source(".github/workflows/deploy.yml");
   const sshStep = workflow.split("      - name: Deploy via SSH")[1].split("\n      - name:")[0];
