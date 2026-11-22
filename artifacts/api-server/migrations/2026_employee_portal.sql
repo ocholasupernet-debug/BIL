@@ -898,7 +898,36 @@ revoke all on function public.employee_review_compensation_item(uuid, text, text
 revoke all on function public.employee_post_payroll(date, date, text) from public;
 revoke all on function public.employee_payroll_preview(date, date) from public;
 do $$
+declare
+  fn regprocedure;
+  api_role text;
 begin
+  -- Supabase may grant new functions directly to its browser-facing roles
+  -- through default privileges. Revoking PUBLIC alone does not remove those
+  -- grants. Keep the RPC boundary on the API's service role.
+  foreach fn in array array[
+    'public.employee_request_withdrawal(uuid, uuid, numeric, text)'::regprocedure,
+    'public.employee_review_withdrawal(uuid, text, text, text)'::regprocedure,
+    'public.employee_cancel_withdrawal(uuid, uuid)'::regprocedure,
+    'public.employee_review_payout_destination(uuid, text, text)'::regprocedure,
+    'public.employee_record_confirmed_payout(uuid, text, text)'::regprocedure,
+    'public.employee_create_invited(text, text, text, text, text, text, numeric, text, text, text, text, timestamptz, text)'::regprocedure,
+    'public.employee_activate_invitation(text, text)'::regprocedure,
+    'public.employee_dashboard_snapshot(uuid)'::regprocedure,
+    'public.employee_admin_summary()'::regprocedure,
+    'public.employee_set_salary(uuid, numeric, date, text)'::regprocedure,
+    'public.employee_create_compensation_item(uuid, text, numeric, date, date, text, text, text)'::regprocedure,
+    'public.employee_create_commission_rule(uuid, text, numeric, numeric, text)'::regprocedure,
+    'public.employee_review_compensation_item(uuid, text, text)'::regprocedure,
+    'public.employee_post_payroll(date, date, text)'::regprocedure,
+    'public.employee_payroll_preview(date, date)'::regprocedure
+  ] loop
+    foreach api_role in array array['anon', 'authenticated'] loop
+      if exists (select 1 from pg_roles where rolname = api_role) then
+        execute format('revoke all on function %s from %I', fn, api_role);
+      end if;
+    end loop;
+  end loop;
   if exists (select 1 from pg_roles where rolname = 'service_role') then
     grant execute on function public.employee_request_withdrawal(uuid, uuid, numeric, text) to service_role;
     grant execute on function public.employee_review_withdrawal(uuid, text, text, text) to service_role;

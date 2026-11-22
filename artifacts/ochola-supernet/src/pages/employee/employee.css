@@ -220,6 +220,14 @@
 .ep-admin-overview-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(225px, .8fr); gap: 14px; margin-top: 15px; }
 .ep-admin-panel { min-width: 0; padding: 19px; border: 1px solid #dfe8e3; border-radius: 10px; background: #fffefa; }
 .ep-admin-panel .ep-section-heading { margin: 0 0 16px; }
+.ep-admin-start { margin-top: 15px; }
+.ep-admin-start ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.ep-admin-start li > button { display: grid; width: 100%; height: 100%; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 13px 12px; border: 1px solid var(--ep-line); border-radius: 9px; color: var(--ep-teal-deep); background: #f3f8f5; text-align: left; }
+.ep-admin-start li > button:hover { border-color: var(--ep-teal); background: #e9f4ee; }
+.ep-admin-start li > button:focus-visible { outline: 2px solid var(--ep-teal-deep); outline-offset: 2px; }
+.ep-admin-start li b, .ep-admin-start li small { display: block; line-height: 1.45; }
+.ep-admin-start li b { color: var(--ep-ink); font-size: 13px; }
+.ep-admin-start li small { margin-top: 3px; color: var(--ep-ink-soft); font-size: 11px; }
 .ep-admin-side-panel { padding: 21px; border-radius: 10px; color: #e6f1e9; background: #164f53; }
 .ep-admin-side-panel .ep-eyebrow { color: #d4b878; margin: 18px 0 7px; }
 .ep-admin-side-panel h3 { margin: 0 0 9px; color: #f8f6ec; font-size: 17px; line-height: 1.35; }
@@ -446,7 +454,9 @@
   .ep-summary-strip > div { padding: 0 8px; }
   .ep-summary-strip span { font-size: 8px; line-height: 1.3; }
   .ep-summary-strip strong { font-size: 11px; }
-  .ep-table { display: none; }
+  .ep-table:has(+ .ep-mobile-rows) { display: none; }
+  .ep-table-wrap:not(:has(> .ep-mobile-rows)) { overflow-x: auto; }
+  .ep-table-wrap:not(:has(> .ep-mobile-rows)) > .ep-table { min-width: max-content; }
   .ep-mobile-rows { display: grid; }
   .ep-mobile-rows article { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 13px; border-bottom: 1px solid #edf1ee; }
   .ep-mobile-rows article:last-child { border-bottom: 0; }
@@ -461,6 +471,7 @@
   .ep-admin-app { padding-inline: 8px; }
   .ep-admin-welcome { align-items: flex-start; flex-direction: column; padding: 17px; }
   .ep-admin-overview-grid, .ep-settings-grid { grid-template-columns: 1fr; }
+  .ep-admin-start ol { grid-template-columns: 1fr; }
   .ep-admin-panel { padding: 15px; }
   .ep-admin-status { font-size: 0; }
   .ep-admin-status span { width: 8px; height: 8px; }
