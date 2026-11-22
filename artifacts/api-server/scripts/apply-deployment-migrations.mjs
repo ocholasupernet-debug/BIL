@@ -144,6 +144,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_router_api_secret_encryption.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_routeros_installer_v2_enrollments.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_admin_renewal_vouchers.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_employee_portal.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
 

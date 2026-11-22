@@ -92,6 +92,7 @@ import ResellerConnector from "./pages/admin/network/ResellerConnector";
 import NetworkLoadBalancing from "./pages/admin/network/LoadBalancing";
 import AdminRegister from "./pages/admin/AdminRegister";
 import VisualCheckHarness from "./visual/VisualCheckHarness";
+import { EmployeeActivatePage, EmployeeAdminPage, EmployeeDashboardPage, EmployeeLoginPage } from "./pages/employee/EmployeePortal";
 
 function RoleAwareDashboard() {
   return getAdminRole() === "reseller" ? <ResellerWorkspace /> : <AdminDashboard />;
@@ -130,6 +131,10 @@ function ResellerBlockedPage() {
 ──────────────────────────────────────────────────────────────── */
 function SubdomainGuard() {
   const [, setLocation] = useLocation();
+  const hostname = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
+  const employeeAdminHost = hostname === "employee1088.isplatty.org";
+  const employeePortalHost = /^[^.]+\.employees\.isplatty\.org$/.test(hostname);
+  const employeeHost = employeeAdminHost || employeePortalHost;
   const hotspotConfig = typeof window !== "undefined"
     ? (window as Window & { __HOTSPOT_CONFIG__?: { adminId?: unknown } }).__HOTSPOT_CONFIG__
     : undefined;
@@ -139,12 +144,15 @@ function SubdomainGuard() {
     && /^admin\.isplatty\.(org|com)$/.test(window.location.hostname.toLowerCase());
 
   useEffect(() => {
+    if (employeeAdminHost) { setLocation("/employee/admin"); return; }
+    if (employeePortalHost) { setLocation("/employee/login"); return; }
     if (isAdminEntryHost) { setLocation("/admin/login"); return; }
     const sub = getHostSubdomain();
     if (sub && sub !== "register" && sub !== "latex") setLocation("/admin/login");
-  }, [isAdminEntryHost, setLocation]);
+  }, [employeeAdminHost, employeePortalHost, isAdminEntryHost, setLocation]);
 
   if (customHotspotPortal) return <HotspotLogin />;
+  if (employeeHost) return null;
   if (isAdminEntryHost) return null;
   const sub = getHostSubdomain();
   if (sub === "register") return <AdminRegister />;
@@ -235,6 +243,10 @@ function Router() {
     <Switch>
       {import.meta.env.DEV && <Route path="/__visual/:page" component={VisualCheckHarness} />}
       <Route path="/" component={SubdomainGuard} />
+      <Route path="/employee/activate" component={EmployeeActivatePage} />
+      <Route path="/employee/login" component={EmployeeLoginPage} />
+      <Route path="/employee/dashboard" component={EmployeeDashboardPage} />
+      <Route path="/employee/admin" component={EmployeeAdminPage} />
       <Route path="/admin/entry" component={TenantAdminLoginRoute} />
       <Route path="/admin/login" component={TenantAdminLoginRoute} />
       <Route path="/admin/login/isp" component={TenantAdminLoginRoute} />
