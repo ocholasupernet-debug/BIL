@@ -72,6 +72,7 @@ import SuperAdminImpersonate from "./pages/super-admin/Impersonate";
 import SuperAdminAuthSecurity from "./pages/super-admin/AuthSecurity";
 import SuperAdminStorage from "./pages/super-admin/Storage";
 import SuperAdminAdminRenewalVouchers from "./pages/super-admin/AdminRenewalVouchers";
+import StaffPortalStatusPage from "./pages/staff/StaffPortalStatusPage";
 import VpnDashboard from "./pages/vpn/VpnDashboard";
 import VpnRemoteAccess from "./pages/vpn/RemoteAccess";
 import VpnList from "./pages/vpn/VpnList";
@@ -129,6 +130,8 @@ function ResellerBlockedPage() {
 ──────────────────────────────────────────────────────────────── */
 function SubdomainGuard() {
   const [, setLocation] = useLocation();
+  const isStaffPortalHost = typeof window !== "undefined"
+    && window.location.hostname.toLowerCase() === "staff.isplatty.com";
   const hotspotConfig = typeof window !== "undefined"
     ? (window as Window & { __HOTSPOT_CONFIG__?: { adminId?: unknown } }).__HOTSPOT_CONFIG__
     : undefined;
@@ -138,12 +141,14 @@ function SubdomainGuard() {
     && /^admin\.isplatty\.(org|com)$/.test(window.location.hostname.toLowerCase());
 
   useEffect(() => {
+    if (isStaffPortalHost) { setLocation("/staff/login"); return; }
     if (isAdminEntryHost) { setLocation("/admin/login"); return; }
     const sub = getHostSubdomain();
     if (sub && sub !== "register" && sub !== "latex") setLocation("/admin/login");
-  }, [isAdminEntryHost, setLocation]);
+  }, [isStaffPortalHost, isAdminEntryHost, setLocation]);
 
   if (customHotspotPortal) return <HotspotLogin />;
+  if (isStaffPortalHost) return null;
   if (isAdminEntryHost) return null;
   const sub = getHostSubdomain();
   if (sub === "register") return <AdminRegister />;
@@ -234,6 +239,7 @@ function Router() {
     <Switch>
       {import.meta.env.DEV && <Route path="/__visual/:page" component={VisualCheckHarness} />}
       <Route path="/" component={SubdomainGuard} />
+      <Route path="/staff/login" component={StaffPortalStatusPage} />
       <Route path="/admin/entry" component={TenantAdminLoginRoute} />
       <Route path="/admin/login" component={TenantAdminLoginRoute} />
       <Route path="/admin/login/isp" component={TenantAdminLoginRoute} />

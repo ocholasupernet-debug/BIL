@@ -50,6 +50,11 @@ on:
         required: false
         default: false
         type: boolean
+      staff_host_repair:
+        description: "Restore only the Staff website host, TLS, and static page"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: vps-deploy
@@ -61,6 +66,7 @@ permissions:
 
 jobs:
   deploy:
+    if: ${{ !inputs.staff_host_repair }}
     name: SSH Deploy
     runs-on: ubuntu-latest
 
@@ -539,3 +545,102 @@ jobs:
           WAHA_SESSION_ID: ${{ secrets.WAHA_SESSION_ID }}
           WAHA_DEFAULT_COUNTRY_CODE: ${{ secrets.WAHA_DEFAULT_COUNTRY_CODE }}
           GMAIL_APP_PASSWORD_B64: ${{ steps.encode_runtime_ssh.outputs.GMAIL_APP_PASSWORD_B64 }}
+
+  staff-host-repair:
+    if: ${{ inputs.staff_host_repair }}
+    name: Restore Staff host reachability
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the scoped Staff release
+        uses: actions/checkout@v4
+
+      - name: Require a manual Staff-only release branch
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref }}
+          STAFF_HOST_REPAIR: ${{ inputs.staff_host_repair }}
+        run: |
+          set -euo pipefail
+          [[ "$EVENT_NAME" == "workflow_dispatch" ]]
+          [[ "$STAFF_HOST_REPAIR" == "true" ]]
+          [[ "$REF_NAME" == refs/heads/deploy/staff-host-reachability-* ]] || {
+            echo "Staff host repair is restricted to its reviewed release branch."
+            exit 1
+          }
+          bash -n deploy/restore-staff-host-https.sh
+          node --test deploy/tests/staff-host-release.test.mjs
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Build the Staff host page
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          BASE_PATH="/" pnpm --filter @workspace/ochola-supernet run build:vps
+          test -s artifacts/ochola-supernet/dist/public/index.html
+          grep -R -l -F "Staff sign-in is temporarily unavailable" \
+            artifacts/ochola-supernet/dist/public/assets
+          tar -C artifacts/ochola-supernet/dist/public \
+            -czf "$RUNNER_TEMP/staff-host-assets.tgz" .
+          cp "$RUNNER_TEMP/staff-host-assets.tgz" staff-host-assets.tgz
+
+      - name: Copy Staff page assets to the VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: 102.203.116.204
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          fingerprint: "SHA256:XlSA4l6O/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"
+          port: 22
+          source: staff-host-assets.tgz
+          target: /tmp
+          overwrite: true
+          timeout: 120s
+          command_timeout: 5m
+
+      - name: Provision Staff TLS and install the static page
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          STAFF_HOST_REPAIR: "true"
+        with:
+          host: 102.203.116.204
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          fingerprint: "SHA256:XlSA4l6O/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"
+          port: 22
+          timeout: 30s
+          command_timeout: 12m
+          envs: STAFF_HOST_REPAIR
+          script_path: deploy/restore-staff-host-https.sh
+
+      - name: Verify Staff host through Cloudflare
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if curl --fail --silent --show-error --max-time 15 \
+              https://staff.isplatty.com/staff/login -o "$RUNNER_TEMP/staff-page.html"; then
+              break
+            fi
+            if [[ "$attempt" == "5" ]]; then exit 1; fi
+            sleep 5
+          done
+          grep -q 'id="root"' "$RUNNER_TEMP/staff-page.html"
+          curl --fail --silent --show-error --max-time 15 \
+            https://staff.isplatty.com/api/healthz |
+            node -e 'const body=JSON.parse(require("fs").readFileSync(0,"utf8")); if(body.status!=="ok") process.exit(1)'
