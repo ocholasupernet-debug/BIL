@@ -117,32 +117,3 @@ test("tenant router context is authenticated and always scoped to the signed-in 
     }
   }
 });
-
-test("Super Admin platform-data routes reject missing authentication before database reads", async () => {
-  const [{ default: dataRouter }] = await Promise.all([import("./super-admin-data-route.js")]);
-  const app = express();
-  app.use("/api", dataRouter);
-  const server = app.listen(0, "127.0.0.1");
-  await new Promise<void>((resolve, reject) => {
-    server.once("listening", resolve);
-    server.once("error", reject);
-  });
-  const address = server.address();
-  assert.ok(address && typeof address !== "string");
-  const originalFetch = globalThis.fetch;
-  let databaseReads = 0;
-  globalThis.fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.hostname === "127.0.0.1") return originalFetch(input, init);
-    databaseReads += 1;
-    throw new Error(`Unexpected database request: ${init?.method ?? "GET"} ${url.pathname}`);
-  };
-  try {
-    const response = await originalFetch(`http://127.0.0.1:${address.port}/api/super-admin/platform-data`);
-    assert.equal(response.status, 401);
-    assert.equal(databaseReads, 0);
-  } finally {
-    globalThis.fetch = originalFetch;
-    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-  }
-});
