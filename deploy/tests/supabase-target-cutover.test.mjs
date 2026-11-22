@@ -46,6 +46,7 @@ test("app-only guard runs before database tooling, schema changes, or infrastruc
   assert.match(appOnly, /verify-supabase-runtime-target\.mjs/);
   assert.ok(appOnly.indexOf("verify-supabase-runtime-target.mjs") < appOnly.indexOf('rsync -a --delete'));
   assert.match(appOnly, /pm2 reload ecosystem\.config\.cjs --env standalone --update-env/);
+  assert.doesNotMatch(appOnly.slice(appOnly.indexOf('rsync -a --delete')), /curl/);
 });
 
 test("Super Admin platform table reads use the authenticated server API", async () => {

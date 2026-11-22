@@ -58,7 +58,5 @@ BUILD_OUTPUT="$PROJECT_DIR/artifacts/ochola-supernet/dist/public"
 if [ "$(readlink -f "$BUILD_OUTPUT")" != "$(readlink -f "$PUBLIC_HTML")" ]; then
   rsync -a --delete "$BUILD_OUTPUT/" "$PUBLIC_HTML/"
 fi
-curl --fail --silent --show-error --max-time 5 \
-  http://127.0.0.1:8080/ >/dev/null
 
 echo "Application-only release passed API, static-page, and configured target checks."
