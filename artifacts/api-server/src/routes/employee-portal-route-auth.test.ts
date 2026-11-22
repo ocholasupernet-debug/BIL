@@ -49,10 +49,43 @@ test("Staff routes require an authenticated Super Admin or active Staff session"
     req.on("error", reject);
     req.end();
   });
+  const post = async (path: string, host: string, body: Record<string, unknown>) => new Promise<{
+    status: number;
+    body: Record<string, unknown>;
+  }>((resolve, reject) => {
+    const req = httpRequest({
+      hostname: "127.0.0.1",
+      port: address.port,
+      path: `/api${path}`,
+      method: "POST",
+      headers: { host, "content-type": "application/json" },
+    }, (res) => {
+      let responseBody = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk: string) => { responseBody += chunk; });
+      res.on("end", () => {
+        try {
+          resolve({ status: res.statusCode ?? 0, body: JSON.parse(responseBody) as Record<string, unknown> });
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.end(JSON.stringify(body));
+  });
 
   const admin = await get("/employee/admin/employees", "employee1088.isplatty.com");
   assert.equal(admin.status, 401);
   assert.equal(admin.body.error, "Super Admin authentication is required.");
+
+  const signupReview = await post(
+    "/employee/admin/signups/00000000-0000-4000-8000-000000000003/review",
+    "employee1088.isplatty.com",
+    { decision: "approve" },
+  );
+  assert.equal(signupReview.status, 401);
+  assert.equal(signupReview.body.error, "Super Admin authentication is required.");
 
   const adminStatus = await get("/employee/status", "employee1088.isplatty.com");
   assert.equal(adminStatus.body.portal, "admin");

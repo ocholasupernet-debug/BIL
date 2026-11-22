@@ -264,7 +264,7 @@ export function useReviewStaffSignup() {
         { method: "POST", body: JSON.stringify({ decision: input.decision, note: input.note }) },
         true,
       ),
-    onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal", "admin"] }),
+    onSettled: () => client.invalidateQueries({ queryKey: ["employee-portal", "admin"] }),
   });
 }
 

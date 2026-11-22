@@ -4,6 +4,11 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getMpesaSettings } from "../lib/settings-store.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
+import { logger } from "../lib/logger.js";
+import {
+  classifyEmployeeSignupReviewFailure,
+  interpretEmployeeSignupReview,
+} from "../lib/employee-signup-review.js";
 import {
   isStaffPortalHost,
   isEmployeeAdminHost,
@@ -431,19 +436,38 @@ router.post("/employee/admin/signups/:id/review", async (req: Request, res: Resp
       "employee_review_signup_request",
       { p_request_id: id, p_decision: decision, p_review_note: note, p_actor_id: "super_admin" },
     );
-    const result = Array.isArray(rows) ? rows[0] : undefined;
-    if (!result || !["approved", "rejected"].includes(result.outcome)) {
-      res.status(409).json({ ok: false, error: "This Staff request is no longer awaiting review." });
+    const reviewResult = interpretEmployeeSignupReview(Array.isArray(rows) ? rows[0] : undefined);
+    if (reviewResult.kind === "duplicate") {
+      res.status(409).json({
+        ok: false,
+        error: "This request was closed because its email is already assigned to a Staff account. Refresh the request list and check the Staff directory if this seems incorrect.",
+      });
       return;
     }
+    if (reviewResult.kind === "stale") {
+      res.status(409).json({
+        ok: false,
+        error: "This request is no longer waiting for review. Refresh the request list to see its current status.",
+      });
+      return;
+    }
+    if (reviewResult.kind === "unexpected") {
+      logger.error({ category: "unexpected_review_result" }, "[staff-signup-review] unexpected database result");
+      res.status(503).json({
+        ok: false,
+        error: "We couldn't confirm the review result. Refresh the request list before trying again.",
+      });
+      return;
+    }
+    const result = reviewResult;
     let notificationSent = false;
     if (result.email) {
       try {
         await sendPlatformEmail({
           fromName: "OcholaSupernet Billing",
           to: result.email,
-          subject: result.outcome === "approved" ? "Your ISPlatty Staff account is approved" : "Your ISPlatty Staff request update",
-          text: result.outcome === "approved"
+          subject: result.kind === "approved" ? "Your ISPlatty Staff account is approved" : "Your ISPlatty Staff request update",
+          text: result.kind === "approved"
             ? "Your Staff account has been approved. You can now sign in at https://staff.isplatty.com/staff/login using your email, password, and the email verification code."
             : "Your Staff account request was not approved. Contact your ISPlatty administrator if you need more information.",
         });
@@ -452,11 +476,13 @@ router.post("/employee/admin/signups/:id/review", async (req: Request, res: Resp
     }
     res.json({
       ok: true,
-      request: { id, status: result.outcome, employeeId: result.employee_id },
+      request: { id, status: result.kind, employeeId: result.employeeId },
       notificationSent,
     });
-  } catch {
-    res.status(503).json({ ok: false, error: "The Staff request could not be reviewed. Please try again." });
+  } catch (error) {
+    const failure = classifyEmployeeSignupReviewFailure(error);
+    logger.error({ category: failure.category }, "[staff-signup-review] database review failed");
+    res.status(failure.status).json({ ok: false, error: failure.message });
   }
 });
 

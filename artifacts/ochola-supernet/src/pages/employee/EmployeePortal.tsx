@@ -74,8 +74,15 @@ const makeIdempotencyKey = () => typeof crypto !== "undefined" && "randomUUID" i
 
 function BrandMark({ compact = false }: { compact?: boolean }) {
   return <div className="ep-brand">
-    <span className="ep-brand-symbol" aria-hidden="true"><span /><span /><span /></span>
-    {!compact && <span className="ep-brand-word"><strong>ISPlatty</strong><small>PEOPLE & FINANCE</small></span>}
+    <span className="ep-brand-symbol" aria-hidden="true">
+      <svg viewBox="0 0 32 32" focusable="false">
+        <path d="M8 22 15.8 8l8.1 14M10.2 18.2h11.6" />
+        <circle cx="8" cy="22" r="2.3" />
+        <circle cx="15.8" cy="8" r="2.3" />
+        <circle cx="23.9" cy="22" r="2.3" />
+      </svg>
+    </span>
+    {!compact && <span className="ep-brand-word"><strong>ISPLATTY.<em>ORG</em></strong><small>STAFF PORTAL</small></span>}
   </div>;
 }
 
@@ -627,6 +634,11 @@ function AdminPortal() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [dialog, setDialog] = useState<"employee" | "settings" | null>(null);
   const [notice, setNotice] = useState("");
+  const [noticeTone, setNoticeTone] = useState<"success" | "error" | "info">("info");
+  const showNotice = (message: string, tone: "success" | "error" | "info") => {
+    setNotice(message);
+    setNoticeTone(tone);
+  };
   const summary = useEmployeeAdminSummary();
   const employees = useAdminEmployees();
   const withdrawals = useAdminWithdrawals();
@@ -681,7 +693,7 @@ function AdminPortal() {
       email: String(data.get("email")) || undefined, phone: String(data.get("phone")) || undefined,
       monthlySalary, destinationType, destinationDetails,
     }, {
-      onSuccess: (result) => { setCreatedInvite(fragmentInvitation(result.invitationUrl)); setNotice("Staff account created. Share the one-time invitation securely."); },
+      onSuccess: (result) => { setCreatedInvite(fragmentInvitation(result.invitationUrl)); showNotice("Staff account created. Share the one-time invitation securely.", "success"); },
       onError: (error) => setCreateError(errorText(error)),
     });
   };
@@ -696,7 +708,7 @@ function AdminPortal() {
     }, {
       onSuccess: (result) => {
         setContactMessage(result.message);
-        setNotice(result.message);
+        showNotice(result.message, "success");
         setContactTarget(null);
       },
       onError: (error) => setContactMessage(errorText(error)),
@@ -705,16 +717,16 @@ function AdminPortal() {
   const actOnWithdrawal = (decision: "approve" | "reject") => {
     if (!reviewTarget) return;
     review.mutate({ id: reviewTarget.id, decision, note: reviewNote || undefined }, {
-      onSuccess: () => { setNotice(`Withdrawal ${decision === "approve" ? "approved" : "rejected"}.`); setReviewTarget(null); setReviewNote(""); },
-      onError: (error) => setNotice(errorText(error)),
+      onSuccess: () => { showNotice(`Withdrawal ${decision === "approve" ? "approved" : "rejected"}.`, "success"); setReviewTarget(null); setReviewNote(""); },
+      onError: (error) => showNotice(errorText(error), "error"),
     });
   };
   const recordPaymentSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     if (!paymentId || !paymentReference.trim() || !bankTransferConfirmed) return;
     recordPayment.mutate({ id: paymentId, reference: paymentReference.trim() }, {
-      onSuccess: () => { setNotice("External bank-transfer reference recorded."); setPaymentId(""); setPaymentReference(""); setBankTransferConfirmed(false); },
-      onError: (error) => setNotice(errorText(error)),
+      onSuccess: () => { showNotice("External bank-transfer reference recorded.", "success"); setPaymentId(""); setPaymentReference(""); setBankTransferConfirmed(false); },
+      onError: (error) => showNotice(errorText(error), "error"),
     });
   };
   const saveSettingsSubmit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -730,8 +742,8 @@ function AdminPortal() {
       maxWithdrawal: String(data.get("maxWithdrawal")), dailyLimit: String(data.get("dailyLimit")),
       replacePassword: String(data.get("replacePassword")), credentials,
     }, {
-      onSuccess: () => { setNotice("Payout request controls saved. Live disbursements remain disabled."); setDialog(null); },
-      onError: (error) => setNotice(errorText(error)),
+      onSuccess: () => { showNotice("Payout request controls saved. Live disbursements remain disabled.", "success"); setDialog(null); },
+      onError: (error) => showNotice(errorText(error), "error"),
     });
   };
   const filteredEmployees = (employees.data ?? []).filter((employee) => `${employee.display_name} ${employee.username} ${employee.employee_number} ${employee.email ?? ""}`.toLowerCase().includes(search.toLowerCase()));
@@ -740,7 +752,7 @@ function AdminPortal() {
     <aside className={`ep-sidebar ep-admin-sidebar ${menuOpen ? "is-open" : ""}`}><div className="ep-sidebar-brand"><BrandMark /></div><div className="ep-admin-identity"><span className="ep-admin-emblem"><ShieldCheck size={18} /></span><span><b>People operations</b><small>SUPER ADMIN AREA</small></span></div><p className="ep-nav-label">STAFF FINANCE</p><nav>{menuItems.map(({ id, label, icon: Icon }) => <button key={id} className={`ep-nav-item ${view === id ? "active" : ""}`} onClick={() => { setView(id); setMenuOpen(false); }}><Icon size={17} />{label}<ChevronRight className="ep-nav-arrow" size={15} />{id === "withdrawals" && summaryData?.pending_withdrawal_count ? <i className="ep-nav-count">{summaryData.pending_withdrawal_count}</i> : id === "signups" && pendingSignups.data?.length ? <i className="ep-nav-count">{pendingSignups.data.length}</i> : null}</button>)}<button className="ep-nav-item" onClick={() => setLocation("/employee/admin/learning")}><BookOpen size={17} />Technician Learning Center<ChevronRight className="ep-nav-arrow" size={15} /></button></nav><div className="ep-sidebar-bottom"><div className="ep-secure-card"><LockKeyhole size={16} /><span><b>Restricted access</b><small>Super Admin controls</small></span></div></div></aside>
     <section className="ep-admin-main"><header className="ep-work-header"><div className="ep-header-left"><button className="ep-menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle navigation">{menuOpen ? <X size={19} /> : <Menu size={19} />}</button><div><p className="ep-header-kicker">ISPLATTY · PEOPLE OPERATIONS</p><h1>{menuItems.find((item) => item.id === view)?.label}</h1></div></div><span className="ep-admin-status"><span /> Admin workspace</span></header>
       <main className="ep-content ep-admin-content">
-        {notice && <div className="ep-notice-inline"><Notice tone={notice.includes("saved") || notice.includes("approved") || notice.includes("recorded") || notice.includes("created") ? "success" : "info"}>{notice}</Notice><button onClick={() => setNotice("")} aria-label="Dismiss notice"><X size={15} /></button></div>}
+        {notice && <div className="ep-notice-inline"><Notice tone={noticeTone}>{notice}</Notice><button onClick={() => setNotice("")} aria-label="Dismiss notice"><X size={15} /></button></div>}
         {failText && <div className="ep-inline-error"><Notice>{failText}</Notice><button className="ep-text-button" onClick={() => { void summary.refetch(); void employees.refetch(); void withdrawals.refetch(); void pendingDestinations.refetch(); void pendingSignups.refetch(); }}>Retry</button></div>}
         {(summary.isLoading || employees.isLoading || withdrawals.isLoading || pendingDestinations.isLoading) && !summaryData ? <LoadingBlock label="Loading Staff administration" /> : <>
           {view === "overview" && <AdminOverview summary={summaryData} isError={summary.isError} onOpen={(next) => setView(next)} onCreate={() => { setCreatedInvite(""); setCreateError(""); setDialog("employee"); }} withdrawals={withdrawals.data ?? []} pendingSignups={pendingSignups.data ?? []} onReview={setReviewTarget} />}
@@ -748,7 +760,9 @@ function AdminPortal() {
           {view === "signups" && <StaffSignupQueue
             requests={pendingSignups.data ?? []}
             loading={pendingSignups.isLoading}
+            refreshing={pendingSignups.isFetching}
             busy={reviewSignup.isPending}
+            onRefresh={() => { void pendingSignups.refetch(); }}
             onReview={(request, decision) => {
               const message = decision === "approve"
                 ? `Approve Staff access for ${request.full_name}? This creates an active portal account.`
@@ -756,13 +770,13 @@ function AdminPortal() {
               if (!window.confirm(message)) return;
               reviewSignup.mutate({ id: request.id, decision }, {
                 onSuccess: (result) => {
-                  setNotice(`${request.full_name} ${decision === "approve" ? "approved" : "rejected"}${result.notificationSent ? "; email notification sent." : "; email notification was not sent."}`);
+                  showNotice(`${request.full_name} ${decision === "approve" ? "approved" : "rejected"}${result.notificationSent ? "; email notification sent." : "; email notification was not sent."}`, "success");
                 },
-                onError: (error) => setNotice(errorText(error)),
+                onError: (error) => showNotice(errorText(error), "error"),
               });
             }}
           />}
-          {view === "destinations" && <EmployeeDestinationReviewPanel destinations={pendingDestinations.data ?? []} isLoading={pendingDestinations.isLoading} onReview={(id, decision) => reviewDestination.mutate({ id, decision }, { onSuccess: () => setNotice(`Payout destination ${decision === "approve" ? "approved" : "rejected"}.`), onError: (error) => setNotice(errorText(error)) })} busy={reviewDestination.isPending} />}
+          {view === "destinations" && <EmployeeDestinationReviewPanel destinations={pendingDestinations.data ?? []} isLoading={pendingDestinations.isLoading} onReview={(id, decision) => reviewDestination.mutate({ id, decision }, { onSuccess: () => showNotice(`Payout destination ${decision === "approve" ? "approved" : "rejected"}.`, "success"), onError: (error) => showNotice(errorText(error), "error") })} busy={reviewDestination.isPending} />}
           {view === "withdrawals" && <section className="ep-admin-panel"><div className="ep-section-heading"><div><p className="ep-eyebrow">REVIEW QUEUE</p><h3>Withdrawal requests</h3><p>Approvals are not payments. Recording is for confirmed external bank transfers only.</p></div></div><WithdrawalList withdrawals={withdrawals.data ?? []} onReview={setReviewTarget} onRecord={(item) => { setPaymentId(item.id); setPaymentReference(""); setBankTransferConfirmed(false); }} /><div className="ep-manual-payment"><div><span className="ep-manual-icon"><Landmark size={19} /></span><div><h4>Record confirmed bank transfer only</h4><p>Record a reference after a bank transfer has been completed outside this portal. This does not send funds.</p></div></div><form onSubmit={recordPaymentSubmit}><input aria-label="Withdrawal ID" value={paymentId} onChange={(event) => setPaymentId(event.target.value)} placeholder="Withdrawal ID" required /><input aria-label="External bank transfer reference" value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} placeholder="Bank transfer reference" required /><label className="ep-bank-confirm"><input type="checkbox" checked={bankTransferConfirmed} onChange={(event) => setBankTransferConfirmed(event.target.checked)} /> I confirm an external bank transfer is complete.</label><button className="ep-button ep-button-secondary" disabled={recordPayment.isPending || !bankTransferConfirmed}>{recordPayment.isPending ? "Recording…" : "Record bank transfer"}</button></form></div></section>}
           {view === "payroll" && <AdminPayrollSection employees={employees.data ?? []} />}
           {view === "settings" && <PayoutControlPanel settings={settings.data} isLoading={settings.isLoading} isError={settings.isError} onRetry={() => void settings.refetch()} onEdit={() => setDialog("settings")} />}
@@ -1036,15 +1050,20 @@ function EmployeeTable({ employees, onEditContact }: {
   return <div className="ep-table-wrap"><table className="ep-table ep-admin-table"><thead><tr><th>Staff member</th><th>Account</th><th>Type</th><th>Portal</th><th>Monthly salary</th><th>Status</th><th>Contact</th></tr></thead><tbody>{employees.map((employee) => <tr key={employee.id}><td><strong>{employee.display_name}</strong><small>{employee.employee_number}</small></td><td>{employee.username}<small>{employee.email || employee.phone || "No contact details"}</small></td><td>{employee.account_type === "technician" ? "Technician" : "Employee"}</td><td className="ep-mono">staff.isplatty.com</td><td className="ep-amount">{money(employee.fixed_monthly_salary)}</td><td><StatusPill status={employee.status} /></td><td><button className="ep-text-button" onClick={() => onEditContact(employee)} aria-label={`Edit contact for ${employee.display_name}`}><Pencil size={14} /> Edit</button></td></tr>)}</tbody></table><div className="ep-mobile-rows">{employees.map((employee) => <article key={`mobile-${employee.id}`}><div><strong>{employee.display_name}</strong><small>{employee.employee_number} · {employee.username} · {employee.account_type === "technician" ? "Technician" : "Employee"}</small></div><StatusPill status={employee.status} /><small>Shared Staff portal · {money(employee.fixed_monthly_salary)}/month</small><button className="ep-text-button" onClick={() => onEditContact(employee)}><Pencil size={14} /> Update contact email</button></article>)}</div></div>;
 }
 
-function StaffSignupQueue({ requests, loading, busy, onReview }: {
+function StaffSignupQueue({ requests, loading, refreshing, busy, onRefresh, onReview }: {
   requests: StaffSignupRequest[];
   loading: boolean;
+  refreshing: boolean;
   busy: boolean;
+  onRefresh: () => void;
   onReview: (request: StaffSignupRequest, decision: "approve" | "reject") => void;
 }) {
   return <section className="ep-admin-panel">
     <div className="ep-section-heading">
       <div><p className="ep-eyebrow">ACCOUNT APPROVAL</p><h3>Staff access requests</h3><p>Only verified email requests appear here. Approval creates an active account; pending requests cannot sign in.</p></div>
+      <button className="ep-button ep-button-secondary ep-small-button" disabled={refreshing || busy} onClick={onRefresh}>
+        <RefreshCw size={14} className={refreshing ? "ep-spin" : ""} /> {refreshing ? "Refreshing…" : "Refresh list"}
+      </button>
     </div>
     {loading ? <LoadingBlock label="Loading Staff sign-up requests" /> : requests.length ? <div className="ep-signup-queue">
       {requests.map((request) => <article key={request.id} className="ep-signup-request">
