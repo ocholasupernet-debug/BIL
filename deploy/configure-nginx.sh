@@ -8,6 +8,9 @@ CERT_DIR="/etc/letsencrypt/live/${CERT_NAME}"
 COM_DOMAIN="isplatty.com"
 COM_CERT_NAME="isplatty-com-origin"
 COM_CERT_DIR="/etc/letsencrypt/live/${COM_CERT_NAME}"
+COM_EMPLOYEE_CERT_DIR="/etc/ssl/cloudflare/isplatty-com-employee-origin"
+EMPLOYEE_SITE_DIR="/etc/nginx/employee-sites.d"
+EMPLOYEE_COM_SITE_FILE="${EMPLOYEE_SITE_DIR}/isplatty-com-employees.conf"
 REQUIRED_CERT_NAME="${DOMAIN}-required-hosts"
 REQUIRED_CERT_DIR="/etc/letsencrypt/live/${REQUIRED_CERT_NAME}"
 APEX_CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
@@ -56,6 +59,33 @@ has_com_origin_certificate() {
       grep -Fq "DNS:register.${COM_DOMAIN}"
 }
 
+has_com_employee_origin_certificate() {
+  local certificate_public_key private_key_public_key
+  [ -r "${COM_EMPLOYEE_CERT_DIR}/fullchain.pem" ] &&
+    [ -r "${COM_EMPLOYEE_CERT_DIR}/privkey.pem" ] || return 1
+  openssl x509 -in "${COM_EMPLOYEE_CERT_DIR}/fullchain.pem" -noout -ext subjectAltName 2>/dev/null |
+    grep -Fq "DNS:employee1088.${COM_DOMAIN}" || return 1
+  openssl x509 -in "${COM_EMPLOYEE_CERT_DIR}/fullchain.pem" -noout -ext subjectAltName 2>/dev/null |
+    grep -Fq "DNS:*.employees.${COM_DOMAIN}" || return 1
+  certificate_public_key="$(openssl x509 -pubkey -noout -in "${COM_EMPLOYEE_CERT_DIR}/fullchain.pem" 2>/dev/null)" || return 1
+  private_key_public_key="$(openssl pkey -pubout -in "${COM_EMPLOYEE_CERT_DIR}/privkey.pem" 2>/dev/null)" || return 1
+  [ "$certificate_public_key" = "$private_key_public_key" ]
+}
+
+prepare_com_employee_vhost() {
+  install -d -m 0755 "${EMPLOYEE_SITE_DIR}"
+  if has_com_employee_origin_certificate; then
+    install -m 0644 "${PROJECT_DIR}/deploy/nginx-employee-com.conf" "${EMPLOYEE_COM_SITE_FILE}"
+    echo "Prepared employee .com HTTPS routing with the validated origin certificate SANs."
+    return 0
+  fi
+  if [ -e "${EMPLOYEE_COM_SITE_FILE}" ]; then
+    echo "Employee .com routing already exists, but its certificate is missing, mismatched, or lacks required SANs." >&2
+    return 1
+  fi
+  echo "Employee .com HTTPS routing remains disabled until ${COM_EMPLOYEE_CERT_DIR} contains a matching certificate for employee1088.${COM_DOMAIN} and *.employees.${COM_DOMAIN}."
+}
+
 ensure_com_origin_certificate() {
   install -d -m 0755 /var/www/letsencrypt/.well-known/acme-challenge
   if has_com_origin_certificate; then
@@ -88,6 +118,9 @@ backup_nginx_configuration() {
   if [ -d "$TENANT_VHOST_DIR" ]; then
     cp -a "$TENANT_VHOST_DIR" "${NGINX_BACKUP_DIR}/tenant-sites"
   fi
+  if [ -d "$EMPLOYEE_SITE_DIR" ]; then
+    cp -a "$EMPLOYEE_SITE_DIR" "${NGINX_BACKUP_DIR}/employee-sites"
+  fi
   if [ -e /etc/nginx/sites-enabled/default ] || [ -L /etc/nginx/sites-enabled/default ]; then
     cp -a /etc/nginx/sites-enabled/default "${NGINX_BACKUP_DIR}/enabled-default"
   fi
@@ -103,6 +136,10 @@ restore_nginx_configuration() {
   fi
   if [ -e "${NGINX_BACKUP_DIR}/enabled-default" ] || [ -L "${NGINX_BACKUP_DIR}/enabled-default" ]; then
     cp -a "${NGINX_BACKUP_DIR}/enabled-default" /etc/nginx/sites-enabled/default
+  fi
+  rm -rf "$EMPLOYEE_SITE_DIR"
+  if [ -d "${NGINX_BACKUP_DIR}/employee-sites" ]; then
+    cp -a "${NGINX_BACKUP_DIR}/employee-sites" "$EMPLOYEE_SITE_DIR"
   fi
   ln -sfn "$NGINX_SITE" "/etc/nginx/sites-enabled/${DOMAIN}"
   echo "Restored the previous Nginx site configuration." >&2
@@ -142,6 +179,7 @@ fi
 if has_wildcard_certificate; then
   install -d -m 0755 "${TENANT_VHOST_DIR}" /var/www/letsencrypt/.well-known/acme-challenge
   backup_nginx_configuration
+  prepare_com_employee_vhost
   install -m 0644 "${PROJECT_DIR}/deploy/nginx.conf" "${NGINX_SITE}"
 else
   # Namecheap-managed DNS cannot use the Cloudflare DNS hook. Use HTTP-01
@@ -173,6 +211,7 @@ else
 
   install -d -m 0755 "${TENANT_VHOST_DIR}" /var/www/letsencrypt/.well-known/acme-challenge
   backup_nginx_configuration
+  prepare_com_employee_vhost
   install -m 0644 "${PROJECT_DIR}/deploy/nginx-host-specific.conf" "${NGINX_SITE}"
 
   for host in "bil.${DOMAIN}" "vpn.${DOMAIN}"; do

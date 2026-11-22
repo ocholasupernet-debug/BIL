@@ -45,7 +45,7 @@
 - [Brand logo asset](brand-logo-asset.md) — Remove only the connected white background from the source logo so internal highlights remain intact.
 - [Coexistence service isolation](coexistence-service-isolation.md) — Use uniquely named local services and never move foreign bridge ports or rewrite router-global RADIUS.
 - [Shared public IP VPN diagnostics](shared-public-ip-vpn-diagnostics.md) — Identify peers by OpenVPN common name and tunnel address, not source IP alone.
-- [Production tenant DNS](production-tenant-dns.md) — Verify Namecheap DNS and employee-host SAN coverage; Cloudflare DNS automation does not control the .org zone.
+- [Production tenant DNS](production-tenant-dns.md) — Keep .org Namecheap and .com Cloudflare scopes separate; nested employee wildcards need edge and origin certificate coverage.
 - [Service credential process safety](service-credential-process-safety.md) — Never pass deployment credentials as CLI arguments; process listings and service status can expose them.
 - [Tenant self-install HTTPS](tenant-self-install-https.md) — Verified router profiles must download from the signed-in company hostname, not a shared API origin.
 - [Tenant router naming](tenant-router-naming.md) — New routers use the company subdomain plus the next available number, such as come1 and come2.

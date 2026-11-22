@@ -124,7 +124,7 @@ function ResellerBlockedPage() {
 }
 
 /* ── SubdomainGuard ──────────────────────────────────────────────
-   When the visitor arrives at a company subdomain (e.g. fastnet.isplatty.org),
+   When the visitor arrives at a company subdomain (e.g. fastnet.isplatty.com),
    the root "/" path redirects straight to that company's login page.
    The reserved registration host has its own public entry point.
    On the bare domain (isplatty.org) the normal landing page is shown.
@@ -132,8 +132,9 @@ function ResellerBlockedPage() {
 function SubdomainGuard() {
   const [, setLocation] = useLocation();
   const hostname = typeof window !== "undefined" ? window.location.hostname.toLowerCase() : "";
-  const employeeAdminHost = hostname === "employee1088.isplatty.org";
-  const employeePortalHost = /^[^.]+\.employees\.isplatty\.org$/.test(hostname);
+  const employeeAdminHost = hostname === "employee1088.isplatty.com"
+    || hostname === "employee1088.isplatty.org";
+  const employeePortalHost = /^[^.]+\.employees\.isplatty\.(com|org)$/.test(hostname);
   const employeeHost = employeeAdminHost || employeePortalHost;
   const hotspotConfig = typeof window !== "undefined"
     ? (window as Window & { __HOTSPOT_CONFIG__?: { adminId?: unknown } }).__HOTSPOT_CONFIG__

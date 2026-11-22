@@ -8,6 +8,7 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "test": "tsx --test src/**/*.test.ts",
+    "test:employee-hosts": "tsx --test src/lib/employee-hosts.test.ts src/routes/employee-portal-route-auth.test.ts && node --test ../../deploy/tests/employee-host-routing.test.mjs",
     "test:router-script": "tsx --test tests/router-script-generation.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:migration": "node --test tests/router-migration.test.mjs tests/prepaid-transaction-account-claim.test.mjs tests/mpesa-checkout-idempotency.test.mjs tests/hotspot-loyalty-legacy-allocations.test.mjs tests/hotspot-loyalty-repeat-allocations.test.mjs",

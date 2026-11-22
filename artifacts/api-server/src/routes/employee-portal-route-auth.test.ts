@@ -6,6 +6,7 @@ import test from "node:test";
 import { hashEmployeeSecret } from "../lib/employee-portal-security.js";
 
 process.env.EMPLOYEE_PORTAL_ENABLED = "true";
+process.env.EMPLOYEE_ADMIN_HOST = "employee1088.isplatty.com";
 process.env.VITE_SUPABASE_URL = "https://employee-portal-test.invalid";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "test-only-not-a-secret";
 
@@ -50,11 +51,20 @@ test("employee routes require an authenticated Super Admin or host-bound employe
     req.end();
   });
 
-  const admin = await get("/employee/admin/employees", "employee1088.isplatty.org");
+  const admin = await get("/employee/admin/employees", "employee1088.isplatty.com");
   assert.equal(admin.status, 401);
   assert.equal(admin.body.error, "Super Admin authentication is required.");
 
-  const employeeNoSession = await get("/employee/dashboard", "jane.employees.isplatty.org");
+  const adminStatus = await get("/employee/status", "employee1088.isplatty.com");
+  assert.equal(adminStatus.body.portal, "admin");
+
+  const employeeStatus = await get("/employee/status", "jane.employees.isplatty.com");
+  assert.equal(employeeStatus.body.portal, "employee");
+
+  const legacyEmployeeStatus = await get("/employee/status", "jane.employees.isplatty.org");
+  assert.equal(legacyEmployeeStatus.body.portal, "employee");
+
+  const employeeNoSession = await get("/employee/dashboard", "jane.employees.isplatty.com");
   assert.equal(employeeNoSession.status, 401);
   assert.equal(employeeNoSession.body.error, "Employee sign-in is required.");
 
@@ -87,7 +97,7 @@ test("employee routes require an authenticated Super Admin or host-bound employe
   try {
     const employeeFromOtherSubdomain = await get(
       "/employee/dashboard",
-      "jane.employees.isplatty.org",
+      "jane.employees.isplatty.com",
       `bil_employee_session=${sessionToken}`,
     );
     assert.equal(employeeFromOtherSubdomain.status, 401);
