@@ -57,6 +57,9 @@ module.exports = {
         SERVE_STATIC: "true",
         GMAIL_APP_PASSWORD: process.env.GMAIL_APP_PASSWORD || "",
         TAWK_API_KEY: process.env.TAWK_API_KEY || "",
+        SUPERADMIN_USERNAME: process.env.SUPERADMIN_USERNAME || "",
+        SUPERADMIN_API_KEY: process.env.SUPERADMIN_API_KEY || "",
+        SUPERADMIN_PASSWORD: process.env.SUPERADMIN_PASSWORD || "",
       },
 
       // ── Mode 2: Without nginx (simple single-port setup) ─────────────
@@ -76,6 +79,9 @@ module.exports = {
          TURNSTILE_SECRET:     process.env.TURNSTILE_SECRET || "",
          VITE_TURNSTILE_SITE_KEY: process.env.VITE_TURNSTILE_SITE_KEY || "",
         TAWK_API_KEY:         process.env.TAWK_API_KEY || "",
+         SUPERADMIN_USERNAME: process.env.SUPERADMIN_USERNAME || "",
+         SUPERADMIN_API_KEY: process.env.SUPERADMIN_API_KEY || "",
+         SUPERADMIN_PASSWORD: process.env.SUPERADMIN_PASSWORD || "",
          WHATSAPP_ACCESS_TOKEN: process.env.WHATSAPP_ACCESS_TOKEN || "",
          WHATSAPP_WEBHOOK_VERIFY_TOKEN: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "",
          WHATSAPP_APP_SECRET: process.env.WHATSAPP_APP_SECRET || "",
