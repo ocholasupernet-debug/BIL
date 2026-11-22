@@ -2,7 +2,7 @@ import React, { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { SuperAdminLayout } from "@/components/layout/SuperAdminLayout";
-import { supabase } from "@/lib/supabase";
+import { parseJsonResponse, superAdminApiFetch } from "@/lib/api-client";
 import {
   Activity, AlertTriangle, ArrowUpRight, BarChart3, CheckCircle2,
   Database, Gauge, Globe, HardDrive, ReceiptText, RefreshCw, Router, ShieldAlert,
@@ -35,6 +35,12 @@ interface PlanRecord {
   id: number;
   admin_id: number | null;
   type: string | null;
+}
+interface DashboardPlatformData {
+  admins: AdminRecord[];
+  routers: RouterRecord[];
+  customers: CustomerRecord[];
+  plans: PlanRecord[];
 }
 interface PlatformIncomeSummary {
   registrationToday: number;
@@ -135,50 +141,42 @@ export default function SuperAdminDashboard() {
   const [lastRefresh, setLastRefresh] = React.useState(() => new Date());
   const [transactionSearch, setTransactionSearch] = React.useState("");
 
-  const adminsQuery = useQuery<AdminRecord[]>({
-    queryKey: ["sa_all_admins"],
+  const platformDataQuery = useQuery<DashboardPlatformData>({
+    queryKey: ["sa_platform_data"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_admins")
-        .select("id,name,username,email,is_active,subdomain,role,created_at")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
+      const response = await superAdminApiFetch("/api/super-admin/platform-data", { cache: "no-store" });
+      const result = await parseJsonResponse<{ ok?: boolean; error?: string } & Partial<DashboardPlatformData>>(response);
+      if (!response.ok || !result.ok || !result.admins || !result.routers || !result.customers || !result.plans) {
+        throw new Error(result.error || "Platform dashboard data could not be loaded.");
+      }
+      return {
+        admins: result.admins,
+        routers: result.routers,
+        customers: result.customers,
+        plans: result.plans,
+      };
     },
   });
-  const routersQuery = useQuery<RouterRecord[]>({
-    queryKey: ["sa_all_routers"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_routers")
-        .select("id,name,host,status,admin_id")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
-    },
-  });
-  const customersQuery = useQuery<CustomerRecord[]>({
-    queryKey: ["sa_all_customers"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_customers")
-        .select("id,admin_id,is_active")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
-    },
-  });
-  const plansQuery = useQuery<PlanRecord[]>({
-    queryKey: ["sa_all_plans"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("isp_plans")
-        .select("id,admin_id,type")
-        .order("id");
-      if (error) throw error;
-      return data ?? [];
-    },
-  });
+  const adminsQuery = {
+    data: platformDataQuery.data?.admins,
+    isError: platformDataQuery.isError,
+    isLoading: platformDataQuery.isLoading,
+  };
+  const routersQuery = {
+    data: platformDataQuery.data?.routers,
+    isError: platformDataQuery.isError,
+    isLoading: platformDataQuery.isLoading,
+  };
+  const customersQuery = {
+    data: platformDataQuery.data?.customers,
+    isError: platformDataQuery.isError,
+    isLoading: platformDataQuery.isLoading,
+  };
+  const plansQuery = {
+    data: platformDataQuery.data?.plans,
+    isError: platformDataQuery.isError,
+    isLoading: platformDataQuery.isLoading,
+  };
   const incomeQuery = useQuery<PlatformIncomeSummary>({
     queryKey: ["sa_platform_income"],
     queryFn: async () => {
@@ -271,10 +269,7 @@ export default function SuperAdminDashboard() {
 
   const retryAll = () => {
     void Promise.all([
-      adminsQuery.refetch(),
-      routersQuery.refetch(),
-      customersQuery.refetch(),
-      plansQuery.refetch(),
+      platformDataQuery.refetch(),
       incomeQuery.refetch(),
       platformTransactionsQuery.refetch(),
       storageSummaryQuery.refetch(),
@@ -298,6 +293,20 @@ export default function SuperAdminDashboard() {
             </button>
           </div>
         </div>
+
+        <Link
+          className="sa-migration-launch"
+          href="/super-admin/supabase-migration"
+          aria-label="Supabase Migration: open migration preflight workspace"
+        >
+          <span className="sa-migration-launch-icon"><Database size={20} /></span>
+          <span className="sa-migration-launch-copy">
+            <span className="sa-migration-launch-kicker">Data &amp; Migration</span>
+            <strong>Supabase Migration</strong>
+            <span>Review the source, destination, and public-schema preflight. No migration runs automatically.</span>
+          </span>
+          <span className="sa-migration-launch-action">Open workspace <ArrowUpRight size={16} /></span>
+        </Link>
 
         {hasError && (
           <div className="dashboard-error" role="alert">

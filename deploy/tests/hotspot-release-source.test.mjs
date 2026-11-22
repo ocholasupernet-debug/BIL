@@ -116,9 +116,11 @@ test("the default release source keeps WAHA and prepaid migrations without runni
   assert.ok(routeIndex.includes("wahaGatewayRouter"));
 
   const workflow = source(".github/workflows/deploy.yml");
-  assert.ok(workflow.includes(
-    "DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup }}",
-  ));
+  assert.ok(
+    workflow.includes(
+        "DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup || inputs.application_only_release || inputs.supabase_target_cutover }}",
+    ),
+  );
   for (const name of ["WAHA_BASE_URL", "WAHA_API_KEY", "WAHA_SESSION_ID", "WAHA_DEFAULT_COUNTRY_CODE"]) {
     assert.ok(workflow.includes(name + ": ${{ secrets." + name + " }}"), `${name} secret is not mapped`);
   }
@@ -204,10 +206,43 @@ test("router credential encryption follows the new build and reloads before rout
 
 test("SSH transfer and deployment retain the verified VPS fingerprint", () => {
   const workflow = source(".github/workflows/deploy.yml");
-  assert.equal(
-    workflow.split('fingerprint: "SHA256:XlSA4l6O/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"').length - 1,
-    2,
-  );
+  const remoteSteps = workflow.split("\n      - name:").filter(step =>
+    /^\s+uses: appleboy\/(?:scp|ssh)-action@/m.test(step));
+  assert.equal(remoteSteps.length, 3);
+  for (const step of remoteSteps) {
+    assert.match(step, /^\s+fingerprint: "SHA256:XlSA4l6O\/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"$/m);
+  }
+});
+
+test("employee admin HTTPS repair is manual, exact-host only, and precedes application delivery", () => {
+  const workflow = source(".github/workflows/deploy.yml");
+  const step = workflow.split("      - name: Restore only employee admin HTTPS at the origin")[1]
+    .split("\n      - name:")[0];
+  assert.match(step, /if: startsWith\(github\.ref, 'refs\/heads\/deploy\/employee-admin-com-repair-'\) && inputs\.application_only_release && !inputs\.supabase_target_cutover/);
+  assert.match(workflow, /\$GITHUB_EVENT_NAME" != workflow_dispatch \|\| "\$APP_ONLY_RELEASE" != true/);
+  assert.ok(workflow.indexOf("Verify employee admin HTTPS through Cloudflare") <
+    workflow.indexOf("Copy release to VPS"));
+  const script = source("deploy/restore-employee-admin-https.sh");
+  assert.match(script, /server_name employee1088\.isplatty\.com;/);
+  assert.match(script, /proxy_pass http:\/\/127\.0\.0\.1:8080;/);
+  assert.match(script, /nginx -t.*rolling it back/);
+  assert.doesNotMatch(script, /--insecure|curl -k|\.env|pm2|supabase/i);
+});
+
+test("employee activation follows app health and checks both schema availability and authentication", () => {
+  const workflow = source(".github/workflows/deploy.yml");
+  const guard = workflow.split("- name: Guard employee portal activation")[1].split("\n      - name:")[0];
+  assert.match(guard, /"\$GITHUB_EVENT_NAME" != workflow_dispatch/);
+  assert.match(guard, /"\$GITHUB_REF" != refs\/heads\/deploy\/employee-portal-enable-\*/);
+  assert.match(guard, /"\$APP_ONLY_RELEASE" != true.*"\$ENABLE_EMPLOYEE_PORTAL" != true/);
+  assert.match(guard, /"\$TARGET_CUTOVER" == true/);
+  assert.ok(workflow.indexOf('echo "=== API health check passed ==="') <
+    workflow.indexOf("bash deploy/enable-employee-portal.sh"));
+  const activate = source("deploy/enable-employee-portal.sh");
+  assert.ok(activate.indexOf("/rpc/employee_admin_summary") < activate.indexOf('mv -T -- "$pending" "$marker"'));
+  assert.match(activate, /trap cleanup EXIT/);
+  assert.match(activate, /"\$auth_status" == 401/);
+  assert.doesNotMatch(activate, /pm2 |nginx |pg_restore|psql|--insecure|curl -k/);
 });
 
 test("Gmail app password is encoded before SSH transfer and decoded only on the VPS", () => {

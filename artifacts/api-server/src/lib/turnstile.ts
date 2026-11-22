@@ -9,16 +9,28 @@ export type TurnstileResult =
 
 function isAllowedHostname(hostname: string): boolean {
   const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-  return ALLOWED_HOST_SUFFIXES.some((suffix) =>
+  const ownedHostname = ALLOWED_HOST_SUFFIXES.some((suffix) =>
     normalized.endsWith(suffix) &&
     normalized.length > suffix.length &&
     /^[a-z0-9.-]+$/.test(normalized),
   ) || normalized === "isplatty.org" || normalized === "isplatty.com";
+  if (ownedHostname) return true;
+  if (process.env.NODE_ENV === "production") return false;
+  const previewHostname = (process.env.REPLIT_DEV_DOMAIN ?? "").trim().toLowerCase().replace(/\.$/, "");
+  return normalized === "localhost" || normalized === "127.0.0.1" ||
+    (previewHostname !== "" && normalized === previewHostname);
 }
 
-export async function verifyAdminTurnstile(
+export async function verifyTurnstile(
   req: Request,
-  expectedAction: "admin_login",
+  expectedAction:
+    | "admin_login"
+    | "staff_login"
+    | "staff_login_otp"
+    | "staff_activate"
+    | "staff_signup_request"
+    | "staff_signup_verify"
+    | "staff_signup_complete",
 ): Promise<TurnstileResult> {
   const secret = process.env.TURNSTILE_SECRET?.trim();
   if (!secret) {
@@ -80,4 +92,11 @@ export async function verifyAdminTurnstile(
       error: "Cloudflare verification is temporarily unavailable. Try again shortly.",
     };
   }
+}
+
+export function verifyAdminTurnstile(
+  req: Request,
+  expectedAction: "admin_login",
+): Promise<TurnstileResult> {
+  return verifyTurnstile(req, expectedAction);
 }

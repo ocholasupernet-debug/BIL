@@ -30,7 +30,8 @@ function normalizeDatabaseUrl(raw: string): string {
 
 function getPool(): Pool {
   if (pool) return pool;
-  const rawUrl = process.env.SUPABASE_DB_URL?.trim()
+  const rawUrl = process.env.SUPABASE_DEST_DB_URL?.trim()
+    || process.env.SUPABASE_DB_URL?.trim()
     || process.env.SUPABASE_DATABASE_URL?.trim();
   if (!rawUrl) throw new Error("The platform authentication database connection is not configured.");
 

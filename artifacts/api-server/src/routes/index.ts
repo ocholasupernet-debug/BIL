@@ -21,6 +21,7 @@ import bridgeRouter from "./bridge-route.js";
 import mpesaRouter from "./mpesa-route.js";
 import settingsRouter from "./settings-route.js";
 import superAdminAuthRouter from "./super-admin-auth-route.js";
+import supabaseMigrationRouter from "./supabase-migration-route.js";
 import superAdminRoutersRouter from "./super-admin-routers-route.js";
 import superAdminBillingRouter from "./super-admin-billing-route.js";
 import apiAuthRouter from "./api-auth-route.js";
@@ -54,6 +55,7 @@ import superAdminDataRouter from "./super-admin-data-route.js";
 import copilotRouter from "./copilot-route.js";
 import hotspotDiagnosticsRouter from "./hotspot-diagnostics-route.js";
 import adminRenewalVouchersRouter from "./admin-renewal-vouchers-route.js";
+import employeePortalRouter from "./employee-portal-route.js";
 
 const router: IRouter = Router();
 
@@ -80,9 +82,11 @@ router.use(bridgeRouter);
 router.use(mpesaRouter);
 router.use(settingsRouter);
 router.use(superAdminAuthRouter);
+router.use(supabaseMigrationRouter);
 router.use(superAdminRoutersRouter);
 router.use(superAdminBillingRouter);
 router.use(adminRenewalVouchersRouter);
+  router.use(employeePortalRouter);
 router.use(apiAuthRouter);
 router.use(registrationRouter);
 router.use(vpnManagementRouter);

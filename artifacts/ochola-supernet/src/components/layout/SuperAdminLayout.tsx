@@ -22,6 +22,10 @@ const NAV: NavSection[] = [
     items: [{ name: "Dashboard", href: "/super-admin/dashboard", icon: LayoutDashboard }],
   },
   {
+    label: "Data & Migration",
+    items: [{ name: "Supabase Migration", href: "/super-admin/supabase-migration", icon: Database }],
+  },
+  {
     label: "Tenants",
     items: [
       { name: "ISP Admins", href: "/super-admin/admins", icon: Users },
@@ -89,6 +93,7 @@ const PAGE_CONTEXT: { prefix: string; title: string }[] = [
   { prefix: "/super-admin/sms", title: "SMS messaging" },
   { prefix: "/super-admin/automation", title: "Automation" },
   { prefix: "/super-admin/backups", title: "Backups" },
+  { prefix: "/super-admin/supabase-migration", title: "Supabase Migration" },
   { prefix: "/super-admin/storage", title: "Storage governance" },
   { prefix: "/super-admin/api", title: "API and integrations" },
 ];
@@ -247,6 +252,7 @@ export function SuperAdminLayout({ children }: { children: React.ReactNode }) {
                     href={item.href}
                     className={`sa-nav-link${active ? " is-active" : ""}`}
                     title={collapsed ? item.name : undefined}
+                    aria-current={active ? "page" : undefined}
                   >
                     <Icon size={16} strokeWidth={active ? 2.2 : 1.8} />
                     <span>{item.name}</span>

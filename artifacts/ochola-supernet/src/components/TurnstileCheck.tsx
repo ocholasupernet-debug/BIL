@@ -46,7 +46,14 @@ export function TurnstileCheck({
   onToken,
   size = "normal",
 }: {
-  action: "admin_login";
+  action:
+    | "admin_login"
+    | "staff_login"
+    | "staff_login_otp"
+    | "staff_activate"
+    | "staff_signup_request"
+    | "staff_signup_verify"
+    | "staff_signup_complete";
   resetKey: number;
   onToken: (token: string) => void;
   size?: "normal" | "compact" | "flexible";
@@ -112,7 +119,7 @@ export function TurnstileCheck({
       )}
       {loadError && (
         <p role="alert" className="mt-2 text-sm text-red-600">
-          Cloudflare verification could not load. Refresh the page and try again.
+          Cloudflare verification could not complete. Check network access and confirm this hostname is allowed in the Turnstile widget, then try again.
         </p>
       )}
     </div>

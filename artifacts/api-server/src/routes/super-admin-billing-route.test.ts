@@ -3,12 +3,17 @@ import express from "express";
 import { test } from "node:test";
 
 test("platform income summary is super-admin protected and returns separate totals", async () => {
+  const originalGmailAppPassword = process.env.GMAIL_APP_PASSWORD;
+  const originalDestinationServiceRoleKey = process.env.SUPABASE_DEST_SERVICE_ROLE_KEY;
   process.env.SUPERADMIN_USERNAME = "platform-income-test";
   process.env.SUPERADMIN_API_KEY = "platform-income-api-test";
   process.env.SUPERADMIN_PASSWORD = "platform-income-password-test";
   process.env.VITE_SUPABASE_URL = "https://platform-income-test.supabase.co";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "platform-income-service-test";
+  process.env.SUPABASE_DEST_SERVICE_ROLE_KEY = "platform-income-destination-service-test";
   process.env.BILLING_SUPABASE_SERVICE_KEY = "platform-income-service-test";
+  process.env.TURNSTILE_SECRET = "platform-income-turnstile-test";
+  process.env.GMAIL_APP_PASSWORD = "";
 
   const [{ default: authRouter }, { default: billingRouter }] = await Promise.all([
     import("./super-admin-auth-route.js"),
@@ -41,9 +46,16 @@ test("platform income summary is super-admin protected and returns separate tota
   globalThis.fetch = async (input, init) => {
     const url = new URL(String(input));
     if (url.hostname === "127.0.0.1") return originalFetch(input, init);
+    if (url.hostname === "challenges.cloudflare.com") {
+      return new Response(JSON.stringify({
+        success: true,
+        hostname: "isplatty.org",
+        action: "admin_login",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
     supabaseRequests.push(url.toString());
     assert.equal(url.hostname, "platform-income-test.supabase.co");
-    assert.equal(new Headers(init?.headers).get("apikey"), "platform-income-service-test");
+    assert.equal(new Headers(init?.headers).get("apikey"), "platform-income-destination-service-test");
     if (url.pathname.endsWith("/rpc/get_platform_income_summary")) {
       rpcCalls += 1;
       return new Response(JSON.stringify([{
@@ -98,11 +110,12 @@ test("platform income summary is super-admin protected and returns separate tota
 
     const loginResponse = await originalFetch(`http://127.0.0.1:${address.port}/api/super-admin/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Origin: "https://isplatty.org" },
       body: JSON.stringify({
         username: "platform-income-test",
         api_key: "platform-income-api-test",
         password: "platform-income-password-test",
+        turnstileToken: "platform-income-turnstile-token",
       }),
     });
     assert.equal(loginResponse.status, 200);
@@ -202,5 +215,9 @@ test("platform income summary is super-admin protected and returns separate tota
   } finally {
     globalThis.fetch = originalFetch;
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    if (originalGmailAppPassword === undefined) delete process.env.GMAIL_APP_PASSWORD;
+    else process.env.GMAIL_APP_PASSWORD = originalGmailAppPassword;
+    if (originalDestinationServiceRoleKey === undefined) delete process.env.SUPABASE_DEST_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_DEST_SERVICE_ROLE_KEY = originalDestinationServiceRoleKey;
   }
 });

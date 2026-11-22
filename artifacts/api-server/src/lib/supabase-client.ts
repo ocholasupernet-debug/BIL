@@ -8,12 +8,15 @@ import {
   encryptRouterApiSecret,
   routerApiSecretLookupHash,
 } from "./router-api-secret.js";
+import { getSupabaseServiceKey } from "./supabase-service-key.js";
 
-/* VITE_SUPABASE_URL is the Supabase REST API base URL (https://xxx.supabase.co).
-   SUPABASE_URL (if set) is often the Postgres connection string or bare hostname —
-   skip it and fall back to VITE_SUPABASE_URL. */
-function resolveSupabaseUrl(): string {
-  const raw = process.env.VITE_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "";
+/* Prefer the explicit destination API URL for new BIL work. VITE_SUPABASE_URL
+   remains a compatibility fallback; SUPABASE_URL may be a database hostname. */
+export function resolveSupabaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const raw = env.SUPABASE_DEST_URL?.trim()
+    || env.VITE_SUPABASE_URL?.trim()
+    || env.SUPABASE_URL?.trim()
+    || "";
   if (!raw) return "";
   /* Ensure it starts with https:// */
   if (raw.startsWith("http://") || raw.startsWith("https://")) return raw;
@@ -22,12 +25,7 @@ function resolveSupabaseUrl(): string {
 
 const SUPABASE_URL = resolveSupabaseUrl();
 
-/* Prefer the canonical name, but ignore empty legacy values so they cannot
-   mask a valid service-role key from the deployment environment. */
-const SERVICE_KEY = [
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  process.env.SUPABASE_SERVICE_KEY,
-].find(value => !!value?.trim())?.trim() ?? "";
+const SERVICE_KEY = getSupabaseServiceKey();
 const ANON_KEY    = process.env.VITE_SUPABASE_KEY ?? "";
 const BEST_KEY    = SERVICE_KEY || ANON_KEY;
 

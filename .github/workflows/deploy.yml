@@ -33,6 +33,21 @@ on:
         required: false
         default: false
         type: boolean
+      application_only_release:
+        description: "Deploy app code while preserving VPS .env and skipping database, Nginx, and router changes"
+        required: false
+        default: false
+        type: boolean
+      supabase_target_cutover:
+        description: "Switch BIL to the approved Supabase destination using an app-only VPS release"
+        required: false
+        default: false
+        type: boolean
+      employee_portal_enable:
+        description: "Enable employee access after its schema has been applied and verified"
+        required: false
+        default: false
+        type: boolean
       sync_router_configuration_ids:
         description: "Optional comma-separated router IDs for the confirmed queue and Hotspot TTL sync"
         required: false
@@ -50,11 +65,6 @@ on:
         required: false
         default: false
         type: boolean
-      staff_host_repair:
-        description: "Restore only the Staff website host, TLS, and static page"
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
   group: vps-deploy
@@ -66,13 +76,57 @@ permissions:
 
 jobs:
   deploy:
-    if: ${{ !startsWith(github.ref, 'refs/heads/deploy/staff-host-reachability-') && !inputs.staff_host_repair }}
     name: SSH Deploy
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out the release
         uses: actions/checkout@v4
+
+      - name: Require app-only mode on scoped migration release branches
+        if: startsWith(github.ref, 'refs/heads/deploy/supabase-migration-app-only-')
+        env:
+          APP_ONLY_RELEASE: ${{ inputs.application_only_release }}
+        run: |
+          if [ "$APP_ONLY_RELEASE" != "true" ]; then
+            echo "ERROR: scoped migration release branches require application_only_release=true."
+            exit 1
+          fi
+
+      - name: Require guarded mode for employee admin HTTPS repair
+        if: startsWith(github.ref, 'refs/heads/deploy/employee-admin-com-repair-')
+        shell: bash
+        env:
+          APP_ONLY_RELEASE: ${{ inputs.application_only_release }}
+          TARGET_CUTOVER: ${{ inputs.supabase_target_cutover }}
+          INSPECT_ONLY: ${{ inputs.inspect_api_errors }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$APP_ONLY_RELEASE" != true ||
+                "$TARGET_CUTOVER" == true || "$INSPECT_ONLY" == true ]]; then
+            echo "Employee admin HTTPS repair requires a manual, app-only release."
+            exit 1
+          fi
+          bash -n deploy/restore-employee-admin-https.sh
+
+      - name: Guard employee portal activation
+        if: inputs.employee_portal_enable || startsWith(github.ref, 'refs/heads/deploy/employee-portal-enable-')
+        shell: bash
+        env:
+          APP_ONLY_RELEASE: ${{ inputs.application_only_release }}
+          ENABLE_EMPLOYEE_PORTAL: ${{ inputs.employee_portal_enable }}
+          TARGET_CUTOVER: ${{ inputs.supabase_target_cutover }}
+          INSPECT_ONLY: ${{ inputs.inspect_api_errors }}
+          PORTAL_REFRESH_ONLY: ${{ inputs.portal_refresh_only }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch ||
+                "$GITHUB_REF" != refs/heads/deploy/employee-portal-enable-* ||
+                "$APP_ONLY_RELEASE" != true || "$ENABLE_EMPLOYEE_PORTAL" != true ||
+                "$TARGET_CUTOVER" == true || "$INSPECT_ONLY" == true ||
+                "$PORTAL_REFRESH_ONLY" == true ]]; then
+            echo "Employee portal activation requires a manual, scoped, app-only release."
+            exit 1
+          fi
+          bash -n deploy/enable-employee-portal.sh
 
       - name: Test router-management VPN bootstrap decisions
         run: bash deploy/tests/bootstrap-router-management-vpn.test.sh
@@ -114,13 +168,42 @@ jobs:
       - name: Verify application release source contract
         run: node --test deploy/tests/hotspot-release-source.test.mjs
 
+      - name: Test application-only release guard
+        run: node --test deploy/tests/application-only-release.test.mjs
+
+      - name: Test safe Supabase target cutover
+        run: node --test deploy/tests/supabase-target-cutover.test.mjs deploy/tests/supabase-target-runtime.test.mjs deploy/tests/update-supabase-target-env.test.mjs deploy/tests/validate-supabase-cutover-config.test.mjs
+
+      - name: Verify destination credentials and project identity
+        env:
+          SUPABASE_DEST_URL: ${{ secrets.SUPABASE_DEST_URL }}
+          SUPABASE_DEST_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_DEST_PUBLISHABLE_KEY }}
+          SUPABASE_DEST_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_DEST_SERVICE_ROLE_KEY }}
+          SUPABASE_DEST_DB_URL: ${{ secrets.SUPABASE_DEST_DB_URL }}
+        run: node deploy/validate-supabase-cutover-config.mjs
+
+      - name: Verify destination build target
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_DEST_URL }}
+        run: node deploy/verify-supabase-build-target.mjs
+
       - name: Build release artifacts on the runner
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_DEST_URL }}
+          VITE_SUPABASE_KEY: ${{ secrets.SUPABASE_DEST_PUBLISHABLE_KEY }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
         run: |
           pnpm install --frozen-lockfile
+          for api_test in \
+            src/lib/supabase-client.test.ts \
+            src/lib/supabase-service-key.test.ts \
+            src/lib/platform-billing-store.test.ts \
+            src/routes/super-admin-billing-route.test.ts \
+            src/routes/super-admin-data-route.test.ts \
+            src/routes/super-admin-routers-route.test.ts
+          do
+            pnpm --filter @workspace/api-server exec tsx --test "$api_test"
+          done
           BASE_PATH="/" pnpm --filter @workspace/ochola-supernet run build:vps
           pnpm --filter @workspace/api-server run build
           test -s artifacts/ochola-supernet/dist/public/index.html
@@ -136,6 +219,8 @@ jobs:
             --exclude='./.agents' \
             --exclude='./screenshots' \
             --exclude='./attached_assets' \
+            --exclude='./data/backups' \
+            --exclude='./generated-artifacts' \
             --exclude='./.env' \
             --exclude='*/.env' \
             --exclude='./node_modules' \
@@ -150,7 +235,30 @@ jobs:
             -czf "$release_archive" .
           mv "$release_archive" ocholasupernet-release.tgz
 
+      - name: Restore only employee admin HTTPS at the origin
+        if: startsWith(github.ref, 'refs/heads/deploy/employee-admin-com-repair-') && inputs.application_only_release && !inputs.supabase_target_cutover
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: 102.203.116.204
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          fingerprint: "SHA256:XlSA4l6O/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"
+          port: 22
+          timeout: 30s
+          command_timeout: 8m
+          script_path: deploy/restore-employee-admin-https.sh
+
+      - name: Verify employee admin HTTPS through Cloudflare
+        if: startsWith(github.ref, 'refs/heads/deploy/employee-admin-com-repair-') && inputs.application_only_release && !inputs.supabase_target_cutover
+        run: |
+          curl --fail --silent --show-error --max-time 15 \
+            --retry 4 --retry-delay 5 --retry-all-errors \
+            https://employee1088.isplatty.com/api/healthz |
+            node -e 'const body=JSON.parse(require("fs").readFileSync(0, "utf8")); if(body.status!=="ok") process.exit(1)'
+
       - name: Encode runtime SSH material
+        if: ${{ !inputs.application_only_release && !inputs.supabase_target_cutover }}
         id: encode_runtime_ssh
         shell: bash
         env:
@@ -193,7 +301,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,VITE_TURNSTILE_SITE_KEY,TURNSTILE_SECRET,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,SYNC_ROUTER_CONFIGURATION_IDS,SYNC_ROUTER_ADMIN_ID,SYNC_ROUTER_AUTH_VERSION,INSPECT_API_ERRORS,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE,GMAIL_APP_PASSWORD_B64
+          envs: ${{ inputs.supabase_target_cutover && 'SUPABASE_TARGET_CUTOVER,SUPABASE_DEST_URL,SUPABASE_DEST_PUBLISHABLE_KEY,SUPABASE_DEST_SERVICE_ROLE_KEY,SUPABASE_DEST_DB_URL,APP_ONLY_RELEASE,DEPLOY_REFRESH_PM2_ENV,DEPLOY_VERIFY_SUPABASE_TARGET,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS' || inputs.application_only_release && 'APP_ONLY_RELEASE,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS' || 'VITE_SUPABASE_URL,VITE_SUPABASE_KEY,VITE_TURNSTILE_SITE_KEY,TURNSTILE_SECRET,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,SYNC_ROUTER_CONFIGURATION_IDS,SYNC_ROUTER_ADMIN_ID,SYNC_ROUTER_AUTH_VERSION,INSPECT_API_ERRORS,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE,GMAIL_APP_PASSWORD_B64' }}
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -272,6 +380,47 @@ jobs:
             tar -xzf /tmp/ocholasupernet-release.tgz -C .
             rm -f /tmp/ocholasupernet-release.tgz
 
+            if [ "${SUPABASE_TARGET_CUTOVER:-false}" = "true" ]; then
+              if [ ! -s .env ] || [ -L .env ]; then
+                echo "Supabase target cutover requires the existing regular VPS .env; refusing to create one."
+                exit 1
+              fi
+              cutover_env_backup="$(mktemp ./.env.supabase-cutover.XXXXXX)"
+              cp -p .env "$cutover_env_backup"
+              chmod 600 "$cutover_env_backup"
+              rollback_supabase_target() {
+                local status=$?
+                trap - EXIT
+                if [ "$status" -ne 0 ]; then
+                  if ! cmp -s .env "$cutover_env_backup"; then
+                    if cp -p "$cutover_env_backup" .env; then
+                      chmod 600 .env
+                      set -a
+                      # shellcheck disable=SC1091
+                      if source .env; then
+                        set +a
+                        if pm2 describe ocholanet-api >/dev/null 2>&1; then
+                          pm2 reload ecosystem.config.cjs --env standalone --update-env || \
+                            echo "Warning: previous PM2 environment was restored but reload needs inspection."
+                        fi
+                        echo "Supabase cutover failed; the previous VPS .env was restored."
+                      else
+                        set +a
+                        echo "Warning: the previous .env was restored but could not be loaded for PM2 recovery."
+                      fi
+                    else
+                      echo "Warning: failed to restore the previous VPS .env; manual recovery is required."
+                    fi
+                  fi
+                fi
+                rm -f "$cutover_env_backup"
+                if [ "$status" -ne 0 ]; then exit "$status"; fi
+              }
+              trap rollback_supabase_target EXIT
+              PROJECT_DIR="$PWD" bash deploy/update-supabase-target-env.sh
+            elif [ "${APP_ONLY_RELEASE:-false}" = "true" ]; then
+              echo "Application-only release: skipping VPS .env writes, WhatsApp sync, and Nginx configuration."
+            else
             # Inject Supabase credentials and the encryption key into .env so PM2 always has them
             # (safe even if already set — idempotent upsert)
             upsert_env() {
@@ -344,18 +493,24 @@ jobs:
             # unnecessary dependency and can fail before the application
             # deployment starts on minimal VPS images.
             bash deploy/configure-nginx.sh
+            fi
 
             # This release changes application source only; package manifests
             # and the lockfile are unchanged, so avoid a fragile registry
             # install on the VPS. deploy.sh still fails explicitly if the
             # required workspace binaries are absent.
             DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP="${DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP:-false}" \
+            DEPLOY_APP_ONLY="${APP_ONLY_RELEASE:-false}" \
             DEPLOY_PORTAL_REFRESH_ONLY="${DEPLOY_PORTAL_REFRESH_ONLY:-false}" \
             DEPLOY_FROM_ARCHIVE=1 \
             DEPLOY_SKIP_INSTALL=1 \
             DEPLOY_SKIP_BUILD=1 \
             DEPLOY_SOURCE_COMMIT="${{ github.sha }}" \
               bash deploy/deploy.sh
+            if [ "${SUPABASE_TARGET_CUTOVER:-false}" = "true" ]; then
+              echo "=== Supabase target cutover passed app, PM2, Auth, and read-only database checks ==="
+              exit 0
+            fi
             api_ready=false
             for attempt in $(seq 1 30); do
               if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8080/api/healthz >/dev/null; then
@@ -372,6 +527,13 @@ jobs:
               exit 1
             fi
             echo "=== API health check passed ==="
+            if [ "${APP_ONLY_RELEASE:-false}" = "true" ]; then
+              if [ "${{ inputs.employee_portal_enable }}" = "true" ]; then
+                bash deploy/enable-employee-portal.sh
+              fi
+              echo "=== Application-only release finished; router actions were not run ==="
+              exit 0
+            fi
             if [ -n "${SYNC_ROUTER_CONFIGURATION_IDS:-}" ] || [ -n "${SYNC_ROUTER_ADMIN_ID:-}" ] || [ -n "${SYNC_ROUTER_AUTH_VERSION:-}" ]; then
               if [ -z "${SYNC_ROUTER_CONFIGURATION_IDS:-}" ] || [ -z "${SYNC_ROUTER_ADMIN_ID:-}" ] || [ -z "${SYNC_ROUTER_AUTH_VERSION:-}" ]; then
                 echo "ERROR: router configuration sync requires router IDs and the owning administrator session values."
@@ -513,12 +675,12 @@ jobs:
             fi
             echo "=== Deploy finished at $(date) ==="
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_DEST_URL }}
+          VITE_SUPABASE_KEY: ${{ secrets.SUPABASE_DEST_PUBLISHABLE_KEY }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
           TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_DEST_SERVICE_ROLE_KEY }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DEST_DB_URL }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
           TAWK_API_KEY: ${{ secrets.TAWK_API_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -533,9 +695,17 @@ jobs:
           SYNC_ROUTER_ADMIN_ID: ${{ inputs.sync_router_admin_id }}
           SYNC_ROUTER_AUTH_VERSION: ${{ inputs.sync_router_auth_version }}
           INSPECT_API_ERRORS: ${{ inputs.inspect_api_errors }}
-          DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup }}
-          DEPLOY_SKIP_ROUTER_ONESHOTS: ${{ github.event_name == 'push' || inputs.skip_router_oneshots }}
+          DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup || inputs.application_only_release || inputs.supabase_target_cutover }}
+          DEPLOY_SKIP_ROUTER_ONESHOTS: ${{ github.event_name == 'push' || inputs.skip_router_oneshots || inputs.application_only_release || inputs.supabase_target_cutover }}
           DEPLOY_PORTAL_REFRESH_ONLY: ${{ inputs.portal_refresh_only }}
+          APP_ONLY_RELEASE: ${{ inputs.application_only_release || inputs.supabase_target_cutover }}
+          SUPABASE_TARGET_CUTOVER: ${{ inputs.supabase_target_cutover }}
+          SUPABASE_DEST_URL: ${{ secrets.SUPABASE_DEST_URL }}
+          SUPABASE_DEST_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_DEST_PUBLISHABLE_KEY }}
+          SUPABASE_DEST_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_DEST_SERVICE_ROLE_KEY }}
+          SUPABASE_DEST_DB_URL: ${{ secrets.SUPABASE_DEST_DB_URL }}
+          DEPLOY_REFRESH_PM2_ENV: ${{ inputs.supabase_target_cutover }}
+          DEPLOY_VERIFY_SUPABASE_TARGET: ${{ inputs.supabase_target_cutover }}
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
           WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN }}
           WHATSAPP_APP_SECRET: ${{ secrets.WHATSAPP_APP_SECRET }}
@@ -545,102 +715,3 @@ jobs:
           WAHA_SESSION_ID: ${{ secrets.WAHA_SESSION_ID }}
           WAHA_DEFAULT_COUNTRY_CODE: ${{ secrets.WAHA_DEFAULT_COUNTRY_CODE }}
           GMAIL_APP_PASSWORD_B64: ${{ steps.encode_runtime_ssh.outputs.GMAIL_APP_PASSWORD_B64 }}
-
-  staff-host-repair:
-    if: ${{ inputs.staff_host_repair && startsWith(github.ref, 'refs/heads/deploy/staff-host-reachability-') && github.event_name == 'workflow_dispatch' }}
-    name: Restore Staff host reachability
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out the scoped Staff release
-        uses: actions/checkout@v4
-
-      - name: Require a manual Staff-only release branch
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref }}
-          STAFF_HOST_REPAIR: ${{ inputs.staff_host_repair }}
-        run: |
-          set -euo pipefail
-          [[ "$EVENT_NAME" == "workflow_dispatch" ]]
-          [[ "$STAFF_HOST_REPAIR" == "true" ]]
-          [[ "$REF_NAME" == refs/heads/deploy/staff-host-reachability-* ]] || {
-            echo "Staff host repair is restricted to its reviewed release branch."
-            exit 1
-          }
-          bash -n deploy/restore-staff-host-https.sh
-          node --test deploy/tests/staff-host-release.test.mjs
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.26.1
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-
-      - name: Build the Staff host page
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
-          VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
-        run: |
-          set -euo pipefail
-          pnpm install --frozen-lockfile
-          BASE_PATH="/" pnpm --filter @workspace/ochola-supernet run build:vps
-          test -s artifacts/ochola-supernet/dist/public/index.html
-          grep -R -l -F "Staff sign-in is temporarily unavailable" \
-            artifacts/ochola-supernet/dist/public/assets
-          tar -C artifacts/ochola-supernet/dist/public \
-            -czf "$RUNNER_TEMP/staff-host-assets.tgz" .
-          cp "$RUNNER_TEMP/staff-host-assets.tgz" staff-host-assets.tgz
-
-      - name: Copy Staff page assets to the VPS
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: 102.203.116.204
-          username: root
-          key: ${{ secrets.VPS_SSH_KEY }}
-          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
-          fingerprint: "SHA256:XlSA4l6O/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"
-          port: 22
-          source: staff-host-assets.tgz
-          target: /tmp
-          overwrite: true
-          timeout: 120s
-          command_timeout: 5m
-
-      - name: Provision Staff TLS and install the static page
-        uses: appleboy/ssh-action@v1.2.5
-        env:
-          STAFF_HOST_REPAIR: "true"
-        with:
-          host: 102.203.116.204
-          username: root
-          key: ${{ secrets.VPS_SSH_KEY }}
-          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
-          fingerprint: "SHA256:XlSA4l6O/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"
-          port: 22
-          timeout: 30s
-          command_timeout: 12m
-          envs: STAFF_HOST_REPAIR
-          script_path: deploy/restore-staff-host-https.sh
-
-      - name: Verify Staff host through Cloudflare
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3 4 5; do
-            if curl --fail --silent --show-error --max-time 15 \
-              https://staff.isplatty.com/staff/login -o "$RUNNER_TEMP/staff-page.html"; then
-              break
-            fi
-            if [[ "$attempt" == "5" ]]; then exit 1; fi
-            sleep 5
-          done
-          grep -q 'id="root"' "$RUNNER_TEMP/staff-page.html"
-          curl --fail --silent --show-error --max-time 15 \
-            https://staff.isplatty.com/api/healthz |
-            node -e 'const body=JSON.parse(require("fs").readFileSync(0,"utf8")); if(body.status!=="ok") process.exit(1)'

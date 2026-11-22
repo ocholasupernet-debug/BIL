@@ -26,6 +26,8 @@ export const RESERVED_SUBDOMAINS = new Set([
   "mail",
   "admin",
   "come",
+  "employee1088",
+  "staff",
 ]);
 
 function hostnameOnly(value: string): string {

@@ -9,7 +9,10 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
   process.env.VITE_SUPABASE_KEY = "billing-test-anon";
   process.env.BILLING_SUPABASE_SERVICE_KEY = "billing-test-service";
   const originalDatabaseUrl = process.env.SUPABASE_DB_URL;
+  const originalDestinationDatabaseUrl = process.env.SUPABASE_DEST_DB_URL;
   process.env.SUPABASE_DB_URL = "postgres://billing-test:billing-test@127.0.0.1:5432/billing_test";
+  process.env.SUPABASE_DEST_DB_URL = "postgres://billing-test:billing-test@127.0.0.1:5432/billing_test";
+  delete process.env.SUPABASE_DEST_SERVICE_ROLE_KEY;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   delete process.env.SUPABASE_SERVICE_KEY;
 
@@ -370,6 +373,8 @@ test("billing-only access reads safely but cannot start an unsettled payment", a
     poolPrototype.query = originalPoolQuery;
     if (originalDatabaseUrl === undefined) delete process.env.SUPABASE_DB_URL;
     else process.env.SUPABASE_DB_URL = originalDatabaseUrl;
+    if (originalDestinationDatabaseUrl === undefined) delete process.env.SUPABASE_DEST_DB_URL;
+    else process.env.SUPABASE_DEST_DB_URL = originalDestinationDatabaseUrl;
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
 });
