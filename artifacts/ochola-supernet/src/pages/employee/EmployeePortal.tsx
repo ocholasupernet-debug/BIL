@@ -21,7 +21,7 @@ import {
 } from "@workspace/api-client-react";
 import type { EmployeeCompensationItem, EmployeePortalDashboard, EmployeePortalEmployee, EmployeePortalWithdrawal, StaffSignupRequest } from "@workspace/api-client-react";
 import { TurnstileCheck } from "@/components/TurnstileCheck";
-import { isSuperAdminLoggedIn } from "../super-admin/Login";
+import { StaffFinanceLogin } from "../super-admin/Login";
 import "./employee.css";
 
 type EmployeeView = "overview" | "activity" | "profile";
@@ -564,14 +564,60 @@ export function EmployeeAdminPage() {
 }
 
 function AdminAccessGate() {
-  const [, setLocation] = useLocation();
-  const [hasAdminSession] = useState(() => isSuperAdminLoggedIn());
-  if (!hasAdminSession) return <PortalFrame kind="admin"><section className="ep-unavailable ep-admin-auth-required">
-    <span className="ep-unavailable-icon"><LockKeyhole size={24} /></span><p className="ep-eyebrow">SUPER ADMIN ACCESS</p>
-    <h1>Sign in to manage Staff finance</h1>
-    <p>Staff administration is restricted to an authenticated Super Admin session. No administration data is loaded until you sign in.</p>
-    <button className="ep-button ep-button-primary" onClick={() => setLocation("/super-admin/login")}>Go to Super Admin sign in <ArrowRight size={16} /></button>
-  </section></PortalFrame>;
+  const [sessionState, setSessionState] = useState<"checking" | "authorized" | "unauthorized" | "unavailable">("checking");
+  const [checkAttempt, setCheckAttempt] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    let token = "";
+    try {
+      token = localStorage.getItem("ochola_superadmin_token") ?? "";
+    } catch {
+      token = "";
+    }
+    if (!token) {
+      setSessionState("unauthorized");
+      return () => { cancelled = true; };
+    }
+
+    setSessionState("checking");
+    void fetch("/api/super-admin/verify", {
+      cache: "no-store",
+      headers: { "x-sa-token": token },
+    }).then(async (response) => {
+      const result = await response.json().catch(() => ({})) as { ok?: boolean };
+      if (cancelled) return;
+      if (response.ok && result.ok === true) {
+        setSessionState("authorized");
+        return;
+      }
+      try {
+        localStorage.removeItem("ochola_superadmin_token");
+        localStorage.removeItem("ochola_superadmin_name");
+        localStorage.removeItem("ochola_superadmin_issued_at");
+      } catch {}
+      setSessionState("unauthorized");
+    }).catch(() => {
+      if (!cancelled) setSessionState("unavailable");
+    });
+
+    return () => { cancelled = true; };
+  }, [checkAttempt]);
+
+  if (sessionState === "checking") {
+    return <PortalFrame kind="admin"><LoadingBlock label="Verifying Staff administrator access" /></PortalFrame>;
+  }
+  if (sessionState === "unauthorized") {
+    return <StaffFinanceLogin />;
+  }
+  if (sessionState === "unavailable") {
+    return <PortalFrame kind="admin"><section className="ep-unavailable ep-admin-auth-required">
+      <span className="ep-unavailable-icon"><LockKeyhole size={24} /></span><p className="ep-eyebrow">STAFF ADMINISTRATION</p>
+      <h1>Administrator access could not be verified</h1>
+      <p>No Staff finance data was loaded. Check the connection and try again.</p>
+      <button className="ep-button ep-button-primary" onClick={() => setCheckAttempt((attempt) => attempt + 1)}>Retry verification <RefreshCw size={16} /></button>
+    </section></PortalFrame>;
+  }
   return <PortalGate kind="admin"><AdminPortal /></PortalGate>;
 }
 

@@ -62,8 +62,25 @@ const inputStyle: React.CSSProperties = {
 };
 
 /* ── Main component ── */
+type SuperAdminLoginProps = {
+  redirectTo?: string;
+  variant?: "platform" | "staff-finance";
+};
+
 export default function SuperAdminLogin() {
+  return <SuperAdminLoginForm />;
+}
+
+export function StaffFinanceLogin() {
+  return <SuperAdminLoginForm redirectTo="/employee/admin" variant="staff-finance" />;
+}
+
+function SuperAdminLoginForm({
+  redirectTo = "/super-admin/dashboard",
+  variant = "platform",
+}: SuperAdminLoginProps) {
   const [, setLocation] = useLocation();
+  const isStaffFinanceLogin = variant === "staff-finance";
   const [username, setUsername] = useState("");
   const [apiKey,   setApiKey]   = useState("");
   const [password, setPassword] = useState("");
@@ -118,7 +135,7 @@ export default function SuperAdminLogin() {
         return;
       }
       setSuperAdminSession(data.name ?? username, data.token, data.issuedAt);
-      setLocation("/super-admin/dashboard");
+      setLocation(redirectTo);
     } catch {
       setError("Could not reach the server. Please try again.");
     } finally {
@@ -155,10 +172,12 @@ export default function SuperAdminLogin() {
             <Logo size="lg" />
           </div>
           <h1 style={{ color: "#f5f0e8", fontWeight: 900, fontSize: 26, margin: "0 0 6px", letterSpacing: "-0.02em" }}>
-            Super Admin
+            {isStaffFinanceLogin ? "Staff Finance Administration" : "Super Admin"}
           </h1>
           <p style={{ color: "#78716c", fontSize: 13, margin: 0 }}>
-            ISPlatty · Restricted Access Panel
+            {isStaffFinanceLogin
+              ? "Restricted staff administration · ISP account credentials are not accepted"
+              : "ISPlatty · Restricted Access Panel"}
           </p>
 
           {/* Warning badge */}

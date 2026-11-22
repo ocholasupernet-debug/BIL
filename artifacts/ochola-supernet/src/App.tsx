@@ -10,6 +10,7 @@ import { AdminPageVisibilityProvider } from "@/context/AdminPageVisibilityContex
 import { DashboardPreferencesProvider } from "@/context/DashboardPreferencesContext";
 import { getHostSubdomain } from "@/lib/subdomain";
 import { getAdminApiToken, getAdminRole, isImpersonating } from "@/lib/supabase";
+import { shouldRedirectPlatformAdminToStaffFinance } from "@/lib/employee-admin-host-boundary";
 
 import LandingPage from "./pages/LandingPage";
 import AdminLogin from "./pages/admin/AdminLogin";
@@ -243,6 +244,16 @@ function TenantRenewalRouteGate({ children }: { children: React.ReactNode }) {
 }
 
 function Router() {
+  const [location, setLocation] = useLocation();
+  const hostname = typeof window !== "undefined" ? window.location.hostname : "";
+  const shouldRedirectPlatformAdmin = shouldRedirectPlatformAdminToStaffFinance(hostname, location);
+
+  useEffect(() => {
+    if (shouldRedirectPlatformAdmin) setLocation("/employee/admin");
+  }, [shouldRedirectPlatformAdmin, setLocation]);
+
+  if (shouldRedirectPlatformAdmin) return null;
+
   return (
     <TenantRenewalRouteGate>
     <Switch>
