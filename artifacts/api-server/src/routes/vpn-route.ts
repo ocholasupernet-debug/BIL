@@ -8,6 +8,7 @@ import { logger } from "../lib/logger";
 import { requireAdmin } from "../lib/api-auth.js";
 import { createHash } from "crypto";
 import { routerApiSecretLookupHash } from "../lib/router-api-secret.js";
+import { getSupabaseServiceKey } from "../lib/supabase-service-key.js";
 
 const router: IRouter = Router();
 
@@ -21,11 +22,10 @@ router.use("/vpn/users", requireAdmin());
 
 /* Read env per-call so changes after startup are picked up */
 function sbUrl(): string {
-  return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+  return process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "";
 }
 function sbKey(): string {
-  /* Prefer service key (bypasses RLS) → falls back to anon */
-  return process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_KEY || "";
+  return getSupabaseServiceKey() || process.env.VITE_SUPABASE_KEY || "";
 }
 
 const CA_PATHS = [

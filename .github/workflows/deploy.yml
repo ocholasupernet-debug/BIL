@@ -154,6 +154,14 @@ jobs:
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
         run: |
           pnpm install --frozen-lockfile
+          pnpm --filter @workspace/api-server exec tsx --test \
+            src/lib/supabase-client.test.ts \
+            src/lib/supabase-service-key.test.ts \
+            src/lib/platform-billing-store.test.ts \
+            src/routes/super-admin-billing-route.test.ts \
+            src/routes/super-admin-data-route.test.ts \
+            src/routes/super-admin-routers-route.test.ts \
+            src/routes/admin-data-route.test.ts
           BASE_PATH="/" pnpm --filter @workspace/ochola-supernet run build:vps
           pnpm --filter @workspace/api-server run build
           test -s artifacts/ochola-supernet/dist/public/index.html

@@ -3,11 +3,12 @@ import express from "express";
 import { test } from "node:test";
 
 test("tenant router context is authenticated and always scoped to the signed-in ISP", async () => {
-  const envKeys = ["TOKEN_SIGNING_SECRET", "VITE_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"] as const;
+  const envKeys = ["TOKEN_SIGNING_SECRET", "VITE_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_DEST_SERVICE_ROLE_KEY"] as const;
   const originalEnv = new Map(envKeys.map(key => [key, process.env[key]]));
   process.env.TOKEN_SIGNING_SECRET = "admin-data-route-test-secret";
   process.env.VITE_SUPABASE_URL = "https://admin-data-route-test.supabase.co";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "admin-data-route-test-service";
+  process.env.SUPABASE_DEST_SERVICE_ROLE_KEY = "admin-data-route-test-destination-service";
 
   const [{ default: routersRouter }, { generateAdminSessionToken }] = await Promise.all([
     import("./routers-route.js"),
@@ -31,7 +32,7 @@ test("tenant router context is authenticated and always scoped to the signed-in 
     if (url.hostname === "127.0.0.1") return originalFetch(input, init);
     externalRequests.push(`${init?.method ?? "GET"} ${url.pathname}?${url.searchParams.toString()}`);
     assert.equal(url.hostname, "admin-data-route-test.supabase.co");
-    assert.equal(new Headers(init?.headers).get("apikey"), "admin-data-route-test-service");
+    assert.equal(new Headers(init?.headers).get("apikey"), "admin-data-route-test-destination-service");
 
     if (url.pathname.endsWith("/rest/v1/isp_admins")) {
       const id = Number(url.searchParams.get("id")?.replace(/^eq\./, ""));

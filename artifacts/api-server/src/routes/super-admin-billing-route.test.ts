@@ -4,11 +4,13 @@ import { test } from "node:test";
 
 test("platform income summary is super-admin protected and returns separate totals", async () => {
   const originalGmailAppPassword = process.env.GMAIL_APP_PASSWORD;
+  const originalDestinationServiceRoleKey = process.env.SUPABASE_DEST_SERVICE_ROLE_KEY;
   process.env.SUPERADMIN_USERNAME = "platform-income-test";
   process.env.SUPERADMIN_API_KEY = "platform-income-api-test";
   process.env.SUPERADMIN_PASSWORD = "platform-income-password-test";
   process.env.VITE_SUPABASE_URL = "https://platform-income-test.supabase.co";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "platform-income-service-test";
+  process.env.SUPABASE_DEST_SERVICE_ROLE_KEY = "platform-income-destination-service-test";
   process.env.BILLING_SUPABASE_SERVICE_KEY = "platform-income-service-test";
   process.env.TURNSTILE_SECRET = "platform-income-turnstile-test";
   process.env.GMAIL_APP_PASSWORD = "";
@@ -53,7 +55,7 @@ test("platform income summary is super-admin protected and returns separate tota
     }
     supabaseRequests.push(url.toString());
     assert.equal(url.hostname, "platform-income-test.supabase.co");
-    assert.equal(new Headers(init?.headers).get("apikey"), "platform-income-service-test");
+    assert.equal(new Headers(init?.headers).get("apikey"), "platform-income-destination-service-test");
     if (url.pathname.endsWith("/rpc/get_platform_income_summary")) {
       rpcCalls += 1;
       return new Response(JSON.stringify([{
@@ -215,5 +217,7 @@ test("platform income summary is super-admin protected and returns separate tota
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     if (originalGmailAppPassword === undefined) delete process.env.GMAIL_APP_PASSWORD;
     else process.env.GMAIL_APP_PASSWORD = originalGmailAppPassword;
+    if (originalDestinationServiceRoleKey === undefined) delete process.env.SUPABASE_DEST_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_DEST_SERVICE_ROLE_KEY = originalDestinationServiceRoleKey;
   }
 });

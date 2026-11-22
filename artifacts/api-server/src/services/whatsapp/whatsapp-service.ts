@@ -397,10 +397,7 @@ export async function saveWhatsAppSettings(input: unknown): Promise<WhatsAppSett
 }
 
 function supabaseServiceReady(): boolean {
-  return !!(
-    process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ||
-    process.env.SUPABASE_SERVICE_KEY?.trim()
-  );
+  return supabaseServiceRoleConfigured;
 }
 
 export function isWhatsAppEnabled(settings: WhatsAppSettings): boolean {

@@ -1,5 +1,6 @@
 import { Client } from "pg";
 import { runVpsScript, vpsSshConfigured } from "./vps-ssh.js";
+import { getSupabaseServiceKey } from "./supabase-service-key.js";
 
 export type TelemetryStatus = "available" | "partial" | "unavailable" | "stale";
 
@@ -55,9 +56,7 @@ function supabaseUrl(): string {
 }
 
 function supabaseServiceKey(): string {
-  return process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
-    || process.env.SUPABASE_SERVICE_KEY?.trim()
-    || "";
+  return getSupabaseServiceKey();
 }
 
 function safeByteValue(value: unknown): number | null {
@@ -66,7 +65,9 @@ function safeByteValue(value: unknown): number | null {
 }
 
 export async function measureSupabaseDatabase(): Promise<StorageTelemetry> {
-  const connectionString = process.env.SUPABASE_DB_URL?.trim() || process.env.SUPABASE_DATABASE_URL?.trim();
+  const connectionString = process.env.SUPABASE_DEST_DB_URL?.trim()
+    || process.env.SUPABASE_DB_URL?.trim()
+    || process.env.SUPABASE_DATABASE_URL?.trim();
   if (!connectionString) {
     return unavailable("supabase_postgres", "database_physical_size", "SUPABASE_DB_URL is not configured.");
   }

@@ -284,7 +284,9 @@ async function sha256File(filePath: string): Promise<string> {
 }
 
 function runPgDump(filePath: string): Promise<{ ok: boolean; reason?: string }> {
-  const rawUrl = process.env.SUPABASE_DB_URL?.trim() || process.env.SUPABASE_DATABASE_URL?.trim();
+  const rawUrl = process.env.SUPABASE_DEST_DB_URL?.trim()
+    || process.env.SUPABASE_DB_URL?.trim()
+    || process.env.SUPABASE_DATABASE_URL?.trim();
   if (!rawUrl) return Promise.resolve({ ok: false, reason: "Database backup is unavailable because SUPABASE_DB_URL is not configured." });
   let serviceFile = "";
   try {

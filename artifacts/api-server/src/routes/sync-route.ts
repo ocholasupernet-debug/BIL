@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { RouterOSAPI } from "node-routeros";
 import { readVpnClients, syncIppEntry, vpnIpFor, VPN_STATUS_PATHS } from "../lib/vpn-status";
+import { getSupabaseServiceKey } from "../lib/supabase-service-key.js";
 import { recordInstallEvent, listInstallHistory } from "../lib/install-events";
 import {
   sbDeleteStrict,
@@ -3228,8 +3229,8 @@ router.post("/admin/router/bridge-assign", async (req, res): Promise<void> => {
    Looks up the router by its router_secret token and marks it online.
 ═══════════════════════════════════════════════════════════════ */
 /* Per-request env helpers — use || so empty-string falls through */
-function hbUrl(): string { return process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ""; }
-function hbKey(): string { return process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_KEY || ""; }
+function hbUrl(): string { return process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || ""; }
+function hbKey(): string { return getSupabaseServiceKey() || process.env.VITE_SUPABASE_KEY || ""; }
 
 type RouterSetupStatus = "setup" | "awaiting_ports" | "awaiting_sync" | "awaiting_connection";
 

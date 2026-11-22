@@ -7,6 +7,7 @@ test("ISP connection-request deletion stays scoped and safely clears approved li
     "SESSION_SECRET",
     "VITE_SUPABASE_URL",
     "VITE_SUPABASE_KEY",
+    "SUPABASE_DEST_SERVICE_ROLE_KEY",
     "BILLING_SUPABASE_SERVICE_KEY",
   ] as const;
   const previousEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
@@ -14,6 +15,7 @@ test("ISP connection-request deletion stays scoped and safely clears approved li
   process.env.VITE_SUPABASE_URL = "https://reseller-connection-test.supabase.co";
   process.env.VITE_SUPABASE_KEY = "reseller-connection-test-anon";
   process.env.BILLING_SUPABASE_SERVICE_KEY = "reseller-connection-test-service";
+  delete process.env.SUPABASE_DEST_SERVICE_ROLE_KEY;
 
   const [{ default: resellerRouter }, { generateAdminSessionToken }] = await Promise.all([
     import("./reseller-route.js"),

@@ -11,6 +11,7 @@ test("super-admin router deletion revokes planned temporary VPN clients and remo
     "GMAIL_APP_PASSWORD",
     "VITE_SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_DEST_SERVICE_ROLE_KEY",
   ] as const;
   const originalEnv = new Map(envKeys.map(key => [key, process.env[key]]));
   process.env.SUPERADMIN_USERNAME = "router-delete-test";
@@ -20,6 +21,7 @@ test("super-admin router deletion revokes planned temporary VPN clients and remo
   process.env.GMAIL_APP_PASSWORD = "";
   process.env.VITE_SUPABASE_URL = "https://router-delete-test.supabase.co";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "router-delete-service-test";
+  process.env.SUPABASE_DEST_SERVICE_ROLE_KEY = "router-delete-destination-service-test";
 
   const [{ default: authRouter }, { default: routersRouter }] = await Promise.all([
     import("./super-admin-auth-route.js"),

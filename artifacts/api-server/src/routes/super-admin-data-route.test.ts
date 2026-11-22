@@ -11,6 +11,7 @@ test("platform dashboard data is Super Admin protected and read through the serv
     "GMAIL_APP_PASSWORD",
     "VITE_SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_DEST_SERVICE_ROLE_KEY",
   ] as const;
   const originalEnv = new Map(envKeys.map(key => [key, process.env[key]]));
   Object.assign(process.env, {
@@ -21,6 +22,7 @@ test("platform dashboard data is Super Admin protected and read through the serv
     GMAIL_APP_PASSWORD: "",
     VITE_SUPABASE_URL: "https://platform-data-test.supabase.co",
     SUPABASE_SERVICE_ROLE_KEY: "platform-data-service-test",
+    SUPABASE_DEST_SERVICE_ROLE_KEY: "platform-data-destination-service-test",
   });
 
   const [{ default: authRouter }, { default: dataRouter }] = await Promise.all([
@@ -57,7 +59,7 @@ test("platform dashboard data is Super Admin protected and read through the serv
     }
 
     assert.equal(url.hostname, "platform-data-test.supabase.co");
-    assert.equal(new Headers(init?.headers).get("apikey"), "platform-data-service-test");
+    assert.equal(new Headers(init?.headers).get("apikey"), "platform-data-destination-service-test");
     assert.ok(!init?.method || init.method === "GET");
     const table = url.pathname.split("/").at(-1) ?? "";
     readTables.add(table);

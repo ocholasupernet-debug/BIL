@@ -11,6 +11,7 @@ function credentials(): { url: string; key: string } {
   const rawUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "").trim().replace(/\/+$/, "");
   const url = /^https?:\/\//.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
   const key = [
+    process.env.SUPABASE_DEST_SERVICE_ROLE_KEY,
     process.env.BILLING_SUPABASE_SERVICE_KEY,
     process.env.SUPABASE_SERVICE_ROLE_KEY,
     process.env.SUPABASE_SERVICE_KEY,

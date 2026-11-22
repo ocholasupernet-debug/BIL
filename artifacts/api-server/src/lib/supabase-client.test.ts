@@ -4,9 +4,11 @@ import { test } from "node:test";
 const originalUrl = process.env.VITE_SUPABASE_URL;
 const originalKey = process.env.VITE_SUPABASE_KEY;
 const originalServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const originalDestinationServiceRoleKey = process.env.SUPABASE_DEST_SERVICE_ROLE_KEY;
 process.env.VITE_SUPABASE_URL = "https://supabase-test.invalid";
 process.env.VITE_SUPABASE_KEY = "test-key";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
+process.env.SUPABASE_DEST_SERVICE_ROLE_KEY = "test-destination-service-role-key";
 const { sbDeleteStrict, sbRpc, sbSelectStrict } = await import("./supabase-client.js");
 if (originalUrl === undefined) delete process.env.VITE_SUPABASE_URL;
 else process.env.VITE_SUPABASE_URL = originalUrl;
@@ -14,12 +16,16 @@ if (originalKey === undefined) delete process.env.VITE_SUPABASE_KEY;
 else process.env.VITE_SUPABASE_KEY = originalKey;
 if (originalServiceRoleKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 else process.env.SUPABASE_SERVICE_ROLE_KEY = originalServiceRoleKey;
+if (originalDestinationServiceRoleKey === undefined) delete process.env.SUPABASE_DEST_SERVICE_ROLE_KEY;
+else process.env.SUPABASE_DEST_SERVICE_ROLE_KEY = originalDestinationServiceRoleKey;
 
-test("isp_plans selects omit the removed plan_type field", async () => {
+test("Supabase client prefers the explicit destination service role key", async () => {
   const originalFetch = globalThis.fetch;
   const requestedUrls: string[] = [];
-  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+  const requestedKeys: string[] = [];
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     requestedUrls.push(String(input));
+    requestedKeys.push(new Headers(init?.headers).get("apikey") ?? "");
     return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
   }) as typeof fetch;
 
@@ -44,6 +50,10 @@ test("isp_plans selects omit the removed plan_type field", async () => {
     new URL(requestedUrls[1]).searchParams.get("select"),
     "id,plan_type",
   );
+  assert.deepEqual(requestedKeys, [
+    "test-destination-service-role-key",
+    "test-destination-service-role-key",
+  ]);
 });
 
 test("strict delete failures identify the table being deleted", async () => {
