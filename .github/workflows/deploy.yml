@@ -33,6 +33,11 @@ on:
         required: false
         default: false
         type: boolean
+      supabase_target_cutover:
+        description: "Switch only BIL's active Supabase target using an app-only release"
+        required: false
+        default: false
+        type: boolean
       sync_router_configuration_ids:
         description: "Optional comma-separated router IDs for the confirmed queue and Hotspot TTL sync"
         required: false
@@ -99,6 +104,22 @@ jobs:
       - name: Test WhatsApp environment sync
         run: node --test deploy/tests/sync-whatsapp-env.test.mjs
 
+      - name: Test safe Supabase target cutover
+        run: node --test deploy/tests/supabase-target-cutover.test.mjs deploy/tests/supabase-target-runtime.test.mjs deploy/tests/update-supabase-target-env.test.mjs
+
+      - name: Verify destination credentials and project identity
+        env:
+          SUPABASE_DEST_URL: ${{ secrets.SUPABASE_DEST_URL }}
+          SUPABASE_DEST_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_DEST_PUBLISHABLE_KEY }}
+          SUPABASE_DEST_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_DEST_SERVICE_ROLE_KEY }}
+          SUPABASE_DEST_DB_URL: ${{ secrets.SUPABASE_DEST_DB_URL }}
+        run: node deploy/validate-supabase-cutover-config.mjs
+
+      - name: Verify destination build target
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_DEST_URL }}
+        run: node deploy/verify-supabase-build-target.mjs
+
       - name: Test Gmail secret reaches PM2
         run: node --test deploy/tests/gmail-secret-release.test.mjs
 
@@ -110,8 +131,8 @@ jobs:
 
       - name: Build release artifacts on the runner
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_DEST_URL }}
+          VITE_SUPABASE_KEY: ${{ secrets.SUPABASE_DEST_PUBLISHABLE_KEY }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
         run: |
           pnpm install --frozen-lockfile
@@ -130,6 +151,8 @@ jobs:
             --exclude='./.agents' \
             --exclude='./screenshots' \
             --exclude='./attached_assets' \
+            --exclude='./generated-artifacts' \
+            --exclude='./data/backups' \
             --exclude='./.env' \
             --exclude='*/.env' \
             --exclude='./node_modules' \
@@ -145,6 +168,7 @@ jobs:
           mv "$release_archive" ocholasupernet-release.tgz
 
       - name: Encode runtime SSH material
+        if: ${{ !inputs.supabase_target_cutover }}
         id: encode_runtime_ssh
         shell: bash
         env:
@@ -187,7 +211,7 @@ jobs:
           port: 22
           timeout: 30s
           command_timeout: 15m
-          envs: VITE_SUPABASE_URL,VITE_SUPABASE_KEY,VITE_TURNSTILE_SITE_KEY,TURNSTILE_SECRET,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,SYNC_ROUTER_CONFIGURATION_IDS,SYNC_ROUTER_ADMIN_ID,SYNC_ROUTER_AUTH_VERSION,INSPECT_API_ERRORS,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE,GMAIL_APP_PASSWORD_B64
+          envs: ${{ inputs.supabase_target_cutover && 'SUPABASE_TARGET_CUTOVER,SUPABASE_DEST_URL,SUPABASE_DEST_PUBLISHABLE_KEY,SUPABASE_DEST_SERVICE_ROLE_KEY,SUPABASE_DEST_DB_URL,APP_ONLY_RELEASE,DEPLOY_REFRESH_PM2_ENV,DEPLOY_VERIFY_SUPABASE_TARGET' || 'VITE_SUPABASE_URL,VITE_SUPABASE_KEY,VITE_TURNSTILE_SITE_KEY,TURNSTILE_SECRET,SUPABASE_SERVICE_ROLE_KEY,SUPABASE_DB_URL,SESSION_SECRET,TAWK_API_KEY,CLOUDFLARE_API_TOKEN,CLOUDFLARE_ZONE_ID,VPS_USER,VPS_SSH_KEY_B64,VPS_SSH_PASSPHRASE_B64,RECONCILE_RESELLER_PORT,RECONCILE_RESELLER_INTERFACE,INSPECT_RESELLER_PORT,SYNC_ROUTER_CONFIGURATION_IDS,SYNC_ROUTER_ADMIN_ID,SYNC_ROUTER_AUTH_VERSION,INSPECT_API_ERRORS,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS,DEPLOY_PORTAL_REFRESH_ONLY,WHATSAPP_ACCESS_TOKEN,WHATSAPP_WEBHOOK_VERIFY_TOKEN,WHATSAPP_APP_SECRET,WHATSAPP_PHONE_NUMBER_ID,WAHA_BASE_URL,WAHA_API_KEY,WAHA_SESSION_ID,WAHA_DEFAULT_COUNTRY_CODE,GMAIL_APP_PASSWORD_B64' }}
           script: |
             set -e
             echo "=== Starting deploy at $(date) ==="
@@ -266,6 +290,36 @@ jobs:
             tar -xzf /tmp/ocholasupernet-release.tgz -C .
             rm -f /tmp/ocholasupernet-release.tgz
 
+            if [ "${SUPABASE_TARGET_CUTOVER:-false}" = "true" ]; then
+              if [ ! -s .env ] || [ -L .env ]; then
+                echo "Supabase target cutover requires the existing regular VPS .env; refusing to create one."
+                exit 1
+              fi
+              cutover_env_backup="$(mktemp ./.env.supabase-cutover.XXXXXX)"
+              cp -p .env "$cutover_env_backup"
+              chmod 600 "$cutover_env_backup"
+              rollback_supabase_target() {
+                local status=$?
+                trap - EXIT
+                if [ "$status" -ne 0 ]; then
+                  cp -p "$cutover_env_backup" .env
+                  chmod 600 .env
+                  set -a
+                  # shellcheck disable=SC1091
+                  source .env
+                  set +a
+                  if pm2 describe ocholanet-api >/dev/null 2>&1; then
+                    pm2 reload ecosystem.config.cjs --env standalone --update-env || \
+                      echo "Warning: previous PM2 environment was restored but reload needs inspection."
+                  fi
+                  echo "Supabase cutover failed; the previous VPS .env was restored."
+                fi
+                rm -f "$cutover_env_backup"
+                if [ "$status" -ne 0 ]; then exit "$status"; fi
+              }
+              trap rollback_supabase_target EXIT
+              PROJECT_DIR="$PWD" bash deploy/update-supabase-target-env.sh
+            else
             # Inject Supabase credentials and the encryption key into .env so PM2 always has them
             # (safe even if already set — idempotent upsert)
             upsert_env() {
@@ -338,6 +392,7 @@ jobs:
             # unnecessary dependency and can fail before the application
             # deployment starts on minimal VPS images.
             bash deploy/configure-nginx.sh
+            fi
 
             # This release changes application source only; package manifests
             # and the lockfile are unchanged, so avoid a fragile registry
@@ -348,8 +403,15 @@ jobs:
             DEPLOY_FROM_ARCHIVE=1 \
             DEPLOY_SKIP_INSTALL=1 \
             DEPLOY_SKIP_BUILD=1 \
+            DEPLOY_APP_ONLY="${APP_ONLY_RELEASE:-false}" \
+            DEPLOY_REFRESH_PM2_ENV="${DEPLOY_REFRESH_PM2_ENV:-false}" \
+            DEPLOY_VERIFY_SUPABASE_TARGET="${DEPLOY_VERIFY_SUPABASE_TARGET:-false}" \
             DEPLOY_SOURCE_COMMIT="${{ github.sha }}" \
               bash deploy/deploy.sh
+            if [ "${SUPABASE_TARGET_CUTOVER:-false}" = "true" ]; then
+              echo "=== Supabase target cutover passed app, PM2, Auth, and read-only database checks ==="
+              exit 0
+            fi
             api_ready=false
             for attempt in $(seq 1 30); do
               if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8080/api/healthz >/dev/null; then
@@ -507,12 +569,12 @@ jobs:
             fi
             echo "=== Deploy finished at $(date) ==="
         env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_KEY }}
+          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_DEST_URL }}
+          VITE_SUPABASE_KEY: ${{ secrets.SUPABASE_DEST_PUBLISHABLE_KEY }}
           VITE_TURNSTILE_SITE_KEY: ${{ secrets.VITE_TURNSTILE_SITE_KEY }}
           TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_DEST_SERVICE_ROLE_KEY }}
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DEST_DB_URL }}
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
           TAWK_API_KEY: ${{ secrets.TAWK_API_KEY }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -527,8 +589,16 @@ jobs:
           SYNC_ROUTER_ADMIN_ID: ${{ inputs.sync_router_admin_id }}
           SYNC_ROUTER_AUTH_VERSION: ${{ inputs.sync_router_auth_version }}
           INSPECT_API_ERRORS: ${{ inputs.inspect_api_errors }}
-          DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup }}
-          DEPLOY_SKIP_ROUTER_ONESHOTS: ${{ github.event_name == 'push' || inputs.skip_router_oneshots }}
+          SUPABASE_TARGET_CUTOVER: ${{ inputs.supabase_target_cutover }}
+          SUPABASE_DEST_URL: ${{ secrets.SUPABASE_DEST_URL }}
+          SUPABASE_DEST_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_DEST_PUBLISHABLE_KEY }}
+          SUPABASE_DEST_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_DEST_SERVICE_ROLE_KEY }}
+          SUPABASE_DEST_DB_URL: ${{ secrets.SUPABASE_DEST_DB_URL }}
+          APP_ONLY_RELEASE: ${{ inputs.supabase_target_cutover }}
+          DEPLOY_REFRESH_PM2_ENV: ${{ inputs.supabase_target_cutover }}
+          DEPLOY_VERIFY_SUPABASE_TARGET: ${{ inputs.supabase_target_cutover }}
+          DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: ${{ github.event_name == 'push' || inputs.skip_router_management_setup || inputs.supabase_target_cutover }}
+          DEPLOY_SKIP_ROUTER_ONESHOTS: ${{ github.event_name == 'push' || inputs.skip_router_oneshots || inputs.supabase_target_cutover }}
           DEPLOY_PORTAL_REFRESH_ONLY: ${{ inputs.portal_refresh_only }}
           WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
           WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN }}
