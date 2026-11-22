@@ -16,6 +16,8 @@ test("base and service hostnames do not resolve as tenants", () => {
     "admin.isplatty.com",
     "come.isplatty.com",
     "vpn.isplatty.org",
+    "staff.isplatty.com",
+    "employee1088.isplatty.com",
   ]) {
     assert.equal(getTenantSubdomain(host), null, host);
   }

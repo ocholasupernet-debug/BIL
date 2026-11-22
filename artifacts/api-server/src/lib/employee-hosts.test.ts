@@ -1,24 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  employeeInvitationUrl,
-  employeeSubdomainForHost,
   isEmployeeAdminHost,
+  isStaffPortalHost,
+  staffActivationUrl,
 } from "./employee-hosts.js";
 
-test("employee .com hosts are canonical and .org hosts remain compatible", () => {
+test("shared Staff host is canonical and the existing Super Admin .com host is preserved", () => {
   assert.equal(isEmployeeAdminHost("employee1088.isplatty.com"), true);
-  assert.equal(isEmployeeAdminHost("employee1088.isplatty.org"), true);
-  assert.equal(employeeSubdomainForHost("jane.employees.isplatty.com"), "jane");
-  assert.equal(employeeSubdomainForHost("jane.employees.isplatty.org"), "jane");
-  assert.equal(employeeSubdomainForHost("nested.jane.employees.isplatty.com"), null);
-  assert.equal(employeeSubdomainForHost("not-employees.isplatty.com"), null);
+  assert.equal(isEmployeeAdminHost("employee1088.isplatty.org"), false);
+  assert.equal(isStaffPortalHost("staff.isplatty.com"), true);
+  assert.equal(isStaffPortalHost("jane.employees.isplatty.com"), false);
+  assert.equal(isStaffPortalHost("employee1088.isplatty.com"), false);
 });
 
-test("new employee invitations always use the .com portal host", () => {
+test("Staff invitations use the shared .com host and a fragment token", () => {
   assert.equal(
-    employeeInvitationUrl("jane", "token with space"),
-    "https://jane.employees.isplatty.com/employee/activate#token=token%20with%20space",
+    staffActivationUrl("A".repeat(43)),
+    `https://staff.isplatty.com/staff/activate#token=${"A".repeat(43)}`,
   );
-  assert.throws(() => employeeInvitationUrl("bad.subdomain", "token"), /Invalid employee subdomain/);
+  assert.throws(() => staffActivationUrl("too-short"), /Invalid staff invitation token/);
 });

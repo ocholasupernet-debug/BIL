@@ -66,7 +66,7 @@ has_com_employee_origin_certificate() {
   openssl x509 -in "${COM_EMPLOYEE_CERT_DIR}/fullchain.pem" -noout -ext subjectAltName 2>/dev/null |
     grep -Fq "DNS:employee1088.${COM_DOMAIN}" || return 1
   openssl x509 -in "${COM_EMPLOYEE_CERT_DIR}/fullchain.pem" -noout -ext subjectAltName 2>/dev/null |
-    grep -Fq "DNS:*.employees.${COM_DOMAIN}" || return 1
+    grep -Fq "DNS:staff.${COM_DOMAIN}" || return 1
   certificate_public_key="$(openssl x509 -pubkey -noout -in "${COM_EMPLOYEE_CERT_DIR}/fullchain.pem" 2>/dev/null)" || return 1
   private_key_public_key="$(openssl pkey -pubout -in "${COM_EMPLOYEE_CERT_DIR}/privkey.pem" 2>/dev/null)" || return 1
   [ "$certificate_public_key" = "$private_key_public_key" ]
@@ -76,14 +76,14 @@ prepare_com_employee_vhost() {
   install -d -m 0755 "${EMPLOYEE_SITE_DIR}"
   if has_com_employee_origin_certificate; then
     install -m 0644 "${PROJECT_DIR}/deploy/nginx-employee-com.conf" "${EMPLOYEE_COM_SITE_FILE}"
-    echo "Prepared employee .com HTTPS routing with the validated origin certificate SANs."
+    echo "Prepared shared Staff .com HTTPS routing with the validated origin certificate SANs."
     return 0
   fi
   if [ -e "${EMPLOYEE_COM_SITE_FILE}" ]; then
-    echo "Employee .com routing already exists, but its certificate is missing, mismatched, or lacks required SANs." >&2
+    echo "Staff .com routing already exists, but its certificate is missing, mismatched, or lacks required SANs." >&2
     return 1
   fi
-  echo "Employee .com HTTPS routing remains disabled until ${COM_EMPLOYEE_CERT_DIR} contains a matching certificate for employee1088.${COM_DOMAIN} and *.employees.${COM_DOMAIN}."
+  echo "Staff .com HTTPS routing remains disabled until ${COM_EMPLOYEE_CERT_DIR} contains a matching certificate for employee1088.${COM_DOMAIN} and staff.${COM_DOMAIN}."
 }
 
 ensure_com_origin_certificate() {

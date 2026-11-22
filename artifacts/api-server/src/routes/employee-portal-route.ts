@@ -1,14 +1,25 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getMpesaSettings } from "../lib/settings-store.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import {
-  employeeInvitationUrl,
-  employeeSubdomainForHost,
+  isStaffPortalHost,
   isEmployeeAdminHost,
+  staffActivationUrl,
 } from "../lib/employee-hosts.js";
+import { sendPlatformEmail } from "../lib/platform-email.js";
+import { verifyTurnstile } from "../lib/turnstile.js";
+import {
+  employeeAuth,
+  isStaffOtpChallengeId,
+  isStaffOtpCode,
+  normalizeStaffEmail,
+  normalizeStaffPhone,
+  StaffOtpDeliveryError,
+  StaffOtpRateLimitError,
+} from "../services/employee-auth.js";
 import {
   encryptEmployeePayoutDetails,
   hashEmployeePassword,
@@ -16,7 +27,6 @@ import {
   isMoneyString,
   maskedPayoutLabel,
   newEmployeeToken,
-  validEmployeeSubdomain,
   verifyEmployeePassword,
   employeeSessionCookieName,
   decryptEmployeePayoutDetails,
@@ -31,7 +41,7 @@ type EmployeeProfile = {
   id: string;
   username: string;
   display_name: string;
-  subdomain: string;
+  email: string | null;
   status: string;
   auth_version: number;
 };
@@ -55,7 +65,7 @@ function employeePortalEnabled(): boolean {
 
 function enabled(res: Response): boolean {
   if (employeePortalEnabled()) return true;
-  res.status(404).json({ ok: false, error: "The employee portal is not enabled." });
+  res.status(404).json({ ok: false, error: "The Staff portal is not enabled." });
   return false;
 }
 
@@ -111,10 +121,9 @@ function readCookie(req: Request, name: string): string {
 }
 
 async function requireEmployee(req: Request, res: Response): Promise<EmployeeProfile | null> {
-  const subdomain = employeeSubdomainForHost(requestHost(req));
   const token = readCookie(req, employeeSessionCookieName);
-  if (!subdomain || !token) {
-    res.status(401).json({ ok: false, error: "Employee sign-in is required." });
+  if (!isStaffPortalHost(requestHost(req)) || !token) {
+    res.status(401).json({ ok: false, error: "Staff sign-in is required." });
     return null;
   }
   try {
@@ -126,22 +135,22 @@ async function requireEmployee(req: Request, res: Response): Promise<EmployeePro
     const session = sessions[0];
     if (!session) {
       clearSessionCookie(res);
-      res.status(401).json({ ok: false, error: "Employee session expired. Sign in again." });
+      res.status(401).json({ ok: false, error: "Staff session expired. Sign in again." });
       return null;
     }
     const employees = await sbSelectStrict<EmployeeProfile>(
       "employee_profiles",
-      `id=eq.${encodeURIComponent(session.employee_id)}&subdomain=eq.${encodeURIComponent(subdomain)}&status=eq.active&select=id,username,display_name,subdomain,status,auth_version&limit=1`,
+      `id=eq.${encodeURIComponent(session.employee_id)}&status=eq.active&select=id,username,display_name,email,status,auth_version&limit=1`,
     );
     const employee = employees[0];
     if (!employee || employee.auth_version !== session.auth_version) {
       clearSessionCookie(res);
-      res.status(401).json({ ok: false, error: "Employee session is no longer valid." });
+      res.status(401).json({ ok: false, error: "Staff session is no longer valid." });
       return null;
     }
     return employee;
   } catch {
-    res.status(503).json({ ok: false, error: "Employee access could not be verified." });
+    res.status(503).json({ ok: false, error: "Staff access could not be verified." });
     return null;
   }
 }
@@ -189,8 +198,188 @@ router.get("/employee/status", (req: Request, res: Response): void => {
     ok: true,
     enabled: employeePortalEnabled(),
     portal: isEmployeeAdminHost(requestHost(req)) ? "admin" :
-      employeeSubdomainForHost(requestHost(req)) ? "employee" : "unmatched",
+      isStaffPortalHost(requestHost(req)) ? "staff" : "unmatched",
   });
+});
+
+function staffRequestAllowed(req: Request, res: Response): boolean {
+  if (isStaffPortalHost(requestHost(req))) return true;
+  res.status(404).json({ ok: false, error: "Staff access is available from the shared Staff portal." });
+  return false;
+}
+
+async function validateStaffTurnstile(
+  req: Request,
+  res: Response,
+  action: Parameters<typeof verifyTurnstile>[1],
+): Promise<boolean> {
+  if (!hasSameOrigin(req)) {
+    res.status(403).json({ ok: false, error: "Request origin could not be verified." });
+    return false;
+  }
+  const result = await verifyTurnstile(req, action);
+  if (!result.ok) {
+    res.status(result.status).json({ ok: false, error: result.error });
+    return false;
+  }
+  return true;
+}
+
+router.post("/employee/signup/request-otp", async (req: Request, res: Response): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!staffRequestAllowed(req, res) || !enabled(res)) return;
+  if (!await validateStaffTurnstile(req, res, "staff_signup_request")) return;
+  const email = normalizeStaffEmail(req.body?.email);
+  if (!email) {
+    res.status(400).json({ ok: false, error: "Enter a valid email address." });
+    return;
+  }
+  try {
+    const result = await employeeAuth.requestSignupOtp(email, req.ip || req.socket.remoteAddress || "");
+    res.status(202).json({ ok: true, ...result });
+  } catch (error) {
+    if (error instanceof StaffOtpRateLimitError) {
+      res.status(429).json({ ok: false, error: error.message });
+      return;
+    }
+    res.status(503).json({
+      ok: false,
+      error: error instanceof StaffOtpDeliveryError
+        ? error.message
+        : "Staff email verification could not be started. Please try again later.",
+    });
+  }
+});
+
+router.post("/employee/signup/verify-otp", async (req: Request, res: Response): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!staffRequestAllowed(req, res) || !enabled(res)) return;
+  if (!await validateStaffTurnstile(req, res, "staff_signup_verify")) return;
+  const email = normalizeStaffEmail(req.body?.email);
+  const challengeId = req.body?.challengeId;
+  const code = req.body?.code;
+  if (!email || !isStaffOtpChallengeId(challengeId) || !isStaffOtpCode(code)) {
+    res.status(400).json({ ok: false, error: "Enter the six-digit code sent to your email." });
+    return;
+  }
+  try {
+    const emailVerificationToken = await employeeAuth.verifySignupOtp({ email, challengeId, code });
+    if (!emailVerificationToken) {
+      res.status(400).json({ ok: false, error: "That verification code is invalid or expired. Request a new code." });
+      return;
+    }
+    res.json({ ok: true, emailVerificationToken, expiresInSeconds: 600 });
+  } catch {
+    res.status(503).json({ ok: false, error: "Staff email verification is temporarily unavailable." });
+  }
+});
+
+router.post("/employee/signup", async (req: Request, res: Response): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!staffRequestAllowed(req, res) || !enabled(res)) return;
+  if (!await validateStaffTurnstile(req, res, "staff_signup_complete")) return;
+  const email = normalizeStaffEmail(req.body?.email);
+  const fullName = typeof req.body?.fullName === "string" ? req.body.fullName.trim() : "";
+  const phone = normalizeStaffPhone(req.body?.phone);
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  const confirmation = typeof req.body?.confirmPassword === "string" ? req.body.confirmPassword : "";
+  const emailVerificationToken = req.body?.emailVerificationToken;
+  if (!email || fullName.length < 2 || fullName.length > 120 || /[\u0000-\u001f\u007f]/.test(fullName)) {
+    res.status(400).json({ ok: false, error: "Enter your full name and a valid email address." });
+    return;
+  }
+  if (!phone) {
+    res.status(400).json({ ok: false, error: "Enter a valid Kenyan mobile number." });
+    return;
+  }
+  if (password.length < 12 || password.length > 256 || password !== confirmation) {
+    res.status(400).json({ ok: false, error: "Use a password of at least 12 characters and confirm it exactly." });
+    return;
+  }
+  if (typeof emailVerificationToken !== "string" || !/^[A-Za-z0-9_-]{40,64}$/.test(emailVerificationToken)) {
+    res.status(400).json({ ok: false, error: "Verify your email address before submitting your Staff request." });
+    return;
+  }
+  try {
+    await employeeAuth.completeSignup({
+      email,
+      emailVerificationToken,
+      fullName,
+      phone,
+      passwordHash: await hashEmployeePassword(password),
+    });
+    res.status(202).json({
+      ok: true,
+      status: "pending_approval",
+      message: "Your request has been received. Staff portal access remains locked until Super Admin approval.",
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Your Staff request could not be submitted. Please try again later." });
+  }
+});
+
+router.get("/employee/admin/signups", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  try {
+    const signups = await sbSelectStrict<Record<string, unknown>>(
+      "employee_signup_requests",
+      "status=eq.pending_approval&select=id,full_name,phone,email,status,email_verified_at,created_at&order=created_at.asc",
+    );
+    res.json({ ok: true, signups });
+  } catch {
+    res.status(503).json({ ok: false, error: "Staff sign-up requests are unavailable. Apply the Staff portal migration first." });
+  }
+});
+
+router.post("/employee/admin/signups/:id/review", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  const id = String(req.params.id ?? "");
+  const decision = req.body?.decision;
+  const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 500) : "";
+  if (!/^[0-9a-f-]{36}$/i.test(id) || !["approve", "reject"].includes(decision)) {
+    res.status(400).json({ ok: false, error: "Choose a valid Staff request and approval decision." });
+    return;
+  }
+  try {
+    const rows = await sbRpc<{ outcome: string; email: string | null; employee_id: string | null }>(
+      "employee_review_signup_request",
+      { p_request_id: id, p_decision: decision, p_review_note: note, p_actor_id: "super_admin" },
+    );
+    const result = Array.isArray(rows) ? rows[0] : undefined;
+    if (!result || !["approved", "rejected"].includes(result.outcome)) {
+      res.status(409).json({ ok: false, error: "This Staff request is no longer awaiting review." });
+      return;
+    }
+    let notificationSent = false;
+    if (result.email) {
+      try {
+        await sendPlatformEmail({
+          fromName: "OcholaSupernet Billing",
+          to: result.email,
+          subject: result.outcome === "approved" ? "Your ISPlatty Staff account is approved" : "Your ISPlatty Staff request update",
+          text: result.outcome === "approved"
+            ? "Your Staff account has been approved. You can now sign in at https://staff.isplatty.com/staff/login using your email, password, and the email verification code."
+            : "Your Staff account request was not approved. Contact your ISPlatty administrator if you need more information.",
+        });
+        notificationSent = true;
+      } catch { /* Approval/rejection is recorded even if notification delivery is unavailable. */ }
+    }
+    res.json({
+      ok: true,
+      request: { id, status: result.outcome, employeeId: result.employee_id },
+      notificationSent,
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "The Staff request could not be reviewed. Please try again." });
+  }
 });
 
 router.post("/employee/admin/employees", async (req: Request, res: Response): Promise<void> => {
@@ -200,18 +389,20 @@ router.post("/employee/admin/employees", async (req: Request, res: Response): Pr
     return;
   }
   const {
-    employeeNumber, username, displayName, email, phone, subdomain, monthlySalary,
+    employeeNumber, username, displayName, email, phone, monthlySalary,
     destinationType, destinationDetails,
   } = req.body ?? {};
+  const normalizedEmail = normalizeStaffEmail(email);
+  const internalSubdomain = `staff-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
   const normalizedDestination = normalizePayoutDestination(destinationType, destinationDetails);
   if (
     typeof employeeNumber !== "string" || !/^[A-Z0-9-]{3,32}$/i.test(employeeNumber.trim()) ||
     typeof username !== "string" || !/^[a-z0-9][a-z0-9._-]{2,31}$/i.test(username.trim()) ||
     typeof displayName !== "string" || displayName.trim().length < 2 || displayName.length > 120 ||
-    !validEmployeeSubdomain(subdomain) || !isMoneyString(monthlySalary) ||
+    !normalizedEmail || !/^[a-z0-9-]{3,63}$/.test(internalSubdomain) || !isMoneyString(monthlySalary) ||
     !normalizedDestination
   ) {
-    res.status(400).json({ ok: false, error: "Complete the employee, salary, subdomain, and payout destination fields." });
+    res.status(400).json({ ok: false, error: "Complete the Staff member, email, salary, and payout destination fields." });
     return;
   }
   const clearToken = newEmployeeToken();
@@ -221,9 +412,9 @@ router.post("/employee/admin/employees", async (req: Request, res: Response): Pr
       p_employee_number: employeeNumber.trim().toUpperCase(),
       p_username: username.trim().toLowerCase(),
       p_display_name: displayName.trim(),
-      p_email: typeof email === "string" ? email.trim().slice(0, 254) : "",
+      p_email: normalizedEmail,
       p_phone: typeof phone === "string" ? phone.trim().slice(0, 40) : "",
-      p_subdomain: subdomain.toLowerCase(),
+      p_subdomain: internalSubdomain,
       p_salary: monthlySalary,
       p_destination_type: normalizedDestination.type,
       p_destination_ciphertext: encrypted.ciphertext,
@@ -233,20 +424,24 @@ router.post("/employee/admin/employees", async (req: Request, res: Response): Pr
       p_actor_id: "super_admin",
     });
     const created = safeRpcObject(result);
-    if (!created.id) throw new Error("Employee record could not be created.");
+    if (!created.id) throw new Error("Staff record could not be created.");
     res.status(201).json({
       ok: true,
-      employee: created,
-      invitationUrl: employeeInvitationUrl(subdomain, clearToken),
+      employee: {
+        id: created.id,
+        employee_number: created.employee_number,
+        username: created.username,
+      },
+      invitationUrl: staffActivationUrl(clearToken),
       invitationExpiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
     if (/duplicate|unique/i.test(message)) {
-      res.status(409).json({ ok: false, error: "Employee number, username, or subdomain is already in use." });
+      res.status(409).json({ ok: false, error: "Staff ID, username, or email is already in use." });
       return;
     }
-    res.status(503).json({ ok: false, error: "Employee registration could not be saved." });
+    res.status(503).json({ ok: false, error: "The Staff account could not be saved." });
   }
 });
 
@@ -259,20 +454,63 @@ router.get("/employee/admin/employees", async (req: Request, res: Response): Pro
   try {
     const employees = await sbSelectStrict<Record<string, unknown>>(
       "employee_profiles",
-      "select=id,employee_number,username,display_name,email,phone,subdomain,status,fixed_monthly_salary,created_at&order=created_at.desc",
+      "select=id,employee_number,username,display_name,email,phone,status,fixed_monthly_salary,created_at&order=created_at.desc",
     );
     res.json({ ok: true, employees });
   } catch {
-    res.status(503).json({ ok: false, error: "Employee records are unavailable. Apply the employee portal migration first." });
+    res.status(503).json({ ok: false, error: "Staff records are unavailable. Apply the Staff portal migration first." });
+  }
+});
+
+router.patch("/employee/admin/employees/:id/contact", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  const employeeId = String(req.params.id ?? "");
+  const email = normalizeStaffEmail(req.body?.email);
+  const phoneInput = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  const phone = phoneInput ? normalizeStaffPhone(phoneInput) : null;
+  if (!/^[0-9a-f-]{36}$/i.test(employeeId) || !email || (phoneInput && !phone)) {
+    res.status(400).json({ ok: false, error: "Enter a valid Staff email address and phone number." });
+    return;
+  }
+  try {
+    const rows = await sbRpc<{ outcome: string; employee_id: string | null; email: string | null; phone: string | null }>(
+      "employee_update_staff_contact",
+      { p_employee_id: employeeId, p_email: email, p_phone: phone, p_actor_id: "super_admin" },
+    );
+    const result = rows[0];
+    if (result?.outcome === "duplicate") {
+      res.status(409).json({ ok: false, error: "That email address is already assigned to another Staff account." });
+      return;
+    }
+    if (!result || result.outcome !== "updated" || !result.employee_id) {
+      res.status(404).json({ ok: false, error: "The Staff account could not be updated." });
+      return;
+    }
+    res.json({
+      ok: true,
+      staff: { id: result.employee_id, email: result.email, phone: result.phone },
+      message: "Contact details updated. The Staff member must verify the new email address at next sign-in.",
+    });
+  } catch {
+    res.status(503).json({ ok: false, error: "Staff contact details are unavailable. Apply the Staff portal migration first." });
   }
 });
 
 router.post("/employee/activate", async (req: Request, res: Response): Promise<void> => {
+  if (!staffRequestAllowed(req, res) || !hasSameOrigin(req)) {
+    if (!res.headersSent) res.status(403).json({ ok: false, error: "Request origin could not be verified." });
+    return;
+  }
   if (!enabled(res)) return;
+  if (!await validateStaffTurnstile(req, res, "staff_activate")) return;
   const token = typeof req.body?.token === "string" ? req.body.token : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
   if (token.length < 32 || password.length < 12 || password.length > 256) {
-    res.status(400).json({ ok: false, error: "Use the invitation link and set a password of at least 12 characters." });
+    res.status(400).json({ ok: false, error: "Use the Staff invitation link and set a password of at least 12 characters." });
     return;
   }
   try {
@@ -283,32 +521,35 @@ router.post("/employee/activate", async (req: Request, res: Response): Promise<v
     if (!safeRpcObject(result).ok) throw new Error("Invitation activation was not confirmed.");
     res.json({ ok: true });
   } catch {
-    res.status(400).json({ ok: false, error: "This invitation is invalid, expired, or already used." });
+    res.status(400).json({ ok: false, error: "This Staff invitation is invalid, expired, or already used." });
   }
 });
 
 router.post("/employee/login", async (req: Request, res: Response): Promise<void> => {
   if (!enabled(res)) return;
-  const subdomain = employeeSubdomainForHost(requestHost(req));
+  if (!staffRequestAllowed(req, res)) return;
+  if (!await validateStaffTurnstile(req, res, "staff_login")) return;
   const username = typeof req.body?.username === "string" ? req.body.username.trim().toLowerCase() : "";
+  const email = normalizeStaffEmail(req.body?.email);
+  const identity = email || username;
   const password = typeof req.body?.password === "string" ? req.body.password : "";
-  if (!subdomain || !username || !password || username.length > 32) {
-    res.status(401).json({ ok: false, error: "Invalid employee credentials." });
+  if (!identity || !password || identity.length > 254 || !hasSameOrigin(req)) {
+    res.status(401).json({ ok: false, error: "The Staff sign-in details could not be verified." });
     return;
   }
-  if (employeeLoginIsLimited(req, username)) {
+  if (employeeLoginIsLimited(req, identity)) {
     res.status(429).json({ ok: false, error: "Too many failed sign-in attempts. Try again later." });
     return;
   }
   try {
     const employees = await sbSelectStrict<EmployeeProfile>(
       "employee_profiles",
-      `subdomain=eq.${encodeURIComponent(subdomain)}&username=eq.${encodeURIComponent(username)}&status=eq.active&select=id,username,display_name,subdomain,status,auth_version&limit=1`,
+      `or=(username.eq.${encodeURIComponent(identity)},email.eq.${encodeURIComponent(identity)})&status=eq.active&select=id,username,display_name,email,status,auth_version&limit=1`,
     );
     const employee = employees[0];
     if (!employee) {
-      recordEmployeeLoginFailure(req, username);
-      res.status(401).json({ ok: false, error: "Invalid employee credentials." });
+      recordEmployeeLoginFailure(req, identity);
+      res.status(401).json({ ok: false, error: "The Staff sign-in details could not be verified." });
       return;
     }
     const credentials = await sbSelectStrict<{ password_hash: string }>(
@@ -316,8 +557,63 @@ router.post("/employee/login", async (req: Request, res: Response): Promise<void
       `employee_id=eq.${encodeURIComponent(employee.id)}&select=password_hash&limit=1`,
     );
     if (!credentials[0] || !await verifyEmployeePassword(credentials[0].password_hash, password)) {
-      recordEmployeeLoginFailure(req, username);
-      res.status(401).json({ ok: false, error: "Invalid employee credentials." });
+      recordEmployeeLoginFailure(req, identity);
+      res.status(401).json({ ok: false, error: "The Staff sign-in details could not be verified." });
+      return;
+    }
+    if (!employee.email) {
+      recordEmployeeLoginFailure(req, identity);
+      res.status(401).json({ ok: false, error: "The Staff sign-in details could not be verified." });
+      return;
+    }
+    const challenge = await employeeAuth.requestLoginOtp({
+      employeeId: employee.id,
+      email: employee.email,
+      ipAddress: req.ip || req.socket.remoteAddress || "",
+    });
+    res.json({ ok: true, step: "email_otp", challengeId: challenge.challengeId, email: employee.email });
+  } catch (error) {
+    if (error instanceof StaffOtpRateLimitError) {
+      res.status(429).json({ ok: false, error: error.message });
+      return;
+    }
+    res.status(503).json({
+      ok: false,
+      error: error instanceof StaffOtpDeliveryError
+        ? error.message
+        : "Staff sign-in is temporarily unavailable.",
+    });
+  }
+});
+
+router.post("/employee/login/verify-otp", async (req: Request, res: Response): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!enabled(res)) return;
+  if (!staffRequestAllowed(req, res) || !hasSameOrigin(req)) {
+    if (!res.headersSent) res.status(403).json({ ok: false, error: "Request origin could not be verified." });
+    return;
+  }
+  if (!await validateStaffTurnstile(req, res, "staff_login_otp")) return;
+  const email = normalizeStaffEmail(req.body?.email);
+  const challengeId = req.body?.challengeId;
+  const code = req.body?.code;
+  if (!email || !isStaffOtpChallengeId(challengeId) || !isStaffOtpCode(code)) {
+    res.status(400).json({ ok: false, error: "Enter the six-digit sign-in code sent to your email." });
+    return;
+  }
+  try {
+    const employeeId = await employeeAuth.verifyLoginOtp({ challengeId, email, code });
+    if (!employeeId) {
+      res.status(401).json({ ok: false, error: "The Staff sign-in code is invalid or expired." });
+      return;
+    }
+    const employees = await sbSelectStrict<EmployeeProfile>(
+      "employee_profiles",
+      `id=eq.${encodeURIComponent(employeeId)}&status=eq.active&select=id,username,display_name,email,status,auth_version&limit=1`,
+    );
+    const employee = employees[0];
+    if (!employee) {
+      res.status(401).json({ ok: false, error: "The Staff account is no longer active." });
       return;
     }
     const token = newEmployeeToken();
@@ -327,11 +623,11 @@ router.post("/employee/login", async (req: Request, res: Response): Promise<void
       auth_version: employee.auth_version,
       expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
     });
-    employeeLoginAttempts.delete(createHash("sha256").update(`${req.ip || "unknown"}:${username}`).digest("hex"));
+    employeeLoginAttempts.delete(createHash("sha256").update(`${req.ip || "unknown"}:${email}`).digest("hex"));
     setSessionCookie(res, token);
     res.json({ ok: true, employee: { id: employee.id, username: employee.username, displayName: employee.display_name } });
   } catch {
-    res.status(503).json({ ok: false, error: "Employee sign-in is temporarily unavailable." });
+    res.status(503).json({ ok: false, error: "Staff sign-in is temporarily unavailable." });
   }
 });
 
@@ -372,7 +668,7 @@ router.get("/employee/dashboard", async (req: Request, res: Response): Promise<v
     const snapshot = await sbRpc<unknown>("employee_dashboard_snapshot", { p_employee_id: employee.id });
     res.json({ ok: true, dashboard: safeRpcObject(snapshot) });
   } catch {
-    res.status(503).json({ ok: false, error: "Employee dashboard data is unavailable." });
+    res.status(503).json({ ok: false, error: "Staff dashboard data is unavailable." });
   }
 });
 
@@ -551,7 +847,7 @@ router.get("/employee/admin/summary", async (req: Request, res: Response): Promi
     );
     res.json({ ok: true, summary: safeRpcObject(result), payoutControls: controls[0] ?? null });
   } catch {
-    res.status(503).json({ ok: false, error: "Employee administration data is unavailable." });
+    res.status(503).json({ ok: false, error: "Staff administration data is unavailable." });
   }
 });
 
@@ -689,7 +985,7 @@ router.get("/employee/admin/salary-history", async (req: Request, res: Response)
   }
   const employeeId = typeof req.query.employeeId === "string" ? req.query.employeeId : "";
   if (!/^[0-9a-f-]{36}$/i.test(employeeId)) {
-    res.status(400).json({ ok: false, error: "Select a valid employee." });
+    res.status(400).json({ ok: false, error: "Select a valid Staff member." });
     return;
   }
   try {

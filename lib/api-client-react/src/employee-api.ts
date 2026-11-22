@@ -7,7 +7,6 @@ export type EmployeePortalEmployee = {
   display_name: string;
   email: string | null;
   phone: string | null;
-  subdomain: string;
   status: "invited" | "active" | "suspended" | "terminated";
   fixed_monthly_salary: string;
   created_at: string;
@@ -46,6 +45,15 @@ export type EmployeeCompensationItem = {
   amount: string; period_start: string; period_end: string; description: string; status: string; created_at: string;
 };
 
+export type StaffSignupRequest = {
+  id: string;
+  full_name: string;
+  phone: string;
+  email: string;
+  email_verified_at: string;
+  created_at: string;
+};
+
 type ApiResult<T> = { ok: true } & T;
 
 async function request<T>(path: string, init: RequestInit = {}, admin = false): Promise<T> {
@@ -65,10 +73,10 @@ async function request<T>(path: string, init: RequestInit = {}, admin = false): 
   try {
     body = JSON.parse(raw) as { ok?: boolean; error?: string } & T;
   } catch {
-    throw new Error(`Employee API returned an invalid response (HTTP ${response.status}).`);
+    throw new Error(`Staff API returned an invalid response (HTTP ${response.status}).`);
   }
   if (!response.ok || body.ok === false) {
-    throw new Error(body.error || `Employee API request failed (HTTP ${response.status}).`);
+    throw new Error(body.error || `Staff API request failed (HTTP ${response.status}).`);
   }
   return body;
 }
@@ -76,24 +84,64 @@ async function request<T>(path: string, init: RequestInit = {}, admin = false): 
 export function useEmployeePortalStatus() {
   return useQuery({
     queryKey: ["employee-portal", "status"],
-    queryFn: () => request<ApiResult<{ enabled: boolean; portal: "admin" | "employee" | "unmatched" }>>("/api/employee/status"),
+    queryFn: () => request<ApiResult<{ enabled: boolean; portal: "admin" | "staff" | "unmatched" }>>("/api/employee/status"),
   });
 }
 
 export function useEmployeeLogin() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (input: { username: string; password: string }) =>
-      request<ApiResult<{ employee: { id: string; username: string; displayName: string } }>>(
+    mutationFn: (input: { username: string; password: string; turnstileToken: string }) =>
+      request<ApiResult<{ step: "email_otp"; challengeId: string; email: string }>>(
         "/api/employee/login", { method: "POST", body: JSON.stringify(input) },
       ),
     onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal"] }),
   });
 }
 
+export function useEmployeeLoginVerifyOtp() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { challengeId: string; email: string; code: string; turnstileToken: string }) =>
+      request<ApiResult<{ employee: { id: string; username: string; displayName: string } }>>(
+        "/api/employee/login/verify-otp", { method: "POST", body: JSON.stringify(input) },
+      ),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal"] }),
+  });
+}
+
+export function useRequestStaffSignupOtp() {
+  return useMutation({
+    mutationFn: (input: { email: string; turnstileToken: string }) =>
+      request<ApiResult<{ challengeId: string; expiresInSeconds: number }>>(
+        "/api/employee/signup/request-otp", { method: "POST", body: JSON.stringify(input) },
+      ),
+  });
+}
+
+export function useVerifyStaffSignupOtp() {
+  return useMutation({
+    mutationFn: (input: { email: string; challengeId: string; code: string; turnstileToken: string }) =>
+      request<ApiResult<{ emailVerificationToken: string; expiresInSeconds: number }>>(
+        "/api/employee/signup/verify-otp", { method: "POST", body: JSON.stringify(input) },
+      ),
+  });
+}
+
+export function useSubmitStaffSignup() {
+  return useMutation({
+    mutationFn: (input: {
+      fullName: string; phone: string; email: string; password: string; confirmPassword: string;
+      emailVerificationToken: string; turnstileToken: string;
+    }) => request<ApiResult<{ status: "pending_approval"; message: string }>>(
+      "/api/employee/signup", { method: "POST", body: JSON.stringify(input) },
+    ),
+  });
+}
+
 export function useEmployeeActivate() {
   return useMutation({
-    mutationFn: (input: { token: string; password: string }) =>
+    mutationFn: (input: { token: string; password: string; turnstileToken: string }) =>
       request<ApiResult<Record<string, never>>>("/api/employee/activate", {
         method: "POST", body: JSON.stringify(input),
       }),
@@ -172,10 +220,48 @@ export function useCreateEmployee() {
   return useMutation({
     mutationFn: (input: {
       employeeNumber: string; username: string; displayName: string; email?: string; phone?: string;
-      subdomain: string; monthlySalary: string; destinationType: string; destinationDetails: Record<string, string>;
+      monthlySalary: string; destinationType: string; destinationDetails: Record<string, string>;
     }) => request<ApiResult<{ employee: EmployeePortalEmployee; invitationUrl: string; invitationExpiresAt: string }>>(
       "/api/employee/admin/employees", { method: "POST", body: JSON.stringify(input) }, true,
     ),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal", "admin"] }),
+  });
+}
+
+export function useUpdateStaffContact() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { id: string; email: string; phone?: string }) =>
+      request<ApiResult<{
+        staff: { id: string; email: string | null; phone: string | null };
+        message: string;
+      }>>(
+        `/api/employee/admin/employees/${encodeURIComponent(input.id)}/contact`,
+        { method: "PATCH", body: JSON.stringify({ email: input.email, phone: input.phone ?? "" }) },
+        true,
+      ),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal", "admin"] }),
+  });
+}
+
+export function usePendingStaffSignups() {
+  return useQuery({
+    queryKey: ["employee-portal", "admin", "signups"],
+    queryFn: async () => (await request<ApiResult<{ signups: StaffSignupRequest[] }>>(
+      "/api/employee/admin/signups", {}, true,
+    )).signups,
+  });
+}
+
+export function useReviewStaffSignup() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { id: string; decision: "approve" | "reject"; note?: string }) =>
+      request<ApiResult<{ request: { id: string; status: string; employeeId: string | null }; notificationSent: boolean }>>(
+        `/api/employee/admin/signups/${encodeURIComponent(input.id)}/review`,
+        { method: "POST", body: JSON.stringify({ decision: input.decision, note: input.note }) },
+        true,
+      ),
     onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal", "admin"] }),
   });
 }

@@ -6,13 +6,12 @@ import test from "node:test";
 import { hashEmployeeSecret } from "../lib/employee-portal-security.js";
 
 process.env.EMPLOYEE_PORTAL_ENABLED = "true";
-process.env.EMPLOYEE_ADMIN_HOST = "employee1088.isplatty.com";
 process.env.VITE_SUPABASE_URL = "https://employee-portal-test.invalid";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "test-only-not-a-secret";
 
 const { default: employeePortalRouter } = await import("./employee-portal-route.js");
 
-test("employee routes require an authenticated Super Admin or host-bound employee session", async (t) => {
+test("Staff routes require an authenticated Super Admin or active Staff session", async (t) => {
   const app = express();
   app.use(express.json());
   app.use("/api", employeePortalRouter);
@@ -58,15 +57,15 @@ test("employee routes require an authenticated Super Admin or host-bound employe
   const adminStatus = await get("/employee/status", "employee1088.isplatty.com");
   assert.equal(adminStatus.body.portal, "admin");
 
-  const employeeStatus = await get("/employee/status", "jane.employees.isplatty.com");
-  assert.equal(employeeStatus.body.portal, "employee");
+  const staffStatus = await get("/employee/status", "staff.isplatty.com");
+  assert.equal(staffStatus.body.portal, "staff");
 
-  const legacyEmployeeStatus = await get("/employee/status", "jane.employees.isplatty.org");
-  assert.equal(legacyEmployeeStatus.body.portal, "employee");
+  const obsoleteStaffStatus = await get("/employee/status", "jane.employees.isplatty.com");
+  assert.equal(obsoleteStaffStatus.body.portal, "unmatched");
 
-  const employeeNoSession = await get("/employee/dashboard", "jane.employees.isplatty.com");
-  assert.equal(employeeNoSession.status, 401);
-  assert.equal(employeeNoSession.body.error, "Employee sign-in is required.");
+  const staffNoSession = await get("/employee/dashboard", "staff.isplatty.com");
+  assert.equal(staffNoSession.status, 401);
+  assert.equal(staffNoSession.body.error, "Staff sign-in is required.");
 
   const employeeWrongHost = await get(
     "/employee/dashboard",
@@ -74,7 +73,7 @@ test("employee routes require an authenticated Super Admin or host-bound employe
     "bil_employee_session=fake-session",
   );
   assert.equal(employeeWrongHost.status, 401);
-  assert.equal(employeeWrongHost.body.error, "Employee sign-in is required.");
+  assert.equal(employeeWrongHost.body.error, "Staff sign-in is required.");
 
   const previousFetch = globalThis.fetch;
   const sessionToken = "test-session-for-another-employee";
@@ -95,19 +94,18 @@ test("employee routes require an authenticated Super Admin or host-bound employe
     throw new Error("Unexpected test Supabase request.");
   };
   try {
-    const employeeFromOtherSubdomain = await get(
+    const staffSession = await get(
       "/employee/dashboard",
-      "jane.employees.isplatty.com",
+      "staff.isplatty.com",
       `bil_employee_session=${sessionToken}`,
     );
-    assert.equal(employeeFromOtherSubdomain.status, 401);
-    assert.equal(employeeFromOtherSubdomain.body.error, "Employee session is no longer valid.");
+    assert.equal(staffSession.status, 401);
+    assert.equal(staffSession.body.error, "Staff session is no longer valid.");
     assert.ok(requestedUrls.some((url) =>
       url.includes(`token_hash=eq.${hashEmployeeSecret(sessionToken)}`),
     ));
-    assert.ok(requestedUrls.some((url) =>
-      url.includes("subdomain=eq.jane"),
-    ));
+    assert.ok(requestedUrls.some((url) => url.includes("status=eq.active")));
+    assert.ok(requestedUrls.every((url) => !url.includes("subdomain=eq.")));
   } finally {
     globalThis.fetch = previousFetch;
   }

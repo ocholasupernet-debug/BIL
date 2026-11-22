@@ -556,3 +556,26 @@
   .ep-form-actions { flex-wrap: wrap; }
   .ep-form-actions .ep-button { flex: 1; }
 }
+
+.ep-signup-prompt { margin: 18px 0 0; text-align: center; }
+.ep-signup-prompt .ep-text-button { display: inline; margin-left: 4px; }
+.ep-pending-actions { display: grid; justify-items: center; gap: 12px; padding-top: 10px; text-align: center; }
+.ep-pending-mark, .ep-signup-request-icon {
+  width: 44px; height: 44px; display: grid; place-items: center; border-radius: 14px;
+  color: var(--ep-teal-deep); background: #e8f3ef;
+}
+.ep-signup-queue { display: grid; gap: 10px; }
+.ep-signup-request {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 14px;
+  padding: 16px; border: 1px solid var(--ep-line); border-radius: 14px; background: #fff;
+}
+.ep-signup-request-details { min-width: 0; display: grid; gap: 3px; }
+.ep-signup-request-details strong { color: var(--ep-ink); font-family: "Manrope", sans-serif; }
+.ep-signup-request-details span { color: var(--ep-teal-deep); overflow-wrap: anywhere; }
+.ep-signup-request-details small { color: var(--ep-muted); }
+.ep-signup-request-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+@media (max-width: 720px) {
+  .ep-signup-request { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .ep-signup-request-actions { grid-column: 1 / -1; justify-content: stretch; }
+  .ep-signup-request-actions .ep-button { flex: 1; }
+}

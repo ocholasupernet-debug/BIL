@@ -46,7 +46,14 @@ export function TurnstileCheck({
   onToken,
   size = "normal",
 }: {
-  action: "admin_login";
+  action:
+    | "admin_login"
+    | "staff_login"
+    | "staff_login_otp"
+    | "staff_activate"
+    | "staff_signup_request"
+    | "staff_signup_verify"
+    | "staff_signup_complete";
   resetKey: number;
   onToken: (token: string) => void;
   size?: "normal" | "compact" | "flexible";

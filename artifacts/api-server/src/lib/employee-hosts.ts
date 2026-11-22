@@ -1,13 +1,5 @@
-import { validEmployeeSubdomain } from "./employee-portal-security.js";
-
-export const EMPLOYEE_PORTAL_DOMAIN = "isplatty.com";
-const LEGACY_EMPLOYEE_PORTAL_DOMAIN = "isplatty.org";
-const CANONICAL_EMPLOYEE_ADMIN_HOST = `employee1088.${EMPLOYEE_PORTAL_DOMAIN}`;
-const LEGACY_EMPLOYEE_ADMIN_HOST = `employee1088.${LEGACY_EMPLOYEE_PORTAL_DOMAIN}`;
-const configuredAdminHost = (process.env.EMPLOYEE_ADMIN_HOST || CANONICAL_EMPLOYEE_ADMIN_HOST)
-  .trim()
-  .toLowerCase()
-  .replace(/\.$/, "");
+export const STAFF_PORTAL_HOST = "staff.isplatty.com";
+const CANONICAL_EMPLOYEE_ADMIN_HOST = "employee1088.isplatty.com";
 
 function hostnameOnly(host: string): string {
   return host.trim().toLowerCase().replace(/\.$/, "").split(":")[0] ?? "";
@@ -15,27 +7,23 @@ function hostnameOnly(host: string): string {
 
 export function isEmployeeAdminHost(host: string): boolean {
   const normalized = hostnameOnly(host);
-  return new Set([
-    configuredAdminHost,
-    CANONICAL_EMPLOYEE_ADMIN_HOST,
-    LEGACY_EMPLOYEE_ADMIN_HOST,
-  ]).has(normalized);
+  return normalized === CANONICAL_EMPLOYEE_ADMIN_HOST;
 }
 
-export function employeeSubdomainForHost(host: string): string | null {
+export function isStaffPortalHost(host: string): boolean {
   const normalized = hostnameOnly(host);
-  for (const domain of [EMPLOYEE_PORTAL_DOMAIN, LEGACY_EMPLOYEE_PORTAL_DOMAIN]) {
-    const suffix = `.employees.${domain}`;
-    if (!normalized.endsWith(suffix)) continue;
-    const label = normalized.slice(0, -suffix.length);
-    return validEmployeeSubdomain(label) ? label : null;
-  }
-  return null;
+  if (normalized === STAFF_PORTAL_HOST) return true;
+  if (process.env.NODE_ENV === "production") return false;
+
+  const configuredPreviewHost = hostnameOnly(process.env.REPLIT_DEV_DOMAIN || "");
+  return normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    (configuredPreviewHost !== "" && normalized === configuredPreviewHost);
 }
 
-export function employeeInvitationUrl(subdomain: string, token: string): string {
-  if (!validEmployeeSubdomain(subdomain)) {
-    throw new Error("Invalid employee subdomain.");
+export function staffActivationUrl(token: string): string {
+  if (!/^[A-Za-z0-9_-]{40,64}$/.test(token)) {
+    throw new Error("Invalid staff invitation token.");
   }
-  return `https://${subdomain.toLowerCase()}.employees.${EMPLOYEE_PORTAL_DOMAIN}/employee/activate#token=${encodeURIComponent(token)}`;
+  return `https://${STAFF_PORTAL_HOST}/staff/activate#token=${encodeURIComponent(token)}`;
 }
