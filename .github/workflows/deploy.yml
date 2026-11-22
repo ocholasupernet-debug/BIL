@@ -88,6 +88,21 @@ jobs:
             exit 1
           fi
 
+      - name: Require guarded mode for employee admin HTTPS repair
+        if: startsWith(github.ref, 'refs/heads/deploy/employee-admin-com-repair-')
+        shell: bash
+        env:
+          APP_ONLY_RELEASE: ${{ inputs.application_only_release }}
+          TARGET_CUTOVER: ${{ inputs.supabase_target_cutover }}
+          INSPECT_ONLY: ${{ inputs.inspect_api_errors }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$APP_ONLY_RELEASE" != true ||
+                "$TARGET_CUTOVER" == true || "$INSPECT_ONLY" == true ]]; then
+            echo "Employee admin HTTPS repair requires a manual, app-only release."
+            exit 1
+          fi
+          bash -n deploy/restore-employee-admin-https.sh
+
       - name: Test router-management VPN bootstrap decisions
         run: bash deploy/tests/bootstrap-router-management-vpn.test.sh
 
@@ -194,6 +209,28 @@ jobs:
             --exclude='*.log' \
             -czf "$release_archive" .
           mv "$release_archive" ocholasupernet-release.tgz
+
+      - name: Restore only employee admin HTTPS at the origin
+        if: startsWith(github.ref, 'refs/heads/deploy/employee-admin-com-repair-') && inputs.application_only_release && !inputs.supabase_target_cutover
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: 102.203.116.204
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          fingerprint: "SHA256:XlSA4l6O/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"
+          port: 22
+          timeout: 30s
+          command_timeout: 8m
+          script_path: deploy/restore-employee-admin-https.sh
+
+      - name: Verify employee admin HTTPS through Cloudflare
+        if: startsWith(github.ref, 'refs/heads/deploy/employee-admin-com-repair-') && inputs.application_only_release && !inputs.supabase_target_cutover
+        run: |
+          curl --fail --silent --show-error --max-time 15 \
+            --retry 4 --retry-delay 5 --retry-all-errors \
+            https://employee1088.isplatty.com/api/healthz |
+            node -e 'const body=JSON.parse(require("fs").readFileSync(0, "utf8")); if(body.status!=="ok") process.exit(1)'
 
       - name: Encode runtime SSH material
         if: ${{ !inputs.application_only_release && !inputs.supabase_target_cutover }}

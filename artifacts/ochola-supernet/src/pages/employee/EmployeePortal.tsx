@@ -373,7 +373,7 @@ function ActivityTable({ dashboard, full = false, onCancel }: {
 }
 
 export function EmployeeAdminPage() {
-  return <PortalGate><AdminAccessGate /></PortalGate>;
+  return <AdminAccessGate />;
 }
 
 function AdminAccessGate() {
@@ -385,7 +385,7 @@ function AdminAccessGate() {
     <p>Employee administration is restricted to an authenticated Super Admin session. No administration data is loaded until you sign in.</p>
     <button className="ep-button ep-button-primary" onClick={() => setLocation("/super-admin/login")}>Go to Super Admin sign in <ArrowRight size={16} /></button>
   </section></PortalFrame>;
-  return <AdminPortal />;
+  return <PortalGate><AdminPortal /></PortalGate>;
 }
 
 function AdminPortal() {
@@ -711,7 +711,7 @@ function RegistrationDestinationFields({ type, onTypeChange }: { type: string; o
 }
 
 function EmployeeTable({ employees }: { employees: EmployeePortalEmployee[] }) {
-  return <div className="ep-table-wrap"><table className="ep-table ep-admin-table"><thead><tr><th>Employee</th><th>Account</th><th>Subdomain</th><th>Monthly salary</th><th>Status</th></tr></thead><tbody>{employees.map((employee) => <tr key={employee.id}><td><strong>{employee.display_name}</strong><small>{employee.employee_number}</small></td><td>{employee.username}<small>{employee.email || employee.phone || "No contact details"}</small></td><td className="ep-mono">{employee.subdomain}.employees.isplatty.org</td><td className="ep-amount">{money(employee.fixed_monthly_salary)}</td><td><StatusPill status={employee.status} /></td></tr>)}</tbody></table><div className="ep-mobile-rows">{employees.map((employee) => <article key={`mobile-${employee.id}`}><div><strong>{employee.display_name}</strong><small>{employee.employee_number} · {employee.username}</small></div><StatusPill status={employee.status} /><small>{employee.subdomain}.employees.isplatty.org · {money(employee.fixed_monthly_salary)}/month</small></article>)}</div></div>;
+  return <div className="ep-table-wrap"><table className="ep-table ep-admin-table"><thead><tr><th>Employee</th><th>Account</th><th>Subdomain</th><th>Monthly salary</th><th>Status</th></tr></thead><tbody>{employees.map((employee) => <tr key={employee.id}><td><strong>{employee.display_name}</strong><small>{employee.employee_number}</small></td><td>{employee.username}<small>{employee.email || employee.phone || "No contact details"}</small></td><td className="ep-mono">{employee.subdomain}.employees.isplatty.com</td><td className="ep-amount">{money(employee.fixed_monthly_salary)}</td><td><StatusPill status={employee.status} /></td></tr>)}</tbody></table><div className="ep-mobile-rows">{employees.map((employee) => <article key={`mobile-${employee.id}`}><div><strong>{employee.display_name}</strong><small>{employee.employee_number} · {employee.username}</small></div><StatusPill status={employee.status} /><small>{employee.subdomain}.employees.isplatty.com · {money(employee.fixed_monthly_salary)}/month</small></article>)}</div></div>;
 }
 
 type PendingDestination = NonNullable<ReturnType<typeof usePendingEmployeeDestinations>["data"]>[number];

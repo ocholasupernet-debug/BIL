@@ -4,6 +4,11 @@ import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict, sbUpsertStrict }
 import { getMpesaSettings } from "../lib/settings-store.js";
 import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import {
+  employeeInvitationUrl,
+  employeeSubdomainForHost,
+  isEmployeeAdminHost,
+} from "../lib/employee-hosts.js";
+import {
   encryptEmployeePayoutDetails,
   hashEmployeePassword,
   hashEmployeeSecret,
@@ -19,7 +24,6 @@ import {
 
 const router: IRouter = Router();
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const EMPLOYEE_ADMIN_HOST = (process.env.EMPLOYEE_ADMIN_HOST || "employee1088.isplatty.org").toLowerCase();
 const employeeLoginAttempts = new Map<string, { count: number; startedAt: number }>();
 
 type EmployeeProfile = {
@@ -57,13 +61,6 @@ function hasSameOrigin(req: Request): boolean {
   } catch {
     return false;
   }
-}
-
-function employeeSubdomainForHost(host: string): string | null {
-  const suffix = ".employees.isplatty.org";
-  if (!host.endsWith(suffix)) return null;
-  const label = host.slice(0, -suffix.length);
-  return validEmployeeSubdomain(label) ? label : null;
 }
 
 function isSuperAdmin(req: Request): boolean {
@@ -179,7 +176,7 @@ router.get("/employee/status", (req: Request, res: Response): void => {
   res.json({
     ok: true,
     enabled: process.env.EMPLOYEE_PORTAL_ENABLED === "true",
-    portal: requestHost(req) === EMPLOYEE_ADMIN_HOST ? "admin" :
+    portal: isEmployeeAdminHost(requestHost(req)) ? "admin" :
       employeeSubdomainForHost(requestHost(req)) ? "employee" : "unmatched",
   });
 });
@@ -228,7 +225,7 @@ router.post("/employee/admin/employees", async (req: Request, res: Response): Pr
     res.status(201).json({
       ok: true,
       employee: created,
-      invitationUrl: `https://${subdomain.toLowerCase()}.employees.isplatty.org/employee/activate#token=${encodeURIComponent(clearToken)}`,
+      invitationUrl: employeeInvitationUrl(subdomain, clearToken),
       invitationExpiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
     });
   } catch (error) {
