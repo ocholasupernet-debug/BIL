@@ -118,7 +118,9 @@ export default function SuperAdminLogin() {
         return;
       }
       setSuperAdminSession(data.name ?? username, data.token, data.issuedAt);
-      setLocation("/super-admin/dashboard");
+      setLocation(window.location.hostname === "employee1088.isplatty.com"
+        ? "/employee/admin"
+        : "/super-admin/dashboard");
     } catch {
       setError("Could not reach the server. Please try again.");
     } finally {

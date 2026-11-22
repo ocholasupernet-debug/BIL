@@ -373,7 +373,7 @@ function ActivityTable({ dashboard, full = false, onCancel }: {
 }
 
 export function EmployeeAdminPage() {
-  return <PortalGate><AdminAccessGate /></PortalGate>;
+  return <AdminAccessGate />;
 }
 
 function AdminAccessGate() {
@@ -385,7 +385,7 @@ function AdminAccessGate() {
     <p>Employee administration is restricted to an authenticated Super Admin session. No administration data is loaded until you sign in.</p>
     <button className="ep-button ep-button-primary" onClick={() => setLocation("/super-admin/login")}>Go to Super Admin sign in <ArrowRight size={16} /></button>
   </section></PortalFrame>;
-  return <AdminPortal />;
+  return <PortalGate><AdminPortal /></PortalGate>;
 }
 
 function AdminPortal() {
