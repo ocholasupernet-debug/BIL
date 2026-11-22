@@ -2,7 +2,6 @@
 - [VPS deployment verification](vps-deployment-verification.md) — Verify live source/artifacts; preserve composite fixes, build off-server, and drain API requests before restart.
 - [Authorization test contracts](authorization-test-contracts.md) — Verify tenant ownership and actual service denial; roaming can legitimately read plans from another origin service.
 - [Theme token cascade](theme-token-cascade.md) — Update the final legacy token layer too; later root declarations can silently override the primary design system.
-- [Wildcard certificate deployment](wildcard-certificate-deployment.md) — Install a separately supplied SAN certificate through encrypted Actions secrets; never commit its private key.
 - [GitHub connector commit flow](github-connector-commit.md) — Read files individually, compare the full remote tree with local tracked files, then use one non-forced tree/commit/ref update.
 - [GitHub connector blob encoding](github-connector-blob-encoding.md) — Use readFile UTF-8 for large blobs, upload sequentially, and verify each returned SHA.
 - [GitHub connector workflow writes](github-connector-workflow-writes.md) — Workflow Contents APIs can be filtered; inspect through Git tree/blob and verify refs after branch writes.
@@ -46,7 +45,7 @@
 - [Brand logo asset](brand-logo-asset.md) — Remove only the connected white background from the source logo so internal highlights remain intact.
 - [Coexistence service isolation](coexistence-service-isolation.md) — Use uniquely named local services and never move foreign bridge ports or rewrite router-global RADIUS.
 - [Shared public IP VPN diagnostics](shared-public-ip-vpn-diagnostics.md) — Identify peers by OpenVPN common name and tunnel address, not source IP alone.
-- [Production tenant DNS](production-tenant-dns.md) — isplatty.org is not Cloudflare-managed; tenant HTTPS may require host-specific certificates unless DNS-01 is handled by the actual provider.
+- [Production tenant DNS](production-tenant-dns.md) — Verify Namecheap DNS and employee-host SAN coverage; Cloudflare DNS automation does not control the .org zone.
 - [Service credential process safety](service-credential-process-safety.md) — Never pass deployment credentials as CLI arguments; process listings and service status can expose them.
 - [Tenant self-install HTTPS](tenant-self-install-https.md) — Verified router profiles must download from the signed-in company hostname, not a shared API origin.
 - [Tenant router naming](tenant-router-naming.md) — New routers use the company subdomain plus the next available number, such as come1 and come2.
