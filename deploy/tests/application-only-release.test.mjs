@@ -32,8 +32,9 @@ test("manual application-only workflow does not forward runtime secrets to SSH",
   const sshStart = workflow.indexOf("- name: Deploy via SSH");
   const sshEnd = workflow.indexOf("\n      - name:", sshStart + 1);
   const sshStep = workflow.slice(sshStart, sshEnd);
-  const forwarded = sshStep.match(
-    /envs:\s*\$\{\{\s*inputs\.application_only_release\s*&&\s*'([^']+)'\s*\|\|/,
+  const envsExpression = sshStep.match(/envs:\s*\$\{\{\s*([\s\S]*?)\s*\}\}/)?.[1] ?? "";
+  const forwarded = envsExpression.match(
+    /inputs\.application_only_release\s*&&\s*'([^']+)'\s*\|\|/,
   )?.[1];
   assert.deepEqual(forwarded?.split(","), [
     "APP_ONLY_RELEASE",
@@ -41,16 +42,20 @@ test("manual application-only workflow does not forward runtime secrets to SSH",
     "DEPLOY_SKIP_ROUTER_ONESHOTS",
   ]);
   assert.match(
-    sshStep,
-    /APP_ONLY_RELEASE: \$\{\{ inputs\.application_only_release \}\}/,
+    envsExpression,
+    /inputs\.supabase_target_cutover\s*&&\s*'SUPABASE_TARGET_CUTOVER,SUPABASE_DEST_URL,SUPABASE_DEST_PUBLISHABLE_KEY,SUPABASE_DEST_SERVICE_ROLE_KEY,SUPABASE_DEST_DB_URL,APP_ONLY_RELEASE,DEPLOY_REFRESH_PM2_ENV,DEPLOY_VERIFY_SUPABASE_TARGET,DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP,DEPLOY_SKIP_ROUTER_ONESHOTS'/,
   );
   assert.match(
     sshStep,
-    /DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: \$\{\{ github\.event_name == 'push' \|\| inputs\.skip_router_management_setup \|\| inputs\.application_only_release \}\}/,
+    /APP_ONLY_RELEASE: \$\{\{ inputs\.application_only_release \|\| inputs\.supabase_target_cutover \}\}/,
   );
   assert.match(
     sshStep,
-    /DEPLOY_SKIP_ROUTER_ONESHOTS: \$\{\{ github\.event_name == 'push' \|\| inputs\.skip_router_oneshots \|\| inputs\.application_only_release \}\}/,
+    /DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP: \$\{\{ github\.event_name == 'push' \|\| inputs\.skip_router_management_setup \|\| inputs\.application_only_release \|\| inputs\.supabase_target_cutover \}\}/,
+  );
+  assert.match(
+    sshStep,
+    /DEPLOY_SKIP_ROUTER_ONESHOTS: \$\{\{ github\.event_name == 'push' \|\| inputs\.skip_router_oneshots \|\| inputs\.application_only_release \|\| inputs\.supabase_target_cutover \}\}/,
   );
   assert.match(
     workflow,
@@ -61,9 +66,10 @@ test("manual application-only workflow does not forward runtime secrets to SSH",
 test("application-only workflow skips VPS config writes, Nginx, database, and router steps", async () => {
   const workflow = await source(".github/workflows/deploy.yml");
   assert.match(workflow, /--exclude='\.\/data\/backups'/);
+  assert.match(workflow, /--exclude='\.\/generated-artifacts'/);
   assert.match(
     workflow,
-    /- name: Verify app-only build still targets BIL source\n\s+if: inputs\.application_only_release\n\s+env:\n\s+VITE_SUPABASE_URL: \$\{\{ secrets\.VITE_SUPABASE_URL \}\}\n\s+run: node deploy\/verify-supabase-build-target\.mjs/,
+    /- name: Verify destination build target\n\s+env:\n\s+VITE_SUPABASE_URL: \$\{\{ secrets\.SUPABASE_DEST_URL \}\}\n\s+run: node deploy\/verify-supabase-build-target\.mjs/,
   );
   assert.doesNotMatch(workflow, /deploy\/validate-r2-env\.mjs/);
   assert.match(
@@ -82,15 +88,17 @@ test("application-only workflow skips VPS config writes, Nginx, database, and ro
 
   const deploy = await source("deploy/deploy.sh");
   const appOnlyGuard = deploy.indexOf('case "${DEPLOY_APP_ONLY:-false}" in');
+  const packagePreparation = deploy.indexOf("ensure_pg_dump_available\n");
   const databaseMigration = deploy.indexOf("apply_supabase_migration() {");
-  assert.ok(appOnlyGuard >= 0 && databaseMigration > appOnlyGuard);
+  assert.ok(appOnlyGuard >= 0 && packagePreparation > appOnlyGuard);
+  assert.ok(databaseMigration > appOnlyGuard);
   assert.match(
     deploy.slice(appOnlyGuard, databaseMigration),
     /app-only-release\.sh[\s\S]*?exit 0/,
   );
 });
 
-test("app-only build target check accepts only the source project and never prints the URL", async (t) => {
+test("build target check accepts only the destination project and never prints the URL", async (t) => {
   const script = path.join(repoRoot, "deploy/verify-supabase-build-target.mjs");
   const sentinel = "do-not-print-the-configured-url";
   const run = (url) =>
@@ -102,7 +110,7 @@ test("app-only build target check accepts only the source project and never prin
       },
     });
 
-  const valid = run("https://qfsxsbzaqwmyuxhramyw.supabase.co");
+  const valid = run("https://vuvyweofsutgqdtbjckj.supabase.co");
   assert.equal(valid.status, 0, valid.stderr);
 
   const wrongProject = run(
@@ -219,7 +227,9 @@ test("app-only release preserves the existing .env and skips infrastructure comm
   assert.doesNotMatch(calls, /nginx|systemctl|router|supabase|migration/i);
   assert.doesNotMatch(calls, /pm2 start|--update-env/);
   const releaseScript = await source("deploy/app-only-release.sh");
-  assert.doesNotMatch(releaseScript, /source .*\.env|--update-env|pm2 start/);
+  assert.doesNotMatch(releaseScript, /source .*\.env|pm2 start/);
+  assert.match(releaseScript, /DEPLOY_REFRESH_PM2_ENV:-false/);
+  assert.match(releaseScript, /verify-supabase-runtime-target\.mjs/);
 });
 
 test("app-only release refuses to start without an existing archive and VPS .env", async (t) => {

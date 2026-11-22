@@ -7,6 +7,8 @@ test("super-admin router deletion revokes planned temporary VPN clients and remo
     "SUPERADMIN_USERNAME",
     "SUPERADMIN_API_KEY",
     "SUPERADMIN_PASSWORD",
+    "TURNSTILE_SECRET",
+    "GMAIL_APP_PASSWORD",
     "VITE_SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
   ] as const;
@@ -14,6 +16,8 @@ test("super-admin router deletion revokes planned temporary VPN clients and remo
   process.env.SUPERADMIN_USERNAME = "router-delete-test";
   process.env.SUPERADMIN_API_KEY = "router-delete-api-test";
   process.env.SUPERADMIN_PASSWORD = "router-delete-password-test";
+  process.env.TURNSTILE_SECRET = "router-delete-turnstile-test";
+  process.env.GMAIL_APP_PASSWORD = "";
   process.env.VITE_SUPABASE_URL = "https://router-delete-test.supabase.co";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "router-delete-service-test";
 
@@ -40,6 +44,13 @@ test("super-admin router deletion revokes planned temporary VPN clients and remo
   globalThis.fetch = async (input, init) => {
     const url = new URL(String(input));
     if (url.hostname === "127.0.0.1") return originalFetch(input, init);
+    if (url.hostname === "challenges.cloudflare.com") {
+      return new Response(JSON.stringify({
+        success: true,
+        hostname: "isplatty.org",
+        action: "admin_login",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
     assert.equal(url.hostname, "router-delete-test.supabase.co");
 
     if (url.pathname.endsWith("/rest/v1/rpc/prepare_super_admin_router_deletion")) {
@@ -87,11 +98,12 @@ test("super-admin router deletion revokes planned temporary VPN clients and remo
     const endpoint = `http://127.0.0.1:${address.port}/api`;
     const loginResponse = await originalFetch(`${endpoint}/super-admin/login`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Origin: "https://isplatty.org" },
       body: JSON.stringify({
         username: "router-delete-test",
         api_key: "router-delete-api-test",
         password: "router-delete-password-test",
+        turnstileToken: "router-delete-turnstile-token",
       }),
     });
     assert.equal(loginResponse.status, 200);

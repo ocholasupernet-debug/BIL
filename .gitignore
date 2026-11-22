@@ -4,6 +4,8 @@ tmp/
 out-tsc/
 *.tsbuildinfo
 /data/backups/
+/generated-artifacts/
+/.env.supabase-rollback
 .expo
 .expo-shared
 

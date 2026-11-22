@@ -34,7 +34,11 @@ if ! pm2 describe ocholanet-api >/dev/null 2>&1; then
 fi
 
 mkdir -p "$PROJECT_DIR/logs"
-pm2 reload ocholanet-api
+if [ "${DEPLOY_REFRESH_PM2_ENV:-false}" = "true" ]; then
+  pm2 reload ecosystem.config.cjs --env standalone --update-env
+else
+  pm2 reload ocholanet-api
+fi
 
 api_ready=false
 for attempt in $(seq 1 30); do
@@ -51,6 +55,10 @@ if [ "$api_ready" != "true" ]; then
   echo "Application-only release API health check failed." >&2
   pm2 status || true
   exit 1
+fi
+
+if [ "${DEPLOY_VERIFY_SUPABASE_TARGET:-false}" = "true" ]; then
+  node "$PROJECT_DIR/deploy/verify-supabase-runtime-target.mjs"
 fi
 
 if [ "$(readlink -f "$BUILD_OUTPUT")" != "$(readlink -f "$PUBLIC_HTML")" ]; then

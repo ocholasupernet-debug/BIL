@@ -128,6 +128,26 @@ else
   echo "      → Now on: $(git log -1 --format='%h %s')"
 fi
 
+# A cutover release must return before PostgreSQL tooling, package installs,
+# migrations, Nginx changes, or router actions.
+case "${DEPLOY_APP_ONLY:-false}" in
+  1|true|TRUE|yes|YES)
+    if [ ! -s "$PROJECT_DIR/.env" ] || [ -L "$PROJECT_DIR/.env" ]; then
+      echo "Application-only release requires the existing VPS .env." >&2
+      exit 1
+    fi
+    set -a
+    # shellcheck disable=SC1091
+    source "$PROJECT_DIR/.env"
+    set +a
+    echo "Application-only release requested; skipping database migrations and infrastructure changes."
+    PUBLIC_HTML="$PUBLIC_HTML" \
+    DEPLOY_FROM_ARCHIVE="${DEPLOY_FROM_ARCHIVE:-0}" \
+      bash "$PROJECT_DIR/deploy/app-only-release.sh"
+    exit 0
+    ;;
+esac
+
 # 2. Install dependencies, or reuse the already-installed workspace for an
 # archive release. Set DEPLOY_FORCE_INSTALL=1 when package manifests or the
 # lockfile changed and a fresh registry install is required.
@@ -166,16 +186,6 @@ load_deploy_env() {
     set +a
   fi
 }
-
-case "${DEPLOY_APP_ONLY:-false}" in
-  1|true|TRUE|yes|YES)
-    echo "Application-only release requested; skipping database migrations and infrastructure changes."
-    PUBLIC_HTML="$PUBLIC_HTML" \
-    DEPLOY_FROM_ARCHIVE="${DEPLOY_FROM_ARCHIVE:-0}" \
-      bash "$PROJECT_DIR/deploy/app-only-release.sh"
-    exit 0
-    ;;
-esac
 
 apply_supabase_migration() {
   local migration_file="$PROJECT_DIR/artifacts/api-server/migrations/2026_admin_initial_password_setup.sql"
