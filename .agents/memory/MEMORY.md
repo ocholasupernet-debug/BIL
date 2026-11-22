@@ -102,6 +102,7 @@
 - [Reseller Daraja bridge](reseller-daraja-bridge.md) — Use global encrypted Daraja credentials; reseller rows hold only destinations and callback settlement credits earnings atomically.
 - [Immutable billing boundary](immutable-billing-boundary.md) — Dashboard revenue comes from the append-only ledger; platform renewal payments settle invoices but never count as sales.
 - [Employee finance ledger](employee-finance-ledger.md) — Keep KES compensation exact and immutable; reserve withdrawals first and release or debit only on verified outcomes.
+- [Employee admin authentication](employee-admin-authentication.md) — Keep employee administration behind the existing Super Admin session; do not add a shared default login.
 - [Reseller connection approval](reseller-connection-approval.md) — Either side can clear an approved link only after non-disabled handoffs are removed; request deletion stays separate.
 - [Reseller XPON handoff boundary](reseller-xpon-handoff.md) — ISP-router physical/VLAN handoffs use Ethernet link state and never configure reseller-owned MikroTik services.
 - [Reseller live-data boundary](reseller-live-data-boundary.md) — Verify tenant ownership and assigned-port ownership before fetching live router data or calculating reseller totals.
