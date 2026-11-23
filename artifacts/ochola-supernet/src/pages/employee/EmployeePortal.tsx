@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import {
   ArrowDownToLine, ArrowRight, ArrowUpRight, BadgeCheck, Banknote, BriefcaseBusiness,
-  BookOpen, Check, ChevronRight, CircleAlert, Clock3, CreditCard, Eye, EyeOff, FileText,
+  BookOpen, Check, ChevronRight, CircleAlert, Clock3, Copy, CreditCard, Eye, EyeOff, FileText, Gift,
   Landmark, LockKeyhole, LogOut, Menu, Pencil, RefreshCw, ShieldCheck, UserRound, Users,
   Wallet, X,
 } from "lucide-react";
@@ -17,7 +17,8 @@ import {
   useReviewEmployeeDestination, useReviewEmployeeWithdrawal,
   useSaveEmployeePayoutSettings, useUpdateEmployeeSalary, useEmployeeLoginVerifyOtp,
   usePendingStaffSignups, useReviewStaffSignup, useRequestStaffSignupOtp, useUpdateStaffContact,
-  useVerifyStaffSignupOtp, useSubmitStaffSignup,
+  useVerifyStaffSignupOtp, useSubmitStaffSignup, useAdminEmployeeCredits, usePostEmployeeAdminCredit,
+  useIssueEmployeeAwardCode, useRedeemEmployeeAwardCode,
 } from "@workspace/api-client-react";
 import type { EmployeeCompensationItem, EmployeePortalDashboard, EmployeePortalEmployee, EmployeePortalWithdrawal, StaffSignupRequest } from "@workspace/api-client-react";
 import { TurnstileCheck } from "@/components/TurnstileCheck";
@@ -25,7 +26,7 @@ import { StaffFinanceLogin } from "../super-admin/Login";
 import "./employee.css";
 
 type EmployeeView = "overview" | "activity" | "profile";
-type AdminView = "overview" | "employees" | "signups" | "destinations" | "withdrawals" | "payroll" | "settings";
+type AdminView = "overview" | "employees" | "signups" | "destinations" | "withdrawals" | "payroll" | "credits" | "settings";
 
 const money = (value?: string | number | null) => {
   if (value === undefined || value === null || value === "") return "—";
@@ -471,7 +472,7 @@ function EmployeeDashboardData({ employee, onLogout }: {
            <ActivityTable dashboard={dashboard} onCancel={cancelPendingWithdrawal} />
         </> : <EmptyState title="Account activity is not available" text="Your account data could not be loaded. Please try again shortly." retry={() => void dashboardQuery.refetch()} />}
       </>}
-       {view === "activity" && <>{dashboardQuery.isLoading ? <LoadingBlock /> : dashboardQuery.isError ? <EmptyState title="Could not load pay activity" text={errorText(dashboardQuery.error)} retry={() => void dashboardQuery.refetch()} /> : dashboard ? <><div className="ep-section-heading"><div><p className="ep-eyebrow">PAY & ACCOUNT HISTORY</p><h3>Recent activity</h3><p>Recorded account movements and withdrawal requests.</p></div></div><ActivityTable dashboard={dashboard} full onCancel={cancelPendingWithdrawal} /></> : null}</>}
+       {view === "activity" && <>{dashboardQuery.isLoading ? <LoadingBlock /> : dashboardQuery.isError ? <EmptyState title="Could not load pay activity" text={errorText(dashboardQuery.error)} retry={() => void dashboardQuery.refetch()} /> : dashboard ? <><div className="ep-section-heading"><div><p className="ep-eyebrow">PAY & ACCOUNT HISTORY</p><h3>Recent activity</h3><p>Recorded account movements and withdrawal requests.</p></div></div><AwardCodeRedeemer /><ActivityTable dashboard={dashboard} full onCancel={cancelPendingWithdrawal} /></> : null}</>}
       {view === "profile" && <div className="ep-account-stack"><section className="ep-profile-panel"><p className="ep-eyebrow">ACCOUNT DETAILS</p><h3>Your Staff profile</h3><div className="ep-profile-grid">{[
         ["Name", employee.displayName], ["Username", employee.username], ["Staff ID", employee.id], ["Session", "Secure browser session"],
       ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div><Notice tone="info">For account access or profile corrections, contact your ISPlatty administrator.</Notice></section><DestinationChangePanel destinations={destinationsQuery.data} isLoading={destinationsQuery.isLoading} isError={destinationsQuery.isError} error={destinationsQuery.error} retry={() => void destinationsQuery.refetch()} /></div>}
@@ -557,7 +558,17 @@ function ActivityTable({ dashboard, full = false, onCancel }: {
 }) {
   const rows = [
     ...dashboard.recent_withdrawals.map((withdrawal) => ({ id: withdrawal.id, date: withdrawal.created_at, type: "Withdrawal request", detail: withdrawal.paid_reference ? `Reference ${withdrawal.paid_reference}` : withdrawal.review_note || "Staff request", amount: `− ${money(withdrawal.amount)}`, status: withdrawal.status, canCancel: withdrawal.status === "pending" })),
-    ...dashboard.recent_ledger.map((entry) => ({ id: String(entry.id), date: entry.created_at, type: entry.entry_type.replaceAll("_", " "), detail: entry.reference || "Account entry", amount: money(entry.amount), status: "recorded", canCancel: false })),
+    ...dashboard.recent_ledger.map((entry) => ({
+      id: String(entry.id),
+      date: entry.created_at,
+      type: entry.entry_type === "admin_credit"
+        ? (entry.reference.startsWith("award_code:") ? "Award code credit" : "Administrator credit")
+        : entry.entry_type.replaceAll("_", " "),
+      detail: entry.description || entry.reference || "Account entry",
+      amount: money(entry.amount),
+      status: "recorded",
+      canCancel: false,
+    })),
     ...dashboard.payroll_history.map((payroll) => ({ id: payroll.id, date: payroll.created_at, type: "Payroll", detail: `Salary and earnings for ${payroll.payroll_period_id}`, amount: money(payroll.net_amount), status: "recorded", canCancel: false })),
   ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, full ? 24 : 6);
   if (!rows.length) return <EmptyState title="No activity to show yet" text="Recorded account movements and withdrawal requests will appear here." />;
@@ -565,6 +576,34 @@ function ActivityTable({ dashboard, full = false, onCancel }: {
     <div className="ep-mobile-rows">{rows.map((row) => <article key={`mobile-${row.type}-${row.id}`}><div><strong>{row.type}</strong><small>{row.detail}</small></div><span className="ep-amount">{row.amount}</span><small>{dateTime(row.date)} · <StatusPill status={row.status} /></small>{row.canCancel && onCancel && <button className="ep-text-button" onClick={() => onCancel(row.id)}>Cancel request</button>}</article>)}</div>
   </div>;
 }
+
+function AwardCodeRedeemer() {
+  const redeem = useRedeemEmployeeAwardCode();
+  const [code, setCode] = useState("");
+  const [message, setMessage] = useState("");
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setMessage("");
+    redeem.mutate({ code }, {
+      onSuccess: (result) => {
+        setMessage(`Award redeemed. ${money(result.redemption.amount)} was added to your available balance.`);
+        setCode("");
+      },
+      onError: (error) => setMessage(errorText(error)),
+    });
+  };
+  return <section className="ep-code-redeemer">
+    <div><p className="ep-eyebrow">STAFF AWARD</p><h3>Redeem an award code</h3><p>Codes are private, account-bound, and can be used once before they expire.</p></div>
+    <form onSubmit={submit}>
+      <label htmlFor="staff-award-code">Award code</label>
+      <div><input id="staff-award-code" value={code} onChange={(event) => setCode(event.target.value)} autoComplete="off" spellCheck={false} required placeholder="ISPLAT-AWARD-…" />
+        <button className="ep-button ep-button-primary" disabled={redeem.isPending || !code.trim()}>{redeem.isPending ? "Checking…" : "Redeem code"}</button>
+      </div>
+    </form>
+    {message && <Notice tone={message.startsWith("Award redeemed.") ? "success" : "error"}>{message}</Notice>}
+  </section>;
+}
+
 
 export function EmployeeAdminPage() {
   return <AdminAccessGate />;
@@ -691,7 +730,7 @@ function AdminPortal() {
   const allErrors = [summary.error, employees.error, withdrawals.error, pendingDestinations.error, pendingSignups.error].filter(Boolean);
   const summaryData = summary.data?.summary;
   const menuItems: Array<{ id: AdminView; label: string; icon: typeof Wallet }> = [
-    { id: "overview", label: "Overview", icon: Wallet }, { id: "employees", label: "Staff directory", icon: Users }, { id: "signups", label: "Staff sign-ups", icon: BadgeCheck }, { id: "destinations", label: "Destination changes", icon: CreditCard }, { id: "withdrawals", label: "Withdrawals", icon: ArrowDownToLine }, { id: "payroll", label: "Payroll & commissions", icon: Banknote }, { id: "settings", label: "Payout controls", icon: Landmark },
+    { id: "overview", label: "Overview", icon: Wallet }, { id: "employees", label: "Staff directory", icon: Users }, { id: "signups", label: "Staff sign-ups", icon: BadgeCheck }, { id: "destinations", label: "Destination changes", icon: CreditCard }, { id: "withdrawals", label: "Withdrawals", icon: ArrowDownToLine }, { id: "payroll", label: "Payroll & commissions", icon: Banknote }, { id: "credits", label: "Credits & award codes", icon: Gift }, { id: "settings", label: "Payout controls", icon: Landmark },
   ];
   const handleCreate = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault(); setCreateError(""); setCreatedInvite("");
@@ -804,6 +843,7 @@ function AdminPortal() {
           {view === "destinations" && <EmployeeDestinationReviewPanel destinations={pendingDestinations.data ?? []} isLoading={pendingDestinations.isLoading} onReview={(id, decision) => reviewDestination.mutate({ id, decision }, { onSuccess: () => showNotice(`Payout destination ${decision === "approve" ? "approved" : "rejected"}.`, "success"), onError: (error) => showNotice(errorText(error), "error") })} busy={reviewDestination.isPending} />}
           {view === "withdrawals" && <section className="ep-admin-panel"><div className="ep-section-heading"><div><p className="ep-eyebrow">REVIEW QUEUE</p><h3>Withdrawal requests</h3><p>Approvals are not payments. Recording is for confirmed external bank transfers only.</p></div></div><WithdrawalList withdrawals={withdrawals.data ?? []} onReview={setReviewTarget} onRecord={(item) => { setPaymentId(item.id); setPaymentReference(""); setBankTransferConfirmed(false); }} /><div className="ep-manual-payment"><div><span className="ep-manual-icon"><Landmark size={19} /></span><div><h4>Record confirmed bank transfer only</h4><p>Record a reference after a bank transfer has been completed outside this portal. This does not send funds.</p></div></div><form onSubmit={recordPaymentSubmit}><input aria-label="Withdrawal ID" value={paymentId} onChange={(event) => setPaymentId(event.target.value)} placeholder="Withdrawal ID" required /><input aria-label="External bank transfer reference" value={paymentReference} onChange={(event) => setPaymentReference(event.target.value)} placeholder="Bank transfer reference" required /><label className="ep-bank-confirm"><input type="checkbox" checked={bankTransferConfirmed} onChange={(event) => setBankTransferConfirmed(event.target.checked)} /> I confirm an external bank transfer is complete.</label><button className="ep-button ep-button-secondary" disabled={recordPayment.isPending || !bankTransferConfirmed}>{recordPayment.isPending ? "Recording…" : "Record bank transfer"}</button></form></div></section>}
           {view === "payroll" && <AdminPayrollSection employees={employees.data ?? []} />}
+          {view === "credits" && <AdminCreditsSection employees={employees.data ?? []} />}
           {view === "settings" && <PayoutControlPanel settings={settings.data} isLoading={settings.isLoading} isError={settings.isError} onRetry={() => void settings.refetch()} onEdit={() => setDialog("settings")} />}
         </>}
       </main>
@@ -1037,6 +1077,155 @@ function AdminPayrollSection({ employees }: { employees: EmployeePortalEmployee[
     </section>}
   </section>;
 }
+
+function AdminCreditsSection({ employees }: { employees: EmployeePortalEmployee[] }) {
+  const history = useAdminEmployeeCredits();
+  const postCredit = usePostEmployeeAdminCredit();
+  const issueAwardCode = useIssueEmployeeAwardCode();
+  const [message, setMessage] = useState("");
+  const [issuedCode, setIssuedCode] = useState<{
+    code: string; amount: string; expiresAt: string;
+  } | null>(null);
+  const creditKey = useRef(makeIdempotencyKey());
+  const awardKey = useRef(makeIdempotencyKey());
+  const availableEmployees = employees.filter((employee) => employee.status === "active" && employee.account_type === "employee");
+  const defaultExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000 - new Date().getTimezoneOffset() * 60_000)
+    .toISOString().slice(0, 16);
+  const employeeName = (id: string) => {
+    const employee = employees.find((item) => item.id === id);
+    return employee ? `${employee.display_name} · ${employee.username}` : "Staff member";
+  };
+  const submitCredit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setMessage("");
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const amount = String(values.get("creditAmount") ?? "").trim();
+    const reason = String(values.get("creditReason") ?? "").trim();
+    if (!isPositiveDecimal(amount)) {
+      setMessage("Enter a positive KES amount as an exact decimal with up to two places.");
+      return;
+    }
+    postCredit.mutate({
+      employeeId: String(values.get("creditEmployee") ?? ""),
+      amount,
+      reason,
+      idempotencyKey: creditKey.current,
+    }, {
+      onSuccess: () => {
+        setMessage("Staff credit posted to the immutable ledger.");
+        form.reset();
+        creditKey.current = makeIdempotencyKey();
+        void history.refetch();
+      },
+      onError: (error) => setMessage(errorText(error)),
+    });
+  };
+  const submitAwardCode = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setMessage("");
+    setIssuedCode(null);
+    const form = event.currentTarget;
+    const values = new FormData(form);
+    const amount = String(values.get("awardAmount") ?? "").trim();
+    const reason = String(values.get("awardReason") ?? "").trim();
+    const localExpiry = String(values.get("awardExpiry") ?? "");
+    const expiry = new Date(localExpiry);
+    if (!Number.isFinite(expiry.getTime())) {
+      setMessage("Choose a valid award-code expiry date and time.");
+      return;
+    }
+    const expiresAt = expiry.toISOString();
+    if (!isPositiveDecimal(amount)) {
+      setMessage("Enter a positive KES amount as an exact decimal with up to two places.");
+      return;
+    }
+    issueAwardCode.mutate({
+      employeeId: String(values.get("awardEmployee") ?? ""),
+      amount,
+      reason,
+      expiresAt,
+      idempotencyKey: awardKey.current,
+    }, {
+      onSuccess: (result) => {
+        setIssuedCode(result.awardCode);
+        setMessage("Code created. Copy and share it privately; it cannot be retrieved after this screen is cleared.");
+        form.reset();
+        awardKey.current = makeIdempotencyKey();
+        void history.refetch();
+      },
+      onError: (error) => setMessage(errorText(error)),
+    });
+  };
+  const clearIssuedCode = () => {
+    setIssuedCode(null);
+    issueAwardCode.reset();
+  };
+  const copyIssuedCode = async () => {
+    if (!issuedCode) return;
+    try {
+      await navigator.clipboard.writeText(issuedCode.code);
+      setMessage("Award code copied. Share it privately with the selected Staff member.");
+    } catch {
+      setMessage("Copy was blocked by this browser. Select the displayed code and copy it securely.");
+    }
+  };
+  return <section className="ep-credit-section">
+    <div className="ep-payroll-heading"><div><p className="ep-eyebrow">LEDGER CONTROLS</p><h2>Credits & award codes</h2><p>Post a reasoned one-time credit or issue a private, expiring code for one active employee.</p></div><span className="ep-payroll-private"><ShieldCheck size={15} /> Super Admin only</span></div>
+    <div className="ep-credit-safety"><ShieldCheck size={17} /><span>Credits are posted server-side in exact KES amounts. Balances are calculated from the ledger; no balance field is editable, and no payout is initiated.</span></div>
+    {message && <div className="ep-notice-inline"><Notice tone={message.includes("posted") || message.startsWith("Code created") || message.startsWith("Award code copied") ? "success" : "info"}>{message}</Notice>
+      {message.includes("credit request was already recorded") && <button className="ep-text-button" onClick={() => { creditKey.current = makeIdempotencyKey(); setMessage(""); }}>Start a separate credit</button>}
+      {message.includes("award-code request was already processed") && <button className="ep-text-button" onClick={() => { awardKey.current = makeIdempotencyKey(); issueAwardCode.reset(); setMessage("The earlier code cannot be retrieved. You can now issue a separate replacement code."); }}>Prepare a replacement code</button>}
+      <button onClick={() => setMessage("")} aria-label="Dismiss"><X size={15} /></button></div>}
+    <div className="ep-credit-grid">
+      <section className="ep-admin-panel"><p className="ep-eyebrow">DIRECT LEDGER CREDIT</p><h3>Add a one-time Staff credit</h3><p className="ep-panel-description">Requires a reason. The credit is immediately included in the selected employee’s available balance.</p>
+        {availableEmployees.length ? <form className="ep-form ep-payroll-form" onSubmit={submitCredit}>
+          <label>Staff member<select name="creditEmployee" required defaultValue=""><option value="" disabled>Select an active employee</option>{availableEmployees.map((employee) => <option key={employee.id} value={employee.id}>{employee.display_name} · {employee.username}</option>)}</select></label>
+          <label>Amount (KES)<input name="creditAmount" inputMode="decimal" type="text" required pattern="(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,2})?" placeholder="0.00" /></label>
+          <label>Reason<input name="creditReason" maxLength={500} required minLength={2} placeholder="e.g. approved service award" /></label>
+          <p className="ep-form-hint"><FileText size={14} /> The reason, administrator, reference, and exact amount are recorded for audit.</p>
+          <button className="ep-button ep-button-primary" disabled={postCredit.isPending}>{postCredit.isPending ? "Posting…" : "Post credit"}</button>
+        </form> : <EmptyState title="No active employees" text="Only active employee accounts can receive direct credits or award codes." />}
+      </section>
+      <section className="ep-admin-panel"><p className="ep-eyebrow">ONE-TIME REDEMPTION</p><h3>Issue an award code</h3><p className="ep-panel-description">Codes are bound to the selected account, expire within 90 days, and can be redeemed once.</p>
+        {availableEmployees.length ? <form className="ep-form ep-payroll-form" onSubmit={submitAwardCode}>
+          <label>Intended Staff member<select name="awardEmployee" required defaultValue=""><option value="" disabled>Select an active employee</option>{availableEmployees.map((employee) => <option key={employee.id} value={employee.id}>{employee.display_name} · {employee.username}</option>)}</select></label>
+          <label>Amount (KES)<input name="awardAmount" inputMode="decimal" type="text" required pattern="(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,2})?" placeholder="0.00" /></label>
+          <label>Reason<input name="awardReason" maxLength={500} required minLength={2} placeholder="e.g. quarterly performance award" /></label>
+          <label>Expires at<input name="awardExpiry" type="datetime-local" required defaultValue={defaultExpiry} /></label>
+          <p className="ep-form-hint"><LockKeyhole size={14} /> The code is shown once and only its hash is stored. Redemption requires the intended employee’s authenticated session.</p>
+          <button className="ep-button ep-button-primary" disabled={issueAwardCode.isPending}>{issueAwardCode.isPending ? "Creating…" : "Generate award code"}</button>
+        </form> : <EmptyState title="No active employees" text="Only active employee accounts can receive direct credits or award codes." />}
+        {issuedCode && <div className="ep-issued-award" role="status">
+          <div><Gift size={17} /><strong>Copy this code now</strong></div>
+          <input readOnly value={issuedCode.code} aria-label="One-time Staff award code" onFocus={(event) => event.currentTarget.select()} />
+          <p>{money(issuedCode.amount)} · Expires {dateTime(issuedCode.expiresAt)} · Bound to the selected employee</p>
+          <div><button className="ep-button ep-button-secondary" onClick={copyIssuedCode}><Copy size={14} /> Copy code</button><button className="ep-text-button" onClick={clearIssuedCode}>Clear from screen</button></div>
+        </div>}
+      </section>
+    </div>
+    <section className="ep-admin-panel">
+      <div className="ep-section-heading"><div><p className="ep-eyebrow">RECENT RECORDS</p><h3>Credits and award codes</h3><p>Only code status is shown here; code values and hashes are never returned in history.</p></div><button className="ep-icon-button" onClick={() => void history.refetch()} aria-label="Refresh credits and award codes"><RefreshCw size={15} /></button></div>
+      {history.isLoading ? <LoadingBlock label="Loading credits and award-code history" /> : history.isError ? <div className="ep-inline-error"><Notice>{errorText(history.error)}</Notice><button className="ep-text-button" onClick={() => void history.refetch()}>Retry</button></div> : <>
+        <div className="ep-credit-history">
+          {(history.data?.credits ?? []).map((credit) => <article key={credit.id}>
+            <div><strong>{employeeName(credit.employee_id)}</strong><small>{credit.reason} · Posted {dateTime(credit.created_at)}</small></div>
+            <b className="ep-amount">+ {money(credit.amount)}</b><StatusPill status="posted" />
+          </article>)}
+          {(history.data?.awardCodes ?? []).map((award) => {
+            const status = award.revoked_at ? "revoked" : award.redeemed_at ? "redeemed" : Date.parse(award.expires_at) <= Date.now() ? "expired" : "available";
+            return <article key={award.id}>
+              <div><strong>{employeeName(award.employee_id)}</strong><small>{award.reason} · Expires {dateTime(award.expires_at)}</small></div>
+              <b className="ep-amount">{money(award.amount)}</b><StatusPill status={status} />
+            </article>;
+          })}
+          {!history.data?.credits.length && !history.data?.awardCodes.length && <EmptyState title="No Staff credits yet" text="Direct credits and issued award codes will appear here after they are recorded." />}
+        </div>
+      </>}
+    </section>
+  </section>;
+}
+
 
 function CompensationList({ items, employeeList, onReview, busy }: {
   items: EmployeeCompensationItem[]; employeeList: EmployeePortalEmployee[]; onReview: (item: EmployeeCompensationItem, decision: "approve" | "reject") => void; busy: boolean;

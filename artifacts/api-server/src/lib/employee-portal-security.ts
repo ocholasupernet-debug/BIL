@@ -87,6 +87,16 @@ export function newEmployeeToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
+export function newEmployeeAwardCode(): string {
+  return `ISPLAT-AWARD-${randomBytes(24).toString("hex").toUpperCase()}`;
+}
+
+export function normalizeEmployeeAwardCode(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const code = value.trim().toUpperCase();
+  return /^ISPLAT-AWARD-[A-F0-9]{48}$/.test(code) ? code : null;
+}
+
 export function isMoneyString(value: unknown): value is string {
   return typeof value === "string" && /^(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?$/.test(value);
 }

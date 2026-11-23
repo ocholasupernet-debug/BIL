@@ -275,6 +275,18 @@
 .ep-search input { height: 38px; background: #fbfcf9; }
 .ep-result-count { color: #879698; font: 9px "Space Mono", monospace; }
 .ep-admin-table .ep-mono { color: #547a75; font: 9px "Space Mono", monospace; }
+.ep-personal-staff-link { display: inline-flex; max-width: 245px; align-items: center; gap: 6px; color: #175cae; font: 600 9px/1.5 "Space Mono", monospace; text-decoration: none; overflow-wrap: anywhere; }
+.ep-personal-staff-link:hover { color: #103d76; text-decoration: underline; }
+.ep-personal-staff-link svg { flex: 0 0 auto; }
+.ep-tech-account { width: min(100%, 850px); min-height: min(610px, calc(100dvh - 160px)); margin: 0 auto; padding: clamp(36px, 7vw, 78px) 0; }
+.ep-tech-account h1 { margin: 0 0 12px; font: 400 clamp(34px, 5vw, 52px)/1.1 "DM Serif Display", Georgia, serif; letter-spacing: -.035em; }
+.ep-tech-account-intro { max-width: 610px; margin: 0 0 25px; color: var(--ep-ink-soft); font-size: 14px; line-height: 1.7; }
+.ep-tech-account-card { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 14px; border: 1px solid var(--ep-line); border-radius: 10px; background: #fff; }
+.ep-tech-account-card > div { display: grid; gap: 5px; padding: 6px 10px; border-right: 1px solid #e6ebf1; }
+.ep-tech-account-card > div:last-child { border-right: 0; }
+.ep-tech-account-card span { color: var(--ep-muted); font-size: 10px; }
+.ep-tech-account-card strong { color: var(--ep-ink); font: 700 12px "Space Mono", monospace; overflow-wrap: anywhere; }
+.ep-tech-account-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 17px; }
 .ep-withdrawal-list { display: grid; }
 .ep-withdrawal-row { display: flex; min-width: 0; align-items: center; gap: 12px; padding: 13px 0; border-bottom: 1px solid #edf1ee; }
 .ep-withdrawal-row:last-child { border-bottom: 0; }
@@ -394,6 +406,30 @@
 .ep-payroll-tabs button.active { border-color: #dbe8e0; color: var(--ep-teal-deep); background: #fffefa; box-shadow: 0 1px 2px rgba(25,58,54,.04); }
 .ep-payroll-grid { display: grid; grid-template-columns: minmax(275px, .82fr) minmax(0, 1.18fr); align-items: start; gap: 14px; }
 .ep-payroll-grid.salary-grid { grid-template-columns: minmax(275px, .82fr) minmax(0, 1.18fr); }
+.ep-credit-section { display: grid; gap: 14px; }
+.ep-credit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 14px; }
+.ep-credit-safety { display: flex; align-items: flex-start; gap: 9px; padding: 11px 13px; border: 1px solid #d3e3f2; border-radius: 8px; color: #3e6182; background: #f1f7fd; font-size: 11px; line-height: 1.55; }
+.ep-credit-safety svg { flex: 0 0 auto; color: #175cae; }
+.ep-code-redeemer { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 16px; align-items: end; margin: 0 0 16px; padding: 17px; border: 1px solid #d8e4ef; border-radius: 9px; background: linear-gradient(110deg, #f3f8fd, #fff); }
+.ep-code-redeemer h3 { margin: 0 0 5px; color: var(--ep-ink); font: 400 20px/1.25 "DM Serif Display", Georgia, serif; }
+.ep-code-redeemer p:not(.ep-eyebrow) { margin: 0; color: #6c7d91; font-size: 10px; line-height: 1.5; }
+.ep-code-redeemer form { display: grid; gap: 6px; }
+.ep-code-redeemer form > label { color: #42566e; font-size: 10px; font-weight: 700; }
+.ep-code-redeemer form > div { display: flex; gap: 8px; }
+.ep-code-redeemer input { min-width: 0; height: 40px; flex: 1; padding: 0 10px; border: 1px solid #d8dfe8; border-radius: 7px; color: var(--ep-ink); background: #fff; font: 700 11px "Space Mono", monospace; }
+.ep-code-redeemer > .ep-notice { grid-column: 1 / -1; }
+.ep-credit-history { display: grid; }
+.ep-credit-history article { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #edf1ee; }
+.ep-credit-history article:last-child { border-bottom: 0; }
+.ep-credit-history article > div { display: grid; min-width: 0; gap: 4px; }
+.ep-credit-history article > div strong { color: var(--ep-ink); font-size: 11px; }
+.ep-credit-history article > div small { overflow-wrap: anywhere; color: #859496; font-size: 9px; }
+.ep-issued-award { display: grid; gap: 8px; margin-top: 15px; padding: 13px; border: 1px solid #d5e5d8; border-radius: 8px; background: #f2f8f2; }
+.ep-issued-award > div { display: flex; align-items: center; gap: 8px; }
+.ep-issued-award > div:first-child { color: #367455; font-size: 11px; }
+.ep-issued-award input { width: 100%; min-width: 0; height: 39px; padding: 0 9px; border: 1px solid #cfdfd3; border-radius: 6px; color: #214c39; background: #fff; font: 700 10px "Space Mono", monospace; }
+.ep-issued-award p { margin: 0; color: #6e8577; font-size: 9px; }
+.ep-issued-award > div:last-child { justify-content: space-between; }
 .ep-payroll-form { margin-top: 15px; }
 .ep-payroll-form input, .ep-payroll-form select { height: 39px; font-size: 11px; }
 .ep-panel-description { margin: 5px 0 0; color: #879597; font-size: 10px; }
@@ -439,6 +475,7 @@
 .ep-bank-confirm input { width: 14px; height: 14px; accent-color: var(--ep-teal); }
 @media (max-width: 950px) {
   .ep-payroll-grid, .ep-payroll-grid.salary-grid { grid-template-columns: 1fr; }
+  .ep-credit-grid { grid-template-columns: 1fr; }
 }
 @keyframes ep-enter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes ep-fade { from { opacity: 0; } to { opacity: 1; } }
@@ -494,6 +531,7 @@
   .ep-mobile-rows article > div strong { color: var(--ep-ink); font-size: 11px; text-transform: capitalize; }
   .ep-mobile-rows article > div small, .ep-mobile-rows article > small { overflow-wrap: anywhere; color: #8c9a9c; font-size: 9px; }
   .ep-mobile-rows article > small { grid-column: 1 / -1; display: flex; align-items: center; gap: 5px; }
+  .ep-mobile-rows .ep-personal-staff-link { grid-column: 1 / -1; max-width: 100%; }
   .ep-mobile-rows .ep-status { padding: 2px 6px; font-size: 8px; }
   .ep-withdraw-form { grid-template-columns: 1fr; gap: 10px; padding: 17px; }
   .ep-withdraw-form > div > p:not(.ep-eyebrow) { max-width: none; }
@@ -513,6 +551,12 @@
   .ep-withdrawal-main { flex-basis: calc(100% - 70px); }
   .ep-withdrawal-row > .ep-status { margin-left: auto; }
   .ep-withdrawal-actions { width: 100%; justify-content: flex-end; }
+  .ep-code-redeemer { grid-template-columns: 1fr; }
+  .ep-credit-history article { grid-template-columns: minmax(0, 1fr) auto; }
+  .ep-credit-history article > .ep-status { grid-column: 2; grid-row: 1; }
+  .ep-credit-history article > .ep-amount { grid-column: 2; grid-row: 2; }
+  .ep-code-redeemer form > div { flex-direction: column; }
+  .ep-code-redeemer form > div .ep-button { width: 100%; }
 }
 @media (max-width: 480px) {
   .ep-footer { flex-direction: column; gap: 4px; padding: 17px 0 20px; }
@@ -557,6 +601,11 @@
   .ep-checkboxes { flex-wrap: wrap; gap: 10px; }
   .ep-form-actions { flex-wrap: wrap; }
   .ep-form-actions .ep-button { flex: 1; }
+  .ep-tech-account-card { grid-template-columns: 1fr; }
+  .ep-tech-account-card > div { border-right: 0; border-bottom: 1px solid #e6ebf1; }
+  .ep-tech-account-card > div:last-child { border-bottom: 0; }
+  .ep-tech-account-actions { flex-direction: column; }
+  .ep-tech-account-actions .ep-button { width: 100%; }
 }
 
 .ep-signup-prompt { margin: 18px 0 0; text-align: center; }

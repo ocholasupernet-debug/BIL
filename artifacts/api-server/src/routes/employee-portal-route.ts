@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { Router, type IRouter, type Request, type Response } from "express";
 import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
 import { getMpesaSettings } from "../lib/settings-store.js";
-import { isActiveSuperAdminToken } from "./super-admin-auth-route.js";
+import { activeSuperAdminName, isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { logger } from "../lib/logger.js";
 import {
   classifyEmployeeSignupReviewFailure,
@@ -35,12 +35,15 @@ import {
   verifyEmployeePassword,
   employeeSessionCookieName,
   decryptEmployeePayoutDetails,
+  newEmployeeAwardCode,
+  normalizeEmployeeAwardCode,
   normalizePayoutDestination,
 } from "../lib/employee-portal-security.js";
 
 const router: IRouter = Router();
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const employeeLoginAttempts = new Map<string, { count: number; startedAt: number }>();
+const EMPLOYEE_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type EmployeeProfile = {
   id: string;
@@ -148,6 +151,31 @@ function hasSameOrigin(req: Request): boolean {
 
 function isSuperAdmin(req: Request): boolean {
   return isActiveSuperAdminToken(String(req.headers["x-sa-token"] ?? ""));
+}
+
+function requireCreditAdmin(req: Request, res: Response): boolean {
+  if (!enabled(res)) return false;
+  if (!isSuperAdmin(req)) {
+    logger.warn({ category: "staff_credit_admin_auth_denied" }, "[staff-credits] admin access denied");
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return false;
+  }
+  if (!hasSameOrigin(req)) {
+    logger.warn({ category: "staff_credit_admin_origin_denied" }, "[staff-credits] admin origin denied");
+    res.status(403).json({ ok: false, error: "Request origin could not be verified." });
+    return false;
+  }
+  return true;
+}
+
+function superAdminActor(req: Request): string {
+  return activeSuperAdminName(String(req.headers["x-sa-token"] ?? "")) ?? "super_admin";
+}
+
+function cleanFinancialReason(value: unknown): string {
+  return typeof value === "string"
+    ? value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim()
+    : "";
 }
 
 function setSessionCookie(res: Response, token: string): void {
@@ -771,9 +799,182 @@ router.get("/employee/dashboard", async (req: Request, res: Response): Promise<v
   if (!requirePayrollEmployee(employee, res)) return;
   try {
     const snapshot = await sbRpc<unknown>("employee_dashboard_snapshot", { p_employee_id: employee.id });
-    res.json({ ok: true, dashboard: safeRpcObject(snapshot) });
+    const dashboard = safeRpcObject(snapshot);
+    const recentLedger = Array.isArray(dashboard.recent_ledger)
+      ? dashboard.recent_ledger as Array<Record<string, unknown>>
+      : [];
+    const ledgerIds = [...new Set(recentLedger
+      .filter((entry) => entry.entry_type === "admin_credit")
+      .map((entry) => String(entry.id ?? ""))
+      .filter((id) => /^\d+$/.test(id)))];
+    if (ledgerIds.length) {
+      const filter = `in.(${ledgerIds.join(",")})`;
+      const [directCredits, awardCodes] = await Promise.all([
+        sbSelectStrict<{ ledger_entry_id: string | number; reason: string }>(
+          "employee_admin_credits",
+          `employee_id=eq.${encodeURIComponent(employee.id)}&ledger_entry_id=${filter}&select=ledger_entry_id,reason`,
+        ),
+        sbSelectStrict<{ redemption_ledger_id: string | number; reason: string }>(
+          "employee_award_codes",
+          `employee_id=eq.${encodeURIComponent(employee.id)}&redemption_ledger_id=${filter}&select=redemption_ledger_id,reason`,
+        ),
+      ]);
+      const descriptions = new Map<string, string>();
+      for (const credit of directCredits) descriptions.set(String(credit.ledger_entry_id), credit.reason);
+      for (const award of awardCodes) descriptions.set(String(award.redemption_ledger_id), award.reason);
+      dashboard.recent_ledger = recentLedger.map((entry) => ({
+        ...entry,
+        description: descriptions.get(String(entry.id)) ?? null,
+      }));
+    }
+    res.json({ ok: true, dashboard });
   } catch {
     res.status(503).json({ ok: false, error: "Staff dashboard data is unavailable." });
+  }
+});
+
+router.get("/employee/admin/credits", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    logger.warn({ category: "staff_credit_admin_auth_denied" }, "[staff-credits] admin list access denied");
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  try {
+    const [credits, awardCodes] = await Promise.all([
+      sbSelectStrict<Record<string, unknown>>(
+        "employee_admin_credits",
+        "select=id,employee_id,amount,reason,ledger_entry_id,created_by,created_at&order=created_at.desc&limit=100",
+      ),
+      sbSelectStrict<Record<string, unknown>>(
+        "employee_award_codes",
+        "select=id,employee_id,amount,reason,expires_at,redeemed_at,revoked_at,created_by,created_at&order=created_at.desc&limit=100",
+      ),
+    ]);
+    res.json({ ok: true, credits, awardCodes });
+  } catch {
+    res.status(503).json({ ok: false, error: "Staff credits and award-code history are unavailable." });
+  }
+});
+
+router.post("/employee/admin/credits", async (req: Request, res: Response): Promise<void> => {
+  if (!requireCreditAdmin(req, res)) return;
+  const employeeId = typeof req.body?.employeeId === "string" ? req.body.employeeId : "";
+  const amount = req.body?.amount;
+  const reason = cleanFinancialReason(req.body?.reason);
+  const idempotencyKey = typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey : "";
+  if (
+    !EMPLOYEE_UUID_PATTERN.test(employeeId) ||
+    !isMoneyString(amount) || !/[1-9]/.test(amount) ||
+    reason.length < 2 || reason.length > 500 ||
+    !/^[A-Za-z0-9_-]{12,128}$/.test(idempotencyKey)
+  ) {
+    res.status(400).json({ ok: false, error: "Choose an employee and enter a positive exact KES amount, reason, and unique request key." });
+    return;
+  }
+  try {
+    const result = safeRpcObject(await sbRpc<unknown>("employee_admin_post_credit", {
+      p_employee_id: employeeId,
+      p_amount: amount,
+      p_reason: reason,
+      p_idempotency_key: idempotencyKey,
+      p_actor_id: superAdminActor(req),
+    }));
+    if (result.status === "duplicate") {
+      res.status(409).json({ ok: false, error: "This credit request was already recorded. Use a new request only for a separate credit." });
+      return;
+    }
+    if (result.status !== "posted") {
+      res.status(409).json({ ok: false, error: "The credit could not be confirmed. Refresh the credit history before retrying." });
+      return;
+    }
+    res.status(201).json({ ok: true, credit: result });
+  } catch {
+    res.status(409).json({ ok: false, error: "The credit could not be posted. Confirm the Staff account is active and refresh before retrying." });
+  }
+});
+
+router.post("/employee/admin/award-codes", async (req: Request, res: Response): Promise<void> => {
+  if (!requireCreditAdmin(req, res)) return;
+  const employeeId = typeof req.body?.employeeId === "string" ? req.body.employeeId : "";
+  const amount = req.body?.amount;
+  const reason = cleanFinancialReason(req.body?.reason);
+  const idempotencyKey = typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey : "";
+  const expiresAt = typeof req.body?.expiresAt === "string" ? req.body.expiresAt : "";
+  const expiryMs = Date.parse(expiresAt);
+  const now = Date.now();
+  if (
+    !EMPLOYEE_UUID_PATTERN.test(employeeId) ||
+    !isMoneyString(amount) || !/[1-9]/.test(amount) ||
+    reason.length < 2 || reason.length > 500 ||
+    !/^[A-Za-z0-9_-]{12,128}$/.test(idempotencyKey) ||
+    !Number.isFinite(expiryMs) || expiryMs <= now + 60_000 || expiryMs > now + 90 * 24 * 60 * 60 * 1000
+  ) {
+    res.status(400).json({ ok: false, error: "Choose an employee and enter a positive exact KES amount, reason, valid expiry, and unique request key." });
+    return;
+  }
+
+  const code = newEmployeeAwardCode();
+  try {
+    const result = safeRpcObject(await sbRpc<unknown>("employee_issue_award_code", {
+      p_employee_id: employeeId,
+      p_amount: amount,
+      p_reason: reason,
+      p_code_hash: hashEmployeeSecret(code),
+      p_idempotency_key: idempotencyKey,
+      p_expires_at: new Date(expiryMs).toISOString(),
+      p_actor_id: superAdminActor(req),
+    }));
+    if (result.status === "duplicate") {
+      res.status(409).json({ ok: false, error: "This award-code request was already processed. Its code cannot be retrieved; issue a new request if needed." });
+      return;
+    }
+    if (result.status !== "issued") {
+      res.status(409).json({ ok: false, error: "The award code could not be confirmed. Refresh history before retrying." });
+      return;
+    }
+    res.status(201).json({
+      ok: true,
+      awardCode: {
+        id: result.award_id,
+        amount: String(amount),
+        expiresAt: result.expires_at,
+        code,
+      },
+    });
+  } catch {
+    res.status(409).json({ ok: false, error: "The award code could not be issued. Confirm the Staff account is active and refresh before retrying." });
+  }
+});
+
+router.post("/employee/award-codes/redeem", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!hasSameOrigin(req)) {
+    res.status(403).json({ ok: false, error: "Request origin could not be verified." });
+    return;
+  }
+  const employee = await requireEmployee(req, res);
+  if (!employee) return;
+  if (!requirePayrollEmployee(employee, res)) return;
+  const code = normalizeEmployeeAwardCode(req.body?.code);
+  if (!code) {
+    logger.warn({ category: "staff_award_code_invalid_format" }, "[staff-credits] award redemption rejected");
+    res.status(400).json({ ok: false, error: "Enter a valid Staff award code." });
+    return;
+  }
+  try {
+    const result = safeRpcObject(await sbRpc<unknown>("employee_redeem_award_code", {
+      p_employee_id: employee.id,
+      p_code_hash: hashEmployeeSecret(code),
+    }));
+    if (result.status !== "redeemed") {
+      logger.warn({ category: "staff_award_code_redemption_rejected" }, "[staff-credits] award redemption rejected");
+      res.status(409).json({ ok: false, error: "This code is invalid, expired, already used, or assigned to another Staff account." });
+      return;
+    }
+    res.json({ ok: true, redemption: result });
+  } catch {
+    res.status(503).json({ ok: false, error: "Award-code redemption could not be confirmed. Refresh your balance before trying again." });
   }
 });
 

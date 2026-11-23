@@ -37,8 +37,18 @@ export type EmployeePortalDashboard = {
   withdrawn_today: string;
   pending_withdrawals: string;
   recent_withdrawals: EmployeePortalWithdrawal[];
-  recent_ledger: Array<{ id: number; entry_type: string; amount: string; currency: "KES"; reference: string; created_at: string }>;
+  recent_ledger: Array<{ id: number; entry_type: string; amount: string; currency: "KES"; reference: string; description?: string | null; created_at: string }>;
   payroll_history: Array<{ id: string; payroll_period_id: string; salary: string; commissions: string; bonuses: string; allowances: string; deductions: string; net_amount: string; created_at: string }>;
+};
+
+export type EmployeeAdminCredit = {
+  id: string; employee_id: string; amount: string; reason: string;
+  ledger_entry_id: string | number; created_by: string; created_at: string;
+};
+
+export type EmployeeAwardCodeRecord = {
+  id: string; employee_id: string; amount: string; reason: string; expires_at: string;
+  redeemed_at: string | null; revoked_at: string | null; created_by: string; created_at: string;
 };
 
 export type EmployeeCompensationItem = {
@@ -170,6 +180,53 @@ export function useEmployeeDashboard() {
   return useQuery({
     queryKey: ["employee-portal", "dashboard"],
     queryFn: async () => (await request<ApiResult<{ dashboard: EmployeePortalDashboard }>>("/api/employee/dashboard")).dashboard,
+  });
+}
+
+export function useAdminEmployeeCredits() {
+  return useQuery({
+    queryKey: ["employee-portal", "admin", "credits"],
+    queryFn: () => request<ApiResult<{
+      credits: EmployeeAdminCredit[];
+      awardCodes: EmployeeAwardCodeRecord[];
+    }>>("/api/employee/admin/credits", {}, true),
+  });
+}
+
+export function usePostEmployeeAdminCredit() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { employeeId: string; amount: string; reason: string; idempotencyKey: string }) =>
+      request<ApiResult<{ credit: { status: string; credit_id: string; ledger_entry_id: number; amount: string } }>>(
+        "/api/employee/admin/credits", { method: "POST", body: JSON.stringify(input) }, true,
+      ),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal"] }),
+  });
+}
+
+export function useIssueEmployeeAwardCode() {
+  const client = useQueryClient();
+  return useMutation({
+    gcTime: 0,
+    mutationFn: (input: {
+      employeeId: string; amount: string; reason: string; expiresAt: string; idempotencyKey: string;
+    }) => request<ApiResult<{
+      awardCode: { id: string; amount: string; expiresAt: string; code: string };
+    }>>(
+      "/api/employee/admin/award-codes", { method: "POST", body: JSON.stringify(input) }, true,
+    ),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal", "admin", "credits"] }),
+  });
+}
+
+export function useRedeemEmployeeAwardCode() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { code: string }) =>
+      request<ApiResult<{ redemption: { status: string; amount: string; ledger_entry_id: number } }>>(
+        "/api/employee/award-codes/redeem", { method: "POST", body: JSON.stringify(input) },
+      ),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal"] }),
   });
 }
 

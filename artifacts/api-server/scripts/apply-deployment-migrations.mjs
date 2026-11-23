@@ -144,6 +144,11 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_router_api_secret_encryption.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_routeros_installer_v2_enrollments.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_admin_renewal_vouchers.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_employee_portal.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_staff_shared_portal_auth.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_technician_learning_center.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_staff_signup_approval_ambiguous_email.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_employee_credits_award_codes.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
 
