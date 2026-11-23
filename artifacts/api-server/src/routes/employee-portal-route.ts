@@ -17,6 +17,15 @@ import {
 import { sendPlatformEmail } from "../lib/platform-email.js";
 import { verifyTurnstile } from "../lib/turnstile.js";
 import {
+  buildB2cCallbackUrl,
+  initiateDarajaB2cPayout,
+  isWholeKesAmount,
+  parseDarajaB2cResult,
+  validateDarajaB2cPayout,
+  type DarajaB2cCredentials,
+  type DarajaB2cEnvironment,
+} from "../services/employee-daraja-b2c.js";
+import {
   employeeAuth,
   isStaffOtpChallengeId,
   isStaffOtpCode,
@@ -1405,12 +1414,37 @@ router.get("/employee/admin/payout-settings", async (req: Request, res: Response
       ),
       getMpesaSettings(),
     ]);
+    let automationSchemaReady = false;
+    let automationRows: Array<Record<string, unknown>> = [];
+    try {
+      automationRows = await sbSelectStrict<Record<string, unknown>>(
+        "employee_payout_controls",
+        "id=eq.global&select=automatic_b2c_enabled,b2c_environment&limit=1",
+      );
+      automationSchemaReady = true;
+    } catch {
+      // The additive migration is intentionally not applied automatically.
+    }
     const secret = secureRows[0] ? decryptEmployeePayoutDetails(secureRows[0]) : {};
+    const b2cEnvironment: DarajaB2cEnvironment =
+      automationRows[0]?.b2c_environment === "production" ? "production" : "sandbox";
     res.json({
       ok: true,
       controls: controlRows[0] ?? null,
+      automationSchemaReady,
+      automaticB2cEnabled: automationSchemaReady && automationRows[0]?.automatic_b2c_enabled === true,
+      b2cEnvironment,
+      runtimeAutomationEnabled: process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true",
+      liveDisbursementsEnabled:
+        automationSchemaReady &&
+        automationRows[0]?.automatic_b2c_enabled === true &&
+        process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true" &&
+        b2cEnvironment === "production" &&
+        process.env.EMPLOYEE_PAYOUT_LIVE_CONFIRMED === "true",
       credentials: {
         hasSharedDarajaOAuthCredentials: !!(sharedDaraja.consumerKey && sharedDaraja.consumerSecret),
+        hasB2cConsumerKey: typeof secret.b2cConsumerKey === "string" && !!secret.b2cConsumerKey,
+        hasB2cConsumerSecret: typeof secret.b2cConsumerSecret === "string" && !!secret.b2cConsumerSecret,
         hasB2cInitiator: typeof secret.b2cInitiator === "string" && !!secret.b2cInitiator,
         hasB2cShortcode: typeof secret.b2cShortcode === "string" && !!secret.b2cShortcode,
         hasB2cSecurityCredential: typeof secret.b2cSecurityCredential === "string" && !!secret.b2cSecurityCredential,
@@ -1449,7 +1483,28 @@ router.put("/employee/admin/payout-settings", async (req: Request, res: Response
     res.status(400).json({ ok: false, error: "Payout methods or exact KES limits are invalid." });
     return;
   }
+  const automaticB2cEnabled = req.body?.automaticB2cEnabled === true;
+  const b2cEnvironment: DarajaB2cEnvironment =
+    req.body?.b2cEnvironment === "production" ? "production" : "sandbox";
+  if (req.body?.b2cEnvironment !== undefined && !["sandbox", "production"].includes(req.body.b2cEnvironment)) {
+    res.status(400).json({ ok: false, error: "Choose a valid B2C environment." });
+    return;
+  }
   try {
+    let automationSchemaReady = false;
+    try {
+      await sbSelectStrict<Record<string, unknown>>(
+        "employee_payout_controls",
+        "id=eq.global&select=automatic_b2c_enabled,b2c_environment&limit=1",
+      );
+      automationSchemaReady = true;
+    } catch {
+      // General withdrawal controls remain saveable before the additive payout migration.
+    }
+    if (automaticB2cEnabled && !automationSchemaReady) {
+      res.status(409).json({ ok: false, error: "Apply the Staff B2C payout schema before enabling automatic payouts." });
+      return;
+    }
     const existing = await sbSelectStrict<{ ciphertext: string; iv: string; auth_tag: string }>(
       "employee_payout_settings",
       "id=eq.global&select=ciphertext,iv,auth_tag&limit=1",
@@ -1459,7 +1514,7 @@ router.put("/employee/admin/payout-settings", async (req: Request, res: Response
       !Array.isArray(req.body.credentials) ? req.body.credentials as Record<string, unknown> : {};
     const next = { ...current };
     for (const key of [
-      "b2cInitiator", "b2cSecurityCredential",
+      "b2cConsumerKey", "b2cConsumerSecret", "b2cInitiator", "b2cSecurityCredential",
       "b2cShortcode", "b2pochiConfiguration", "b2bShortcode", "b2bInitiator", "b2bSecurityCredential",
     ]) {
       const value = incoming[key];
@@ -1479,23 +1534,31 @@ router.put("/employee/admin/payout-settings", async (req: Request, res: Response
       updated_at: new Date().toISOString(),
     });
     const enabledForRequests = req.body?.enabled === true;
-    await sbUpdateStrict(
-      "employee_payout_controls",
-      "id=eq.global",
-      {
-        enabled: enabledForRequests,
-        enabled_destination_types: requestedTypes,
-        max_withdrawal: req.body.maxWithdrawal,
-        daily_limit: req.body.dailyLimit,
-        updated_by: "super_admin",
-        updated_at: new Date().toISOString(),
-      },
-    );
+    await sbUpdateStrict("employee_payout_controls", "id=eq.global", {
+      enabled: enabledForRequests,
+      enabled_destination_types: requestedTypes,
+      max_withdrawal: req.body.maxWithdrawal,
+      daily_limit: req.body.dailyLimit,
+      ...(automationSchemaReady ? {
+        automatic_b2c_enabled: automaticB2cEnabled,
+        b2c_environment: b2cEnvironment,
+      } : {}),
+      updated_by: "super_admin",
+      updated_at: new Date().toISOString(),
+    });
     res.json({
       ok: true,
       enabled: enabledForRequests,
       enabledDestinationTypes: requestedTypes,
-      liveDisbursementsEnabled: false,
+      automaticB2cEnabled: automationSchemaReady && automaticB2cEnabled,
+      b2cEnvironment,
+      runtimeAutomationEnabled: process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true",
+      liveDisbursementsEnabled:
+        automationSchemaReady &&
+        automaticB2cEnabled &&
+        process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true" &&
+        b2cEnvironment === "production" &&
+        process.env.EMPLOYEE_PAYOUT_LIVE_CONFIRMED === "true",
       storedCredentialCount: Object.values(next).filter(value => typeof value === "string" && value.length > 0).length,
     });
   } catch {

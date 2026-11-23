@@ -1,0 +1,245 @@
+-- Automatic Staff B2C payout support. This migration is additive and must be
+-- reviewed/applied explicitly; the application feature flag remains off by default.
+alter table public.employee_payout_controls
+  add column if not exists automatic_b2c_enabled boolean not null default false,
+  add column if not exists b2c_environment text not null default 'sandbox'
+    check (b2c_environment in ('sandbox', 'production'));
+
+alter table public.employee_payout_transactions
+  add column if not exists callback_token_hash text,
+  add column if not exists expected_amount numeric(14,2),
+  add column if not exists expected_phone_hash text,
+  add column if not exists callback_received_at timestamptz,
+  add column if not exists failure_category text;
+
+create or replace function public.employee_review_withdrawal_and_claim_daraja_b2c(
+  p_withdrawal_id uuid,
+  p_actor_id text,
+  p_note text,
+  p_originator_reference text,
+  p_callback_token_hash text,
+  p_expected_phone_hash text
+) returns jsonb
+language plpgsql security definer set search_path = pg_catalog, public, pg_temp as $$
+declare
+  v_request public.employee_withdrawal_requests%rowtype;
+  v_destination public.employee_payout_destinations%rowtype;
+  v_enabled boolean;
+begin
+  if p_actor_id is null or p_actor_id <> 'super_admin'
+     or p_originator_reference !~ '^[A-Za-z0-9_-]{12,64}$'
+     or p_callback_token_hash !~ '^[0-9a-f]{64}$'
+     or p_expected_phone_hash !~ '^[0-9a-f]{64}$' then
+    raise exception 'Invalid payout review metadata.';
+  end if;
+
+  select * into v_request from public.employee_withdrawal_requests
+    where id = p_withdrawal_id for update;
+  if not found or v_request.status <> 'pending' then
+    raise exception 'Withdrawal is no longer awaiting review.';
+  end if;
+  if v_request.amount <> trunc(v_request.amount) then
+    raise exception 'Daraja B2C supports whole-KES withdrawal amounts only.';
+  end if;
+
+  select * into v_destination from public.employee_payout_destinations
+    where id = v_request.destination_id and employee_id = v_request.employee_id
+      and status = 'active' for update;
+  if not found or v_destination.destination_type <> 'mpesa_b2c' then
+    raise exception 'An active M-Pesa B2C destination is required.';
+  end if;
+
+  select automatic_b2c_enabled into v_enabled
+    from public.employee_payout_controls where id = 'global' for update;
+  if not found or v_enabled is distinct from true then
+    raise exception 'Automatic B2C payouts are disabled.';
+  end if;
+
+  update public.employee_withdrawal_requests
+    set status = 'processing', review_note = nullif(left(coalesce(p_note,''), 500), ''),
+        reviewed_by = p_actor_id, reviewed_at = now()
+    where id = p_withdrawal_id;
+  insert into public.employee_payout_transactions(
+    withdrawal_id, provider, originator_reference, status, callback_token_hash,
+    expected_amount, expected_phone_hash, updated_at
+  ) values (
+    p_withdrawal_id, 'daraja_b2c', p_originator_reference, 'created',
+    p_callback_token_hash, v_request.amount, p_expected_phone_hash, now()
+  );
+  insert into public.employee_audit_logs(actor_role, actor_id, action, entity_type, entity_id, details)
+    values ('super_admin', p_actor_id, 'withdrawal_approved_for_daraja_b2c',
+            'withdrawal', p_withdrawal_id::text, jsonb_build_object('provider', 'daraja_b2c'));
+  return jsonb_build_object(
+    'id', p_withdrawal_id, 'status', 'processing', 'amount', v_request.amount,
+    'destination_id', v_request.destination_id, 'originator_reference', p_originator_reference
+  );
+end;
+$$;
+
+create or replace function public.employee_mark_daraja_b2c_submitted(
+  p_withdrawal_id uuid,
+  p_originator_reference text,
+  p_conversation_id text
+) returns jsonb
+language plpgsql security definer set search_path = pg_catalog, public, pg_temp as $$
+declare
+  v_transaction public.employee_payout_transactions%rowtype;
+begin
+  select * into v_transaction from public.employee_payout_transactions
+    where withdrawal_id = p_withdrawal_id and provider = 'daraja_b2c' for update;
+  if not found or v_transaction.originator_reference <> p_originator_reference then
+    raise exception 'Payout transaction reference does not match.';
+  end if;
+  if v_transaction.status in ('succeeded','failed','reconciled') then
+    return jsonb_build_object('status', v_transaction.status);
+  end if;
+  if p_conversation_id is null or length(p_conversation_id) > 128 then
+    raise exception 'Daraja conversation reference is invalid.';
+  end if;
+  update public.employee_payout_transactions set
+    provider_conversation_id = p_conversation_id, status = 'submitted',
+    updated_at = now(), failure_category = null
+    where id = v_transaction.id;
+  return jsonb_build_object('status', 'submitted');
+end;
+$$;
+
+create or replace function public.employee_mark_daraja_b2c_uncertain(
+  p_withdrawal_id uuid,
+  p_originator_reference text,
+  p_failure_category text
+) returns jsonb
+language plpgsql security definer set search_path = pg_catalog, public, pg_temp as $$
+declare
+  v_transaction public.employee_payout_transactions%rowtype;
+begin
+  select * into v_transaction from public.employee_payout_transactions
+    where withdrawal_id = p_withdrawal_id and provider = 'daraja_b2c' for update;
+  if not found or v_transaction.originator_reference <> p_originator_reference then
+    raise exception 'Payout transaction reference does not match.';
+  end if;
+  if v_transaction.status = 'succeeded' then
+    return jsonb_build_object('status', 'succeeded');
+  end if;
+  update public.employee_payout_transactions set
+    status = 'uncertain', failure_category = left(coalesce(p_failure_category, 'uncertain'), 48),
+    updated_at = now()
+    where id = v_transaction.id;
+  update public.employee_withdrawal_requests set status = 'reconciliation_required'
+    where id = p_withdrawal_id and status in ('processing','approved','reconciliation_required');
+  insert into public.employee_audit_logs(actor_role, actor_id, action, entity_type, entity_id, details)
+    values ('system', 'daraja_b2c', 'payout_reconciliation_required', 'withdrawal',
+            p_withdrawal_id::text, jsonb_build_object('category', left(coalesce(p_failure_category, 'uncertain'), 48)));
+  return jsonb_build_object('status', 'reconciliation_required');
+end;
+$$;
+
+create or replace function public.employee_process_daraja_b2c_result(
+  p_withdrawal_id uuid,
+  p_callback_token_hash text,
+  p_originator_reference text,
+  p_conversation_id text,
+  p_result_code integer,
+  p_amount numeric,
+  p_receipt text,
+  p_phone_hash text
+) returns jsonb
+language plpgsql security definer set search_path = pg_catalog, public, pg_temp as $$
+declare
+  v_transaction public.employee_payout_transactions%rowtype;
+  v_request public.employee_withdrawal_requests%rowtype;
+  v_success boolean;
+begin
+  select * into v_transaction from public.employee_payout_transactions
+    where withdrawal_id = p_withdrawal_id and provider = 'daraja_b2c' for update;
+  if not found
+     or v_transaction.callback_token_hash is null
+     or v_transaction.callback_token_hash <> p_callback_token_hash
+     or v_transaction.originator_reference <> p_originator_reference then
+    raise exception 'Payout callback authentication failed.';
+  end if;
+  if v_transaction.status = 'succeeded' then
+    return jsonb_build_object('status', 'paid', 'duplicate', true);
+  end if;
+  if v_transaction.status = 'failed' then
+    return jsonb_build_object('status', 'reconciliation_required', 'duplicate', true);
+  end if;
+  if p_conversation_id is not null and v_transaction.provider_conversation_id is not null
+     and v_transaction.provider_conversation_id <> p_conversation_id then
+    raise exception 'Payout callback correlation failed.';
+  end if;
+  select * into v_request from public.employee_withdrawal_requests
+    where id = p_withdrawal_id for update;
+  if not found or v_request.status not in ('processing','reconciliation_required','approved') then
+    raise exception 'Payout is not in a callback-eligible state.';
+  end if;
+
+  v_success := p_result_code = 0
+    and p_amount = v_transaction.expected_amount
+    and p_receipt is not null
+    and p_receipt ~ '^[A-Za-z0-9]{6,20}$'
+    and (p_phone_hash is null or p_phone_hash = v_transaction.expected_phone_hash);
+
+  if v_success then
+    update public.employee_payout_transactions set
+      status = 'succeeded',
+      provider_conversation_id = coalesce(provider_conversation_id, p_conversation_id),
+      provider_receipt = p_receipt,
+      result_code = '0',
+      callback_received_at = now(),
+      failure_category = null,
+      updated_at = now()
+      where id = v_transaction.id;
+    update public.employee_withdrawal_requests set
+      status = 'paid', paid_reference = p_receipt, paid_at = now()
+      where id = p_withdrawal_id;
+    insert into public.employee_financial_ledger(
+      employee_id, entry_type, amount, reference, idempotency_key, created_by
+    ) values
+      (v_request.employee_id, 'withdrawal_release', v_request.amount, p_withdrawal_id::text,
+       'withdrawal-release:' || p_withdrawal_id::text, 'daraja_b2c'),
+      (v_request.employee_id, 'withdrawal_debit', -v_request.amount, p_withdrawal_id::text,
+       'withdrawal-debit:' || p_withdrawal_id::text, 'daraja_b2c')
+    on conflict (idempotency_key) do nothing;
+    insert into public.employee_audit_logs(actor_role, actor_id, action, entity_type, entity_id, details)
+      values ('system', 'daraja_b2c', 'withdrawal_paid_verified', 'withdrawal',
+              p_withdrawal_id::text, jsonb_build_object('receipt', p_receipt, 'amount', v_request.amount));
+    return jsonb_build_object('status', 'paid', 'duplicate', false);
+  end if;
+
+  if p_result_code <> 0 then
+    update public.employee_payout_transactions set
+      status = 'failed', result_code = p_result_code::text,
+      callback_received_at = now(), failure_category = 'provider_failed', updated_at = now()
+      where id = v_transaction.id;
+    insert into public.employee_audit_logs(actor_role, actor_id, action, entity_type, entity_id, details)
+      values ('system', 'daraja_b2c', 'withdrawal_provider_failure', 'withdrawal',
+              p_withdrawal_id::text, jsonb_build_object('result_code', p_result_code));
+  else
+    update public.employee_payout_transactions set
+      status = 'uncertain', result_code = p_result_code::text,
+      callback_received_at = now(), failure_category = 'callback_validation_failed', updated_at = now()
+      where id = v_transaction.id;
+    insert into public.employee_audit_logs(actor_role, actor_id, action, entity_type, entity_id, details)
+      values ('system', 'daraja_b2c', 'withdrawal_callback_needs_reconciliation', 'withdrawal',
+              p_withdrawal_id::text, jsonb_build_object('result_code', p_result_code));
+  end if;
+  update public.employee_withdrawal_requests set status = 'reconciliation_required'
+    where id = p_withdrawal_id and status <> 'paid';
+  return jsonb_build_object('status', 'reconciliation_required', 'duplicate', false);
+end;
+$$;
+
+revoke all on function public.employee_review_withdrawal_and_claim_daraja_b2c(uuid, text, text, text, text, text) from public;
+revoke all on function public.employee_mark_daraja_b2c_submitted(uuid, text, text) from public;
+revoke all on function public.employee_mark_daraja_b2c_uncertain(uuid, text, text) from public;
+revoke all on function public.employee_process_daraja_b2c_result(uuid, text, text, text, integer, numeric, text, text) from public;
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function public.employee_review_withdrawal_and_claim_daraja_b2c(uuid, text, text, text, text, text) to service_role;
+    grant execute on function public.employee_mark_daraja_b2c_submitted(uuid, text, text) to service_role;
+    grant execute on function public.employee_mark_daraja_b2c_uncertain(uuid, text, text) to service_role;
+    grant execute on function public.employee_process_daraja_b2c_result(uuid, text, text, text, integer, numeric, text, text) to service_role;
+  end if;
+end $$;
