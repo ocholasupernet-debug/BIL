@@ -4,6 +4,7 @@ import {
   buildB2cCallbackUrl,
   initiateDarajaB2cPayout,
   isWholeKesAmount,
+  normalizeWholeKesAmount,
   parseDarajaB2cResult,
 } from "./employee-daraja-b2c.js";
 
@@ -61,6 +62,8 @@ test("B2C rejects incomplete credentials and fractional KES before contacting Sa
   assert.equal(isWholeKesAmount("50"), true);
   assert.equal(isWholeKesAmount("50.25"), false);
   assert.equal(isWholeKesAmount("0"), false);
+  assert.equal(normalizeWholeKesAmount("50.00"), "50");
+  assert.equal(normalizeWholeKesAmount("50.25"), null);
   let calls = 0;
   await assert.rejects(
     initiateDarajaB2cPayout({ ...baseInput, amountKes: "50.25" }, {

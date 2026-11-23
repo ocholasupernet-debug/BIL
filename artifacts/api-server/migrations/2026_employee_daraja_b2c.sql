@@ -12,6 +12,10 @@ alter table public.employee_payout_transactions
   add column if not exists callback_received_at timestamptz,
   add column if not exists failure_category text;
 
+create unique index if not exists employee_daraja_b2c_receipt_unique_idx
+  on public.employee_payout_transactions(provider_receipt)
+  where provider = 'daraja_b2c' and provider_receipt is not null;
+
 create or replace function public.employee_review_withdrawal_and_claim_daraja_b2c(
   p_withdrawal_id uuid,
   p_actor_id text,
@@ -25,11 +29,13 @@ declare
   v_request public.employee_withdrawal_requests%rowtype;
   v_destination public.employee_payout_destinations%rowtype;
   v_enabled boolean;
+  v_requests_enabled boolean;
+  v_enabled_types text[];
 begin
   if p_actor_id is null or p_actor_id <> 'super_admin'
-     or p_originator_reference !~ '^[A-Za-z0-9_-]{12,64}$'
-     or p_callback_token_hash !~ '^[0-9a-f]{64}$'
-     or p_expected_phone_hash !~ '^[0-9a-f]{64}$' then
+     or p_originator_reference is null or p_originator_reference !~ '^[A-Za-z0-9_-]{12,64}$'
+     or p_callback_token_hash is null or p_callback_token_hash !~ '^[0-9a-f]{64}$'
+     or p_expected_phone_hash is null or p_expected_phone_hash !~ '^[0-9a-f]{64}$' then
     raise exception 'Invalid payout review metadata.';
   end if;
 
@@ -49,9 +55,11 @@ begin
     raise exception 'An active M-Pesa B2C destination is required.';
   end if;
 
-  select automatic_b2c_enabled into v_enabled
+  select automatic_b2c_enabled, enabled, enabled_destination_types
+    into v_enabled, v_requests_enabled, v_enabled_types
     from public.employee_payout_controls where id = 'global' for update;
-  if not found or v_enabled is distinct from true then
+  if not found or v_enabled is distinct from true or v_requests_enabled is distinct from true
+     or not ('mpesa_b2c' = any(coalesce(v_enabled_types, '{}'::text[]))) then
     raise exception 'Automatic B2C payouts are disabled.';
   end if;
 
@@ -93,7 +101,19 @@ begin
   if v_transaction.status in ('succeeded','failed','reconciled') then
     return jsonb_build_object('status', v_transaction.status);
   end if;
-  if p_conversation_id is null or length(p_conversation_id) > 128 then
+  if v_transaction.status = 'uncertain' then
+    return jsonb_build_object('status', 'reconciliation_required');
+  end if;
+  if v_transaction.status = 'submitted' then
+    if v_transaction.provider_conversation_id = p_conversation_id then
+      return jsonb_build_object('status', 'submitted');
+    end if;
+    raise exception 'Daraja conversation reference does not match.';
+  end if;
+  if v_transaction.status <> 'created' then
+    raise exception 'Payout transaction is not ready for submission.';
+  end if;
+  if p_conversation_id is null or length(trim(p_conversation_id)) = 0 or length(p_conversation_id) > 128 then
     raise exception 'Daraja conversation reference is invalid.';
   end if;
   update public.employee_payout_transactions set
@@ -107,6 +127,7 @@ $$;
 create or replace function public.employee_mark_daraja_b2c_uncertain(
   p_withdrawal_id uuid,
   p_originator_reference text,
+  p_callback_token_hash text,
   p_failure_category text
 ) returns jsonb
 language plpgsql security definer set search_path = pg_catalog, public, pg_temp as $$
@@ -115,11 +136,21 @@ declare
 begin
   select * into v_transaction from public.employee_payout_transactions
     where withdrawal_id = p_withdrawal_id and provider = 'daraja_b2c' for update;
-  if not found or v_transaction.originator_reference <> p_originator_reference then
+  if not found
+     or p_originator_reference is null
+     or v_transaction.originator_reference <> p_originator_reference
+     or p_callback_token_hash is null
+     or v_transaction.callback_token_hash is distinct from p_callback_token_hash then
     raise exception 'Payout transaction reference does not match.';
   end if;
   if v_transaction.status = 'succeeded' then
     return jsonb_build_object('status', 'succeeded');
+  end if;
+  if v_transaction.status in ('failed','reconciled') then
+    return jsonb_build_object('status', 'reconciliation_required');
+  end if;
+  if v_transaction.status = 'uncertain' then
+    return jsonb_build_object('status', 'reconciliation_required');
   end if;
   update public.employee_payout_transactions set
     status = 'uncertain', failure_category = left(coalesce(p_failure_category, 'uncertain'), 48),
@@ -153,8 +184,9 @@ begin
   select * into v_transaction from public.employee_payout_transactions
     where withdrawal_id = p_withdrawal_id and provider = 'daraja_b2c' for update;
   if not found
-     or v_transaction.callback_token_hash is null
-     or v_transaction.callback_token_hash <> p_callback_token_hash
+     or p_callback_token_hash is null
+     or v_transaction.callback_token_hash is distinct from p_callback_token_hash
+     or p_originator_reference is null
      or v_transaction.originator_reference <> p_originator_reference then
     raise exception 'Payout callback authentication failed.';
   end if;
@@ -210,6 +242,7 @@ begin
   if p_result_code <> 0 then
     update public.employee_payout_transactions set
       status = 'failed', result_code = p_result_code::text,
+      provider_conversation_id = coalesce(provider_conversation_id, p_conversation_id),
       callback_received_at = now(), failure_category = 'provider_failed', updated_at = now()
       where id = v_transaction.id;
     insert into public.employee_audit_logs(actor_role, actor_id, action, entity_type, entity_id, details)
@@ -218,6 +251,7 @@ begin
   else
     update public.employee_payout_transactions set
       status = 'uncertain', result_code = p_result_code::text,
+      provider_conversation_id = coalesce(provider_conversation_id, p_conversation_id),
       callback_received_at = now(), failure_category = 'callback_validation_failed', updated_at = now()
       where id = v_transaction.id;
     insert into public.employee_audit_logs(actor_role, actor_id, action, entity_type, entity_id, details)
@@ -232,14 +266,14 @@ $$;
 
 revoke all on function public.employee_review_withdrawal_and_claim_daraja_b2c(uuid, text, text, text, text, text) from public;
 revoke all on function public.employee_mark_daraja_b2c_submitted(uuid, text, text) from public;
-revoke all on function public.employee_mark_daraja_b2c_uncertain(uuid, text, text) from public;
+revoke all on function public.employee_mark_daraja_b2c_uncertain(uuid, text, text, text) from public;
 revoke all on function public.employee_process_daraja_b2c_result(uuid, text, text, text, integer, numeric, text, text) from public;
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
     grant execute on function public.employee_review_withdrawal_and_claim_daraja_b2c(uuid, text, text, text, text, text) to service_role;
     grant execute on function public.employee_mark_daraja_b2c_submitted(uuid, text, text) to service_role;
-    grant execute on function public.employee_mark_daraja_b2c_uncertain(uuid, text, text) to service_role;
+    grant execute on function public.employee_mark_daraja_b2c_uncertain(uuid, text, text, text) to service_role;
     grant execute on function public.employee_process_daraja_b2c_result(uuid, text, text, text, integer, numeric, text, text) to service_role;
   end if;
 end $$;

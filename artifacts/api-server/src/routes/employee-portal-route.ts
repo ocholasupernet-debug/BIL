@@ -1,7 +1,14 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Router, type IRouter, type Request, type Response } from "express";
-import { sbInsertStrict, sbRpc, sbSelectStrict, sbUpdateStrict, sbUpsertStrict } from "../lib/supabase-client.js";
+import {
+  sbInsertStrict,
+  sbRpc,
+  sbSelectStrict,
+  sbUpdateStrict,
+  sbUpsertStrict,
+  SupabaseHttpError,
+} from "../lib/supabase-client.js";
 import { getMpesaSettings } from "../lib/settings-store.js";
 import { activeSuperAdminName, isActiveSuperAdminToken } from "./super-admin-auth-route.js";
 import { logger } from "../lib/logger.js";
@@ -19,7 +26,7 @@ import { verifyTurnstile } from "../lib/turnstile.js";
 import {
   buildB2cCallbackUrl,
   initiateDarajaB2cPayout,
-  isWholeKesAmount,
+  normalizeWholeKesAmount,
   parseDarajaB2cResult,
   validateDarajaB2cPayout,
   type DarajaB2cCredentials,
@@ -272,6 +279,31 @@ function requirePayrollEmployee(employee: EmployeeProfile, res: Response): boole
 function safeRpcObject(value: unknown): Record<string, unknown> {
   if (Array.isArray(value)) return (value[0] && typeof value[0] === "object" ? value[0] : {}) as Record<string, unknown>;
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function timingSafeHashMatches(supplied: string, expected: string): boolean {
+  if (!/^[0-9a-f]{64}$/.test(supplied) || !/^[0-9a-f]{64}$/.test(expected)) return false;
+  return timingSafeEqual(Buffer.from(supplied, "hex"), Buffer.from(expected, "hex"));
+}
+
+function normalizeCallbackAmount(value: string | null): string | null {
+  if (!value || !/^(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?$/.test(value)) return null;
+  return value;
+}
+
+function secureCallbackOriginConfigured(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const parsed = new URL(value.trim());
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password &&
+      parsed.pathname === "/" && !parsed.search && !parsed.hash;
+  } catch {
+    return false;
+  }
+}
+
+function darajaCallbackAck(): { ResultCode: number; ResultDesc: string } {
+  return { ResultCode: 0, ResultDesc: "Accepted" };
 }
 
 function employeeLoginIsLimited(req: Request, username: string): boolean {
@@ -1103,7 +1135,7 @@ router.get("/employee/admin/withdrawals", async (req: Request, res: Response): P
   try {
     const withdrawals = await sbSelectStrict<Record<string, unknown>>(
       "employee_withdrawal_requests",
-      "select=id,employee_id,destination_id,amount,status,review_note,reviewed_by,reviewed_at,paid_reference,paid_at,created_at,destination:employee_payout_destinations(destination_type,masked_label)&order=created_at.desc",
+      "select=id,employee_id,destination_id,amount,status,review_note,reviewed_by,reviewed_at,paid_reference,paid_at,created_at,destination:employee_payout_destinations(destination_type,masked_label),payout_transaction:employee_payout_transactions(provider,status,provider_receipt,provider_conversation_id,updated_at)&order=created_at.desc",
     );
     res.json({ ok: true, withdrawals });
   } catch {
@@ -1403,7 +1435,7 @@ router.get("/employee/admin/payout-settings", async (req: Request, res: Response
     return;
   }
   try {
-    const [controlRows, secureRows, sharedDaraja] = await Promise.all([
+    const [controlRows, secureRows] = await Promise.all([
       sbSelectStrict<Record<string, unknown>>(
         "employee_payout_controls",
         "id=eq.global&select=enabled,enabled_destination_types,max_withdrawal,daily_limit,updated_at&limit=1",
@@ -1412,7 +1444,6 @@ router.get("/employee/admin/payout-settings", async (req: Request, res: Response
         "employee_payout_settings",
         "id=eq.global&select=ciphertext,iv,auth_tag&limit=1",
       ),
-      getMpesaSettings(),
     ]);
     let automationSchemaReady = false;
     let automationRows: Array<Record<string, unknown>> = [];
@@ -1428,21 +1459,25 @@ router.get("/employee/admin/payout-settings", async (req: Request, res: Response
     const secret = secureRows[0] ? decryptEmployeePayoutDetails(secureRows[0]) : {};
     const b2cEnvironment: DarajaB2cEnvironment =
       automationRows[0]?.b2c_environment === "production" ? "production" : "sandbox";
+    const b2cCredentialsReady = ["b2cConsumerKey", "b2cConsumerSecret", "b2cInitiator", "b2cShortcode", "b2cSecurityCredential"]
+      .every((key) => typeof secret[key] === "string" && !!secret[key]);
+    const runtimeAutomationEnabled = process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true";
+    const automaticB2cEnabled = automationSchemaReady && automationRows[0]?.automatic_b2c_enabled === true;
+    const callbackOriginReady = secureCallbackOriginConfigured(process.env.PUBLIC_APP_ORIGIN);
+    const liveDisbursementsEnabled =
+      automaticB2cEnabled && runtimeAutomationEnabled && callbackOriginReady && b2cCredentialsReady &&
+      b2cEnvironment === "production" && process.env.EMPLOYEE_PAYOUT_LIVE_CONFIRMED === "true";
     res.json({
       ok: true,
       controls: controlRows[0] ?? null,
       automationSchemaReady,
-      automaticB2cEnabled: automationSchemaReady && automationRows[0]?.automatic_b2c_enabled === true,
+      automaticB2cEnabled,
       b2cEnvironment,
-      runtimeAutomationEnabled: process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true",
-      liveDisbursementsEnabled:
-        automationSchemaReady &&
-        automationRows[0]?.automatic_b2c_enabled === true &&
-        process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true" &&
-        b2cEnvironment === "production" &&
-        process.env.EMPLOYEE_PAYOUT_LIVE_CONFIRMED === "true",
+      runtimeAutomationEnabled,
+      b2cCredentialsReady,
+      callbackOriginReady,
+      liveDisbursementsEnabled,
       credentials: {
-        hasSharedDarajaOAuthCredentials: !!(sharedDaraja.consumerKey && sharedDaraja.consumerSecret),
         hasB2cConsumerKey: typeof secret.b2cConsumerKey === "string" && !!secret.b2cConsumerKey,
         hasB2cConsumerSecret: typeof secret.b2cConsumerSecret === "string" && !!secret.b2cConsumerSecret,
         hasB2cInitiator: typeof secret.b2cInitiator === "string" && !!secret.b2cInitiator,
@@ -1579,15 +1614,267 @@ router.post("/employee/admin/withdrawals/:id/review", async (req: Request, res: 
     return;
   }
   try {
+    if (decision === "approve" && process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true") {
+      const controls = await sbSelectStrict<Record<string, unknown>>(
+        "employee_payout_controls",
+        "id=eq.global&select=automatic_b2c_enabled,b2c_environment&limit=1",
+      );
+      if (controls[0]?.automatic_b2c_enabled === true) {
+        const requests = await sbSelectStrict<Record<string, unknown>>(
+          "employee_withdrawal_requests",
+          `id=eq.${encodeURIComponent(id)}&select=id,amount,status,destination_id,destination:employee_payout_destinations(destination_type,encrypted_details)&limit=1`,
+        );
+        const withdrawal = requests[0];
+        const destinationValue = withdrawal?.destination;
+        const destination = Array.isArray(destinationValue)
+          ? destinationValue[0] as Record<string, unknown> | undefined
+          : destinationValue as Record<string, unknown> | undefined;
+        const destinationType = String(destination?.destination_type ?? "");
+        if (!withdrawal || withdrawal.status !== "pending" || !destination) {
+          res.status(409).json({ ok: false, error: "The approved payout destination could not be verified." });
+          return;
+        }
+        if (destinationType === "mpesa_b2c") {
+          const environment: DarajaB2cEnvironment =
+            controls[0].b2c_environment === "production" ? "production" : "sandbox";
+          if (environment === "production" && process.env.EMPLOYEE_PAYOUT_LIVE_CONFIRMED !== "true") {
+            res.status(409).json({
+              ok: false,
+              error: "Live M-Pesa disbursements are not activated. No withdrawal approval or payout was changed.",
+            });
+            return;
+          }
+          const settingsRows = await sbSelectStrict<{ ciphertext: string; iv: string; auth_tag: string }>(
+            "employee_payout_settings",
+            "id=eq.global&select=ciphertext,iv,auth_tag&limit=1",
+          );
+          const secrets = settingsRows[0] ? decryptEmployeePayoutDetails(settingsRows[0]) : {};
+          const credentials: DarajaB2cCredentials = {
+            consumerKey: String(secrets.b2cConsumerKey ?? ""),
+            consumerSecret: String(secrets.b2cConsumerSecret ?? ""),
+            initiatorName: String(secrets.b2cInitiator ?? ""),
+            securityCredential: String(secrets.b2cSecurityCredential ?? ""),
+            shortcode: String(secrets.b2cShortcode ?? ""),
+          };
+          const amountKes = normalizeWholeKesAmount(String(withdrawal.amount ?? "")) ?? "";
+          const encryptedDetails = typeof destination.encrypted_details === "string"
+            ? destination.encrypted_details
+            : "";
+          const details = encryptedDetails
+            ? decryptEmployeePayoutDetails({ ciphertext: encryptedDetails, iv: "", auth_tag: "" })
+            : {};
+          const phone = String(details.phone ?? "");
+          const originatorConversationId = `STAFF${randomUUID().replaceAll("-", "")}`;
+          const callbackToken = newEmployeeToken();
+          const callbackOrigin = process.env.PUBLIC_APP_ORIGIN?.trim() ?? "";
+          if (!callbackOrigin) {
+            res.status(409).json({ ok: false, error: "Set PUBLIC_APP_ORIGIN to the public HTTPS callback origin before enabling automatic payouts." });
+            return;
+          }
+          let resultUrl: string;
+          let queueTimeoutUrl: string;
+          try {
+            resultUrl = buildB2cCallbackUrl(callbackOrigin, "result", id, callbackToken);
+            queueTimeoutUrl = buildB2cCallbackUrl(callbackOrigin, "timeout", id, callbackToken);
+            validateDarajaB2cPayout({ credentials, amountKes, phone, originatorConversationId });
+          } catch (error) {
+            res.status(409).json({
+              ok: false,
+              error: error instanceof Error ? error.message : "B2C payout configuration is incomplete.",
+            });
+            return;
+          }
+
+          const claimResult = await sbRpc<unknown>("employee_review_withdrawal_and_claim_daraja_b2c", {
+            p_withdrawal_id: id,
+            p_actor_id: "super_admin",
+            p_note: typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null,
+            p_originator_reference: originatorConversationId,
+            p_callback_token_hash: hashEmployeeSecret(callbackToken),
+            p_expected_phone_hash: hashEmployeeSecret(phone),
+          });
+          const claimed = safeRpcObject(claimResult);
+          if (claimed.status !== "processing") {
+            res.status(409).json({ ok: false, error: "The payout could not be safely claimed for sending." });
+            return;
+          }
+          const initiation = await initiateDarajaB2cPayout({
+            credentials,
+            environment,
+            amountKes,
+            phone,
+            originatorConversationId,
+            resultUrl,
+            queueTimeoutUrl,
+          });
+          if (initiation.outcome === "submitted") {
+            try {
+              const submissionResult = safeRpcObject(await sbRpc<unknown>("employee_mark_daraja_b2c_submitted", {
+                p_withdrawal_id: id,
+                p_originator_reference: originatorConversationId,
+                p_conversation_id: initiation.conversationId,
+              }));
+              if (submissionResult.status === "succeeded") {
+                res.json({
+                  ok: true,
+                  withdrawal: { id, status: "paid" },
+                  payout: { status: "paid", message: "Safaricom's verified success callback was received and reconciled." },
+                });
+                return;
+              }
+              if (["reconciliation_required", "failed", "reconciled"].includes(String(submissionResult.status))) {
+                res.status(202).json({
+                  ok: true,
+                  withdrawal: { id, status: "reconciliation_required" },
+                  payout: { status: "reconciliation_required", message: "The callback outcome is uncertain. Reconcile before any retry." },
+                });
+                return;
+              }
+              res.json({
+                ok: true,
+                withdrawal: { id, status: "processing" },
+                payout: { status: "submitted", message: "Safaricom accepted the request; awaiting its verified result callback." },
+              });
+            } catch {
+              try {
+                await sbRpc("employee_mark_daraja_b2c_uncertain", {
+                  p_withdrawal_id: id,
+                  p_originator_reference: originatorConversationId,
+                  p_callback_token_hash: hashEmployeeSecret(callbackToken),
+                  p_failure_category: "submission_recording_uncertain",
+                });
+              } catch { /* The payout remains reserved; a callback may still reconcile it. */ }
+              res.status(202).json({
+                ok: true,
+                withdrawal: { id, status: "reconciliation_required" },
+                payout: { status: "reconciliation_required", message: "The provider response could not be recorded. Reconcile before any retry." },
+              });
+            }
+            return;
+          }
+          try {
+            await sbRpc("employee_mark_daraja_b2c_uncertain", {
+              p_withdrawal_id: id,
+              p_originator_reference: originatorConversationId,
+              p_callback_token_hash: hashEmployeeSecret(callbackToken),
+              p_failure_category: initiation.outcome === "rejected" ? "provider_rejected" : initiation.category,
+            });
+          } catch { /* Preserve the reservation and never retry automatically. */ }
+          res.status(202).json({
+            ok: true,
+            withdrawal: { id, status: "reconciliation_required" },
+            payout: {
+              status: "reconciliation_required",
+              message: "The request outcome is not confirmed. Check Safaricom status before retrying.",
+            },
+          });
+          return;
+        }
+
+        const reviewed = await sbRpc<unknown>("employee_review_withdrawal", {
+          p_withdrawal_id: id,
+          p_actor_id: "super_admin",
+          p_decision: decision,
+          p_note: typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null,
+        });
+        const response: Record<string, unknown> = {
+          ok: true,
+          withdrawal: safeRpcObject(reviewed),
+        };
+        if (destinationType === "pochi") {
+          response.payout = {
+            status: "not_sent",
+            message: "No Pochi-specific Safaricom payout contract is configured. No money was sent.",
+          };
+        }
+        res.json(response);
+        return;
+      }
+    }
     const result = await sbRpc<unknown>("employee_review_withdrawal", {
       p_withdrawal_id: id,
       p_actor_id: "super_admin",
       p_decision: decision,
       p_note: typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null,
     });
-    res.json({ ok: true, withdrawal: safeRpcObject(result) });
+    res.json({
+      ok: true,
+      withdrawal: safeRpcObject(result),
+      ...(decision === "approve" ? {
+        payout: {
+          status: "not_sent",
+          message: "Withdrawal approved, but no money was sent. Automatic B2C requires the separate credentials, applied schema, and both server/admin gates.",
+        },
+      } : {}),
+    });
   } catch {
-    res.status(409).json({ ok: false, error: "The withdrawal is no longer awaiting review." });
+    res.status(409).json({ ok: false, error: "The withdrawal could not be safely reviewed or automatically submitted. Check its current status and payout configuration." });
+  }
+});
+
+router.post("/employee/payouts/daraja/b2c/result", async (req: Request, res: Response): Promise<void> => {
+  const withdrawalId = typeof req.query.withdrawal === "string" ? req.query.withdrawal : "";
+  const token = typeof req.query.token === "string" ? req.query.token : "";
+  if (!EMPLOYEE_UUID_PATTERN.test(withdrawalId) || !/^[A-Za-z0-9_-]{40,60}$/.test(token)) {
+    res.status(401).json({ ResultCode: 1, ResultDesc: "Invalid callback authorization" });
+    return;
+  }
+  const callback = parseDarajaB2cResult(req.body);
+  if (!callback) {
+    res.status(400).json({ ResultCode: 1, ResultDesc: "Invalid callback result" });
+    return;
+  }
+  const amount = normalizeCallbackAmount(callback.amount);
+  try {
+    await sbRpc("employee_process_daraja_b2c_result", {
+      p_withdrawal_id: withdrawalId,
+      p_callback_token_hash: hashEmployeeSecret(token),
+      p_originator_reference: callback.originatorConversationId,
+      p_conversation_id: callback.conversationId,
+      p_result_code: callback.resultCode,
+      p_amount: amount,
+      p_receipt: callback.receipt,
+      p_phone_hash: callback.receiverPhone ? hashEmployeeSecret(callback.receiverPhone) : null,
+    });
+    res.json(darajaCallbackAck());
+  } catch {
+    // No callback body, token, recipient, or provider description is logged.
+    logger.warn({ category: "staff_daraja_callback_rejected" }, "[staff-payout] result callback was not accepted");
+    res.status(503).json({ ResultCode: 1, ResultDesc: "Callback processing is temporarily unavailable" });
+  }
+});
+
+router.post("/employee/payouts/daraja/b2c/timeout", async (req: Request, res: Response): Promise<void> => {
+  const withdrawalId = typeof req.query.withdrawal === "string" ? req.query.withdrawal : "";
+  const token = typeof req.query.token === "string" ? req.query.token : "";
+  if (!EMPLOYEE_UUID_PATTERN.test(withdrawalId) || !/^[A-Za-z0-9_-]{40,60}$/.test(token)) {
+    res.status(401).json({ ResultCode: 1, ResultDesc: "Invalid callback authorization" });
+    return;
+  }
+  try {
+    const rows = await sbSelectStrict<{
+      originator_reference: string;
+      callback_token_hash: string | null;
+    }>(
+      "employee_payout_transactions",
+      `withdrawal_id=eq.${encodeURIComponent(withdrawalId)}&provider=eq.daraja_b2c&select=originator_reference,callback_token_hash&limit=1`,
+    );
+    const row = rows[0];
+    const suppliedHash = hashEmployeeSecret(token);
+    if (!row?.callback_token_hash || !timingSafeHashMatches(suppliedHash, row.callback_token_hash)) {
+      res.status(401).json({ ResultCode: 1, ResultDesc: "Invalid callback authorization" });
+      return;
+    }
+    await sbRpc("employee_mark_daraja_b2c_uncertain", {
+      p_withdrawal_id: withdrawalId,
+      p_originator_reference: row.originator_reference,
+      p_callback_token_hash: suppliedHash,
+      p_failure_category: "provider_timeout",
+    });
+    res.json(darajaCallbackAck());
+  } catch {
+    logger.warn({ category: "staff_daraja_timeout_callback_unavailable" }, "[staff-payout] timeout callback processing failed");
+    res.status(503).json({ ResultCode: 1, ResultDesc: "Callback processing is temporarily unavailable" });
   }
 });
 

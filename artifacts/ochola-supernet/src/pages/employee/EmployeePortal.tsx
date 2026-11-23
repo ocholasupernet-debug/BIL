@@ -781,7 +781,12 @@ function AdminPortal() {
   const actOnWithdrawal = (decision: "approve" | "reject") => {
     if (!reviewTarget) return;
     review.mutate({ id: reviewTarget.id, decision, note: reviewNote || undefined }, {
-      onSuccess: () => { showNotice(`Withdrawal ${decision === "approve" ? "approved" : "rejected"}.`, "success"); setReviewTarget(null); setReviewNote(""); },
+      onSuccess: (result) => {
+        showNotice(result.payout?.message ?? `Withdrawal ${decision === "approve" ? "approved" : "rejected"}.`, result.payout?.status === "reconciliation_required" ? "error" : "success");
+        setReviewTarget(null);
+        setReviewNote("");
+        void withdrawals.refetch();
+      },
       onError: (error) => showNotice(errorText(error), "error"),
     });
   };
@@ -798,15 +803,22 @@ function AdminPortal() {
     const data = new FormData(event.currentTarget);
     const types = ["bank", "mpesa_b2c", "pochi", "paybill", "till"].filter((type) => data.get(type) === "on");
     const credentials: Record<string, string> = {};
-    ["b2cInitiator", "b2cShortcode", "b2cSecurityCredential", "b2pochiConfiguration", "b2bShortcode", "b2bInitiator", "b2bSecurityCredential"].forEach((name) => {
+    ["b2cConsumerKey", "b2cConsumerSecret", "b2cInitiator", "b2cShortcode", "b2cSecurityCredential", "b2pochiConfiguration", "b2bShortcode", "b2bInitiator", "b2bSecurityCredential"].forEach((name) => {
       const value = String(data.get(name) || ""); if (value) credentials[name] = value;
     });
     saveSettings.mutate({
       enabled: data.get("enabled") === "on", enabledDestinationTypes: types,
+      automaticB2cEnabled: data.get("automaticB2cEnabled") === "on",
+      b2cEnvironment: data.get("b2cEnvironment") === "production" ? "production" : "sandbox",
       maxWithdrawal: String(data.get("maxWithdrawal")), dailyLimit: String(data.get("dailyLimit")),
       replacePassword: String(data.get("replacePassword")), credentials,
     }, {
-      onSuccess: () => { showNotice("Payout request controls saved. Live disbursements remain disabled.", "success"); setDialog(null); },
+      onSuccess: (result) => {
+        showNotice(result.runtimeAutomationEnabled && result.automaticB2cEnabled
+          ? "B2C settings saved. Automatic payouts are gated by the server and callback readiness."
+          : "Payout request controls saved. Automatic B2C payouts remain off.", "success");
+        setDialog(null);
+      },
       onError: (error) => showNotice(errorText(error), "error"),
     });
   };
@@ -886,8 +898,8 @@ function AdminPortal() {
         </form>
       </section>
     </div>}
-    {dialog === "settings" && <SettingsDialog controls={settings.data?.controls ?? null} credentials={settings.data?.credentials} isPending={saveSettings.isPending} onClose={() => setDialog(null)} onSubmit={saveSettingsSubmit} />}
-    {reviewTarget && <div className="ep-modal-backdrop"><section className="ep-modal ep-review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title"><div className="ep-modal-head"><div><p className="ep-eyebrow">WITHDRAWAL REVIEW</p><h2 id="review-title">{money(reviewTarget.amount)}</h2></div><button className="ep-icon-button" onClick={() => setReviewTarget(null)} aria-label="Close"><X size={18} /></button></div><p className="ep-modal-description">Select whether to approve or reject this request. Approval does not send funds.</p><label className="ep-field-label">Review note <small>Optional</small><textarea rows={3} value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="Add context for the employee" /></label><div className="ep-form-actions"><button className="ep-button ep-button-secondary" onClick={() => setReviewTarget(null)}>Cancel</button><button className="ep-button ep-button-danger" disabled={review.isPending} onClick={() => actOnWithdrawal("reject")}>Reject</button><button className="ep-button ep-button-primary" disabled={review.isPending} onClick={() => actOnWithdrawal("approve")}>{review.isPending ? "Saving…" : "Approve request"}</button></div></section></div>}
+    {dialog === "settings" && <SettingsDialog controls={settings.data?.controls ?? null} configuration={settings.data} isPending={saveSettings.isPending} onClose={() => setDialog(null)} onSubmit={saveSettingsSubmit} />}
+    {reviewTarget && <div className="ep-modal-backdrop"><section className="ep-modal ep-review-modal" role="dialog" aria-modal="true" aria-labelledby="review-title"><div className="ep-modal-head"><div><p className="ep-eyebrow">WITHDRAWAL REVIEW</p><h2 id="review-title">{money(reviewTarget.amount)}</h2></div><button className="ep-icon-button" onClick={() => setReviewTarget(null)} aria-label="Close"><X size={18} /></button></div><p className="ep-modal-description">Approval can start an M-Pesa B2C payout only when the separate B2C configuration and server gates are enabled. Pochi requests remain unsent until a Pochi-specific provider route is verified.</p><label className="ep-field-label">Review note <small>Optional</small><textarea rows={3} value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="Add context for the employee" /></label><div className="ep-form-actions"><button className="ep-button ep-button-secondary" onClick={() => setReviewTarget(null)}>Cancel</button><button className="ep-button ep-button-danger" disabled={review.isPending} onClick={() => actOnWithdrawal("reject")}>Reject</button><button className="ep-button ep-button-primary" disabled={review.isPending} onClick={() => actOnWithdrawal("approve")}>{review.isPending ? "Saving…" : "Approve request"}</button></div></section></div>}
   </div></PortalFrame>;
 }
 
@@ -1315,7 +1327,7 @@ function WithdrawalList({ withdrawals, onReview, onRecord, compact = false }: {
   withdrawals: EmployeePortalWithdrawal[]; onReview: (item: EmployeePortalWithdrawal) => void; onRecord: (item: EmployeePortalWithdrawal) => void; compact?: boolean;
 }) {
   if (!withdrawals.length) return <div className="ep-quiet-empty"><span><FileText size={18} /></span><div><b>No withdrawal requests</b><small>Requests appear here when submitted by Staff members.</small></div></div>;
-  return <div className="ep-withdrawal-list">{withdrawals.map((item) => <article className="ep-withdrawal-row" key={item.id}><div className="ep-withdrawal-main"><span className="ep-withdrawal-icon"><ArrowDownToLine size={17} /></span><div><b>{money(item.amount)}</b><small>Request {item.id.slice(0, 10)} · {dateTime(item.created_at)}</small><small>{item.destination?.masked_label ?? "Payout destination"} · {item.destination?.destination_type?.replaceAll("_", " ") ?? "type unavailable"}</small>{item.review_note && <small>Note: {item.review_note}</small>}</div></div><StatusPill status={item.status} /><div className="ep-withdrawal-actions">{item.status === "pending" && <button className="ep-button ep-button-secondary ep-small-button" onClick={() => onReview(item)}>Review</button>}{!compact && ["approved", "processing", "reconciliation_required"].includes(item.status) && item.destination?.destination_type === "bank" && <button className="ep-button ep-button-secondary ep-small-button" onClick={() => onRecord(item)}>Record bank transfer</button>}{!compact && ["approved", "processing", "reconciliation_required"].includes(item.status) && item.destination?.destination_type !== "bank" && <small>Provider confirmation is required; live payouts are disabled.</small>}</div></article>)}</div>;
+   return <div className="ep-withdrawal-list">{withdrawals.map((item) => <article className="ep-withdrawal-row" key={item.id}><div className="ep-withdrawal-main"><span className="ep-withdrawal-icon"><ArrowDownToLine size={17} /></span><div><b>{money(item.amount)}</b><small>Request {item.id.slice(0, 10)} · {dateTime(item.created_at)}</small><small>{item.destination?.masked_label ?? "Payout destination"} · {item.destination?.destination_type?.replaceAll("_", " ") ?? "type unavailable"}</small>{item.payout_transaction && <small>Provider: {item.payout_transaction.provider.replaceAll("_", " ")} · {item.payout_transaction.status.replaceAll("_", " ")}</small>}{item.payout_transaction?.provider_receipt && <small>Verified receipt: {item.payout_transaction.provider_receipt}</small>}{item.review_note && <small>Note: {item.review_note}</small>}</div></div><StatusPill status={item.status} /><div className="ep-withdrawal-actions">{item.status === "pending" && <button className="ep-button ep-button-secondary ep-small-button" onClick={() => onReview(item)}>Review</button>}{!compact && ["approved", "processing", "reconciliation_required"].includes(item.status) && item.destination?.destination_type === "bank" && <button className="ep-button ep-button-secondary ep-small-button" onClick={() => onRecord(item)}>Record bank transfer</button>}{!compact && ["approved", "processing", "reconciliation_required"].includes(item.status) && item.destination?.destination_type === "pochi" && <small>Pochi-specific payouts are not sent until the dedicated Safaricom API is verified.</small>}{!compact && ["approved", "processing", "reconciliation_required"].includes(item.status) && item.destination?.destination_type === "mpesa_b2c" && !item.payout_transaction && <small>No payout request has been sent. Approval alone is not proof of payment.</small>}{!compact && item.payout_transaction?.status === "uncertain" && <small>Reconcile with Safaricom before any retry. Funds remain reserved.</small>}</div></article>)}</div>;
 }
 
 function PayoutControlPanel({ settings, isLoading, isError, onRetry, onEdit }: {
@@ -1325,33 +1337,32 @@ function PayoutControlPanel({ settings, isLoading, isError, onRetry, onEdit }: {
   if (isError || !settings) return <EmptyState title="Payout controls are unavailable" text="No payout configuration has been returned. Credentials are never displayed here." retry={onRetry} />;
   const controls = settings.controls;
   const credentialLabels: Array<[string, string]> = [
-    ["Shared Daraja OAuth credentials", settings.credentials.hasSharedDarajaOAuthCredentials ? "Configured" : "Not configured"],
+    ["B2C OAuth consumer key", settings.credentials.hasB2cConsumerKey ? "Configured" : "Not configured"],
+    ["B2C OAuth consumer secret", settings.credentials.hasB2cConsumerSecret ? "Configured" : "Not configured"],
     ["B2C shortcode", settings.credentials.hasB2cShortcode ? "Configured" : "Not configured"],
     ["B2C initiator", settings.credentials.hasB2cInitiator ? "Configured" : "Not configured"],
     ["B2C security credential", settings.credentials.hasB2cSecurityCredential ? "Configured" : "Not configured"],
-    ["B2Pochi configuration", settings.credentials.hasB2pochiConfiguration ? "Configured" : "Not configured"],
-    ["B2B shortcode", settings.credentials.hasB2bShortcode ? "Configured" : "Not configured"],
-    ["B2B initiator", settings.credentials.hasB2bInitiator ? "Configured" : "Not configured"],
-    ["B2B security credential", settings.credentials.hasB2bSecurityCredential ? "Configured" : "Not configured"],
+    ["Pochi-specific API contract", settings.credentials.hasB2pochiConfiguration ? "Configuration present; API unverified" : "Not configured"],
   ];
-  return <><div className="ep-settings-intro"><div><p className="ep-eyebrow">ADMINISTRATOR CONTROLS</p><h2>Withdrawal request rules</h2><p>These settings limit requests. They do not enable automatic payouts.</p></div><button className="ep-button ep-button-primary" onClick={onEdit}>Edit controls</button></div>
-    <div className="ep-live-banner"><span><CircleAlert size={19} /></span><div><b>Live disbursements are disabled</b><p>Payments are not sent automatically by this portal. An administrator must confirm an external payment before recording its reference.</p></div></div>
-    <div className="ep-settings-grid"><section className="ep-admin-panel"><p className="ep-eyebrow">REQUEST LIMITS</p><h3>Staff withdrawal rules</h3>{controls ? <div className="ep-settings-list"><div><span>Requests enabled</span><StatusPill status={controls.enabled ? "active" : "disabled"} /></div><div><span>Enabled destinations</span><strong>{controls.enabled_destination_types.length ? controls.enabled_destination_types.join(", ") : "None"}</strong></div><div><span>Maximum per request</span><strong>{money(controls.max_withdrawal)}</strong></div><div><span>Daily limit</span><strong>{money(controls.daily_limit)}</strong></div></div> : <div className="ep-quiet-empty"><div><b>No payout controls returned</b><small>Saved settings are not available yet.</small></div></div>}</section>
-      <section className="ep-admin-panel"><p className="ep-eyebrow">SECRET PRESENCE ONLY</p><h3>Provider configuration</h3><div className="ep-settings-list">{credentialLabels.map(([label, value]) => <div key={label}><span>{label}</span><span className={`ep-presence ${value === "Configured" ? "is-set" : ""}`}><i />{value}</span></div>)}</div><p className="ep-form-hint"><LockKeyhole size={14} /> Secret values cannot be read back from this screen.</p></section></div>
+  const automationReady = settings.automationSchemaReady && settings.automaticB2cEnabled &&
+    settings.runtimeAutomationEnabled && settings.b2cCredentialsReady && settings.callbackOriginReady;
+  return <><div className="ep-settings-intro"><div><p className="ep-eyebrow">ADMINISTRATOR CONTROLS</p><h2>Withdrawal request rules</h2><p>Super Admin approval remains required. Automatic sends use a separate B2C app and callback.</p></div><button className="ep-button ep-button-primary" onClick={onEdit}>Edit controls</button></div>
+    {!settings.automationSchemaReady && <div className="ep-live-banner"><span><CircleAlert size={19} /></span><div><b>Automatic payout schema is unavailable</b><p>The additive migration has not been confirmed by this app. Apply it before configuring B2C automation; existing approval and bank-recording behavior remains unchanged.</p></div></div>}
+    <div className="ep-live-banner"><span><CircleAlert size={19} /></span><div><b>{settings.liveDisbursementsEnabled ? "Live B2C automation is enabled" : automationReady ? "B2C automation configured; live sending remains gated" : "Automatic disbursements are off"}</b><p>{settings.b2cEnvironment === "sandbox" ? "Sandbox is selected. No live funds can be sent through this environment." : settings.liveDisbursementsEnabled ? "New B2C withdrawals send only after Super Admin approval and verified callbacks." : "The server-side payout kill switch or explicit live authorization is off."} Pochi remains separate and cannot send until its Safaricom-specific API contract is verified.</p></div></div>
+    <div className="ep-settings-grid"><section className="ep-admin-panel"><p className="ep-eyebrow">REQUEST LIMITS</p><h3>Staff withdrawal rules</h3>{controls ? <div className="ep-settings-list"><div><span>Requests enabled</span><StatusPill status={controls.enabled ? "active" : "disabled"} /></div><div><span>Enabled destinations</span><strong>{controls.enabled_destination_types.length ? controls.enabled_destination_types.join(", ") : "None"}</strong></div><div><span>Maximum per request</span><strong>{money(controls.max_withdrawal)}</strong></div><div><span>Daily limit</span><strong>{money(controls.daily_limit)}</strong></div><div><span>Automatic B2C approval flow</span><strong>{settings.automaticB2cEnabled ? "Admin-enabled" : "Off"}</strong></div><div><span>B2C environment</span><strong>{settings.b2cEnvironment}</strong></div></div> : <div className="ep-quiet-empty"><div><b>No payout controls returned</b><small>Saved settings are not available yet.</small></div></div>}</section>
+      <section className="ep-admin-panel"><p className="ep-eyebrow">SECRET PRESENCE ONLY</p><h3>Provider configuration</h3><div className="ep-settings-list">{credentialLabels.map(([label, value]) => <div key={label}><span>{label}</span><span className={`ep-presence ${value === "Configured" ? "is-set" : ""}`}><i />{value}</span></div>)}</div><p className="ep-form-hint"><LockKeyhole size={14} /> Secret values cannot be read back. Existing customer C2B/STK credentials are not reused.</p></section></div>
   </>;
 }
 
-function SettingsDialog({ controls, credentials, isPending, onClose, onSubmit }: {
+function SettingsDialog({ controls, configuration, isPending, onClose, onSubmit }: {
   controls: { enabled: boolean; enabled_destination_types: string[]; max_withdrawal: string; daily_limit: string } | null;
-  credentials?: {
-    hasSharedDarajaOAuthCredentials: boolean; hasB2cInitiator: boolean; hasB2cShortcode: boolean;
-    hasB2cSecurityCredential: boolean; hasB2pochiConfiguration: boolean; hasB2bShortcode: boolean;
-    hasB2bInitiator: boolean; hasB2bSecurityCredential: boolean; liveDisbursementsEnabled: false;
-  };
+  configuration?: NonNullable<ReturnType<typeof useEmployeePayoutSettings>["data"]>;
   isPending: boolean; onClose: () => void; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
 }) {
-  return <div className="ep-modal-backdrop"><section className="ep-modal ep-settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div className="ep-modal-head"><div><p className="ep-eyebrow">REQUEST CONFIGURATION</p><h2 id="settings-title">Payout controls</h2></div><button className="ep-icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div><div className="ep-live-banner compact"><span><CircleAlert size={18} /></span><div><b>Live payouts stay disabled</b><p>Saving controls cannot send money automatically.</p></div></div><form className="ep-form ep-modal-form" onSubmit={onSubmit}>
+  return <div className="ep-modal-backdrop"><section className="ep-modal ep-settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"><div className="ep-modal-head"><div><p className="ep-eyebrow">REQUEST CONFIGURATION</p><h2 id="settings-title">Payout controls</h2></div><button className="ep-icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div><div className="ep-live-banner compact"><span><CircleAlert size={18} /></span><div><b>Super Admin approval is always required</b><p>Server-side automation defaults off; production payouts also require a separate live authorization.</p></div></div><form className="ep-form ep-modal-form" onSubmit={onSubmit}>
     <label className="ep-toggle-row"><span><b>Allow withdrawal requests</b><small>Staff members may submit requests for Super Admin review</small></span><input name="enabled" type="checkbox" defaultChecked={controls?.enabled ?? false} /></label>
+     <label className="ep-toggle-row"><span><b>Automatically send approved M-Pesa B2C requests</b><small>Only after the server kill switch, separate credentials, schema, and callbacks are ready</small></span><input name="automaticB2cEnabled" type="checkbox" disabled={!configuration?.automationSchemaReady} defaultChecked={configuration?.automaticB2cEnabled ?? false} /></label>
+     <label>B2C environment<select name="b2cEnvironment" defaultValue={configuration?.b2cEnvironment ?? "sandbox"}><option value="sandbox">Safaricom sandbox</option><option value="production">Production (extra server approval required)</option></select></label>
      <div className="ep-form-two"><label>Maximum per request (KES)<input name="maxWithdrawal" type="text" inputMode="decimal" pattern="(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,2})?" defaultValue={controls?.max_withdrawal ?? ""} required /></label><label>Daily limit (KES)<input name="dailyLimit" type="text" inputMode="decimal" pattern="(?:0|[1-9][0-9]{0,11})(?:\\.[0-9]{1,2})?" defaultValue={controls?.daily_limit ?? ""} required /></label></div>
      <fieldset className="ep-checkboxes"><legend>Accepted destination types</legend>
        <label><input type="checkbox" name="bank" defaultChecked={controls?.enabled_destination_types.includes("bank")} /> Bank transfer</label>
@@ -1360,10 +1371,15 @@ function SettingsDialog({ controls, credentials, isPending, onClose, onSubmit }:
        <label><input type="checkbox" name="paybill" defaultChecked={controls?.enabled_destination_types.includes("paybill")} /> Paybill</label>
        <label><input type="checkbox" name="till" defaultChecked={controls?.enabled_destination_types.includes("till")} /> Till</label>
      </fieldset>
-     <div className="ep-form-hint"><LockKeyhole size={14} /> Shared C2B/STK OAuth settings are reused for API authentication and cannot be changed here. These separate payout credentials are stored encrypted. Saving them does not enable live payouts.</div>
-     <details className="ep-credential-details"><summary>Configure provider credentials <small>Leave blank to keep the stored value</small></summary><div className="ep-credential-fields">{[
-       ["b2cInitiator", "B2C initiator", credentials?.hasB2cInitiator], ["b2cShortcode", "B2C shortcode", credentials?.hasB2cShortcode], ["b2cSecurityCredential", "B2C security credential", credentials?.hasB2cSecurityCredential], ["b2bShortcode", "B2B shortcode", credentials?.hasB2bShortcode], ["b2bInitiator", "B2B initiator", credentials?.hasB2bInitiator], ["b2bSecurityCredential", "B2B security credential", credentials?.hasB2bSecurityCredential], ["b2pochiConfiguration", "B2Pochi configuration", credentials?.hasB2pochiConfiguration],
-    ].map(([name, label, hasValue]) => <label key={String(name)}>{String(label)} <small>{hasValue ? "Currently configured" : "Not configured"}</small><input name={String(name)} type="password" autoComplete="new-password" placeholder="Leave blank to keep existing value" /></label>)}</div></details>
+      <div className="ep-form-hint"><LockKeyhole size={14} /> Separate B2C OAuth credentials are required; customer C2B/STK keys are not reused. Credentials are encrypted server-side and never returned. Pochi cannot be mapped to B2C without Safaricom’s confirmed Pochi API contract.</div>
+      <details className="ep-credential-details"><summary>Configure payout credentials <small>Leave blank to keep stored values</small></summary><div className="ep-credential-fields">{[
+        ["b2cConsumerKey", "B2C consumer key", configuration?.credentials.hasB2cConsumerKey],
+        ["b2cConsumerSecret", "B2C consumer secret", configuration?.credentials.hasB2cConsumerSecret],
+        ["b2cInitiator", "B2C initiator", configuration?.credentials.hasB2cInitiator],
+        ["b2cShortcode", "B2C shortcode", configuration?.credentials.hasB2cShortcode],
+        ["b2cSecurityCredential", "B2C security credential", configuration?.credentials.hasB2cSecurityCredential],
+        ["b2pochiConfiguration", "Pochi-specific provider setup", configuration?.credentials.hasB2pochiConfiguration],
+     ].map(([name, label, hasValue]) => <label key={String(name)}>{String(label)} <small>{hasValue ? "Currently configured" : "Not configured"}</small><input name={String(name)} type="password" autoComplete="new-password" placeholder="Leave blank to keep existing value" /></label>)}</div></details>
     <label>Confirm with your Super Admin password<input name="replacePassword" type="password" autoComplete="current-password" required /></label>
     <div className="ep-form-actions"><button type="button" className="ep-button ep-button-secondary" onClick={onClose}>Cancel</button><button className="ep-button ep-button-primary" disabled={isPending}>{isPending ? "Saving…" : "Save request controls"}</button></div>
   </form></section></div>;

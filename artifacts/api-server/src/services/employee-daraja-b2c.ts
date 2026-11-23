@@ -30,6 +30,12 @@ export function isWholeKesAmount(value: unknown): value is string {
   return typeof value === "string" && /^[1-9]\d{0,8}$/.test(value);
 }
 
+export function normalizeWholeKesAmount(value: unknown): string | null {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d{0,11})(?:\.0{1,2})?$/.test(value)) return null;
+  const integer = value.split(".")[0];
+  return isWholeKesAmount(integer) ? integer : null;
+}
+
 export function validateDarajaB2cPayout(input: {
   credentials: DarajaB2cCredentials;
   amountKes: string;

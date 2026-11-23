@@ -24,6 +24,13 @@ export type EmployeePortalWithdrawal = {
   created_at: string;
   paid_at?: string | null;
   destination?: { destination_type: "bank" | "mpesa_b2c" | "pochi" | "paybill" | "till"; masked_label: string } | null;
+  payout_transaction?: {
+    provider: "manual_bank" | "daraja_b2c" | "daraja_b2b" | "b2pochi";
+    status: "created" | "submitted" | "succeeded" | "failed" | "uncertain" | "reconciled";
+    provider_receipt?: string | null;
+    provider_conversation_id?: string | null;
+    updated_at?: string;
+  } | null;
 };
 
 export type EmployeePortalDashboard = {
@@ -483,11 +490,18 @@ export function useEmployeePayoutSettings() {
     queryKey: ["employee-portal", "admin", "payout-settings"],
     queryFn: () => request<ApiResult<{
       controls: { enabled: boolean; enabled_destination_types: string[]; max_withdrawal: string; daily_limit: string } | null;
+      automationSchemaReady: boolean;
+      automaticB2cEnabled: boolean;
+      b2cEnvironment: "sandbox" | "production";
+      runtimeAutomationEnabled: boolean;
+      b2cCredentialsReady: boolean;
+      callbackOriginReady: boolean;
+      liveDisbursementsEnabled: boolean;
       credentials: {
-        hasSharedDarajaOAuthCredentials: boolean; hasB2cInitiator: boolean; hasB2cShortcode: boolean;
+        hasB2cConsumerKey: boolean; hasB2cConsumerSecret: boolean;
+        hasB2cInitiator: boolean; hasB2cShortcode: boolean;
         hasB2cSecurityCredential: boolean; hasB2pochiConfiguration: boolean;
         hasB2bShortcode: boolean; hasB2bInitiator: boolean; hasB2bSecurityCredential: boolean;
-        liveDisbursementsEnabled: false;
       };
     }>>("/api/employee/admin/payout-settings", {}, true),
   });
@@ -498,8 +512,13 @@ export function useSaveEmployeePayoutSettings() {
   return useMutation({
     mutationFn: (input: {
       enabled: boolean; enabledDestinationTypes: string[]; maxWithdrawal: string; dailyLimit: string;
+      automaticB2cEnabled: boolean; b2cEnvironment: "sandbox" | "production";
       replacePassword: string; credentials: Record<string, string>;
-    }) => request<ApiResult<{ enabled: boolean; enabledDestinationTypes: string[]; liveDisbursementsEnabled: false }>>(
+    }) => request<ApiResult<{
+      enabled: boolean; enabledDestinationTypes: string[]; automaticB2cEnabled: boolean;
+      b2cEnvironment: "sandbox" | "production"; runtimeAutomationEnabled: boolean;
+      liveDisbursementsEnabled: boolean;
+    }>>(
       "/api/employee/admin/payout-settings",
       { method: "PUT", body: JSON.stringify(input) },
       true,
@@ -512,7 +531,10 @@ export function useReviewEmployeeWithdrawal() {
   const client = useQueryClient();
   return useMutation({
     mutationFn: (input: { id: string; decision: "approve" | "reject"; note?: string }) =>
-      request<ApiResult<{ withdrawal: EmployeePortalWithdrawal }>>(
+      request<ApiResult<{
+        withdrawal: EmployeePortalWithdrawal;
+        payout?: { status: string; message: string };
+      }>>(
         `/api/employee/admin/withdrawals/${encodeURIComponent(input.id)}/review`,
         { method: "POST", body: JSON.stringify({ decision: input.decision, note: input.note }) },
         true,
