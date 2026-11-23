@@ -214,8 +214,14 @@
 .ep-admin-identity b { color: var(--ep-ink); font-size: 10px; }
 .ep-admin-identity small { color: #8b9a9b; font: 700 7px "Space Mono", monospace; letter-spacing: .09em; }
 .ep-admin-main { min-width: 0; flex: 1; }
+.ep-admin-header-actions { display: inline-flex; align-items: center; gap: 9px; }
 .ep-admin-status { display: inline-flex; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid #dce5f0; border-radius: 6px; color: #365d8e; background: #f1f6fc; font: 9px "Space Mono", monospace; }
 .ep-admin-status span { width: 7px; height: 7px; border-radius: 50%; background: #58a57e; box-shadow: 0 0 0 3px #e0f1e5; }
+.ep-admin-signout { display: inline-flex; min-height: 32px; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; border: 1px solid #e7d9d4; border-radius: 6px; color: #8a4c43; background: #fff; font: 600 10px "Manrope", sans-serif; white-space: nowrap; }
+.ep-admin-signout:hover:not(:disabled) { border-color: #d4b7ad; color: #74382f; background: #fff7f3; }
+.ep-admin-signout:disabled { cursor: wait; opacity: .7; }
+.ep-signout-spinner { animation: ep-signout-spin .9s linear infinite; }
+@keyframes ep-signout-spin { to { transform: rotate(360deg); } }
 .ep-admin-content { max-width: none; }
 .ep-admin-welcome { position: relative; display: flex; min-height: 142px; align-items: center; justify-content: space-between; gap: 18px; margin: 6px 0 16px; padding: 24px 28px 24px 31px; overflow: hidden; border: 1px solid #d9e3f0; border-radius: 8px; background: linear-gradient(108deg, #f0f5fb 0%, #fafbfd 100%); }
 .ep-admin-welcome::before { position: absolute; inset: 0 auto 0 0; width: 3px; background: linear-gradient(180deg, #1d5fae, #95b6df); content: ""; }
@@ -500,6 +506,8 @@
   .ep-admin-panel { padding: 15px; }
   .ep-admin-status { font-size: 0; }
   .ep-admin-status span { width: 8px; height: 8px; }
+  .ep-admin-header-actions { gap: 6px; }
+  .ep-admin-signout { min-height: 30px; padding-inline: 8px; font-size: 9px; }
   .ep-manual-payment form { grid-template-columns: 1fr; }
   .ep-withdrawal-row { flex-wrap: wrap; gap: 8px; }
   .ep-withdrawal-main { flex-basis: calc(100% - 70px); }

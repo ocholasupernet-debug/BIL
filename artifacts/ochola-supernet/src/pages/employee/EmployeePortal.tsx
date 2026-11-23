@@ -632,12 +632,37 @@ function AdminPortal() {
   const [, setLocation] = useLocation();
   const [view, setView] = useState<AdminView>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
   const [dialog, setDialog] = useState<"employee" | "settings" | null>(null);
   const [notice, setNotice] = useState("");
   const [noticeTone, setNoticeTone] = useState<"success" | "error" | "info">("info");
   const showNotice = (message: string, tone: "success" | "error" | "info") => {
     setNotice(message);
     setNoticeTone(tone);
+  };
+  const handleSignOut = async () => {
+    if (isSigningOut) return;
+    setIsSigningOut(true);
+    let token: string | null = null;
+    try {
+      token = localStorage.getItem("ochola_superadmin_token");
+    } catch {}
+    if (token) {
+      try {
+        await fetch("/api/super-admin/logout", {
+          method: "POST",
+          headers: { "x-sa-token": token },
+        });
+      } catch {
+        // Clear the local session even when the server cannot be reached.
+      }
+    }
+    try {
+      localStorage.removeItem("ochola_superadmin_token");
+      localStorage.removeItem("ochola_superadmin_name");
+      localStorage.removeItem("ochola_superadmin_issued_at");
+    } catch {}
+    setLocation("/super-admin/login");
   };
   const summary = useEmployeeAdminSummary();
   const employees = useAdminEmployees();
@@ -750,7 +775,7 @@ function AdminPortal() {
   const failText = allErrors.length ? errorText(allErrors[0]) : "";
   return <PortalFrame kind="admin"><div className="ep-admin-layout">
     <aside className={`ep-sidebar ep-admin-sidebar ${menuOpen ? "is-open" : ""}`}><div className="ep-sidebar-brand"><BrandMark /></div><div className="ep-admin-identity"><span className="ep-admin-emblem"><ShieldCheck size={18} /></span><span><b>People operations</b><small>SUPER ADMIN AREA</small></span></div><p className="ep-nav-label">STAFF FINANCE</p><nav>{menuItems.map(({ id, label, icon: Icon }) => <button key={id} className={`ep-nav-item ${view === id ? "active" : ""}`} onClick={() => { setView(id); setMenuOpen(false); }}><Icon size={17} />{label}<ChevronRight className="ep-nav-arrow" size={15} />{id === "withdrawals" && summaryData?.pending_withdrawal_count ? <i className="ep-nav-count">{summaryData.pending_withdrawal_count}</i> : id === "signups" && pendingSignups.data?.length ? <i className="ep-nav-count">{pendingSignups.data.length}</i> : null}</button>)}<button className="ep-nav-item" onClick={() => setLocation("/employee/admin/learning")}><BookOpen size={17} />Technician Learning Center<ChevronRight className="ep-nav-arrow" size={15} /></button></nav><div className="ep-sidebar-bottom"><div className="ep-secure-card"><LockKeyhole size={16} /><span><b>Restricted access</b><small>Super Admin controls</small></span></div></div></aside>
-    <section className="ep-admin-main"><header className="ep-work-header"><div className="ep-header-left"><button className="ep-menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle navigation">{menuOpen ? <X size={19} /> : <Menu size={19} />}</button><div><p className="ep-header-kicker">ISPLATTY · PEOPLE OPERATIONS</p><h1>{menuItems.find((item) => item.id === view)?.label}</h1></div></div><span className="ep-admin-status"><span /> Admin workspace</span></header>
+     <section className="ep-admin-main"><header className="ep-work-header"><div className="ep-header-left"><button className="ep-menu-button" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle navigation">{menuOpen ? <X size={19} /> : <Menu size={19} />}</button><div><p className="ep-header-kicker">ISPLATTY · PEOPLE OPERATIONS</p><h1>{menuItems.find((item) => item.id === view)?.label}</h1></div></div><div className="ep-admin-header-actions"><span className="ep-admin-status"><span /> Admin workspace</span><button type="button" className="ep-admin-signout" onClick={handleSignOut} disabled={isSigningOut} title="Sign out of Super Admin" aria-label="Sign out of Super Admin">{isSigningOut ? <RefreshCw size={14} className="ep-signout-spinner" /> : <LogOut size={14} />}{isSigningOut ? "Signing out…" : "Sign out"}</button></div></header>
       <main className="ep-content ep-admin-content">
         {notice && <div className="ep-notice-inline"><Notice tone={noticeTone}>{notice}</Notice><button onClick={() => setNotice("")} aria-label="Dismiss notice"><X size={15} /></button></div>}
         {failText && <div className="ep-inline-error"><Notice>{failText}</Notice><button className="ep-text-button" onClick={() => { void summary.refetch(); void employees.refetch(); void withdrawals.refetch(); void pendingDestinations.refetch(); void pendingSignups.refetch(); }}>Retry</button></div>}
