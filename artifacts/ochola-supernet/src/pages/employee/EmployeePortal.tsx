@@ -654,7 +654,7 @@ function AdminAccessGate() {
     return <PortalFrame kind="admin"><LoadingBlock label="Verifying Staff administrator access" /></PortalFrame>;
   }
   if (sessionState === "unauthorized") {
-    return <StaffFinanceLogin />;
+    return <StaffFinanceLogin onAuthenticated={() => setCheckAttempt((attempt) => attempt + 1)} />;
   }
   if (sessionState === "unavailable") {
     return <PortalFrame kind="admin"><section className="ep-unavailable ep-admin-auth-required">

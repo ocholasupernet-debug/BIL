@@ -5,7 +5,7 @@ import { Logo } from "@/components/Logo";
 import { TurnstileCheck } from "@/components/TurnstileCheck";
 
 /* ── Helper: store super admin session in localStorage ── */
-function setSuperAdminSession(name: string, token: string, issuedAt: number) {
+function setSuperAdminSession(name: string, token: string, issuedAt: number): boolean {
   try {
     localStorage.setItem("ochola_superadmin_token",     token);
     localStorage.setItem("ochola_superadmin_name",      name);
@@ -16,7 +16,10 @@ function setSuperAdminSession(name: string, token: string, issuedAt: number) {
     localStorage.removeItem("ochola_admin_display_name");
     localStorage.removeItem("ochola_admin_username");
     localStorage.removeItem("ochola_api_token");
-  } catch {}
+    return localStorage.getItem("ochola_superadmin_token") === token;
+  } catch {
+    return false;
+  }
 }
 
 export function isSuperAdminLoggedIn(): boolean {
@@ -65,19 +68,21 @@ const inputStyle: React.CSSProperties = {
 type SuperAdminLoginProps = {
   redirectTo?: string;
   variant?: "platform" | "staff-finance";
+  onAuthenticated?: () => void;
 };
 
 export default function SuperAdminLogin() {
   return <SuperAdminLoginForm />;
 }
 
-export function StaffFinanceLogin() {
-  return <SuperAdminLoginForm redirectTo="/employee/admin" variant="staff-finance" />;
+export function StaffFinanceLogin({ onAuthenticated }: { onAuthenticated?: () => void }) {
+  return <SuperAdminLoginForm redirectTo="/employee/admin" variant="staff-finance" onAuthenticated={onAuthenticated} />;
 }
 
 function SuperAdminLoginForm({
   redirectTo = "/super-admin/dashboard",
   variant = "platform",
+  onAuthenticated,
 }: SuperAdminLoginProps) {
   const [, setLocation] = useLocation();
   const isStaffFinanceLogin = variant === "staff-finance";
@@ -134,7 +139,11 @@ function SuperAdminLoginForm({
         setError("The server did not create a secure session. Please try again.");
         return;
       }
-      setSuperAdminSession(data.name ?? username, data.token, data.issuedAt);
+      if (!setSuperAdminSession(data.name ?? username, data.token, data.issuedAt)) {
+        setError("Your browser could not save the secure sign-in session. Allow site storage and try again.");
+        return;
+      }
+      onAuthenticated?.();
       setLocation(redirectTo);
     } catch {
       setError("Could not reach the server. Please try again.");
