@@ -33,6 +33,15 @@ import {
   type DarajaB2cEnvironment,
 } from "../services/employee-daraja-b2c.js";
 import {
+  buildB2bCallbackUrl,
+  b2bCommandForDestination,
+  initiateDarajaB2bPayout,
+  parseDarajaB2bResult,
+  validateB2bPayout,
+  type DarajaB2bCredentials,
+  type DarajaB2bEnvironment,
+} from "../services/employee-daraja-b2b.js";
+import {
   employeeAuth,
   isStaffOtpChallengeId,
   isStaffOtpCode,
@@ -1447,6 +1456,8 @@ router.get("/employee/admin/payout-settings", async (req: Request, res: Response
     ]);
     let automationSchemaReady = false;
     let automationRows: Array<Record<string, unknown>> = [];
+    let b2bSchemaReady = false;
+    let b2bAutomationRows: Array<Record<string, unknown>> = [];
     try {
       automationRows = await sbSelectStrict<Record<string, unknown>>(
         "employee_payout_controls",
@@ -1456,13 +1467,28 @@ router.get("/employee/admin/payout-settings", async (req: Request, res: Response
     } catch {
       // The additive migration is intentionally not applied automatically.
     }
+    try {
+      b2bAutomationRows = await sbSelectStrict<Record<string, unknown>>(
+        "employee_payout_controls",
+        "id=eq.global&select=automatic_b2b_enabled,b2b_environment&limit=1",
+      );
+      b2bSchemaReady = true;
+    } catch {
+      // B2B merchant automation has a separate additive migration and kill switch.
+    }
     const secret = secureRows[0] ? decryptEmployeePayoutDetails(secureRows[0]) : {};
     const b2cEnvironment: DarajaB2cEnvironment =
       automationRows[0]?.b2c_environment === "production" ? "production" : "sandbox";
+    const b2bEnvironment: DarajaB2bEnvironment =
+      b2bAutomationRows[0]?.b2b_environment === "production" ? "production" : "sandbox";
     const b2cCredentialsReady = ["b2cConsumerKey", "b2cConsumerSecret", "b2cInitiator", "b2cShortcode", "b2cSecurityCredential"]
       .every((key) => typeof secret[key] === "string" && !!secret[key]);
+    const b2bCredentialsReady = ["b2bConsumerKey", "b2bConsumerSecret", "b2bInitiator", "b2bShortcode", "b2bSecurityCredential"]
+      .every((key) => typeof secret[key] === "string" && !!secret[key]);
     const runtimeAutomationEnabled = process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true";
+    const runtimeB2bAutomationEnabled = process.env.EMPLOYEE_B2B_PAYOUT_AUTOMATION_ENABLED === "true";
     const automaticB2cEnabled = automationSchemaReady && automationRows[0]?.automatic_b2c_enabled === true;
+    const automaticB2bEnabled = b2bSchemaReady && b2bAutomationRows[0]?.automatic_b2b_enabled === true;
     const callbackOriginReady = secureCallbackOriginConfigured(process.env.PUBLIC_APP_ORIGIN);
     const liveDisbursementsEnabled =
       automaticB2cEnabled && runtimeAutomationEnabled && callbackOriginReady && b2cCredentialsReady &&
@@ -1473,17 +1499,26 @@ router.get("/employee/admin/payout-settings", async (req: Request, res: Response
       automationSchemaReady,
       automaticB2cEnabled,
       b2cEnvironment,
+      b2bSchemaReady,
+      automaticB2bEnabled,
+      b2bEnvironment,
       runtimeAutomationEnabled,
+      runtimeB2bAutomationEnabled,
       b2cCredentialsReady,
+      b2bCredentialsReady,
       callbackOriginReady,
       liveDisbursementsEnabled,
+      liveB2bDisbursementsEnabled:
+        automaticB2bEnabled && runtimeB2bAutomationEnabled && callbackOriginReady && b2bCredentialsReady &&
+        b2bEnvironment === "production" && process.env.EMPLOYEE_B2B_PAYOUT_LIVE_CONFIRMED === "true",
       credentials: {
         hasB2cConsumerKey: typeof secret.b2cConsumerKey === "string" && !!secret.b2cConsumerKey,
         hasB2cConsumerSecret: typeof secret.b2cConsumerSecret === "string" && !!secret.b2cConsumerSecret,
         hasB2cInitiator: typeof secret.b2cInitiator === "string" && !!secret.b2cInitiator,
         hasB2cShortcode: typeof secret.b2cShortcode === "string" && !!secret.b2cShortcode,
         hasB2cSecurityCredential: typeof secret.b2cSecurityCredential === "string" && !!secret.b2cSecurityCredential,
-        hasB2pochiConfiguration: typeof secret.b2pochiConfiguration === "string" && !!secret.b2pochiConfiguration,
+        hasB2bConsumerKey: typeof secret.b2bConsumerKey === "string" && !!secret.b2bConsumerKey,
+        hasB2bConsumerSecret: typeof secret.b2bConsumerSecret === "string" && !!secret.b2bConsumerSecret,
         hasB2bShortcode: typeof secret.b2bShortcode === "string" && !!secret.b2bShortcode,
         hasB2bInitiator: typeof secret.b2bInitiator === "string" && !!secret.b2bInitiator,
         hasB2bSecurityCredential: typeof secret.b2bSecurityCredential === "string" && !!secret.b2bSecurityCredential,
@@ -1521,12 +1556,20 @@ router.put("/employee/admin/payout-settings", async (req: Request, res: Response
   const automaticB2cEnabled = req.body?.automaticB2cEnabled === true;
   const b2cEnvironment: DarajaB2cEnvironment =
     req.body?.b2cEnvironment === "production" ? "production" : "sandbox";
+  const automaticB2bEnabled = req.body?.automaticB2bEnabled === true;
+  const b2bEnvironment: DarajaB2bEnvironment =
+    req.body?.b2bEnvironment === "production" ? "production" : "sandbox";
   if (req.body?.b2cEnvironment !== undefined && !["sandbox", "production"].includes(req.body.b2cEnvironment)) {
     res.status(400).json({ ok: false, error: "Choose a valid B2C environment." });
     return;
   }
+  if (req.body?.b2bEnvironment !== undefined && !["sandbox", "production"].includes(req.body.b2bEnvironment)) {
+    res.status(400).json({ ok: false, error: "Choose a valid B2B environment." });
+    return;
+  }
   try {
     let automationSchemaReady = false;
+    let b2bSchemaReady = false;
     try {
       await sbSelectStrict<Record<string, unknown>>(
         "employee_payout_controls",
@@ -1536,8 +1579,21 @@ router.put("/employee/admin/payout-settings", async (req: Request, res: Response
     } catch {
       // General withdrawal controls remain saveable before the additive payout migration.
     }
+    try {
+      await sbSelectStrict<Record<string, unknown>>(
+        "employee_payout_controls",
+        "id=eq.global&select=automatic_b2b_enabled,b2b_environment&limit=1",
+      );
+      b2bSchemaReady = true;
+    } catch {
+      // B2B merchant automation remains unavailable until its additive migration is applied.
+    }
     if (automaticB2cEnabled && !automationSchemaReady) {
       res.status(409).json({ ok: false, error: "Apply the Staff B2C payout schema before enabling automatic payouts." });
+      return;
+    }
+    if (automaticB2bEnabled && !b2bSchemaReady) {
+      res.status(409).json({ ok: false, error: "Apply the Staff B2B payout schema before enabling merchant payouts." });
       return;
     }
     const existing = await sbSelectStrict<{ ciphertext: string; iv: string; auth_tag: string }>(
@@ -1550,7 +1606,8 @@ router.put("/employee/admin/payout-settings", async (req: Request, res: Response
     const next = { ...current };
     for (const key of [
       "b2cConsumerKey", "b2cConsumerSecret", "b2cInitiator", "b2cSecurityCredential",
-      "b2cShortcode", "b2pochiConfiguration", "b2bShortcode", "b2bInitiator", "b2bSecurityCredential",
+      "b2cShortcode", "b2bConsumerKey", "b2bConsumerSecret", "b2bShortcode",
+      "b2bInitiator", "b2bSecurityCredential",
     ]) {
       const value = incoming[key];
       if (typeof value === "string" && value.trim() && value !== "**hidden**") {
@@ -1578,6 +1635,10 @@ router.put("/employee/admin/payout-settings", async (req: Request, res: Response
         automatic_b2c_enabled: automaticB2cEnabled,
         b2c_environment: b2cEnvironment,
       } : {}),
+      ...(b2bSchemaReady ? {
+        automatic_b2b_enabled: automaticB2bEnabled,
+        b2b_environment: b2bEnvironment,
+      } : {}),
       updated_by: "super_admin",
       updated_at: new Date().toISOString(),
     });
@@ -1587,13 +1648,23 @@ router.put("/employee/admin/payout-settings", async (req: Request, res: Response
       enabledDestinationTypes: requestedTypes,
       automaticB2cEnabled: automationSchemaReady && automaticB2cEnabled,
       b2cEnvironment,
+      b2bSchemaReady,
+      automaticB2bEnabled: b2bSchemaReady && automaticB2bEnabled,
+      b2bEnvironment,
       runtimeAutomationEnabled: process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true",
+      runtimeB2bAutomationEnabled: process.env.EMPLOYEE_B2B_PAYOUT_AUTOMATION_ENABLED === "true",
       liveDisbursementsEnabled:
         automationSchemaReady &&
         automaticB2cEnabled &&
         process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true" &&
         b2cEnvironment === "production" &&
         process.env.EMPLOYEE_PAYOUT_LIVE_CONFIRMED === "true",
+      liveB2bDisbursementsEnabled:
+        b2bSchemaReady &&
+        automaticB2bEnabled &&
+        process.env.EMPLOYEE_B2B_PAYOUT_AUTOMATION_ENABLED === "true" &&
+        b2bEnvironment === "production" &&
+        process.env.EMPLOYEE_B2B_PAYOUT_LIVE_CONFIRMED === "true",
       storedCredentialCount: Object.values(next).filter(value => typeof value === "string" && value.length > 0).length,
     });
   } catch {
@@ -1613,7 +1684,21 @@ router.post("/employee/admin/withdrawals/:id/review", async (req: Request, res: 
     res.status(400).json({ ok: false, error: "Invalid withdrawal review." });
     return;
   }
+  let reviewDestinationType = "";
   try {
+    if (decision === "approve") {
+      try {
+        const destinationRows = await sbSelectStrict<Record<string, unknown>>(
+          "employee_withdrawal_requests",
+          `id=eq.${encodeURIComponent(id)}&select=destination:employee_payout_destinations(destination_type)&limit=1`,
+        );
+        const value = destinationRows[0]?.destination;
+        const row = Array.isArray(value) ? value[0] as Record<string, unknown> | undefined : value as Record<string, unknown> | undefined;
+        reviewDestinationType = String(row?.destination_type ?? "");
+      } catch {
+        // A metadata read is advisory; the locked review RPC remains authoritative.
+      }
+    }
     if (decision === "approve" && process.env.EMPLOYEE_PAYOUT_AUTOMATION_ENABLED === "true") {
       const controls = await sbSelectStrict<Record<string, unknown>>(
         "employee_payout_controls",
@@ -1630,6 +1715,7 @@ router.post("/employee/admin/withdrawals/:id/review", async (req: Request, res: 
           ? destinationValue[0] as Record<string, unknown> | undefined
           : destinationValue as Record<string, unknown> | undefined;
         const destinationType = String(destination?.destination_type ?? "");
+        reviewDestinationType = destinationType;
         if (!withdrawal || withdrawal.status !== "pending" || !destination) {
           res.status(409).json({ ok: false, error: "The approved payout destination could not be verified." });
           return;
@@ -1771,24 +1857,185 @@ router.post("/employee/admin/withdrawals/:id/review", async (req: Request, res: 
           return;
         }
 
-        const reviewed = await sbRpc<unknown>("employee_review_withdrawal", {
-          p_withdrawal_id: id,
-          p_actor_id: "super_admin",
-          p_decision: decision,
-          p_note: typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null,
-        });
-        const response: Record<string, unknown> = {
-          ok: true,
-          withdrawal: safeRpcObject(reviewed),
-        };
-        if (destinationType === "pochi") {
-          response.payout = {
-            status: "not_sent",
-            message: "No Pochi-specific Safaricom payout contract is configured. No money was sent.",
+      }
+    }
+    if (decision === "approve" && process.env.EMPLOYEE_B2B_PAYOUT_AUTOMATION_ENABLED === "true") {
+      const controls = await sbSelectStrict<Record<string, unknown>>(
+        "employee_payout_controls",
+        "id=eq.global&select=automatic_b2b_enabled,b2b_environment&limit=1",
+      );
+      if (controls[0]?.automatic_b2b_enabled === true) {
+        const requests = await sbSelectStrict<Record<string, unknown>>(
+          "employee_withdrawal_requests",
+          `id=eq.${encodeURIComponent(id)}&select=id,amount,status,destination_id,destination:employee_payout_destinations(destination_type,encrypted_details)&limit=1`,
+        );
+        const withdrawal = requests[0];
+        const destinationValue = withdrawal?.destination;
+        const destination = Array.isArray(destinationValue)
+          ? destinationValue[0] as Record<string, unknown> | undefined
+          : destinationValue as Record<string, unknown> | undefined;
+        const destinationType = String(destination?.destination_type ?? "");
+        reviewDestinationType = destinationType;
+        if (destinationType === "paybill" || destinationType === "till") {
+          if (!withdrawal || withdrawal.status !== "pending" || !destination) {
+            res.status(409).json({ ok: false, error: "The approved merchant destination could not be verified." });
+            return;
+          }
+          const environment: DarajaB2bEnvironment =
+            controls[0].b2b_environment === "production" ? "production" : "sandbox";
+          if (environment === "production" && process.env.EMPLOYEE_B2B_PAYOUT_LIVE_CONFIRMED !== "true") {
+            res.status(409).json({
+              ok: false,
+              error: "Live B2B merchant payouts are not activated. No withdrawal approval or payout was changed.",
+            });
+            return;
+          }
+          const settingsRows = await sbSelectStrict<{ ciphertext: string; iv: string; auth_tag: string }>(
+            "employee_payout_settings",
+            "id=eq.global&select=ciphertext,iv,auth_tag&limit=1",
+          );
+          const secrets = settingsRows[0] ? decryptEmployeePayoutDetails(settingsRows[0]) : {};
+          const credentials: DarajaB2bCredentials = {
+            consumerKey: String(secrets.b2bConsumerKey ?? ""),
+            consumerSecret: String(secrets.b2bConsumerSecret ?? ""),
+            initiatorName: String(secrets.b2bInitiator ?? ""),
+            securityCredential: String(secrets.b2bSecurityCredential ?? ""),
+            shortcode: String(secrets.b2bShortcode ?? ""),
           };
+          const encryptedDetails = typeof destination.encrypted_details === "string"
+            ? destination.encrypted_details
+            : "";
+          const details = encryptedDetails
+            ? decryptEmployeePayoutDetails({ ciphertext: encryptedDetails, iv: "", auth_tag: "" })
+            : {};
+          const destinationNumber = String(destinationType === "paybill"
+            ? details.paybillNumber ?? ""
+            : details.tillNumber ?? "").replace(/\s+/g, "");
+          const accountReference = destinationType === "paybill"
+            ? String(details.accountReference ?? "")
+            : `STF${id.replaceAll("-", "").slice(0, 10)}`;
+          const amountKes = normalizeWholeKesAmount(String(withdrawal.amount ?? "")) ?? "";
+          const originatorConversationId = `STAFFB2B${randomUUID().replaceAll("-", "")}`;
+          const callbackToken = newEmployeeToken();
+          const callbackOrigin = process.env.PUBLIC_APP_ORIGIN?.trim() ?? "";
+          if (!callbackOrigin) {
+            res.status(409).json({ ok: false, error: "Set PUBLIC_APP_ORIGIN to the public HTTPS callback origin before enabling B2B payouts." });
+            return;
+          }
+          let resultUrl: string;
+          let queueTimeoutUrl: string;
+          const command = b2bCommandForDestination(destinationType);
+          try {
+            resultUrl = buildB2bCallbackUrl(callbackOrigin, "result", id, callbackToken);
+            queueTimeoutUrl = buildB2bCallbackUrl(callbackOrigin, "timeout", id, callbackToken);
+            validateB2bPayout({
+              credentials,
+              environment,
+              destinationType,
+              amountKes,
+              destinationNumber,
+              accountReference,
+              originatorConversationId,
+              resultUrl,
+              queueTimeoutUrl,
+            });
+          } catch (error) {
+            res.status(409).json({
+              ok: false,
+              error: error instanceof Error ? error.message : "B2B merchant payout configuration is incomplete.",
+            });
+            return;
+          }
+
+          const claimResult = await sbRpc<unknown>("employee_review_withdrawal_and_claim_daraja_b2b", {
+            p_withdrawal_id: id,
+            p_actor_id: "super_admin",
+            p_note: typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null,
+            p_destination_type: destinationType,
+            p_command: command,
+            p_originator_reference: originatorConversationId,
+            p_callback_token_hash: hashEmployeeSecret(callbackToken),
+            p_expected_destination_hash: hashEmployeeSecret(destinationNumber),
+          });
+          const claimed = safeRpcObject(claimResult);
+          if (claimed.status !== "processing") {
+            res.status(409).json({ ok: false, error: "The merchant payout could not be safely claimed for sending." });
+            return;
+          }
+          const initiation = await initiateDarajaB2bPayout({
+            credentials,
+            environment,
+            destinationType,
+            amountKes,
+            destinationNumber,
+            accountReference,
+            originatorConversationId,
+            resultUrl,
+            queueTimeoutUrl,
+          });
+          if (initiation.outcome === "submitted") {
+            try {
+              const submissionResult = safeRpcObject(await sbRpc<unknown>("employee_mark_daraja_b2b_submitted", {
+                p_withdrawal_id: id,
+                p_originator_reference: originatorConversationId,
+                p_conversation_id: initiation.conversationId,
+              }));
+              if (submissionResult.status === "succeeded") {
+                res.json({
+                  ok: true,
+                  withdrawal: { id, status: "paid" },
+                  payout: { status: "paid", message: "Safaricom's verified B2B success callback was received and reconciled." },
+                });
+                return;
+              }
+              if (["reconciliation_required", "failed", "reconciled"].includes(String(submissionResult.status))) {
+                res.status(202).json({
+                  ok: true,
+                  withdrawal: { id, status: "reconciliation_required" },
+                  payout: { status: "reconciliation_required", message: "The B2B callback outcome is uncertain. Reconcile before any retry." },
+                });
+                return;
+              }
+              res.json({
+                ok: true,
+                withdrawal: { id, status: "processing" },
+                payout: { status: "submitted", message: "Safaricom accepted the B2B request; awaiting its verified result callback." },
+              });
+            } catch {
+              try {
+                await sbRpc("employee_mark_daraja_b2b_uncertain", {
+                  p_withdrawal_id: id,
+                  p_originator_reference: originatorConversationId,
+                  p_callback_token_hash: hashEmployeeSecret(callbackToken),
+                  p_failure_category: "submission_recording_uncertain",
+                });
+              } catch { /* Preserve the reservation; a later callback may still reconcile it. */ }
+              res.status(202).json({
+                ok: true,
+                withdrawal: { id, status: "reconciliation_required" },
+                payout: { status: "reconciliation_required", message: "The B2B response could not be recorded. Reconcile before any retry." },
+              });
+            }
+            return;
+          }
+          try {
+            await sbRpc("employee_mark_daraja_b2b_uncertain", {
+              p_withdrawal_id: id,
+              p_originator_reference: originatorConversationId,
+              p_callback_token_hash: hashEmployeeSecret(callbackToken),
+              p_failure_category: initiation.outcome === "rejected" ? "provider_rejected" : initiation.category,
+            });
+          } catch { /* Preserve the reservation and never retry automatically. */ }
+          res.status(202).json({
+            ok: true,
+            withdrawal: { id, status: "reconciliation_required" },
+            payout: {
+              status: "reconciliation_required",
+              message: "The B2B request outcome is not confirmed. Check Safaricom before retrying.",
+            },
+          });
+          return;
         }
-        res.json(response);
-        return;
       }
     }
     const result = await sbRpc<unknown>("employee_review_withdrawal", {
@@ -1803,7 +2050,9 @@ router.post("/employee/admin/withdrawals/:id/review", async (req: Request, res: 
       ...(decision === "approve" ? {
         payout: {
           status: "not_sent",
-          message: "Withdrawal approved, but no money was sent. Automatic B2C requires the separate credentials, applied schema, and both server/admin gates.",
+          message: reviewDestinationType === "pochi"
+            ? "Pochi must be paid manually through the M-PESA app or USSD. No money was sent automatically."
+            : "Withdrawal approved, but no money was sent. Each automatic B2C or B2B route requires its own credentials, applied schema, and server/admin gates.",
         },
       } : {}),
     });
@@ -1878,6 +2127,69 @@ router.post("/employee/payouts/daraja/b2c/timeout", async (req: Request, res: Re
   }
 });
 
+router.post("/employee/payouts/daraja/b2b/result", async (req: Request, res: Response): Promise<void> => {
+  const withdrawalId = typeof req.query.withdrawal === "string" ? req.query.withdrawal : "";
+  const token = typeof req.query.token === "string" ? req.query.token : "";
+  if (!EMPLOYEE_UUID_PATTERN.test(withdrawalId) || !/^[A-Za-z0-9_-]{40,60}$/.test(token)) {
+    res.status(401).json({ ResultCode: 1, ResultDesc: "Invalid callback authorization" });
+    return;
+  }
+  const callback = parseDarajaB2bResult(req.body);
+  if (!callback) {
+    res.status(400).json({ ResultCode: 1, ResultDesc: "Invalid callback result" });
+    return;
+  }
+  try {
+    await sbRpc("employee_process_daraja_b2b_result", {
+      p_withdrawal_id: withdrawalId,
+      p_callback_token_hash: hashEmployeeSecret(token),
+      p_originator_reference: callback.originatorConversationId,
+      p_conversation_id: callback.conversationId,
+      p_result_code: callback.resultCode,
+      p_amount: normalizeCallbackAmount(callback.amount),
+      p_receipt: callback.receipt,
+    });
+    res.json(darajaCallbackAck());
+  } catch {
+    logger.warn({ category: "staff_daraja_b2b_callback_rejected" }, "[staff-payout] B2B result callback was not accepted");
+    res.status(503).json({ ResultCode: 1, ResultDesc: "Callback processing is temporarily unavailable" });
+  }
+});
+
+router.post("/employee/payouts/daraja/b2b/timeout", async (req: Request, res: Response): Promise<void> => {
+  const withdrawalId = typeof req.query.withdrawal === "string" ? req.query.withdrawal : "";
+  const token = typeof req.query.token === "string" ? req.query.token : "";
+  if (!EMPLOYEE_UUID_PATTERN.test(withdrawalId) || !/^[A-Za-z0-9_-]{40,60}$/.test(token)) {
+    res.status(401).json({ ResultCode: 1, ResultDesc: "Invalid callback authorization" });
+    return;
+  }
+  try {
+    const rows = await sbSelectStrict<{
+      originator_reference: string;
+      callback_token_hash: string | null;
+    }>(
+      "employee_payout_transactions",
+      `withdrawal_id=eq.${encodeURIComponent(withdrawalId)}&provider=eq.daraja_b2b&select=originator_reference,callback_token_hash&limit=1`,
+    );
+    const row = rows[0];
+    const suppliedHash = hashEmployeeSecret(token);
+    if (!row?.callback_token_hash || !timingSafeHashMatches(suppliedHash, row.callback_token_hash)) {
+      res.status(401).json({ ResultCode: 1, ResultDesc: "Invalid callback authorization" });
+      return;
+    }
+    await sbRpc("employee_mark_daraja_b2b_uncertain", {
+      p_withdrawal_id: withdrawalId,
+      p_originator_reference: row.originator_reference,
+      p_callback_token_hash: suppliedHash,
+      p_failure_category: "provider_timeout",
+    });
+    res.json(darajaCallbackAck());
+  } catch {
+    logger.warn({ category: "staff_daraja_b2b_timeout_unavailable" }, "[staff-payout] B2B timeout callback processing failed");
+    res.status(503).json({ ResultCode: 1, ResultDesc: "Callback processing is temporarily unavailable" });
+  }
+});
+
 router.post("/employee/admin/withdrawals/:id/record-payment", async (req: Request, res: Response): Promise<void> => {
   if (!enabled(res)) return;
   if (!isSuperAdmin(req)) {
@@ -1899,6 +2211,96 @@ router.post("/employee/admin/withdrawals/:id/record-payment", async (req: Reques
     res.json({ ok: true, withdrawal: safeRpcObject(result) });
   } catch {
     res.status(409).json({ ok: false, error: "Only an approved payout can be recorded as paid." });
+  }
+});
+
+router.post("/employee/admin/withdrawals/:id/record-pochi-payment", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  if (!hasSameOrigin(req)) {
+    res.status(403).json({ ok: false, error: "Request origin could not be verified." });
+    return;
+  }
+  const passcode = process.env.SUPERADMIN_PASSWORD?.trim() ?? "";
+  const suppliedPassword = typeof req.body?.confirmPassword === "string" ? req.body.confirmPassword : "";
+  if (!passcode || !suppliedPassword ||
+      !timingSafeHashMatches(hashEmployeeSecret(suppliedPassword), hashEmployeeSecret(passcode))) {
+    res.status(401).json({ ok: false, error: "Confirm the Super Admin password to record a Pochi payment." });
+    return;
+  }
+  if (req.body?.confirmedPaid !== true) {
+    res.status(400).json({ ok: false, error: "Confirm that the Pochi payment was completed outside the portal." });
+    return;
+  }
+  const id = Array.isArray(req.params.id) ? req.params.id[0] ?? "" : req.params.id;
+  const reference = typeof req.body?.reference === "string" ? req.body.reference.trim().toUpperCase() : "";
+  if (!EMPLOYEE_UUID_PATTERN.test(id) || !/^[A-Z0-9]{6,20}$/.test(reference)) {
+    res.status(400).json({ ok: false, error: "Enter the completed Safaricom Pochi transaction reference." });
+    return;
+  }
+  try {
+    const result = await sbRpc<unknown>("employee_record_manual_pochi_payout", {
+      p_withdrawal_id: id,
+      p_actor_id: "super_admin",
+      p_payment_reference: reference,
+    });
+    res.json({ ok: true, withdrawal: safeRpcObject(result) });
+  } catch {
+    res.status(409).json({ ok: false, error: "The Pochi payment was not recorded. Confirm the request is approved, Pochi was paid, and no payout is already in progress." });
+  }
+});
+
+router.post("/employee/admin/withdrawals/:id/reconcile-daraja", async (req: Request, res: Response): Promise<void> => {
+  if (!enabled(res)) return;
+  if (!isSuperAdmin(req)) {
+    res.status(401).json({ ok: false, error: "Super Admin authentication is required." });
+    return;
+  }
+  if (!hasSameOrigin(req)) {
+    res.status(403).json({ ok: false, error: "Request origin could not be verified." });
+    return;
+  }
+  const passcode = process.env.SUPERADMIN_PASSWORD?.trim() ?? "";
+  const suppliedPassword = typeof req.body?.confirmPassword === "string" ? req.body.confirmPassword : "";
+  if (!passcode || !suppliedPassword ||
+      !timingSafeHashMatches(hashEmployeeSecret(suppliedPassword), hashEmployeeSecret(passcode))) {
+    res.status(401).json({ ok: false, error: "Confirm the Super Admin password to reconcile a payout." });
+    return;
+  }
+  if (req.body?.verifiedSafaricomResult !== true) {
+    res.status(400).json({ ok: false, error: "Confirm that you checked the final transaction result in Safaricom’s official channel." });
+    return;
+  }
+  const id = Array.isArray(req.params.id) ? req.params.id[0] ?? "" : req.params.id;
+  const outcome = req.body?.outcome;
+  const reference = typeof req.body?.providerReference === "string"
+    ? req.body.providerReference.trim().toUpperCase()
+    : "";
+  const amount = typeof req.body?.amount === "string" ? req.body.amount.trim() : "";
+  const note = cleanText(req.body?.note, 500);
+  const referenceValid = outcome === "success"
+    ? /^[A-Z0-9]{6,20}$/.test(reference)
+    : outcome === "failure" && /^[A-Z0-9_-]{6,64}$/.test(reference);
+  if (!EMPLOYEE_UUID_PATTERN.test(id) || !["success", "failure"].includes(outcome) ||
+      !referenceValid || !isMoneyString(amount) || !note || note.length < 12) {
+    res.status(400).json({ ok: false, error: "Enter the verified result, provider reference, exact amount and a useful audit note." });
+    return;
+  }
+  try {
+    const result = await sbRpc<unknown>("employee_reconcile_daraja_payout", {
+      p_withdrawal_id: id,
+      p_actor_id: "super_admin",
+      p_outcome: outcome,
+      p_provider_reference: reference,
+      p_amount: amount,
+      p_note: note,
+    });
+    res.json({ ok: true, withdrawal: safeRpcObject(result) });
+  } catch {
+    res.status(409).json({ ok: false, error: "The payout was not reconciled. Verify it is still awaiting reconciliation and confirm the Safaricom status, amount and reference." });
   }
 });
 

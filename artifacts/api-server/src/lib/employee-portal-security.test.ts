@@ -51,4 +51,12 @@ test("payout destination input is normalized and rejects incomplete bank details
     normalizePayoutDestination("till", { tillNumber: "1234567" })?.details.tillNumber,
     "1234567",
   );
+  assert.deepEqual(
+    normalizePayoutDestination("paybill", { paybillNumber: "123456", accountReference: "STAFF 123" }),
+    { type: "paybill", details: { paybillNumber: "123456", accountReference: "STAFF123" } },
+  );
+  assert.equal(
+    normalizePayoutDestination("paybill", { paybillNumber: "123456", accountReference: "REFERENCE123456" }),
+    null,
+  );
 });

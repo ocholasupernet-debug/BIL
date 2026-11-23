@@ -493,14 +493,21 @@ export function useEmployeePayoutSettings() {
       automationSchemaReady: boolean;
       automaticB2cEnabled: boolean;
       b2cEnvironment: "sandbox" | "production";
+      b2bSchemaReady: boolean;
+      automaticB2bEnabled: boolean;
+      b2bEnvironment: "sandbox" | "production";
       runtimeAutomationEnabled: boolean;
+      runtimeB2bAutomationEnabled: boolean;
       b2cCredentialsReady: boolean;
+      b2bCredentialsReady: boolean;
       callbackOriginReady: boolean;
       liveDisbursementsEnabled: boolean;
+      liveB2bDisbursementsEnabled: boolean;
       credentials: {
         hasB2cConsumerKey: boolean; hasB2cConsumerSecret: boolean;
         hasB2cInitiator: boolean; hasB2cShortcode: boolean;
-        hasB2cSecurityCredential: boolean; hasB2pochiConfiguration: boolean;
+        hasB2cSecurityCredential: boolean;
+        hasB2bConsumerKey: boolean; hasB2bConsumerSecret: boolean;
         hasB2bShortcode: boolean; hasB2bInitiator: boolean; hasB2bSecurityCredential: boolean;
       };
     }>>("/api/employee/admin/payout-settings", {}, true),
@@ -513,11 +520,15 @@ export function useSaveEmployeePayoutSettings() {
     mutationFn: (input: {
       enabled: boolean; enabledDestinationTypes: string[]; maxWithdrawal: string; dailyLimit: string;
       automaticB2cEnabled: boolean; b2cEnvironment: "sandbox" | "production";
+      automaticB2bEnabled: boolean; b2bEnvironment: "sandbox" | "production";
       replacePassword: string; credentials: Record<string, string>;
     }) => request<ApiResult<{
       enabled: boolean; enabledDestinationTypes: string[]; automaticB2cEnabled: boolean;
       b2cEnvironment: "sandbox" | "production"; runtimeAutomationEnabled: boolean;
+      b2bSchemaReady: boolean; automaticB2bEnabled: boolean;
+      b2bEnvironment: "sandbox" | "production"; runtimeB2bAutomationEnabled: boolean;
       liveDisbursementsEnabled: boolean;
+      liveB2bDisbursementsEnabled: boolean;
     }>>(
       "/api/employee/admin/payout-settings",
       { method: "PUT", body: JSON.stringify(input) },
@@ -550,6 +561,57 @@ export function useRecordEmployeePayment() {
       request<ApiResult<{ withdrawal: EmployeePortalWithdrawal }>>(
         `/api/employee/admin/withdrawals/${encodeURIComponent(input.id)}/record-payment`,
         { method: "POST", body: JSON.stringify({ reference: input.reference }) },
+        true,
+      ),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal", "admin"] }),
+  });
+}
+
+export function useRecordManualPochiPayment() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { id: string; reference: string; confirmedPaid: boolean; confirmPassword: string }) =>
+      request<ApiResult<{ withdrawal: EmployeePortalWithdrawal }>>(
+        `/api/employee/admin/withdrawals/${encodeURIComponent(input.id)}/record-pochi-payment`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            reference: input.reference,
+            confirmedPaid: input.confirmedPaid,
+            confirmPassword: input.confirmPassword,
+          }),
+        },
+        true,
+      ),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal", "admin"] }),
+  });
+}
+
+export function useReconcileDarajaEmployeePayout() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: {
+      id: string;
+      outcome: "success" | "failure";
+      providerReference: string;
+      amount: string;
+      note: string;
+      verifiedSafaricomResult: boolean;
+      confirmPassword: string;
+    }) =>
+      request<ApiResult<{ withdrawal: EmployeePortalWithdrawal }>>(
+        `/api/employee/admin/withdrawals/${encodeURIComponent(input.id)}/reconcile-daraja`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            outcome: input.outcome,
+            providerReference: input.providerReference,
+            amount: input.amount,
+            note: input.note,
+            verifiedSafaricomResult: input.verifiedSafaricomResult,
+            confirmPassword: input.confirmPassword,
+          }),
+        },
         true,
       ),
     onSuccess: () => client.invalidateQueries({ queryKey: ["employee-portal", "admin"] }),

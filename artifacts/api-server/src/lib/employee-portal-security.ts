@@ -145,8 +145,8 @@ export function normalizePayoutDestination(
   }
   if (kind === "paybill") {
     const paybillNumber = text("paybillNumber", 16).replace(/\s+/g, "");
-    const accountReference = text("accountReference", 32);
-    if (!/^\d{5,16}$/.test(paybillNumber) || accountReference.length < 1) return null;
+    const accountReference = text("accountReference", 32).replace(/\s+/g, "");
+    if (!/^\d{5,16}$/.test(paybillNumber) || accountReference.length < 1 || accountReference.length > 13) return null;
     return { type: kind, details: { paybillNumber, accountReference } };
   }
   const tillNumber = text("tillNumber", 16).replace(/\s+/g, "");
