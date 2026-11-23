@@ -81,6 +81,12 @@ import {
   EmployeeLoginPage,
   StaffSignupPage,
 } from "./pages/employee/EmployeePortal";
+import TechnicianDashboard from "./pages/technician/TechnicianDashboard";
+import TechnicianLearning from "./pages/technician/TechnicianLearning";
+import TechnicianLearningAdmin from "./pages/admin/TechnicianLearningAdmin";
+import { useEmployeeMe } from "@workspace/api-client-react";
+import { isSuperAdminLoggedIn } from "./pages/super-admin/Login";
+import { parsePersonalizedStaffPath, personalizedStaffPath } from "./pages/employee/staff-routes";
 import VpnDashboard from "./pages/vpn/VpnDashboard";
 import VpnRemoteAccess from "./pages/vpn/RemoteAccess";
 import VpnList from "./pages/vpn/VpnList";
@@ -103,6 +109,92 @@ import VisualCheckHarness from "./visual/VisualCheckHarness";
 
 function RoleAwareDashboard() {
   return getAdminRole() === "reseller" ? <ResellerWorkspace /> : <AdminDashboard />;
+}
+
+function TechnicianLearningStaffRoute() {
+  const [, setLocation] = useLocation();
+  const me = useEmployeeMe();
+  const requested = typeof window === "undefined"
+    ? null
+    : parsePersonalizedStaffPath(window.location.pathname);
+  useEffect(() => {
+    if (me.isLoading) return;
+    const employee = me.data?.employee;
+    if (!employee) {
+      const returnTo = requested?.section === "learning"
+        ? personalizedStaffPath(requested.username, "learning")
+        : null;
+      setLocation(returnTo
+        ? `/staff/login?returnTo=${encodeURIComponent(returnTo)}`
+        : "/staff/login");
+      return;
+    }
+    if (requested && requested.username !== employee.username) {
+      setLocation(personalizedStaffPath(
+        employee.username,
+        employee.accountType === "technician" ? "learning" : "dashboard",
+      ) ?? "/staff/dashboard");
+      return;
+    }
+    if (employee.accountType !== "technician") {
+      setLocation(personalizedStaffPath(employee.username, "dashboard") ?? "/staff/dashboard");
+      return;
+    }
+    if (requested?.section !== "learning") {
+      setLocation(personalizedStaffPath(employee.username, "learning") ?? "/staff/learning");
+    }
+  }, [me.isLoading, me.data, requested?.username, requested?.section, setLocation]);
+  if (me.isLoading || !me.data?.employee || me.data.employee.accountType !== "technician") {
+    return <div role="status" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Checking Technician access…</div>;
+  }
+  if (requested && requested.username !== me.data.employee.username) return null;
+  if (requested?.section === "dashboard") return null;
+  return <TechnicianLearning username={me.data.employee.username} />;
+}
+
+function PersonalizedStaffDashboardRoute() {
+  const [, setLocation] = useLocation();
+  const me = useEmployeeMe();
+  const requested = typeof window === "undefined"
+    ? null
+    : parsePersonalizedStaffPath(window.location.pathname);
+  useEffect(() => {
+    if (me.isLoading) return;
+    const employee = me.data?.employee;
+    if (!employee) {
+      const returnTo = requested?.section === "dashboard"
+        ? personalizedStaffPath(requested.username, "dashboard")
+        : null;
+      setLocation(returnTo
+        ? `/staff/login?returnTo=${encodeURIComponent(returnTo)}`
+        : "/staff/login");
+      return;
+    }
+    if (requested && requested.username !== employee.username) {
+      setLocation(personalizedStaffPath(employee.username, "dashboard") ?? "/staff/dashboard");
+      return;
+    }
+    if (employee.accountType === "technician" && requested?.section !== "dashboard") {
+      setLocation(personalizedStaffPath(employee.username, "dashboard") ?? "/staff/dashboard");
+    }
+  }, [me.isLoading, me.data, requested?.username, requested?.section, setLocation]);
+  if (me.isLoading || !me.data?.employee) {
+    return <div role="status" style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Checking Staff access…</div>;
+  }
+  if (requested && requested.username !== me.data.employee.username) return null;
+  return me.data.employee.accountType === "technician"
+    ? <TechnicianDashboard />
+    : <EmployeeDashboardPage />;
+}
+
+function TechnicianLearningAdminRoute() {
+  const [, setLocation] = useLocation();
+  const [authorized] = useState(() => isSuperAdminLoggedIn());
+  useEffect(() => {
+    if (!authorized) setLocation("/super-admin/login");
+  }, [authorized, setLocation]);
+  if (!authorized) return null;
+  return <TechnicianLearningAdmin />;
 }
 
 function TenantAdminLoginRoute() {
@@ -263,6 +355,15 @@ function Router() {
       <Route path="/staff/signup" component={StaffSignupPage} />
       <Route path="/staff/activate" component={EmployeeActivatePage} />
       <Route path="/staff/dashboard" component={EmployeeDashboardPage} />
+      <Route path="/staff/learning" component={TechnicianLearningStaffRoute} />
+      <Route path="/u/:username/dashboard" component={PersonalizedStaffDashboardRoute} />
+      <Route path="/u/:username/learning" component={TechnicianLearningStaffRoute} />
+      <Route path="/dashboard" component={EmployeeDashboardPage} />
+      <Route path="/learning" component={TechnicianLearningStaffRoute} />
+      <Route path="/technician" component={TechnicianLearningStaffRoute} />
+      <Route path="/technician/learning" component={TechnicianLearningStaffRoute} />
+      <Route path="/technician/dashboard" component={TechnicianDashboard} />
+      <Route path="/employee/admin/learning" component={TechnicianLearningAdminRoute} />
       <Route path="/employee/admin" component={EmployeeAdminPage} />
       <Route path="/admin/entry" component={TenantAdminLoginRoute} />
       <Route path="/admin/login" component={TenantAdminLoginRoute} />
