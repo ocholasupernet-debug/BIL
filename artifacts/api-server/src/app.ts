@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from "fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { resolveVlanHotspotPortalRequest } from "./lib/api-auth.js";
-import { TENANT_BASE_DOMAINS } from "./lib/tenant-host.js";
+import { TENANT_BASE_DOMAIN, TENANT_BASE_DOMAINS } from "./lib/tenant-host.js";
 import {
   resolveCanonicalAdminLoginRedirect,
   resolveLegacyAdminEntry,
@@ -229,7 +229,7 @@ if (shouldServeStatic) {
           const html = readFileSync(registerIndexPath, "utf8");
           res.set("Cache-Control", "no-store")
             .type("html")
-            .send(injectHotspotHostConfig(html, host, mapping.adminId));
+            .send(injectHotspotHostConfig(html, host, mapping.adminId, mapping.subdomain, TENANT_BASE_DOMAIN));
         } catch (error) {
           logger.error({ err: error }, "Custom Hotspot hostname lookup failed");
           res.status(503).type("text").send("Hotspot portal is temporarily unavailable.\n");

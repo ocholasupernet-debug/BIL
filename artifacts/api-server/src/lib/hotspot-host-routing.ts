@@ -38,10 +38,29 @@ export function resolveHotspotHostMapping(
   return matches.length === 1 ? matches[0] : null;
 }
 
-export function injectHotspotHostConfig(html: string, host: string, adminId: number): string {
+export function injectHotspotHostConfig(
+  html: string,
+  host: string,
+  adminId: number,
+  tenantSubdomain?: string | null,
+  tenantBaseDomain?: string | null,
+): string {
   const hostname = normalizeRequestHostname(host);
   if (!hostname || !Number.isSafeInteger(adminId) || adminId < 1) return html;
-  const config = JSON.stringify({ apiBase: `https://${hostname}`, adminId })
+  const cleanSubdomain = typeof tenantSubdomain === "string"
+    && /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(tenantSubdomain.trim().toLowerCase())
+    ? tenantSubdomain.trim().toLowerCase()
+    : "";
+  const cleanBaseDomain = tenantBaseDomain === "isplatty.org" || tenantBaseDomain === "isplatty.com"
+    ? tenantBaseDomain
+    : "";
+  const config = JSON.stringify({
+    apiBase: `https://${hostname}`,
+    adminId,
+    ...(cleanSubdomain && cleanBaseDomain
+      ? { adminLoginUrl: `https://${cleanSubdomain}.${cleanBaseDomain}/admin/login` }
+      : {}),
+  })
     .replace(/</g, "\\u003c");
   return html.replace(/<head([^>]*)>/i, `<head$1><script>window.__HOTSPOT_CONFIG__=${config};</script>`);
 }

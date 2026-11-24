@@ -43,7 +43,32 @@ test("custom Hotspot root receives only its mapped tenant bootstrap before app s
     "<html><head><title>BIL</title><script type=\"module\">start()</script></head><body></body></html>",
     "ocholasupernet.com",
     ocholaMapping.adminId,
+    ocholaMapping.subdomain,
+    "isplatty.com",
+  );
+  assert.match(html, /window\.__HOTSPOT_CONFIG__=\{"apiBase":"https:\/\/ocholasupernet\.com","adminId":33,"adminLoginUrl":"https:\/\/ocholasupernet\.isplatty\.com\/admin\/login"\}/);
+  assert.ok(html.indexOf("window.__HOTSPOT_CONFIG__") < html.indexOf('type="module"'));
+});
+
+test("custom portal bootstrap excludes unsafe tenant subdomains", () => {
+  const html = injectHotspotHostConfig(
+    "<html><head></head><body></body></html>",
+    "ocholasupernet.com",
+    ocholaMapping.adminId,
+    "<script>alert(1)</script>",
+    "isplatty.com",
   );
   assert.match(html, /window\.__HOTSPOT_CONFIG__=\{"apiBase":"https:\/\/ocholasupernet\.com","adminId":33\}/);
-  assert.ok(html.indexOf("window.__HOTSPOT_CONFIG__") < html.indexOf('type="module"'));
+  assert.doesNotMatch(html, /adminLoginUrl/);
+});
+
+test("custom portal bootstrap omits an admin link for unknown base domains", () => {
+  const html = injectHotspotHostConfig(
+    "<html><head></head><body></body></html>",
+    "ocholasupernet.com",
+    ocholaMapping.adminId,
+    ocholaMapping.subdomain,
+    "attacker.example",
+  );
+  assert.match(html, /window\.__HOTSPOT_CONFIG__=\{"apiBase":"https:\/\/ocholasupernet\.com","adminId":33\}/);
 });

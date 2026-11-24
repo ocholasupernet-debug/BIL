@@ -68,6 +68,7 @@ interface LoyaltyQuote {
 interface HotspotRuntimeConfig {
   apiBase: string;
   adminId: number | null;
+  adminLoginUrl: string;
   routerId: number | null;
   portId: number | null;
   resellerId: number | null;
@@ -217,6 +218,10 @@ function readHotspotRuntimeConfig(): HotspotRuntimeConfig {
   return {
     apiBase,
     adminId: positivePortalId(raw?.adminId),
+    adminLoginUrl: typeof raw?.adminLoginUrl === "string"
+      && /^https:\/\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.isplatty\.(?:org|com)\/admin\/login$/.test(raw.adminLoginUrl)
+      ? raw.adminLoginUrl
+      : "",
     routerId: positivePortalId(raw?.routerId),
     portId: positivePortalId(raw?.portId),
     resellerId: positivePortalId(raw?.resellerId),
@@ -3253,6 +3258,29 @@ function HotspotLoginView({
            text-align: center; margin-top: 38px;
           font-size: 11px; color: rgba(255,255,255,0.15); font-weight: 500;
         }
+        .hp-admin-entry {
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          gap: 6px;
+          margin: 18px auto 4px;
+          color: rgba(226,238,249,.64);
+          font-size: 12px;
+          line-height: 1.5;
+        }
+        .hp-admin-entry a {
+          color: #73e0de;
+          font-weight: 800;
+          text-decoration: underline;
+          text-decoration-color: rgba(115,224,222,.45);
+          text-underline-offset: 3px;
+        }
+        .hp-admin-entry a:hover { color: #b4fbf5; }
+        .hp-admin-entry a:focus-visible {
+          outline: 2px solid #73e0de;
+          outline-offset: 4px;
+          border-radius: 3px;
+        }
 
         .hp-connected-badge {
           display: inline-flex; align-items: center; gap: 6px;
@@ -4759,6 +4787,14 @@ function HotspotLoginView({
           {portalCards.footer && (
             <div className="hp-footer">
               {new Date().getFullYear()} {portalDisplayName}
+            </div>
+          )}
+          {HOTSPOT_RUNTIME_CONFIG.adminLoginUrl && (
+            <div className="hp-admin-entry">
+              <span>Admin?</span>
+              <a href={HOTSPOT_RUNTIME_CONFIG.adminLoginUrl}>
+                Click here
+              </a>
             </div>
           )}
             </>
