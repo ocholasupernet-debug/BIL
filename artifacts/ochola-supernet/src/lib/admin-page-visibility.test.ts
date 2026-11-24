@@ -14,6 +14,12 @@ test("Hotspot diagnostics uses its dedicated visibility and authorization key", 
   assert.equal(getAdminPageAuthFeatureKeyForPath("/admin/network/hotspot-diagnostics"), "network.hotspot-diagnostics");
 });
 
+test("Hotspot Page Builder uses the existing Hotspot Settings permission", () => {
+  assert.equal(getAdminFeatureKeyForPath("/admin/hotspot-page-builder"), "network.hotspot-settings");
+  assert.equal(getAdminPageAuthFeatureKeyForPath("/admin/hotspot-page-builder"), "network.hotspot-settings");
+  assert.equal(isAdminFeatureVisible({ "network.hotspot-settings": false }, "network.hotspot-settings"), false);
+});
+
 test("payment gateway settings are identified separately from other settings tabs", () => {
   assert.equal(isPaymentGatewaySettingsPath("/admin/settings?tab=gateways"), true);
   assert.equal(isPaymentGatewaySettingsPath("/admin/settings/?tab=gateways&source=nav"), true);

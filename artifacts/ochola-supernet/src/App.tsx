@@ -422,6 +422,7 @@ function Router() {
       <Route path="/admin/free-access/device-grant" component={PrepaidUsers} />
       <Route path="/admin/free-access" component={FreeHotspotAccess} />
       <Route path="/admin/hotspot-settings" component={HotspotSettings} />
+      <Route path="/admin/hotspot-page-builder" component={HotspotSettings} />
       <Route path="/admin/pppoe-settings"   component={PPPoESettings}   />
       <Route path="/admin/pppoe-settings/setup" component={PPPoESetup} />
       <Route path="/admin/webhooks"          component={Webhooks}         />

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { AdminLayout } from "@/components/layout/AdminLayout";
 import { useBrand } from "@/context/BrandContext";
 import { useDashboardPreferences } from "@/context/DashboardPreferencesContext";
@@ -1338,6 +1338,8 @@ function PreviewModal({
 }
 
 export default function HotspotSettings() {
+  const [currentLocation] = useLocation();
+  const pageBuilderMode = currentLocation.split("?")[0] === "/admin/hotspot-page-builder";
   const brand = useBrand();
   const adminId = getSelectedTenantId() ?? AUTH_ADMIN_ID;
   const storageKey = `hotspot_settings_${adminId}`;
@@ -2401,9 +2403,17 @@ export default function HotspotSettings() {
       <div className="hs-page">
         <header className="hs-hero">
           <div>
-            <div className="hs-eyebrow"><Wifi size={13} /> Hotspot settings</div>
-            <h1 className="hs-title">{isResellerAccount ? "Assigned hotspot" : "Customer portal"}</h1>
-            <p className="hs-subtitle">Choose a layout, review the preview, then save.</p>
+            <div className="hs-eyebrow"><Wifi size={13} /> {pageBuilderMode ? "Settings · Hotspot Page Builder" : "Hotspot settings"}</div>
+            <h1 className="hs-title">
+              {pageBuilderMode
+                ? isResellerAccount ? "Assigned Hotspot Page Builder" : "Hotspot Page Builder"
+                : isResellerAccount ? "Assigned hotspot" : "Customer portal"}
+            </h1>
+            <p className="hs-subtitle">
+              {pageBuilderMode
+                ? "Design, preview, and sync the customer-facing Hotspot sign-in page."
+                : "Choose a layout, review the preview, then save."}
+            </p>
           </div>
           <div className="hs-actions">
             <button type="button" className="hs-btn hs-btn-quiet" onClick={() => void handlePreview()} disabled={previewLoading || portsLoading}>

@@ -287,6 +287,7 @@ const navSections: NavSection[] = [
           { name: "Billing & M-Pesa",     href: "/admin/settings?tab=billing" },
           { name: "Payment Gateways",     href: "/admin/settings?tab=gateways" },
           { name: "Dashboard Page Builder", href: "/admin/settings?tab=dashboard" },
+          { name: "Hotspot Page Builder",   href: "/admin/hotspot-page-builder" },
           { name: "Desired Font",         href: "/admin/settings?tab=typography" },
           { name: "SMS & Email",           href: "/admin/settings?tab=sms" },
           { name: "Network",               href: "/admin/settings?tab=network" },

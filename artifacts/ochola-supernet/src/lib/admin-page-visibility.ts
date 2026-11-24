@@ -136,6 +136,7 @@ const ROUTE_FEATURES: Array<{ prefix: string; featureKey: string }> = [
   { prefix: "/admin/network", featureKey: "network.routers" },
   { prefix: "/admin/access-points", featureKey: "network.access-points" },
   { prefix: "/admin/pppoe-settings", featureKey: "network.pppoe-settings" },
+  { prefix: "/admin/hotspot-page-builder", featureKey: "network.hotspot-settings" },
   { prefix: "/admin/hotspot-settings", featureKey: "network.hotspot-settings" },
   { prefix: "/admin/vpn", featureKey: "tools.vpn" },
   { prefix: "/admin/bulk", featureKey: "tools.bulk" },
