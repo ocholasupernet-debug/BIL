@@ -292,8 +292,23 @@ jobs:
           test -s artifacts/api-server/dist/index.mjs
 
       - name: Package release for VPS
+        env:
+          APP_ONLY_RELEASE: ${{ inputs.application_only_release }}
         run: |
           release_archive="${RUNNER_TEMP}/ocholasupernet-release.tgz"
+          app_only_archive_excludes=()
+          if [ "${APP_ONLY_RELEASE:-false}" = "true" ]; then
+            # App-only updates must preserve the live PM2 and router-management
+            # configuration, including files staged by separate VPN releases.
+            app_only_archive_excludes+=(
+              --exclude='./.github'
+              --exclude='./ecosystem.config.cjs'
+              --exclude='./deploy/activate-router-management-vpn-com.sh'
+              --exclude='./deploy/bootstrap-router-management-vpn.sh'
+              --exclude='./deploy/tests/bootstrap-router-management-vpn.test.sh'
+              --exclude='./deploy/tests/vpn-management-host-cutover.test.sh'
+            )
+          fi
           tar \
             --exclude='./.git' \
             --exclude='./.local' \
@@ -314,6 +329,7 @@ jobs:
             --exclude='./logs' \
             --exclude='*/logs' \
             --exclude='*.log' \
+            "${app_only_archive_excludes[@]}" \
             -czf "$release_archive" .
           mv "$release_archive" ocholasupernet-release.tgz
 

@@ -67,6 +67,26 @@ test("application-only workflow skips VPS config writes, Nginx, database, and ro
   const workflow = await source(".github/workflows/deploy.yml");
   assert.match(workflow, /--exclude='\.\/data\/backups'/);
   assert.match(workflow, /--exclude='\.\/generated-artifacts'/);
+  const packageStart = workflow.indexOf("- name: Package release for VPS");
+  const packageEnd = workflow.indexOf("\n      - name:", packageStart + 1);
+  const packageStep = workflow.slice(packageStart, packageEnd);
+  assert.match(
+    packageStep,
+    /APP_ONLY_RELEASE: \$\{\{ inputs\.application_only_release \}\}/,
+  );
+  for (const protectedPath of [
+    "./.github",
+    "./ecosystem.config.cjs",
+    "./deploy/activate-router-management-vpn-com.sh",
+    "./deploy/bootstrap-router-management-vpn.sh",
+    "./deploy/tests/bootstrap-router-management-vpn.test.sh",
+    "./deploy/tests/vpn-management-host-cutover.test.sh",
+  ]) {
+    assert.ok(
+      packageStep.includes(`--exclude='${protectedPath}'`),
+      `app-only archive must preserve ${protectedPath} on the VPS`,
+    );
+  }
   assert.match(
     workflow,
     /- name: Verify destination build target\n\s+env:\n\s+VITE_SUPABASE_URL: \$\{\{ secrets\.SUPABASE_DEST_URL \}\}\n\s+run: node deploy\/verify-supabase-build-target\.mjs/,
