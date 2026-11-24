@@ -309,6 +309,7 @@ function CheckLine({
 export default function SelfInstall() {
   const [, navigate] = useLocation();
   const statusCheckInFlight = useRef(false);
+  const errorRef = useRef<HTMLDivElement | null>(null);
   const scriptResultRef = useRef<HTMLDivElement | null>(null);
   const [mode, setMode] = useState<InstallMode>("greenfield");
   const [routerName, setRouterName] = useState("");
@@ -544,6 +545,9 @@ export default function SelfInstall() {
       }, 100);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install steps.");
+      window.setTimeout(() => {
+        errorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
     } finally {
       setBusy("");
     }
@@ -654,7 +658,7 @@ export default function SelfInstall() {
         </div>
 
         {error && (
-          <div style={{ ...panel, padding: "0.8rem 1rem", borderColor: "rgba(248,113,113,0.35)", background: "rgba(127,29,29,0.16)", color: "#fca5a5", display: "flex", gap: "0.55rem", alignItems: "flex-start", fontSize: "0.78rem" }}>
+          <div ref={errorRef} role="alert" aria-live="assertive" style={{ ...panel, padding: "0.8rem 1rem", borderColor: "rgba(248,113,113,0.35)", background: "rgba(127,29,29,0.16)", color: "#fca5a5", display: "flex", gap: "0.55rem", alignItems: "flex-start", fontSize: "0.78rem" }}>
             <AlertCircle size={16} style={{ flexShrink: 0 }} />
             <span>{error}</span>
           </div>
