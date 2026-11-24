@@ -953,6 +953,26 @@ const STYLES = `
   .hs-btn-quiet { background:var(--isp-input-bg); border-color:var(--isp-border); color:var(--isp-text-muted); }
   .hs-btn-quiet:hover:not(:disabled) { color:var(--isp-text); background:var(--isp-hover); }
   .hs-grid { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(280px,.75fr); gap:18px; align-items:start; }
+  .hs-grid-operations { grid-template-columns:minmax(0,1fr); }
+  .hs-page-builder { max-width:1480px; padding:30px clamp(18px,3vw,38px) 56px; background:#f1f5f1; }
+  .hs-page-builder .hs-hero { align-items:center; padding:22px 24px; border:1px solid #dce6df; border-radius:17px; background:linear-gradient(125deg,#fff 0%,#f5faf6 72%,#edf5ef 100%); box-shadow:0 8px 24px rgba(27,61,48,.05); }
+  .hs-page-builder .hs-title { font-size:1.85rem; }
+  .hs-page-builder .hs-subtitle { max-width:720px; }
+  .hs-page-builder .hs-grid-builder { grid-template-columns:minmax(0,1.35fr) minmax(310px,.78fr); gap:22px; }
+  .hs-page-builder .hs-stack { gap:20px; }
+  .hs-page-builder .hs-side { position:sticky; top:16px; }
+  .hs-page-builder .hs-card { border-color:#dfe8e1; border-radius:15px; box-shadow:0 3px 12px rgba(27,61,48,.045); }
+  .hs-page-builder .hs-card-head { align-items:center; padding:18px 21px 15px; }
+  .hs-page-builder .hs-card-title { font-size:.98rem; }
+  .hs-page-builder .hs-card-desc { display:block; margin:5px 0 0; color:#69796f; font-size:.72rem; line-height:1.5; }
+  .hs-page-builder .hs-card-body { padding:6px 21px 12px; }
+  .hs-builder-form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; column-gap:22px; }
+  .hs-builder-form-grid--compact { margin-top:2px; }
+  .hs-builder-span-2 { grid-column:1 / -1; }
+  .hs-builder-form-grid > .hs-field { grid-template-columns:1fr; gap:8px; min-width:0; }
+  .hs-builder-form-grid .hs-inline-body .hs-field { grid-template-columns:minmax(140px,.7fr) minmax(0,1.3fr); }
+  .hs-builder-layouts { scroll-margin-top:20px; }
+  .hs-page-builder .hs-foot-actions { justify-content:flex-end; padding:14px; border:1px solid #dfe8e1; border-radius:14px; background:#f9fbf8; }
   .hs-stack { display:flex; flex-direction:column; gap:18px; }
   .hs-jump-nav { display:flex; gap:7px; overflow-x:auto; margin:-8px 0 18px; padding:2px 1px 8px; scrollbar-width:thin; }
   .hs-jump-nav a { display:inline-flex; align-items:center; min-height:34px; padding:7px 11px; border:1px solid var(--isp-border); border-radius:999px; background:var(--isp-section); color:var(--isp-text-muted); font-size:.7rem; font-weight:700; text-decoration:none; white-space:nowrap; transition:color .15s,border-color .15s,background .15s; }
@@ -1131,12 +1151,16 @@ const STYLES = `
   @media (max-width: 900px) {
     .hs-grid { grid-template-columns:1fr; }
     .hs-side { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+    .hs-page-builder .hs-side { position:static; }
   }
   @media (max-width: 680px) {
     .hs-page { padding:22px 15px 42px; }
     .hs-hero { display:block; }
     .hs-actions { justify-content:flex-start; margin-top:12px; }
     .hs-field { grid-template-columns:1fr; gap:8px; }
+    .hs-builder-form-grid { grid-template-columns:1fr; }
+    .hs-builder-span-2 { grid-column:auto; }
+    .hs-builder-form-grid .hs-inline-body .hs-field { grid-template-columns:1fr; }
     .hs-card-body { padding-inline:15px; }
     .hs-card-head { padding-inline:15px; }
     .hs-color-grid { grid-template-columns:repeat(4,1fr); gap:12px 7px; }
@@ -1147,6 +1171,9 @@ const STYLES = `
     .hs-layout-detail { align-items:flex-start; }
     .hs-layout-thumb { flex-basis:78px; width:78px; height:60px; }
     .hs-more-menu { left:0; right:auto; }
+    .hs-page-builder .hs-hero { padding:18px; }
+    .hs-page-builder .hs-card-head { padding-inline:15px; }
+    .hs-page-builder .hs-card-body { padding-inline:15px; }
   }
   @media (max-width: 420px) {
     .hs-page { padding:18px 12px 32px; }
@@ -1449,14 +1476,16 @@ export default function HotspotSettings() {
   }, [adminId]);
 
   useEffect(() => {
+    if (pageBuilderMode) return;
     const requestedRouterId = new URLSearchParams(window.location.search).get("routerId");
     if (requestedRouterId && /^\d+$/.test(requestedRouterId)) {
       setSettings(previous => ({ ...previous, routerId: requestedRouterId }));
     }
-  }, []);
+  }, [pageBuilderMode]);
 
   const { data: routers = [], isLoading: routersLoading } = useQuery<DbRouter[]>({
     queryKey: ["routers_for_hotspot_settings", adminId],
+    enabled: !pageBuilderMode,
     queryFn: async () => {
       const response = await fetch("/api/routers", { headers: adminApiHeaders(), cache: "no-store" });
       const data = await parseApiResponse<DbRouter[] | { error?: string }>(response, "Routers could not be loaded.");
@@ -1471,6 +1500,12 @@ export default function HotspotSettings() {
     setSelectedManagerLayoutId(settings.portalLayout);
   }, [settings.portalLayout]);
   useEffect(() => {
+    if (pageBuilderMode) {
+      setCustomLayouts([]);
+      setCustomLayoutsLoading(false);
+      setLayoutHistoryError(null);
+      return;
+    }
     if (!Number.isSafeInteger(layoutTenantId) || layoutTenantId < 1) {
       setCustomLayouts([]);
       setCustomLayoutsLoading(false);
@@ -1495,9 +1530,15 @@ export default function HotspotSettings() {
       if (!cancelled) setCustomLayoutsLoading(false);
     });
     return () => { cancelled = true; };
-  }, [layoutTenantId, layoutHistoryRefresh]);
+  }, [pageBuilderMode, layoutTenantId, layoutHistoryRefresh]);
   useEffect(() => {
     const routerId = Number(settings.routerId);
+    if (pageBuilderMode) {
+      setLayoutHistory([]);
+      setLayoutHistoryError(null);
+      setLayoutHistoryLoading(false);
+      return;
+    }
     if (!Number.isSafeInteger(routerId) || routerId < 1 || !Number.isSafeInteger(layoutTenantId) || layoutTenantId < 1) {
       setLayoutHistory([]);
       setLayoutHistoryError(null);
@@ -1522,13 +1563,20 @@ export default function HotspotSettings() {
       if (!cancelled) setLayoutHistoryLoading(false);
     });
     return () => { cancelled = true; };
-  }, [settings.routerId, layoutTenantId, layoutHistoryRefresh]);
+  }, [pageBuilderMode, settings.routerId, layoutTenantId, layoutHistoryRefresh]);
 
   useEffect(() => () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
   }, [previewUrl]);
 
   useEffect(() => {
+    if (pageBuilderMode) {
+      setAssignedPorts([]);
+      setPortDrafts({});
+      setSelectedAssignedPortId("");
+      setPortsLoading(false);
+      return;
+    }
     const routerId = Number(settings.routerId);
     if (!isResellerAccount && (!Number.isSafeInteger(routerId) || routerId < 1)) {
       setAssignedPorts([]);
@@ -1573,17 +1621,17 @@ export default function HotspotSettings() {
     return () => {
       cancelled = true;
     };
-  }, [isResellerAccount, settings.routerId]);
+  }, [pageBuilderMode, isResellerAccount, settings.routerId]);
 
   useEffect(() => {
-    if (!isResellerAccount || routersLoading) return;
+    if (pageBuilderMode || !isResellerAccount || routersLoading) return;
     setSettings(previous => {
       const current = Number(previous.routerId);
       const stillAssigned = routers.some(router => router.id === current);
       if (stillAssigned) return previous;
       return { ...previous, routerId: routers[0] ? String(routers[0].id) : "" };
     });
-  }, [isResellerAccount, routers, routersLoading]);
+  }, [pageBuilderMode, isResellerAccount, routers, routersLoading]);
 
   const update = <K extends keyof HSettings>(key: K, value: HSettings[K]) => {
     setSettings(previous => ({ ...previous, [key]: value }));
@@ -1857,7 +1905,64 @@ export default function HotspotSettings() {
     reader.readAsDataURL(file);
   };
 
+  const handleSavePageBuilder = async () => {
+    const error = validateSettings(settings);
+    if (error) {
+      setNotice({ type: "error", text: error });
+      return;
+    }
+
+    setSaving(true);
+    setNotice(null);
+    let brandingSavedOnServer = false;
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(settings));
+      const response = await fetch("/api/admin/hotspot-branding", {
+        method: "PUT",
+        headers: adminApiHeaders(),
+        body: JSON.stringify({
+          branding: { portalHostname: settings.portalHostname, settings },
+        }),
+      });
+      const data = await parseApiResponse<{ ok?: boolean }>(
+        response,
+        "The Hotspot page design could not be saved.",
+      );
+      if (!response.ok) throw new Error(data.error || "The Hotspot page design could not be saved.");
+      brandingSavedOnServer = true;
+
+      await savePreferences({
+        ...preferences,
+        portalBackground,
+        portalPackageShape,
+      });
+
+      setSaved(true);
+      setNotice({
+        type: "success",
+        text: "Page design saved. No ports, MikroTik settings, or router files were changed.",
+      });
+      window.setTimeout(() => setSaved(false), 2500);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+      setNotice({
+        type: "error",
+        text: brandingSavedOnServer
+          ? `Page settings were saved, but appearance preferences could not be saved. ${message}`
+          : message === "Failed to fetch"
+            ? "The page design could not be saved because the server could not be reached. Try again when the connection is available."
+            : message,
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSave = async () => {
+    if (pageBuilderMode) {
+      await handleSavePageBuilder();
+      return;
+    }
     const error = validateSettings(settings);
     if (error) {
       setNotice({ type: "error", text: error });
@@ -2015,7 +2120,7 @@ export default function HotspotSettings() {
       setNotice({ type: "error", text: error });
       return null;
     }
-    if ((isResellerAccount || selectedAssignedPortId) && !selectedPortalPort) {
+    if (!pageBuilderMode && (isResellerAccount || selectedAssignedPortId) && !selectedPortalPort) {
       throw new Error("The selected Hotspot service is no longer available. Choose a service again.");
     }
     return buildTargetPortal(selectedPortalPort);
@@ -2158,7 +2263,7 @@ export default function HotspotSettings() {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
     try {
-       if ((isResellerAccount || selectedAssignedPortId) && !port) {
+       if (!pageBuilderMode && (isResellerAccount || selectedAssignedPortId) && !port) {
          throw new Error("The selected Hotspot service is no longer available. Choose a service again.");
        }
        const html = await buildTargetPortal(port, true);
@@ -2400,41 +2505,59 @@ export default function HotspotSettings() {
     <AdminLayout>
       <style>{STYLES}</style>
       {showPreview && <PreviewModal url={previewUrl} loading={previewLoading} onClose={closePreview} />}
-      <div className="hs-page">
+      <div className={`hs-page ${pageBuilderMode ? "hs-page-builder" : "hs-page-settings"}`}>
         <header className="hs-hero">
           <div>
             <div className="hs-eyebrow"><Wifi size={13} /> {pageBuilderMode ? "Settings · Hotspot Page Builder" : "Hotspot settings"}</div>
             <h1 className="hs-title">
               {pageBuilderMode
-                ? isResellerAccount ? "Assigned Hotspot Page Builder" : "Hotspot Page Builder"
-                : isResellerAccount ? "Assigned hotspot" : "Customer portal"}
+                ? "Hotspot Page Builder"
+                : isResellerAccount ? "Assigned Hotspot settings" : "Hotspot settings"}
             </h1>
             <p className="hs-subtitle">
               {pageBuilderMode
-                ? "Design, preview, and sync the customer-facing Hotspot sign-in page."
-                : "Choose a layout, review the preview, then save."}
+                ? "Build and preview the customer sign-in page. Saving updates the design only; router deployment stays in Hotspot Settings."
+                : "Manage router assignments, ports, and deployment separately from customer-facing page design."}
             </p>
           </div>
           <div className="hs-actions">
-            <button type="button" className="hs-btn hs-btn-quiet" onClick={() => void handlePreview()} disabled={previewLoading || portsLoading}>
-              {previewLoading ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview
-            </button>
-            <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving || portsLoading || installingHotspotFiles || savingPortId !== null}>
+            {pageBuilderMode ? (
+              <button type="button" className="hs-btn hs-btn-quiet" onClick={() => void handlePreview(undefined)} disabled={previewLoading}>
+                {previewLoading ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview customer page
+              </button>
+            ) : (
+              <Link href="/admin/hotspot-page-builder" className="hs-btn hs-btn-soft">
+                <Sparkles size={14} /> Open Page Builder
+              </Link>
+            )}
+            <button
+              type="button"
+              className="hs-btn hs-btn-primary"
+              onClick={handleSave}
+              disabled={saving || (!pageBuilderMode && (portsLoading || installingHotspotFiles || savingPortId !== null))}
+            >
               {saving ? <Loader2 size={14} className="animate-spin" /> : saved ? <Check size={14} /> : <Save size={14} />}
-              {saving ? "Syncing…" : saved ? "Synced" : isResellerAccount ? "Sync to MikroTik" : settings.routerId ? "Save & sync to MikroTik" : "Save settings"}
+              {pageBuilderMode
+                ? saving ? "Saving page…" : saved ? "Page saved" : "Save page design"
+                : saving ? "Syncing…" : saved ? "Synced" : isResellerAccount ? "Sync to MikroTik" : settings.routerId ? "Save & sync to MikroTik" : "Save settings"}
             </button>
             <details className="hs-more-actions">
               <summary className="hs-btn hs-btn-quiet">More <ChevronDown size={13} /></summary>
               <div className="hs-more-menu">
-                <button type="button" className="hs-btn hs-btn-soft" onClick={handleDownload} disabled={exporting || portsLoading}>
-                  {exporting ? <Loader2 size={14} className="animate-spin" /> : <ArrowDownToLine size={14} />} Download HTML
-                </button>
-                {!isResellerAccount && <button type="button" className="hs-btn hs-btn-soft" onClick={handleInstallHotspotFiles} disabled={installingHotspotFiles || saving || exporting}>
-                  {installingHotspotFiles ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />} {installingHotspotFiles ? "Installing…" : "Install support files"}
-                </button>}
-                {!isResellerAccount && <Link href="/admin/network/files" className="hs-btn hs-btn-quiet">
-                  <FolderOpen size={14} /> View router files
-                </Link>}
+                {pageBuilderMode ? (
+                  <button type="button" className="hs-btn hs-btn-soft" onClick={handleDownload} disabled={exporting}>
+                    {exporting ? <Loader2 size={14} className="animate-spin" /> : <ArrowDownToLine size={14} />} Download HTML
+                  </button>
+                ) : (
+                  <>
+                    {!isResellerAccount && <button type="button" className="hs-btn hs-btn-soft" onClick={handleInstallHotspotFiles} disabled={installingHotspotFiles || saving || exporting}>
+                      {installingHotspotFiles ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />} {installingHotspotFiles ? "Installing…" : "Install support files"}
+                    </button>}
+                    {!isResellerAccount && <Link href="/admin/network/files" className="hs-btn hs-btn-quiet">
+                      <FolderOpen size={14} /> View router files
+                    </Link>}
+                  </>
+                )}
               </div>
             </details>
           </div>
@@ -2447,31 +2570,49 @@ export default function HotspotSettings() {
           </div>
         )}
 
-        <nav className="hs-jump-nav" aria-label="Hotspot settings sections">
-          <a href="#hotspot-identity">Basics</a>
-          {!isResellerAccount && <a href="#hotspot-ports">Ports</a>}
-          <a href="#hotspot-appearance">Layout</a>
-          <a href="#hotspot-content">Content</a>
-          <a href="#hotspot-checkout">Checkout</a>
-          <a href="#hotspot-support">Support</a>
+        <nav className="hs-jump-nav" aria-label={pageBuilderMode ? "Hotspot page builder sections" : "Hotspot settings sections"}>
+          {pageBuilderMode ? (
+            <>
+              <a href="#hotspot-identity">Portal identity</a>
+              <a href="#hotspot-appearance">Appearance</a>
+              <a href="#hotspot-layouts">Layout library</a>
+              <a href="#hotspot-content">Content</a>
+              <a href="#hotspot-checkout">Checkout</a>
+              <a href="#hotspot-support">Support</a>
+            </>
+          ) : (
+            <>
+              <a href="#hotspot-identity">Router & service</a>
+              {!isResellerAccount && <a href="#hotspot-ports">Ports</a>}
+              <a href="#hotspot-layouts">Layout deployment</a>
+            </>
+          )}
         </nav>
 
-        <div className="hs-grid">
+        <div className={`hs-grid ${pageBuilderMode ? "hs-grid-builder" : "hs-grid-operations"}`}>
           <main className="hs-stack">
-            <Section id="hotspot-identity" icon={<LayoutTemplate size={16} />} title="Portal basics" description="Set your customer-facing identity and choose which router or assigned VLAN receives portal updates.">
+            <Section
+              id="hotspot-identity"
+              icon={<LayoutTemplate size={16} />}
+              title={pageBuilderMode ? "Portal identity" : "Router & service"}
+              description={pageBuilderMode
+                ? "Set the name, public address, and availability customers see before they connect."
+                : "Choose the router or assigned VLAN service used by operational Hotspot changes."}
+            >
+              {pageBuilderMode && <div className="hs-builder-form-grid">
               <Field label="ISP name" help="Used in the page title, header, footer, and downloaded filename.">
                 <input className="hs-input" value={settings.ispName} maxLength={80} onChange={event => update("ispName", event.target.value)} placeholder="Your ISP name" />
               </Field>
               <Field label="Tagline">
                 <input className="hs-input" value={settings.tagline} maxLength={120} onChange={event => update("tagline", event.target.value)} placeholder="Fast and reliable internet" />
               </Field>
-              <details className="hs-inline-disclosure">
-                <summary>More portal settings <ChevronDown size={14} /></summary>
+              <details className="hs-inline-disclosure hs-builder-span-2" open>
+                <summary>Guest portal address & live chat <ChevronDown size={14} /></summary>
                 <div className="hs-inline-body">
-                <Field label="Customer portal hostname" help="After successful Hotspot sign-in, customers are sent to this hostname. Portal API calls use a custom host only when its health check passes; otherwise they use the tenant API address. Saving syncs the selected router’s sign-in files after confirmation but does not change DNS or RouterOS service configuration.">
+                <Field label="Customer portal hostname" help="Public address shown to customers. Saving the page does not change DNS or router configuration.">
                  <input className="hs-input" value={settings.portalHostname} maxLength={253} onChange={event => update("portalHostname", event.target.value)} placeholder="wifi.example.com" inputMode="url" />
                </Field>
-                <Field label="Tawk.to live chat and calling" help="When enabled, the widget loads only on ocholasupernet.isplatty.org. Save & sync updates the selected router’s portal and adds missing allow rules. Turning it off leaves those rules in place.">
+                 <Field label="Tawk.to live chat and calling" help="Choose whether the chat widget appears on the customer portal. This does not change router allow rules.">
                   <label style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--isp-text)", fontSize: ".78rem", fontWeight: 700 }}>
                     <input
                       type="checkbox"
@@ -2483,6 +2624,8 @@ export default function HotspotSettings() {
                 </Field>
                 </div>
               </details>
+              </div>}
+              {!pageBuilderMode && <>
                <Field label={isResellerAccount ? "Assigned MikroTik VLAN interface" : "Linked router"} help={isResellerAccount ? "Use the VLAN interface name assigned on the MikroTik. Syncing this service writes changes to that VLAN interface." : "Saving with a router selected pushes the updated customer sign-in pages to it."}>
                  {(!isResellerAccount && routersLoading) ? <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading routers…</div> : (
                   <div className="hs-select-wrap">
@@ -2605,6 +2748,8 @@ export default function HotspotSettings() {
                    </div>
                  </Field>
                )}
+              </>}
+              {pageBuilderMode && <div className="hs-builder-form-grid hs-builder-form-grid--compact">
               <Field label="Portal status" help="Maintenance mode keeps the page available while replacing purchases with your message.">
                 <SelectField value={settings.maintenanceMode} onChange={value => update("maintenanceMode", value)} options={["Online", "Maintenance"]} />
               </Field>
@@ -2616,8 +2761,10 @@ export default function HotspotSettings() {
               <Field label="Logo" help="PNG, JPG, or WebP. The file is embedded in the exported HTML.">
                 <FilePicker label="Choose logo" value={settings.logoUrl} accept=".png,.jpg,.jpeg,.webp" onSelect={file => handleFile("logoUrl", file)} />
               </Field>
+              </div>}
             </Section>
 
+            {!pageBuilderMode && (
             <Section id="hotspot-ports" icon={<Wifi size={16} />} title={isResellerAccount ? "Assigned VLAN service" : "Port services"} description={isResellerAccount ? "Assigned hotspot service." : "Router port services."} collapsible>
                {!settings.routerId && !isResellerAccount ? (
                 <div className="hs-status hs-status-info"><Info size={15} /> Choose a linked router above to load its assigned physical ports.</div>
@@ -2752,14 +2899,14 @@ export default function HotspotSettings() {
                 </div>
               )}
             </Section>
+            )}
 
+            {pageBuilderMode && (
             <Section
               id="hotspot-appearance"
               icon={<Sparkles size={16} />}
               title="Portal appearance"
-              description={selectedManagerLayoutId.startsWith("custom-")
-                ? "Custom layouts are independent saved snapshots; edit a built-in layout and make a new copy to change its appearance."
-                : "Customize this built-in layout. Selection and deployment are managed in the layout panel below."}
+              description="Adjust the page background, package cards, colors, and shape, then preview the customer experience before saving."
             >
               {appearanceLoading ? (
                 <div className="hs-status hs-status-info"><Loader2 size={14} className="animate-spin" /> Loading portal appearance…</div>
@@ -2840,10 +2987,13 @@ export default function HotspotSettings() {
                 </>
               )}
             </Section>
+            )}
 
+            <div id="hotspot-layouts" className={pageBuilderMode ? "hs-builder-layouts" : undefined}>
             <HotspotLayoutManager
-              layouts={managedLayouts}
-              selectedLayoutId={selectedManagerLayoutId}
+              mode={pageBuilderMode ? "builder" : "deployment"}
+              layouts={pageBuilderMode ? managedLayouts.filter(layout => layout.isBuiltIn) : managedLayouts}
+              selectedLayoutId={pageBuilderMode && selectedManagerLayoutId.startsWith("custom-") ? settings.portalLayout : selectedManagerLayoutId}
               deployment={{
                 routerName: selectedRouterForLayout?.name ?? (settings.routerId ? `Router ${settings.routerId}` : "No router selected"),
                 hotspotName: selectedPortalPort?.hotspot_server_name ?? (selectedAssignedPortId ? "Assigned Hotspot service" : "Router-wide Hotspot"),
@@ -2854,8 +3004,12 @@ export default function HotspotSettings() {
                 syncStatus: layoutHistory[0]?.status ?? "not-deployed",
                 lastSuccessfulSync: successfulLayoutDeployment?.created_at ?? null,
               }}
-              history={managedLayoutHistory}
-              state={{ loading: layoutHistoryLoading || customLayoutsLoading, error: layoutHistoryError, busy: layoutDeployBusy || !layoutTenantId }}
+              history={pageBuilderMode ? [] : managedLayoutHistory}
+              state={{
+                loading: pageBuilderMode ? false : layoutHistoryLoading || customLayoutsLoading,
+                error: pageBuilderMode ? null : layoutHistoryError,
+                busy: pageBuilderMode ? false : layoutDeployBusy || !layoutTenantId,
+              }}
               selectLayout={selectManagedLayout}
               previewLayout={(id, _viewport) => { void previewManagedLayout(id); }}
               duplicateLayout={id => { void duplicateManagedLayout(id); }}
@@ -2866,9 +3020,11 @@ export default function HotspotSettings() {
                 }
               }}
               restoreLayout={id => { void setManagedLayoutArchived(id, "active"); }}
-              confirmDeploy={deployManagedLayout}
+              confirmDeploy={pageBuilderMode ? undefined : deployManagedLayout}
             />
+            </div>
 
+            {pageBuilderMode && <>
             <Section id="hotspot-content" icon={<Eye size={16} />} title="Portal content" description="Optional customer page cards." collapsible>
               <p style={{ margin: "12px 0 0", color: "var(--isp-text-muted)", fontSize: ".7rem", lineHeight: 1.5 }}>
                 Hiding a card removes it from the customer page without deleting its content or changing router configuration.
@@ -3009,13 +3165,32 @@ export default function HotspotSettings() {
                 </Field>
               )}
             </Section>
+            </>}
 
             <div className="hs-foot-actions">
-              <button type="button" className="hs-btn hs-btn-quiet" onClick={() => void handlePreview()} disabled={previewLoading || portsLoading}><Eye size={14} /> Preview portal</button>
-              <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving || installingHotspotFiles || portsLoading || savingPortId !== null}>{saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {saving ? "Saving…" : isResellerAccount ? "Sync to MikroTik" : settings.routerId ? "Save & sync to MikroTik" : "Save settings"}</button>
+              {pageBuilderMode ? (
+                <>
+                  <button type="button" className="hs-btn hs-btn-quiet" onClick={() => void handlePreview(undefined)} disabled={previewLoading}>
+                    {previewLoading ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} Preview customer page
+                  </button>
+                  <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving}>
+                    {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    {saving ? "Saving page…" : "Save page design"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Link href="/admin/hotspot-page-builder" className="hs-btn hs-btn-quiet"><Sparkles size={14} /> Open Page Builder</Link>
+                  <button type="button" className="hs-btn hs-btn-primary" onClick={handleSave} disabled={saving || installingHotspotFiles || portsLoading || savingPortId !== null}>
+                    {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                    {saving ? "Syncing…" : isResellerAccount ? "Sync to MikroTik" : settings.routerId ? "Save & sync to MikroTik" : "Save settings"}
+                  </button>
+                </>
+              )}
             </div>
           </main>
 
+          {pageBuilderMode && (
           <aside className="hs-stack hs-side">
             <section className="hs-card hs-side-card">
               <div className="hs-card-head">
@@ -3060,6 +3235,7 @@ export default function HotspotSettings() {
               </div>
             </details>
           </aside>
+          )}
         </div>
       </div>
     </AdminLayout>

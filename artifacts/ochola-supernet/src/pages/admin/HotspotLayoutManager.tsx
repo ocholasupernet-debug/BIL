@@ -42,6 +42,7 @@ export type HotspotDeploymentHistoryEntry = {
 };
 
 export type HotspotLayoutManagerProps = {
+  mode?: "builder" | "deployment";
   layouts: HotspotLayoutEntry[];
   selectedLayoutId: string | null;
   deployment: {
@@ -63,7 +64,7 @@ export type HotspotLayoutManagerProps = {
   duplicateLayout: (id: string) => void;
   archiveLayout: (id: string) => void;
   restoreLayout: (id: string) => void;
-  confirmDeploy: () => void | Promise<void>;
+  confirmDeploy?: () => void | Promise<void>;
 };
 
 type PreviewState = {
@@ -171,6 +172,7 @@ function LayoutArtwork({ layoutId, index, active }: { layoutId: string; index: n
 }
 
 export function HotspotLayoutManager({
+  mode = "deployment",
   layouts,
   selectedLayoutId,
   deployment,
@@ -190,7 +192,7 @@ export function HotspotLayoutManager({
   const selectedDiffersFromInstalled =
     !!selectedLayout && !!deployment.installedLayout && selectedLayout.name !== deployment.installedLayout;
   const previewLayoutEntry = preview ? layouts.find(layout => layout.id === preview.id) : undefined;
-  const canDeploy = !!selectedLayout && selectedLayout.availability !== "archived" && !state.busy && !deploying;
+  const canDeploy = mode === "deployment" && !!confirmDeploy && !!selectedLayout && selectedLayout.availability !== "archived" && !state.busy && !deploying;
 
   useEffect(() => {
     if (!preview) return;
@@ -207,6 +209,7 @@ export function HotspotLayoutManager({
   };
 
   const runDeploy = async () => {
+    if (mode !== "deployment" || !confirmDeploy) return;
     setDeploying(true);
     try {
       await confirmDeploy();
@@ -373,15 +376,26 @@ export function HotspotLayoutManager({
       <div className="hlm-shell">
         <header className="hlm-head">
           <div>
-            <div className="hlm-eyebrow"><LayoutTemplate aria-hidden="true" /> Hotspot settings <ChevronRight aria-hidden="true" /> Portal layouts</div>
-            <h1 id="hlm-title">Hotspot layout manager</h1>
-            <p className="hlm-lead">Choose the guest sign-in experience for this hotspot, review it at each screen size, and deploy it to the connected router.</p>
+            <div className="hlm-eyebrow">
+              <LayoutTemplate aria-hidden="true" />
+              {mode === "builder" ? "Hotspot Page Builder" : "Hotspot settings"}
+              <ChevronRight aria-hidden="true" />
+              {mode === "builder" ? "Layout library" : "Portal layouts"}
+            </div>
+            <h1 id="hlm-title">{mode === "builder" ? "Choose a page layout" : "Hotspot layout manager"}</h1>
+            <p className="hlm-lead">
+              {mode === "builder"
+                ? "Select a customer sign-in design and preview it before saving your page. This does not change any router."
+                : "Choose the guest sign-in experience for this hotspot, review it at each screen size, and deploy it to the connected router."}
+            </p>
           </div>
-          <div className="hlm-context" aria-label="Current hotspot context">
-            <span className="hlm-context-label">Deployment target</span>
-            <strong><Radio aria-hidden="true" /> {deployment.routerName || "Router not selected"}</strong>
-            <small>{deployment.hotspotName || "Hotspot not selected"}</small>
-          </div>
+          {mode === "deployment" && (
+            <div className="hlm-context" aria-label="Current hotspot context">
+              <span className="hlm-context-label">Deployment target</span>
+              <strong><Radio aria-hidden="true" /> {deployment.routerName || "Router not selected"}</strong>
+              <small>{deployment.hotspotName || "Hotspot not selected"}</small>
+            </div>
+          )}
         </header>
 
         {state.error && (
@@ -475,6 +489,7 @@ export function HotspotLayoutManager({
           )}
         </section>
 
+        {mode === "deployment" && (
         <section className="hlm-deploy" aria-labelledby="hlm-deploy-title">
           <div className="hlm-deploy-main">
             <div className="hlm-deploy-icon"><Wifi aria-hidden="true" /></div>
@@ -496,8 +511,9 @@ export function HotspotLayoutManager({
             <span className="hlm-deploy-note">Review the replacement before confirming</span>
           </div>
         </section>
+        )}
 
-        <div className="hlm-lower">
+        {mode === "deployment" && <div className="hlm-lower">
           <section className="hlm-panel" aria-labelledby="hlm-status-title">
             <div className="hlm-panel-head">
               <h2 id="hlm-status-title"><Radio aria-hidden="true" /> Router deployment</h2>
@@ -542,7 +558,7 @@ export function HotspotLayoutManager({
               </div>
             )}
           </section>
-        </div>
+        </div>}
       </div>
 
       {preview && previewLayoutEntry && (
@@ -573,19 +589,25 @@ export function HotspotLayoutManager({
                 <div className="hlm-preview-missing">
                   <div className="hlm-empty-icon"><Eye aria-hidden="true" /></div>
                   <strong>Preview unavailable</strong>
-                  <p>A preview URL has not been provided for this layout. The layout can still be selected and deployed according to your account permissions.</p>
+                  <p>
+                    {mode === "builder"
+                      ? "A preview URL has not been provided for this layout. You can still select it and preview your current saved page."
+                      : "A preview URL has not been provided for this layout. The layout can still be selected and deployed according to your account permissions."}
+                  </p>
                 </div>
               )}
             </div>
             <footer className="hlm-modal-footer">
-              <span>Viewport: {statusLabel(preview.viewport)}</span>
+              <span>
+                {mode === "builder" ? "Preview only · no router changes" : `Viewport: ${statusLabel(preview.viewport)}`}
+              </span>
               {previewLayoutEntry.previewUrl && <a href={previewLayoutEntry.previewUrl} target="_blank" rel="noreferrer">Open preview in new tab <ExternalLink aria-hidden="true" /></a>}
             </footer>
           </section>
         </div>
       )}
 
-      {confirmOpen && selectedLayout && (
+      {mode === "deployment" && confirmOpen && selectedLayout && confirmDeploy && (
         <div className="hlm-modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !deploying) setConfirmOpen(false); }}>
           <section className="hlm-confirm" role="alertdialog" aria-modal="true" aria-labelledby="hlm-confirm-title" aria-describedby="hlm-confirm-description">
             <div className="hlm-confirm-icon"><LockKeyhole aria-hidden="true" /></div>
