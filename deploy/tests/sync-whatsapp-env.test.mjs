@@ -11,7 +11,11 @@ test("forwards optional WAHA settings and key to the VPS environment sync step",
     new URL("../../.github/workflows/deploy.yml", import.meta.url),
     "utf8",
   );
-  const sshActionEnvs = workflow.match(/^\s+envs: ([^\n]+)$/m)?.[1] ?? "";
+  const deployStep = workflow
+    .split("      - name: Deploy via SSH")[1]
+    ?.split("\n      - name:")[0] ?? "";
+  const sshActionEnvs = deployStep.match(/^\s+envs: ([^\n]+)$/m)?.[1] ?? "";
+  assert.ok(sshActionEnvs, "the Deploy via SSH step declares its forwarded environment");
   for (const key of ["WAHA_BASE_URL", "WAHA_API_KEY", "WAHA_SESSION_ID", "WAHA_DEFAULT_COUNTRY_CODE"]) {
     assert.ok(sshActionEnvs.split(",").includes(key), `${key} is forwarded to the VPS SSH session`);
     assert.match(workflow, new RegExp(`${key}: \\$\\{\\{ secrets\\.${key} \\}\\}`));
