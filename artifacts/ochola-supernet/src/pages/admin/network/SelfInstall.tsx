@@ -88,18 +88,21 @@ type FinishResult = {
 };
 
 type SelfInstallStep = {
-  id: "mainhotspot";
+  id: "mainhotspot" | "network" | "vpn" | "services";
   order: number;
   title: string;
   fileName: string;
   description: string;
   command: string;
+  content?: string;
+  sizeBytes?: number;
 };
 
 type SelfInstallStepsResponse = {
   routerId: number;
   warning?: string;
-  bundleContent: string;
+  bundleContent?: string;
+  compactMode?: boolean;
   steps: SelfInstallStep[];
 };
 
@@ -312,6 +315,7 @@ export default function SelfInstall() {
   const [bridgeName, setBridgeName] = useState("hotspot-bridge");
   const [ports, setPorts] = useState("");
   const [router, setRouter] = useState<RouterProfile | null>(null);
+  const [compactMode, setCompactMode] = useState(false);
   const [vpnInfo, setVpnInfo] = useState<VpnInfo | null>(null);
   const [installStatus, setInstallStatus] = useState<InstallStatus | null>(null);
   const [finished, setFinished] = useState<FinishResult["router"] | null>(null);
@@ -365,7 +369,12 @@ export default function SelfInstall() {
     setBundleContent("");
     setScriptWarning("");
     setCopiedStep(null);
-  }, [mode, router?.id]);
+  }, [compactMode, mode, router?.id]);
+
+  useEffect(() => {
+    if (!router) return;
+    setCompactMode(/h[\s-]?ap\s*lite|rb941/i.test(router.model ?? ""));
+  }, [router?.id, router?.model]);
 
   const refreshStatus = useCallback(async () => {
     if (!router || statusCheckInFlight.current) return;
@@ -483,6 +492,7 @@ export default function SelfInstall() {
     const params = new URLSearchParams({
       adminId: String(ADMIN_ID),
       mode: backendMode(mode),
+      compact: compactMode ? "1" : "0",
     });
     if (bridgeName.trim()) params.set("bridgeName", bridgeName.trim());
     if (ports.trim()) params.set("bridgePorts", ports.trim());
@@ -499,11 +509,17 @@ export default function SelfInstall() {
     }
     const payload = await response.json().catch(() => ({})) as SelfInstallStepsResponse;
     const steps = Array.isArray(payload.steps) ? payload.steps as SelfInstallStep[] : [];
-    if (steps.length === 0 || typeof payload.bundleContent !== "string" || !payload.bundleContent.trim()) {
-      throw new Error("The generated mainhotspot.rsc bundle was empty.");
+    const bundleContent = typeof payload.bundleContent === "string" ? payload.bundleContent : "";
+    if (
+      steps.length === 0
+      || (payload.compactMode
+        ? steps.some(step => !step.content?.trim())
+        : !bundleContent.trim())
+    ) {
+      throw new Error("The generated Self Install script files were empty.");
     }
     setScriptSteps(steps);
-    setBundleContent(payload.bundleContent);
+    setBundleContent(bundleContent);
     setScriptWarning(payload.warning || "");
     setCopiedStep(null);
     return payload;
@@ -519,7 +535,9 @@ export default function SelfInstall() {
       const result = await fetchSelfInstallSteps();
       setNotice(result.warning
         ? "The authenticated bundle is ready. Resolve the VPS warning before importing it."
-        : "Download the authenticated bundle, upload it to the router, then import it.");
+        : result.compactMode
+          ? "Three smaller setup stages are ready. Run Network, VPN/API, and services in order."
+          : "Download the authenticated bundle, upload it to the router, then import it.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install steps.");
     } finally {
@@ -539,16 +557,18 @@ export default function SelfInstall() {
        const steps = generated.steps;
       const step = steps.find(item => item.id === stepId);
       if (!step) throw new Error("That Self Install step is not available.");
-       const blob = new Blob([generated.bundleContent], { type: "text/plain;charset=utf-8" });
+        const fileContent = step.content || generated.bundleContent;
+        if (!fileContent) throw new Error("The selected setup file is empty.");
+        const blob = new Blob([fileContent], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-       link.download = `mainhotspot-${router.id}.rsc`;
+        link.download = step.fileName;
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-       setNotice("Downloaded mainhotspot.rsc. Upload it to the router, then run the import command.");
+        setNotice(`Downloaded ${step.fileName}. Keep it private and run the generated stages in order.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
     } finally {
@@ -570,7 +590,7 @@ export default function SelfInstall() {
       if (!step) throw new Error("That Self Install step is not available.");
       await navigator.clipboard.writeText(step.command);
       setCopiedStep(step.id);
-       setNotice("Copied the import command. Upload mainhotspot.rsc to the router before running it.");
+        setNotice(`Copied the ${step.fileName} stage command. Run the stages in order.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not copy the Self Install script.");
     } finally {
@@ -759,8 +779,51 @@ export default function SelfInstall() {
                  <div style={{ marginTop: "0.35rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.5 }}>
                     {mode === "zero-touch"
                       ? "This script is intentionally empty while its replacement structure is being prepared."
-                       : <>Download the tagged <strong style={{ color: "var(--isp-text)" }}>mainhotspot.rsc</strong> file from this signed-in page, upload it to the router, then import its ordered network, VPN/API, and customer-service sections.</>}
+                        : compactMode
+                          ? <>Generate three smaller, ordered files for limited-memory routers. Run Network, then VPN/API, then Hotspot/PPPoE; each stage stops on errors and can be retried independently.</>
+                          : <>Download the tagged <strong style={{ color: "var(--isp-text)" }}>mainhotspot.rsc</strong> file from this signed-in page, upload it to the router, then import its ordered network, VPN/API, and customer-service sections.</>}
                  </div>
+                  {mode !== "zero-touch" && (
+                    <label style={{
+                      marginTop: "0.7rem",
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "0.55rem",
+                      padding: "0.7rem 0.75rem",
+                      borderRadius: 8,
+                      background: compactMode ? "rgba(245,158,11,0.08)" : "var(--isp-section)",
+                      border: `1px solid ${compactMode ? "rgba(245,158,11,0.28)" : "var(--isp-border-subtle)"}`,
+                      color: "var(--isp-text)",
+                      cursor: "pointer",
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={compactMode}
+                        onChange={event => setCompactMode(event.target.checked)}
+                        style={{ marginTop: 2, accentColor: "var(--isp-accent)" }}
+                      />
+                      <span>
+                        <strong style={{ display: "block", fontSize: "0.74rem" }}>Compact staged setup for hAP lite / 32 MB routers</strong>
+                        <span style={{ display: "block", marginTop: "0.2rem", color: "var(--isp-text-muted)", fontSize: "0.69rem", lineHeight: 1.5 }}>
+                          Imports one subsystem at a time to reduce peak script memory. For hAP lite (SMIPS), first import and trust the public ISRG Root X1 certificate through Winbox; its built-in CA store is unavailable. HTTPS verification remains enabled.
+                        </span>
+                      </span>
+                    </label>
+                  )}
+                  {compactMode && mode !== "zero-touch" && (
+                    <div role="note" style={{
+                      marginTop: "0.55rem",
+                      padding: "0.65rem 0.75rem",
+                      borderRadius: 8,
+                      background: "rgba(245,158,11,0.08)",
+                      border: "1px solid rgba(245,158,11,0.25)",
+                      color: "var(--isp-text-muted)",
+                      fontSize: "0.69rem",
+                      lineHeight: 1.5,
+                    }}>
+                      hAP lite TLS prerequisite: upload the official ISRG Root X1 PEM in Winbox → Files, import it under Certificates, and mark it trusted for fetch before running the generated commands. Do not use <code>check-certificate=no</code>.
+                    </div>
+                  )}
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
                    <button
                      type="button"
@@ -769,7 +832,7 @@ export default function SelfInstall() {
                     style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: 0, borderRadius: 8, background: canGenerateSteps ? "var(--isp-accent)" : "var(--isp-section)", color: canGenerateSteps ? "#fff" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: canGenerateSteps ? "pointer" : "not-allowed" }}
                    >
                       {busy === "script" ? <Loader2 size={15} style={{ animation: "self-install-spin 1.1s linear infinite" }} /> : <TerminalSquare size={15} />}
-                        {mode === "zero-touch" ? "Script content pending" : "Generate mainhotspot.rsc"}
+                         {mode === "zero-touch" ? "Script content pending" : compactMode ? "Generate compact stages" : "Generate mainhotspot.rsc"}
                    </button>
                      {mode !== "zero-touch" && <button
                       type="button"
@@ -796,6 +859,7 @@ export default function SelfInstall() {
                     <div style={{ marginTop: "0.8rem" }}>
                       <SelfInstallStepsResult
                         steps={scriptSteps}
+                        compactMode={compactMode}
                         copiedStep={copiedStep}
                         busy={busy}
                         onCopy={stepId => void copySelfInstallStep(stepId)}
@@ -837,7 +901,9 @@ export default function SelfInstall() {
                     <TerminalSquare size={14} style={{ color: selectedMode.tone }} /> Router-side checklist
                   </div>
                      <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.1rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.7 }}>
-                       <li>Download and upload mainhotspot.rsc, then run <code>/import mainhotspot.rsc</code>.</li>
+                       {compactMode
+                         ? <li>Run the Network, VPN/API, and Hotspot/PPPoE stage commands in order; wait for each stage to report completion.</li>
+                         : <li>Download and upload mainhotspot.rsc, then run <code>/import mainhotspot.rsc</code>.</li>}
                        <li>The final services file creates the selected Hotspot bridge, DHCP, walled garden, PPPoE, and service NAT.</li>
                       <li>It waits for the management tunnel to reach a running state.</li>
                       <li>Return here after the VPN is up so the next configuration step can be added.</li>

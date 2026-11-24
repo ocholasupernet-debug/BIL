@@ -68,7 +68,10 @@ import {
   provisionRouterManagementOpenVpn,
   provisionRouterManagementOpenVpnPair,
 } from "../lib/router-vpn-provisioning.js";
-import { buildRouterFileImportCommand } from "../lib/self-install-step-command.js";
+import {
+  buildRouterFileImportCommand,
+  buildSelfInstallStepCommand,
+} from "../lib/self-install-step-command.js";
 import {
   readRouterManagementCaCertificate,
   ROUTER_MANAGEMENT_API_USERNAME,
@@ -89,6 +92,7 @@ import {
 import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { buildSelfInstallBundle } from "../lib/self-install-bundle.js";
+import { buildCompactSelfInstallFiles } from "../lib/self-install-compact-plan.js";
 import { buildSelfInstallTenantOrigin, moveSelfInstallHostnameToCom } from "../lib/self-install-origin.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
@@ -3605,28 +3609,97 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     });
 
     const fileName = "mainhotspot.rsc";
-    const bundle = buildSelfInstallBundle([
-      { tag: "Network", content: networkScript },
-      { tag: "Management VPN and API", content: vpnScript },
-      { tag: "Hotspot and PPPoE Services", content: serviceScript },
-    ]);
     const bundleSourceOrigin = sourceOrigin;
     if (!bundleSourceOrigin.startsWith("https://")) {
       res.status(503).json({ error: "Self Install bundle fetch requires the signed-in tenant HTTPS hostname." });
       return;
     }
-    const bundleSourceToken = createPendingRouterFileSource({
-      content: Buffer.from(bundle, "utf8"),
-      contentType: "text/plain; charset=utf-8",
-      fileName,
-      maxFetchAttempts: 3,
-    }, SELF_INSTALL_BUNDLE_SOURCE_TTL_MS);
-    const bundleSourceUrl = `${bundleSourceOrigin}/api/router-file-source/${bundleSourceToken}`;
-    const command = buildRouterFileImportCommand({
-      sourceUrl: bundleSourceUrl,
-      fileName,
-      verified: true,
+    const compactMode = ["1", "true", "yes"].includes(
+      String(req.query.compact ?? "").trim().toLowerCase(),
+    );
+    const compactFiles = compactMode
+      ? buildCompactSelfInstallFiles([
+          {
+            id: "network",
+            tag: "Network",
+            title: "Network foundation",
+            description: "Creates and verifies the router's tagged network and management API foundation.",
+            content: networkScript,
+          },
+          {
+            id: "vpn",
+            tag: "Management VPN and API",
+            title: "Management VPN and API",
+            description: "Imports the management and public HTTPS trust certificates, then configures the management tunnel and API.",
+            content: vpnScript,
+          },
+          {
+            id: "services",
+            tag: "Hotspot and PPPoE Services",
+            title: "Hotspot and PPPoE services",
+            description: "Adds the selected customer bridge, portal files, DHCP, Hotspot, PPPoE, and service firewall rules.",
+            content: serviceScript,
+          },
+        ])
+      : [];
+    const compactSteps = compactFiles.map(file => {
+      const token = createPendingRouterFileSource({
+        content: Buffer.from(file.content, "utf8"),
+        contentType: "text/plain; charset=utf-8",
+        fileName: file.fileName,
+        maxFetchAttempts: 3,
+      }, SELF_INSTALL_BUNDLE_SOURCE_TTL_MS);
+      const sourceUrl = `${bundleSourceOrigin}/api/router-file-source/${token}`;
+      return {
+        id: file.id,
+        order: file.order,
+        title: file.title,
+        fileName: file.fileName,
+        description: file.description,
+        content: file.content,
+        sizeBytes: Buffer.byteLength(file.content, "utf8"),
+        command: buildSelfInstallStepCommand({
+          routerId: id,
+          stepId: file.id,
+          stepOrder: file.order as 1 | 2 | 3,
+          sourceUrl,
+          fileName: file.fileName,
+          verified: true,
+        }),
+      };
     });
+    const bundle = compactMode
+      ? ""
+      : buildSelfInstallBundle([
+          { tag: "Network", content: networkScript },
+          { tag: "Management VPN and API", content: vpnScript },
+          { tag: "Hotspot and PPPoE Services", content: serviceScript },
+        ]);
+    const regularSteps = compactMode
+      ? []
+      : (() => {
+          const bundleSourceToken = createPendingRouterFileSource({
+            content: Buffer.from(bundle, "utf8"),
+            contentType: "text/plain; charset=utf-8",
+            fileName,
+            maxFetchAttempts: 3,
+          }, SELF_INSTALL_BUNDLE_SOURCE_TTL_MS);
+          const bundleSourceUrl = `${bundleSourceOrigin}/api/router-file-source/${bundleSourceToken}`;
+          return [{
+            id: "mainhotspot" as const,
+            order: 1,
+            title: "Configure router management, VPN, Hotspot, and PPPoE",
+            fileName,
+            description: "Run the command to fetch this router's protected setup bundle from the signed-in tenant hostname, then import it. Its network, management VPN/API, and customer-service sections run in order and stop on errors.",
+            content: bundle,
+            sizeBytes: Buffer.byteLength(bundle, "utf8"),
+            command: buildRouterFileImportCommand({
+              sourceUrl: bundleSourceUrl,
+              fileName,
+              verified: true,
+            }),
+          }];
+        })();
     for (const file of portalFileContents) {
       createPublicRouterFileSource(id, file.routeName, {
         content: file.content,
@@ -3643,16 +3716,8 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       routerId: id,
       warning: provisioningWarning || undefined,
       bundleContent: bundle,
-      steps: [
-        {
-          id: "mainhotspot",
-          order: 1,
-          title: "Configure router management, VPN, Hotspot, and PPPoE",
-          fileName,
-          description: "Run the command to fetch this router's protected setup bundle from the signed-in tenant hostname, then import it. Its network, management VPN/API, and customer-service sections run in order and stop on errors.",
-          command,
-        },
-      ],
+      compactMode,
+      steps: compactMode ? compactSteps : regularSteps,
       });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);

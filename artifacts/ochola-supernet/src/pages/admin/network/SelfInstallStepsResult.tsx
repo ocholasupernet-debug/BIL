@@ -2,7 +2,7 @@ import React from "react";
 import { AlertTriangle, Check, CheckCircle2, Clipboard, Download, ShieldCheck, TerminalSquare } from "lucide-react";
 import "./SelfInstallStepsResult.css";
 
-type StepId = "mainhotspot";
+type StepId = "mainhotspot" | "network" | "vpn" | "services";
 
 type SelfInstallStep = {
   id: StepId;
@@ -11,10 +11,12 @@ type SelfInstallStep = {
   fileName: string;
   description: string;
   command: string;
+  sizeBytes?: number;
 };
 
 type SelfInstallStepsResultProps = {
   steps: SelfInstallStep[];
+  compactMode?: boolean;
   copiedStep: StepId | null;
   busy: string;
   onCopy: (stepId: StepId) => void;
@@ -23,6 +25,7 @@ type SelfInstallStepsResultProps = {
 
 export function SelfInstallStepsResult({
   steps,
+  compactMode = false,
   copiedStep,
   busy,
   onCopy,
@@ -33,9 +36,11 @@ export function SelfInstallStepsResult({
       <header className="self-install-result__header">
         <div>
           <p className="self-install-result__eyebrow">Router configuration · Authenticated download</p>
-          <h3 id="self-install-result-heading">Your setup file is ready</h3>
+          <h3 id="self-install-result-heading">{compactMode ? "Compact setup stages are ready" : "Your setup file is ready"}</h3>
           <p className="self-install-result__intro">
-            Download the file, upload it to the router, then run the import command.
+            {compactMode
+              ? "Run each smaller file in order. The next stage should start only after the previous one completes."
+              : "Download the file, upload it to the router, then run the import command."}
           </p>
         </div>
         <span className="self-install-result__ready">
@@ -49,14 +54,16 @@ export function SelfInstallStepsResult({
           <ShieldCheck size={18} aria-hidden="true" />
         </span>
         <span>
-            <strong>No public script URL</strong>
-            <span>The fetch URL has been removed. Download the setup file from this signed-in admin page.</span>
+            <strong>Short-lived protected fetch links</strong>
+            <span>{compactMode
+              ? "Each ordered stage uses a short-lived, limited-use router link. HTTPS certificate verification stays enabled."
+              : "The command uses a temporary limited-use link. The setup file is also available from this signed-in admin page."}</span>
         </span>
       </div>
 
       <div className="self-install-result__list-heading">
-        <h4>Import after uploading the file</h4>
-        <span>One local import command</span>
+        <h4>{compactMode ? "Run stages in this order" : "Import after uploading the file"}</h4>
+        <span>{compactMode ? "Network → VPN/API → services" : "One setup command"}</span>
       </div>
 
       <div className="self-install-result__steps">
@@ -67,7 +74,10 @@ export function SelfInstallStepsResult({
                 <span className="self-install-result__number">{String(step.order).padStart(2, "0")}</span>
                 <span>
                   <strong>{step.title}</strong>
-                  <code>{step.fileName}</code>
+                  <code>
+                    {step.fileName}
+                    {typeof step.sizeBytes === "number" ? ` · ${(step.sizeBytes / 1024).toFixed(1)} KB` : ""}
+                  </code>
                 </span>
               </div>
             </div>
@@ -85,10 +95,10 @@ export function SelfInstallStepsResult({
                     type="button"
                     onClick={() => onDownload(step.id)}
                     disabled={busy !== ""}
-                    aria-label="Download mainhotspot.rsc"
+                    aria-label={`Download ${step.fileName}`}
                   >
                     <Download size={14} aria-hidden="true" />
-                    Download RSC
+                    Download file
                   </button>
                   <button
                     className="self-install-result__button self-install-result__button--primary"
@@ -114,12 +124,17 @@ export function SelfInstallStepsResult({
 
       <div className="self-install-result__warning">
         <AlertTriangle size={16} aria-hidden="true" />
-        <span><strong>Upload mainhotspot.rsc first.</strong> The file contains router credentials; keep it private and remove it after installation.</span>
+        <span>
+          <strong>{compactMode ? "Keep the stages separate and ordered." : "Upload mainhotspot.rsc first."}</strong>{" "}
+          These files contain router-specific configuration and credentials. Keep them private and remove them after installation.
+        </span>
       </div>
 
       <p className="self-install-result__footnote" aria-live="polite">
         <CheckCircle2 size={14} aria-hidden="true" />
-        After upload, run the import command. The bundle executes network, VPN/API, and service setup in order, stopping on errors.
+        {compactMode
+          ? "Each command downloads and imports only its own stage, records completion, and stops on errors. A failed stage can be retried without rerunning completed stages."
+          : "After upload, run the import command. The bundle executes network, VPN/API, and service setup in order, stopping on errors."}
       </p>
     </section>
   );
