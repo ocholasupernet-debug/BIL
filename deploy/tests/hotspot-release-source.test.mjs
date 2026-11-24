@@ -208,7 +208,7 @@ test("SSH transfer and deployment retain the verified VPS fingerprint", () => {
   const workflow = source(".github/workflows/deploy.yml");
   const remoteSteps = workflow.split("\n      - name:").filter(step =>
     /^\s+uses: appleboy\/(?:scp|ssh)-action@/m.test(step));
-  assert.equal(remoteSteps.length, 3);
+  assert.equal(remoteSteps.length, 5);
   for (const step of remoteSteps) {
     assert.match(step, /^\s+fingerprint: "SHA256:XlSA4l6O\/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"$/m);
   }
@@ -260,7 +260,7 @@ test("Gmail app password is encoded before SSH transfer and decoded only on the 
 
 test("release retains the tenant-branded admin login instead of the legacy page", () => {
   const login = web("src/pages/admin/AdminLogin.tsx");
-  assert.ok(login.includes("OCHOLA ISP"));
+  assert.ok(login.includes("OCHOLASUPERNET ISP"));
   assert.ok(login.includes("tenantBranding.ispName"));
   assert.ok(login.includes("OCHOLASUPERNET ISP"));
 });
