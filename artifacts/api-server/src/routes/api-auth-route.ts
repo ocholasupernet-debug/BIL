@@ -26,7 +26,22 @@ import { registerAccount } from "../controllers/auth-controller.js";
 import { logger } from "../lib/logger.js";
 import { verifyAdminTurnstile } from "../lib/turnstile.js";
 import { recordWhatsAppSignInFailure, type WhatsAppLoginAccountType } from "../services/whatsapp/whatsapp-service.js";
-import { getPageAuthMethod, isSupportedPasswordReauthFeature, recordPlatformAuthAudit } from "../lib/platform-auth-security.js";
+import {
+  getPageAuthMethod,
+  isOtpChannelEnabled,
+  isSupportedPasswordReauthFeature,
+  recordPlatformAuthAudit,
+} from "../lib/platform-auth-security.js";
+import { getPlatformEmailStatus } from "../lib/platform-email.js";
+import { isSmsFeatureEnabled, getSmsSecretsStatus, getSmsSettings, normalizeSmsPhone } from "../services/sms/sms-service.js";
+import {
+  allowIspAdminPasswordRecoveryLookup,
+  consumeIspAdminPasswordRecoveryToken,
+  issueIspAdminPasswordRecovery,
+  maskIspAdminRecoveryEmail,
+  maskIspAdminRecoveryPhone,
+  verifyIspAdminPasswordRecoveryCode,
+} from "../services/isp-admin-password-recovery.js";
 import {
   EmailRegistrationOtpRateLimitError,
   isEmailRegistrationChallengeId,
@@ -94,6 +109,72 @@ const SA_PASSWORD = process.env.SUPERADMIN_PASSWORD ?? "";
 
 function getIspSubdomain(req: Request): string {
   return getTenantSubdomainFromRequest(req) ?? "";
+}
+
+function getRequestedAdminRecoverySubdomain(req: Request): string {
+  const hostSubdomain = getIspSubdomain(req);
+  if (hostSubdomain) return hostSubdomain;
+  const requested = typeof req.body?.subdomain === "string"
+    ? req.body.subdomain.trim().toLowerCase()
+    : "";
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(requested)
+    && !RESERVED_SUBDOMAINS.has(requested)
+    ? requested
+    : "";
+}
+
+function validAdminRecoveryUsername(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,64}$/.test(value.trim());
+}
+
+async function findAdminRecoveryTarget(req: Request, username: string): Promise<{
+  tenantAdminId: number;
+  admin: Record<string, unknown>;
+} | null> {
+  const subdomain = getRequestedAdminRecoverySubdomain(req);
+  if (!subdomain) return null;
+  const tenants = await sbSelectStrict<Record<string, unknown>>(
+    "isp_admins",
+    `subdomain=eq.${encodeURIComponent(subdomain)}&is_active=is.true&select=id,role&limit=1`,
+  );
+  const tenantAdminId = Number(tenants[0]?.id);
+  if (!Number.isSafeInteger(tenantAdminId) || tenantAdminId <= 0) return null;
+  const rows = await sbSelectStrict<Record<string, unknown>>(
+    "isp_admins",
+    `username=eq.${encodeURIComponent(username.trim())}&is_active=is.true&or=(id.eq.${tenantAdminId},parent_id.eq.${tenantAdminId})&select=id,parent_id,subdomain,username,role,email,phone,phone_e164,auth_version&limit=3`,
+  );
+  const matches = rows.filter(row =>
+    (Number(row.id) === tenantAdminId || Number(row.parent_id) === tenantAdminId)
+    && (row.role === "isp_admin" || row.role === "reseller"),
+  );
+  return matches.length === 1 ? { tenantAdminId, admin: matches[0] } : null;
+}
+
+async function getAdminRecoveryOptions(admin: Record<string, unknown>): Promise<{
+  email?: { masked: string };
+  phone?: { masked: string };
+}> {
+  const options: { email?: { masked: string }; phone?: { masked: string } } = {};
+  const email = typeof admin.email === "string" ? admin.email.trim().toLowerCase() : "";
+  if (getPlatformEmailStatus().configured) {
+    const masked = maskIspAdminRecoveryEmail(email);
+    if (masked) options.email = { masked };
+  }
+  const [settings, smsSecrets, otpEnabled] = await Promise.all([
+    getSmsSettings(),
+    getSmsSecretsStatus(),
+    isOtpChannelEnabled("sms"),
+  ]);
+  const phoneValue = typeof admin.phone_e164 === "string" && admin.phone_e164.trim()
+    ? admin.phone_e164
+    : typeof admin.phone === "string" ? admin.phone : "";
+  const phone = otpEnabled && isSmsFeatureEnabled(settings, "passwordRecovery")
+    && smsSecrets.apiKeyConfigured && settings.username
+    ? normalizeSmsPhone(phoneValue, settings.defaultCountryCode)
+    : null;
+  const maskedPhone = phone ? maskIspAdminRecoveryPhone(phone) : null;
+  if (maskedPhone) options.phone = { masked: maskedPhone };
+  return options;
 }
 
 function sendInvalidCredentials(res: Response): void {
@@ -187,6 +268,219 @@ router.post("/auth/email-registration/verify-otp", async (req: Request, res: Res
       ok: false,
       error: "Email verification is currently unavailable. Please try again later.",
     });
+  }
+});
+
+router.post("/auth/admin/password-recovery/options", async (req: Request, res: Response): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  const turnstile = await verifyAdminTurnstile(req, "admin_password_recovery");
+  if (!turnstile.ok) {
+    res.status(turnstile.status).json({ ok: false, error: turnstile.error });
+    return;
+  }
+  const username = req.body?.username;
+  if (!validAdminRecoveryUsername(username)) {
+    res.json({ ok: true, options: {} });
+    return;
+  }
+  try {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    if (!await allowIspAdminPasswordRecoveryLookup(ip)) {
+      res.status(429).json({ ok: false, error: "Please wait before trying account recovery again." });
+      return;
+    }
+    const target = await findAdminRecoveryTarget(req, username);
+    res.json({
+      ok: true,
+      options: target ? await getAdminRecoveryOptions(target.admin) : {},
+    });
+  } catch (error) {
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[auth] ISP admin recovery options lookup failed",
+    );
+    res.status(503).json({ ok: false, error: "Recovery options are temporarily unavailable." });
+  }
+});
+
+router.post("/auth/admin/password-recovery/request-code", async (req: Request, res: Response): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  const turnstile = await verifyAdminTurnstile(req, "admin_password_recovery");
+  if (!turnstile.ok) {
+    res.status(turnstile.status).json({ ok: false, error: turnstile.error });
+    return;
+  }
+  const username = req.body?.username;
+  const channel = req.body?.channel;
+  if (!validAdminRecoveryUsername(username) || (channel !== "email" && channel !== "phone")) {
+    res.status(400).json({ ok: false, error: "Enter your username and choose a recovery method." });
+    return;
+  }
+  const genericMessage = "If the username and recovery method match an account, a reset code will be sent.";
+  try {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    if (!await allowIspAdminPasswordRecoveryLookup(ip)) {
+      res.status(429).json({ ok: false, error: "Please wait before trying account recovery again." });
+      return;
+    }
+    const target = await findAdminRecoveryTarget(req, username);
+    if (!target) {
+      res.status(202).json({ ok: true, challengeId: null, message: genericMessage });
+      return;
+    }
+    const options = await getAdminRecoveryOptions(target.admin);
+    if (channel === "email" && !options.email) {
+      res.status(202).json({ ok: true, challengeId: null, message: genericMessage });
+      return;
+    }
+    if (channel === "phone" && !options.phone) {
+      res.status(202).json({ ok: true, challengeId: null, message: genericMessage });
+      return;
+    }
+    const storedPhone = typeof target.admin.phone_e164 === "string" && target.admin.phone_e164.trim()
+      ? target.admin.phone_e164
+      : String(target.admin.phone ?? "");
+    const destination = channel === "email"
+      ? String(target.admin.email ?? "").trim().toLowerCase()
+      : normalizeSmsPhone(storedPhone, (await getSmsSettings()).defaultCountryCode) ?? "";
+    if (!destination) {
+      res.status(202).json({ ok: true, challengeId: null, message: genericMessage });
+      return;
+    }
+    const issued = await issueIspAdminPasswordRecovery({
+      tenantAdminId: target.tenantAdminId,
+      targetAdminId: Number(target.admin.id),
+      channel,
+      destination,
+      requestIp: ip,
+    });
+    if (issued.outcome === "limited") {
+      res.status(202).json({ ok: true, challengeId: null, message: genericMessage });
+      return;
+    }
+    if (issued.outcome !== "sent") {
+      res.status(202).json({ ok: true, challengeId: null, message: genericMessage });
+      return;
+    }
+    res.status(202).json({
+      ok: true,
+      challengeId: issued.challengeId,
+      expiresInSeconds: issued.expiresInSeconds,
+      maskedDestination: channel === "email"
+        ? maskIspAdminRecoveryEmail(destination)
+        : maskIspAdminRecoveryPhone(destination),
+      message: "A reset code was sent to the selected registered contact.",
+    });
+  } catch (error) {
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[auth] ISP admin recovery code request failed",
+    );
+    res.status(503).json({ ok: false, error: "The reset code could not be delivered. Please try again later." });
+  }
+});
+
+router.post("/auth/admin/password-recovery/verify-code", async (req: Request, res: Response): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  try {
+    const resetToken = await verifyIspAdminPasswordRecoveryCode({
+      challengeId: String(req.body?.challengeId ?? ""),
+      code: String(req.body?.code ?? ""),
+    });
+    if (!resetToken) {
+      res.status(401).json({ ok: false, error: "The code is invalid or expired. Request a new one." });
+      return;
+    }
+    res.json({ ok: true, resetToken });
+  } catch (error) {
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[auth] ISP admin recovery code verification failed",
+    );
+    res.status(503).json({ ok: false, error: "The code could not be verified. Please try again." });
+  }
+});
+
+router.post("/auth/admin/password-recovery/reset-password", async (req: Request, res: Response): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (password.length < 6 || password.length > 256 || password.toLowerCase() === "admin") {
+    res.status(400).json({ ok: false, error: "Choose a new password with at least 6 characters." });
+    return;
+  }
+  const subdomain = getRequestedAdminRecoverySubdomain(req);
+  if (!subdomain) {
+    res.status(401).json({ ok: false, error: "The reset request is invalid or expired." });
+    return;
+  }
+  try {
+    const tenants = await sbSelectStrict<Record<string, unknown>>(
+      "isp_admins",
+      `subdomain=eq.${encodeURIComponent(subdomain)}&is_active=is.true&select=id&limit=1`,
+    );
+    const tenantAdminId = Number(tenants[0]?.id);
+    if (!Number.isSafeInteger(tenantAdminId) || tenantAdminId <= 0) {
+      res.status(401).json({ ok: false, error: "The reset request is invalid or expired." });
+      return;
+    }
+    const targetAdminId = await consumeIspAdminPasswordRecoveryToken({
+      tenantAdminId,
+      resetToken: String(req.body?.resetToken ?? ""),
+    });
+    if (!targetAdminId) {
+      res.status(401).json({ ok: false, error: "The reset request is invalid or expired." });
+      return;
+    }
+    const admins = await sbSelectStrict<Record<string, unknown>>(
+      "isp_admins",
+      `id=eq.${targetAdminId}&is_active=is.true&or=(id.eq.${tenantAdminId},parent_id.eq.${tenantAdminId})&select=id,username,role,auth_version,must_change_password&limit=1`,
+    );
+    const admin = admins[0];
+    if (!admin || (admin.role !== "isp_admin" && admin.role !== "reseller")) {
+      res.status(401).json({ ok: false, error: "The reset request is invalid or expired." });
+      return;
+    }
+    const currentVersion = Number(admin.auth_version ?? 1);
+    const nextVersion = currentVersion + 1;
+    const versionFilter = admin.auth_version === null || admin.auth_version === undefined
+      ? "auth_version=is.null"
+      : `auth_version=eq.${encodeURIComponent(String(admin.auth_version))}`;
+    const updated = await sbUpdateStrict(
+      "isp_admins",
+      `id=eq.${targetAdminId}&is_active=is.true&${versionFilter}`,
+      {
+        password: await hashIspAdminPassword(password),
+        must_change_password: false,
+        auth_version: nextVersion,
+        updated_at: new Date().toISOString(),
+      },
+    );
+    if (!updated[0]) {
+      res.status(409).json({ ok: false, error: "The account changed during this reset. Request a new code." });
+      return;
+    }
+    try {
+      await recordPlatformAuthAudit({
+        actorName: String(admin.username ?? targetAdminId),
+        action: "admin_password_reset",
+        targetAdminId,
+        details: { channel: "verified_recovery_code" },
+        sourceIp: req.ip ?? req.socket.remoteAddress,
+        userAgent: req.get("user-agent"),
+      });
+    } catch (auditError) {
+      logger.error(
+        { errorType: auditError instanceof Error ? auditError.name : "unknown" },
+        "[auth] ISP admin password reset audit write failed",
+      );
+    }
+    res.json({ ok: true, message: "Password updated. Sign in with your new password." });
+  } catch (error) {
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[auth] ISP admin recovery password update failed",
+    );
+    res.status(503).json({ ok: false, error: "Your password could not be updated safely. Request a new code or contact your system administrator." });
   }
 });
 
@@ -493,18 +787,18 @@ router.post("/auth/admin/change-password", requireAdmin(), async (req: Request, 
 });
 
 router.post("/auth/admin/login", async (req: Request, res: Response): Promise<void> => {
-  const { username, email, password, api_key, subdomain } = req.body as {
-    username?: string; email?: string; password?: string; api_key?: string; subdomain?: string;
+  const { username, password, api_key, subdomain } = req.body as {
+    username?: string; password?: string; api_key?: string; subdomain?: string;
   };
   const turnstile = await verifyAdminTurnstile(req, "admin_login");
   if (!turnstile.ok) {
     res.status(turnstile.status).json({ ok: false, error: turnstile.error });
     return;
   }
-  const identity = (typeof username === "string" ? username : email ?? "").trim();
+  const identity = typeof username === "string" ? username.trim() : "";
 
-  if (!identity || !password) {
-    res.status(400).json({ ok: false, error: "email or username and password are required" });
+  if (!identity || identity.includes("@") || !password) {
+    res.status(400).json({ ok: false, error: "username and password are required" });
     return;
   }
   if (!apiTokenSigningConfigured) {
@@ -542,7 +836,7 @@ router.post("/auth/admin/login", async (req: Request, res: Response): Promise<vo
   const tenantId = tenantRows[0]?.id;
   const rows = await sbSelect<Record<string, unknown>>(
     "isp_admins",
-    `or=(username.eq.${encodeURIComponent(identity)},email.eq.${encodeURIComponent(identity)})&select=id,name,username,password,fullname,email,role,is_active,subdomain,parent_id,company_name,earnings_balance,area,currency,must_change_password,auth_version&limit=100`,
+    `username=eq.${encodeURIComponent(identity)}&select=id,name,username,password,fullname,email,role,is_active,subdomain,parent_id,company_name,earnings_balance,area,currency,must_change_password,auth_version&limit=100`,
   );
   const admin = tenantId
     ? rows.find((row) => Number(row.id) === tenantId || Number(row.parent_id) === tenantId)

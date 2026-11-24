@@ -35,17 +35,12 @@ test("the member login renders username, password, and a separate admin link", (
   assert.match(html, /type="text"[^>]*name="username"|name="username"[^>]*type="text"/);
   assert.match(html, /name="password"/);
   assert.match(html, /href="\/admin\/login"/);
-  assert.match(html, /Forgot password\?/);
+  assert.doesNotMatch(html, /Forgot password\?/);
   assert.doesNotMatch(html, /name="email"|ISPLATTY\.ISP|Need a member account|isplatty\.com|isplatty\.org/i);
 });
 
-test("Hotspot member recovery keeps contact values masked and credentials in memory only", () => {
-  assert.match(memberLoginSource, /hotspot-password-recovery\/options/);
-  assert.match(memberLoginSource, /hotspot-password-recovery\/request-code/);
-  assert.match(memberLoginSource, /hotspot-password-recovery\/verify-code/);
-  assert.match(memberLoginSource, /hotspot-password-recovery\/reset-password/);
-  assert.match(memberLoginSource, /Email <strong>\{recoveryOptions\.email\.masked\}<\/strong>/);
-  assert.match(memberLoginSource, /Phone <strong>\{recoveryOptions\.phone\.masked\}<\/strong>/);
+test("Hotspot member sign-in does not expose the misplaced administrator recovery flow", () => {
+  assert.doesNotMatch(memberLoginSource, /Forgot password\?/);
+  assert.match(memberLoginSource, /href="\/admin\/login"/);
   assert.doesNotMatch(memberLoginSource, /localStorage|sessionStorage/);
-  assert.doesNotMatch(memberLoginSource, /ISPLATTY\.ISP|isplatty\.com|isplatty\.org/i);
 });

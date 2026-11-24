@@ -59,7 +59,10 @@ export function maskIspAdminRecoveryEmail(value: string): string | null {
   const local = email.slice(0, at);
   const domain = email.slice(at + 1);
   if (!/^[^\s@]+$/.test(local) || !/^[^\s@.]+(?:\.[^\s@.]+)+$/.test(domain)) return null;
-  return `${local[0]}****${local.at(-1)}@${domain}`;
+  const maskedLocal = local.length === 1
+    ? `${local[0]}***`
+    : `${local[0]}****${local.at(-1)}`;
+  return `${maskedLocal}@${domain}`;
 }
 
 export function maskIspAdminRecoveryPhone(value: string): string | null {
@@ -104,7 +107,7 @@ export async function issueIspAdminPasswordRecovery(input: {
   try {
     if (input.channel === "email") {
       await sendPlatformEmail({
-        fromName: "ISP Administrator Security",
+        fromName: "OcholaSupernet Billing Security",
         to: input.destination,
         subject: "Your ISP administrator password reset code",
         text: [

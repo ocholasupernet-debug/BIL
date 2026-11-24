@@ -3390,6 +3390,10 @@ async function enforceHotspotRecoveryLookupLimit(req: Request, res: Response): P
   }
 }
 
+router.use("/customers/hotspot-password-recovery", (_req, res) => {
+  res.status(404).json({ ok: false, error: "Not found." });
+});
+
 router.post("/customers/hotspot-password-recovery/options", async (req, res): Promise<void> => {
   res.set("Cache-Control", "no-store");
   if (!await enforceHotspotRecoveryLookupLimit(req, res)) return;

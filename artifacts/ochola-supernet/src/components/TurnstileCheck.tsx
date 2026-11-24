@@ -48,6 +48,7 @@ export function TurnstileCheck({
 }: {
   action:
     | "admin_login"
+    | "admin_password_recovery"
     | "staff_login"
     | "staff_login_otp"
     | "staff_activate"

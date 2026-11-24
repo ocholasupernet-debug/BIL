@@ -351,9 +351,6 @@ export default function HotspotMemberLogin() {
             <button type="submit" disabled={submitting} style={buttonStyle(submitting)}>
               {submitting ? "Signing in…" : "Login"}
             </button>
-            <button type="button" onClick={beginRecovery} style={textButtonStyle}>
-              Forgot password?
-            </button>
             {recoveryMessage && <div role="status" style={noticeStyle}>{recoveryMessage}</div>}
           </form>
         ) : (

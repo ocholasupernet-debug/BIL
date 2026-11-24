@@ -25,6 +25,7 @@ export async function verifyTurnstile(
   req: Request,
   expectedAction:
     | "admin_login"
+    | "admin_password_recovery"
     | "staff_login"
     | "staff_login_otp"
     | "staff_activate"
@@ -96,7 +97,7 @@ export async function verifyTurnstile(
 
 export function verifyAdminTurnstile(
   req: Request,
-  expectedAction: "admin_login",
+  expectedAction: "admin_login" | "admin_password_recovery",
 ): Promise<TurnstileResult> {
   return verifyTurnstile(req, expectedAction);
 }

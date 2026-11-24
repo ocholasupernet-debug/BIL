@@ -4,7 +4,7 @@ import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Wifi } from "lucide-r
 import { clearAdminAuth, clearPasswordSetupToken, setAdminAuth, setPasswordSetupToken } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-client";
 import { getHostSubdomain } from "@/lib/subdomain";
-import { PUBLIC_BASE_DOMAIN, tenantHostname } from "@/lib/public-domain";
+import { PUBLIC_BASE_DOMAIN } from "@/lib/public-domain";
 import { INITIAL_ADMIN_PASSWORD, INITIAL_ADMIN_USERNAME } from "@/lib/initial-admin-credentials";
 import { TurnstileCheck } from "@/components/TurnstileCheck";
 
@@ -12,6 +12,11 @@ interface CompanyInfo {
   id: number;
   name: string;
   subdomain: string;
+}
+
+interface AdminRecoveryOptions {
+  email?: { masked: string };
+  phone?: { masked: string };
 }
 
 export default function AdminLogin() {
@@ -28,15 +33,13 @@ export default function AdminLogin() {
   const [isLoading, setIsLoading]       = useState(false);
   const [error, setError]               = useState("");
   const [whatsappLoginEnabled, setWhatsappLoginEnabled] = useState(false);
-  const [whatsappRecoveryEnabled, setWhatsappRecoveryEnabled] = useState(false);
   const [smsLoginEnabled, setSmsLoginEnabled] = useState(false);
-  const [smsRecoveryEnabled, setSmsRecoveryEnabled] = useState(false);
   const [loginMethod, setLoginMethod] = useState<"password" | "whatsapp" | "sms" | "recovery">("password");
   const [otpChannel, setOtpChannel] = useState<"whatsapp" | "sms">("whatsapp");
   const [whatsappPhone, setWhatsappPhone] = useState("");
   const [otpChallengeId, setOtpChallengeId] = useState("");
   const [otpCode, setOtpCode] = useState("");
-  const [otpPurpose, setOtpPurpose] = useState<"login" | "recovery">("login");
+  const [otpPurpose, setOtpPurpose] = useState<"login">("login");
   const [otpLoading, setOtpLoading] = useState(false);
   const [otpNotice, setOtpNotice] = useState("");
   const [resendWait, setResendWait] = useState(0);
@@ -47,6 +50,10 @@ export default function AdminLogin() {
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [resetToken, setResetToken] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [recoveryUsername, setRecoveryUsername] = useState("");
+  const [recoveryOptions, setRecoveryOptions] = useState<AdminRecoveryOptions>({});
+  const [recoveryChannel, setRecoveryChannel] = useState<"email" | "phone">("email");
   const [recoveryStage, setRecoveryStage] = useState<"request" | "verify" | "password">("request");
   const sessionExpired = typeof window !== "undefined"
     && new URLSearchParams(window.location.search).get("session") === "expired";
@@ -103,9 +110,7 @@ export default function AdminLogin() {
         .catch(() => null),
     ]).then(([whatsapp, sms]) => {
       setWhatsappLoginEnabled(whatsapp?.loginEnabled === true);
-      setWhatsappRecoveryEnabled(whatsapp?.passwordRecoveryEnabled === true);
       setSmsLoginEnabled(sms?.loginEnabled === true);
-      setSmsRecoveryEnabled(sms?.passwordRecoveryEnabled === true);
     });
   }, []);
 
@@ -116,7 +121,7 @@ export default function AdminLogin() {
   }, [resendWait]);
 
   const requestOtpCode = async (
-    purpose: "login" | "recovery",
+    purpose: "login",
     channel: "whatsapp" | "sms" = otpChannel,
   ) => {
     setError("");
@@ -144,7 +149,6 @@ export default function AdminLogin() {
       setOtpPurpose(purpose);
       setOtpCode("");
       setResendWait(Number(data.resendAfterSeconds) || 60);
-      if (purpose === "recovery") setRecoveryStage("verify");
       setOtpNotice(data.message || `If eligible, a code will be sent by ${channel === "sms" ? "SMS" : "WhatsApp"}.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not request a verification code.");
@@ -174,12 +178,6 @@ export default function AdminLogin() {
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "The code is invalid or expired.");
 
-      if (otpPurpose === "recovery") {
-        if (!data.resetToken) throw new Error("Could not start password recovery. Request a new code.");
-        setResetToken(data.resetToken);
-        setRecoveryStage("password");
-        return;
-      }
       const admin = data.admin as {
         id: number;
         name?: string;
@@ -213,21 +211,170 @@ export default function AdminLogin() {
       setError(cause instanceof Error ? cause.message : "Phone verification failed.");
     } finally {
       setOtpLoading(false);
-      if (otpPurpose === "login") {
-        turnstileTokenRef.current = "";
-        setTurnstileResetKey((key) => key + 1);
+      turnstileTokenRef.current = "";
+      setTurnstileResetKey((key) => key + 1);
+    }
+  };
+
+  const startAdminRecovery = () => {
+    setLoginMethod("recovery");
+    turnstileTokenRef.current = "";
+    setTurnstileResetKey(key => key + 1);
+    setRecoveryStage("request");
+    setRecoveryUsername(username.trim());
+    setRecoveryOptions({});
+    setOtpChallengeId("");
+    setOtpCode("");
+    setResetToken("");
+    setNewPassword("");
+    setConfirmNewPassword("");
+    setError("");
+    setOtpNotice("");
+  };
+
+  const loadAdminRecoveryOptions = async () => {
+    setError("");
+    setOtpNotice("");
+    if (!recoveryUsername.trim()) {
+      setError("Enter your administrator username.");
+      return;
+    }
+    if (!turnstileTokenRef.current) {
+      setError("Complete Cloudflare verification before checking recovery options.");
+      return;
+    }
+    setOtpLoading(true);
+    try {
+      const response = await fetch(apiUrl("/api/auth/admin/password-recovery/options"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: recoveryUsername.trim(),
+          subdomain: (hostSubdomain || companySubdomain).trim().toLowerCase(),
+          turnstileToken: turnstileTokenRef.current,
+        }),
+        cache: "no-store",
+      });
+      const data = await response.json() as {
+        ok?: boolean;
+        error?: string;
+        options?: AdminRecoveryOptions;
+      };
+      if (!response.ok || !data.ok) throw new Error(data.error || "Recovery options are unavailable.");
+      const options = data.options ?? {};
+      setRecoveryOptions(options);
+      setRecoveryChannel(options.email ? "email" : "phone");
+      if (!options.email && !options.phone) {
+        setOtpNotice("No recovery method is available for that username. Contact your system administrator.");
       }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Recovery options are unavailable.");
+    } finally {
+      setOtpLoading(false);
+      turnstileTokenRef.current = "";
+      setTurnstileResetKey(key => key + 1);
+    }
+  };
+
+  const requestAdminRecoveryCode = async () => {
+    setError("");
+    setOtpNotice("");
+    if (!turnstileTokenRef.current) {
+      setError("Complete Cloudflare verification before requesting a reset code.");
+      return;
+    }
+    setOtpLoading(true);
+    try {
+      const response = await fetch(apiUrl("/api/auth/admin/password-recovery/request-code"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: recoveryUsername.trim(),
+          channel: recoveryChannel,
+          subdomain: (hostSubdomain || companySubdomain).trim().toLowerCase(),
+          turnstileToken: turnstileTokenRef.current,
+        }),
+        cache: "no-store",
+      });
+      const data = await response.json() as {
+        ok?: boolean;
+        error?: string;
+        challengeId?: string | null;
+        maskedDestination?: string | null;
+        message?: string;
+      };
+      if (!response.ok || !data.ok) throw new Error(data.error || "The reset code could not be sent.");
+      if (!data.challengeId) {
+        setOtpNotice(data.message || "If the username and recovery method match an account, a reset code will be sent.");
+        return;
+      }
+      setOtpChallengeId(data.challengeId);
+      setOtpCode("");
+      setRecoveryStage("verify");
+      setOtpNotice(data.maskedDestination
+        ? `A reset code was sent to ${data.maskedDestination}.`
+        : "A reset code was sent to the selected registered contact.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The reset code could not be sent.");
+    } finally {
+      setOtpLoading(false);
+      turnstileTokenRef.current = "";
+      setTurnstileResetKey(key => key + 1);
+    }
+  };
+
+  const verifyAdminRecoveryCode = async () => {
+    setError("");
+    setOtpNotice("");
+    if (!otpChallengeId || !/^\d{6}$/.test(otpCode)) {
+      setError("Enter the six-digit code sent to your registered contact.");
+      return;
+    }
+    setOtpLoading(true);
+    try {
+      const response = await fetch(apiUrl("/api/auth/admin/password-recovery/verify-code"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeId: otpChallengeId, code: otpCode }),
+        cache: "no-store",
+      });
+      const data = await response.json() as { ok?: boolean; error?: string; resetToken?: string };
+      if (!response.ok || !data.ok || !data.resetToken) {
+        throw new Error(data.error || "The code is invalid or expired.");
+      }
+      setResetToken(data.resetToken);
+      setOtpCode("");
+      setRecoveryStage("password");
+      setOtpNotice("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The code could not be verified.");
+    } finally {
+      setOtpLoading(false);
     }
   };
 
   const saveRecoveredPassword = async () => {
     setError("");
+    setOtpNotice("");
+    if (newPassword.length < 6 || newPassword.length > 256 || newPassword.toLowerCase() === "admin") {
+      setError("Choose a new password with at least 6 characters.");
+      return;
+    }
+    if (newPassword !== confirmNewPassword) {
+      setError("The passwords do not match.");
+      return;
+    }
+    if (!resetToken) {
+      setError("Verify a reset code before choosing a new password.");
+      return;
+    }
     setOtpLoading(true);
     try {
-      const response = await fetch(`/api/auth/${otpChannel}/reset-password`, {
+      const response = await fetch(apiUrl("/api/auth/admin/password-recovery/reset-password"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ resetToken, password: newPassword }),
+        cache: "no-store",
       });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || "Password could not be reset.");
@@ -236,6 +383,9 @@ export default function AdminLogin() {
       setRecoveryStage("request");
       setResetToken("");
       setNewPassword("");
+      setConfirmNewPassword("");
+      setPassword("");
+      setRecoveryOptions({});
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Password could not be reset.");
     } finally {
@@ -253,7 +403,7 @@ export default function AdminLogin() {
      if (!username.trim() || !password.trim()) {
        setError(firstLogin
          ? "Enter the admin username and temporary password."
-         : "Please enter your email or username and password.");
+          : "Please enter your username and password.");
       return;
     }
     setIsLoading(true);
@@ -281,7 +431,7 @@ export default function AdminLogin() {
         return;
       }
       const admin = apiSession.admin;
-      if (company && (admin.id !== company.id || (admin.username !== username.trim() && admin.email !== username.trim().toLowerCase()))) {
+      if (company && (admin.id !== company.id || admin.username !== username.trim())) {
         setError("Invalid username or password.");
         return;
       }
@@ -323,12 +473,6 @@ export default function AdminLogin() {
     /^https:\/\//i.test(tenantBranding.logoUrl) ||
     /^data:image\/(?:png|jpeg|webp);base64,/i.test(tenantBranding.logoUrl)
   ) ? tenantBranding.logoUrl : "";
-  const displayDomain = hostSubdomain && typeof window !== "undefined"
-    ? window.location.hostname.toLowerCase()
-    : company
-      ? tenantHostname(company.subdomain)
-      : PUBLIC_BASE_DOMAIN;
-
   const inputStyle: React.CSSProperties = {
     width: "100%", paddingLeft: 38, paddingRight: 14,
     paddingTop: 11, paddingBottom: 11,
@@ -447,8 +591,6 @@ export default function AdminLogin() {
              ) : (
                <div className="admin-login-mark" aria-hidden="true"><Wifi size={30} strokeWidth={1.8} /></div>
              )}
-              <span className="admin-login-product">ISPLATTY <span>· ISP ADMIN</span></span>
-             <div className="admin-login-domain">{displayDomain}</div>
            </div>
 
           <h1 style={{
@@ -461,7 +603,7 @@ export default function AdminLogin() {
               Secure administrator sign in
           </p>
 
-          {(whatsappLoginEnabled || smsLoginEnabled || whatsappRecoveryEnabled || smsRecoveryEnabled) && (
+          {(whatsappLoginEnabled || smsLoginEnabled) && (
              <div role="group" aria-label="Choose sign-in method" style={{ display: "flex", gap: 8, marginBottom: 18 }}>
               <button type="button" onClick={() => { setLoginMethod("password"); setError(""); }} aria-pressed={loginMethod === "password"} style={{ flex: 1, border: "1px solid var(--isp-input-border)", borderRadius: 9, padding: "9px 10px", background: loginMethod === "password" ? "var(--isp-accent-glow)" : "transparent", color: "var(--isp-text)", cursor: "pointer", fontWeight: 600 }}>
                 Use password
@@ -499,7 +641,10 @@ export default function AdminLogin() {
           )}
           {otpNotice && <p role="status" style={{ margin: "0 0 16px", fontSize: "0.83rem", color: "var(--isp-text-muted)" }}>{otpNotice}</p>}
 
-           <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+            <form onSubmit={event => {
+              if (loginMethod === "password") void handleLogin(event);
+              else event.preventDefault();
+            }} style={{ display: "flex", flexDirection: "column", gap: 18 }}>
              {!hostSubdomain && (
                <div>
                   <label htmlFor="admin-company-subdomain" style={{
@@ -537,7 +682,7 @@ export default function AdminLogin() {
                  display: "block", fontSize: "0.88rem", fontWeight: 600,
                 color: "var(--isp-text)", marginBottom: 7,
               }}>
-                  {firstLogin ? "Username" : "Email or username"}
+                  Username
               </label>
               <div style={{ position: "relative" }}>
                 <User size={15} style={{
@@ -550,7 +695,7 @@ export default function AdminLogin() {
                   value={username}
                   onChange={e => setUsername(e.target.value)}
                   readOnly={firstLogin}
-                  placeholder={firstLogin ? INITIAL_ADMIN_USERNAME : "you@yourcompany.com"}
+                  placeholder={firstLogin ? INITIAL_ADMIN_USERNAME : "Enter your username"}
                   autoComplete="username"
                   style={inputStyle}
                   onFocus={e => { e.target.style.borderColor = "var(--isp-accent)"; e.target.style.boxShadow = "0 0 0 3px var(--isp-accent-glow)"; }}
@@ -595,11 +740,9 @@ export default function AdminLogin() {
                 >
                   {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
-                {(whatsappRecoveryEnabled || smsRecoveryEnabled) && (
-                  <button type="button" onClick={() => { setLoginMethod("recovery"); setOtpChannel(smsRecoveryEnabled && !whatsappRecoveryEnabled ? "sms" : "whatsapp"); setRecoveryStage("request"); setOtpChallengeId(""); setResetToken(""); setError(""); setOtpNotice(""); }} style={{ display: "block", marginTop: 8, marginLeft: "auto", padding: 0, border: 0, background: "none", color: "var(--isp-accent)", cursor: "pointer", fontSize: "0.8rem", fontWeight: 600 }}>
+                <button type="button" onClick={startAdminRecovery} style={{ display: "block", marginTop: 8, marginLeft: "auto", padding: 0, border: 0, background: "none", color: "var(--isp-accent)", cursor: "pointer", fontSize: "0.8rem", fontWeight: 600 }}>
                     Forgot password?
-                  </button>
-                )}
+                </button>
                 {(whatsappLoginEnabled || smsLoginEnabled) && (
                   <button
                     type="button"
@@ -620,31 +763,8 @@ export default function AdminLogin() {
               </div>
             </div></>}
 
-            {(loginMethod === "whatsapp" || loginMethod === "sms" || loginMethod === "recovery") && (
+            {(loginMethod === "whatsapp" || loginMethod === "sms") && (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                {loginMethod === "recovery" && whatsappRecoveryEnabled && smsRecoveryEnabled && (
-                  <div>
-                    <label htmlFor="admin-recovery-method" style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>
-                      Recovery method
-                    </label>
-                    <select
-                      id="admin-recovery-method"
-                      value={otpChannel}
-                      onChange={event => {
-                        const channel = event.target.value as "whatsapp" | "sms";
-                        setOtpChannel(channel);
-                        setOtpChallengeId("");
-                        setOtpCode("");
-                        setRecoveryStage("request");
-                        setOtpNotice("");
-                      }}
-                      style={inputStyle}
-                    >
-                      <option value="whatsapp">WhatsApp</option>
-                      <option value="sms">SMS</option>
-                    </select>
-                  </div>
-                )}
                 <div>
                   <label htmlFor="admin-otp-phone" style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>
                     {otpChannel === "sms" ? "SMS phone number" : "WhatsApp phone number"}
@@ -660,19 +780,13 @@ export default function AdminLogin() {
                   />
                 </div>
 
-                {(loginMethod === "whatsapp" || loginMethod === "sms") && !otpChallengeId && (
+                {!otpChallengeId && (
                   <button type="button" onClick={() => void requestOtpCode("login", otpChannel)} disabled={otpLoading} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading ? 0.6 : 1 }}>
                     {otpLoading ? "Requesting code…" : otpChannel === "sms" ? "Continue with SMS" : "Continue with WhatsApp"}
                   </button>
                 )}
 
-                {loginMethod === "recovery" && recoveryStage === "request" && (
-                  <button type="button" onClick={() => void requestOtpCode("recovery", otpChannel)} disabled={otpLoading} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading ? 0.6 : 1 }}>
-                    {otpLoading ? "Requesting code…" : "Send recovery code"}
-                  </button>
-                )}
-
-                {(((loginMethod === "whatsapp" || loginMethod === "sms") && otpChallengeId && otpPurpose === "login") || (loginMethod === "recovery" && recoveryStage === "verify")) && (
+                {otpChallengeId && otpPurpose === "login" && (
                   <>
                     <div>
                       <label htmlFor="admin-otp-code" style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>
@@ -690,29 +804,118 @@ export default function AdminLogin() {
                         style={inputStyle}
                       />
                     </div>
-                    {otpPurpose === "login" && (
-                      <TurnstileCheck
-                        action="admin_login"
-                        resetKey={turnstileResetKey}
-                        onToken={updateTurnstileToken}
-                      />
-                    )}
+                    <TurnstileCheck
+                      action="admin_login"
+                      resetKey={turnstileResetKey}
+                      onToken={updateTurnstileToken}
+                    />
                     <button type="button" onClick={() => void verifyWhatsappCode()} disabled={otpLoading || otpCode.length !== 6} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || otpCode.length !== 6 ? 0.6 : 1 }}>
                       {otpLoading ? "Verifying…" : "Verify code"}
                     </button>
-                    <button type="button" onClick={() => void requestOtpCode(otpPurpose, otpChannel)} disabled={otpLoading || resendWait > 0} style={{ border: 0, background: "none", color: "var(--isp-accent)", cursor: resendWait > 0 ? "default" : "pointer", fontSize: "0.82rem", opacity: resendWait > 0 ? 0.6 : 1 }}>
+                    <button type="button" onClick={() => void requestOtpCode("login", otpChannel)} disabled={otpLoading || resendWait > 0} style={{ border: 0, background: "none", color: "var(--isp-accent)", cursor: resendWait > 0 ? "default" : "pointer", fontSize: "0.82rem", opacity: resendWait > 0 ? 0.6 : 1 }}>
                       {resendWait > 0 ? `Resend code in ${resendWait}s` : "Resend code"}
                     </button>
                   </>
                 )}
+              </div>
+            )}
 
-                {loginMethod === "recovery" && recoveryStage === "password" && (
+            {loginMethod === "recovery" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <button type="button" onClick={() => {
+                  setLoginMethod("password");
+                  turnstileTokenRef.current = "";
+                  setTurnstileResetKey(key => key + 1);
+                  setRecoveryOptions({});
+                  setOtpChallengeId("");
+                  setOtpCode("");
+                  setResetToken("");
+                  setNewPassword("");
+                  setConfirmNewPassword("");
+                  setError("");
+                  setOtpNotice("");
+                }} style={{ alignSelf: "flex-start", border: 0, background: "none", color: "var(--isp-accent)", cursor: "pointer", padding: 0, fontWeight: 600 }}>
+                  ← Back to sign in
+                </button>
+
+                {recoveryStage === "request" && (
                   <>
-                    <div>
-                      <label htmlFor="admin-new-password" style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: 7 }}>New password</label>
-                      <input id="admin-new-password" type="password" autoComplete="new-password" value={newPassword} onChange={event => setNewPassword(event.target.value)} minLength={6} style={inputStyle} />
-                    </div>
-                    <button type="button" onClick={() => void saveRecoveredPassword()} disabled={otpLoading || newPassword.length < 6} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || newPassword.length < 6 ? 0.6 : 1 }}>
+                    <label htmlFor="admin-recovery-username" style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: -8 }}>
+                      Administrator username
+                    </label>
+                    <input
+                      id="admin-recovery-username"
+                      type="text"
+                      autoComplete="username"
+                      autoCapitalize="none"
+                      maxLength={64}
+                      value={recoveryUsername}
+                      onChange={event => {
+                        setRecoveryUsername(event.target.value);
+                        setRecoveryOptions({});
+                        setOtpNotice("");
+                      }}
+                      placeholder="Enter your username"
+                      style={inputStyle}
+                    />
+                    <TurnstileCheck
+                      action="admin_password_recovery"
+                      resetKey={turnstileResetKey}
+                      onToken={updateTurnstileToken}
+                    />
+                    <button type="button" onClick={() => void loadAdminRecoveryOptions()} disabled={otpLoading || !recoveryUsername.trim()} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || !recoveryUsername.trim() ? 0.6 : 1 }}>
+                      {otpLoading ? "Checking…" : "Find recovery options"}
+                    </button>
+                    {Object.keys(recoveryOptions).length > 0 && (
+                      <>
+                        <p style={{ margin: "6px 0 0", fontSize: "0.86rem", color: "var(--isp-text-muted)" }}>Choose a registered contact. Full contact details are never shown.</p>
+                        {recoveryOptions.email && (
+                          <label style={{ display: "flex", alignItems: "center", gap: 10, border: "1px solid var(--isp-input-border)", borderRadius: 10, padding: 12, cursor: "pointer" }}>
+                            <input type="radio" name="admin-recovery-channel" value="email" checked={recoveryChannel === "email"} onChange={() => setRecoveryChannel("email")} />
+                            <span>Email <strong>{recoveryOptions.email.masked}</strong></span>
+                          </label>
+                        )}
+                        {recoveryOptions.phone && (
+                          <label style={{ display: "flex", alignItems: "center", gap: 10, border: "1px solid var(--isp-input-border)", borderRadius: 10, padding: 12, cursor: "pointer" }}>
+                            <input type="radio" name="admin-recovery-channel" value="phone" checked={recoveryChannel === "phone"} onChange={() => setRecoveryChannel("phone")} />
+                            <span>Phone <strong>{recoveryOptions.phone.masked}</strong></span>
+                          </label>
+                        )}
+                        <button type="button" onClick={() => void requestAdminRecoveryCode()} disabled={otpLoading} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading ? 0.6 : 1 }}>
+                          {otpLoading ? "Sending…" : "Send reset code"}
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+
+                {recoveryStage === "verify" && (
+                  <>
+                    <p style={{ margin: 0, color: "var(--isp-text-muted)" }}>Enter the six-digit code sent to your registered contact.</p>
+                    <input
+                      aria-label="Six-digit reset code"
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      maxLength={6}
+                      value={otpCode}
+                      onChange={event => setOtpCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                      placeholder="000000"
+                      style={inputStyle}
+                    />
+                    <button type="button" onClick={() => void verifyAdminRecoveryCode()} disabled={otpLoading || otpCode.length !== 6} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || otpCode.length !== 6 ? 0.6 : 1 }}>
+                      {otpLoading ? "Verifying…" : "Verify code"}
+                    </button>
+                  </>
+                )}
+
+                {recoveryStage === "password" && (
+                  <>
+                    <label htmlFor="admin-new-password" style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)" }}>New password</label>
+                    <input id="admin-new-password" type="password" autoComplete="new-password" value={newPassword} onChange={event => setNewPassword(event.target.value)} minLength={6} maxLength={256} style={inputStyle} />
+                    <label htmlFor="admin-confirm-new-password" style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)" }}>Confirm new password</label>
+                    <input id="admin-confirm-new-password" type="password" autoComplete="new-password" value={confirmNewPassword} onChange={event => setConfirmNewPassword(event.target.value)} minLength={6} maxLength={256} style={inputStyle} />
+                    <button type="button" onClick={() => void saveRecoveredPassword()} disabled={otpLoading || newPassword.length < 6 || newPassword !== confirmNewPassword} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || newPassword.length < 6 || newPassword !== confirmNewPassword ? 0.6 : 1 }}>
                       {otpLoading ? "Updating…" : "Reset password"}
                     </button>
                   </>
@@ -766,8 +969,8 @@ export default function AdminLogin() {
               width: 7, height: 7, borderRadius: "50%",
               background: "var(--isp-green)",
             }} />
-              <span style={{ fontSize: "0.8rem", color: "var(--isp-text-sub)", fontWeight: 500 }}>
-              ISP operator access · {displayDomain}
+               <span style={{ fontSize: "0.8rem", color: "var(--isp-text-sub)", fontWeight: 500 }}>
+              ISP administrator access
             </span>
           </div>
           <p className="customer-access-note">Membership and hotspot customers use their separate customer access page.</p>
