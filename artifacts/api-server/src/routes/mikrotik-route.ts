@@ -3418,7 +3418,9 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     return;
   }
 
-  const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
+  // Use the same public endpoint as the VPS provisioner. VPS_HOST is the SSH
+      // address; the management VPN listener can use a different hostname.
+      const vpsIp = vpnEndpointHost(process.env.ROUTER_OPENVPN_ENDPOINT || process.env.VPS_HOST);
   if (!vpsIp) {
     res.status(400).json({ error: "VPS OpenVPN endpoint is not configured" });
     return;
@@ -3477,7 +3479,10 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
         || provisioning.backup.endpoint !== vpsIp
       ) {
         if (installationMode !== "coexist") {
-          res.status(503).json({ error: "VPS router-management OpenVPN linkage is incomplete." });
+          res.status(503).json({
+                error: "The VPS management VPN endpoint does not match the configured endpoint.",
+                detail: "Refresh Self Install and confirm ROUTER_OPENVPN_ENDPOINT is the public hostname configured on the VPS.",
+              });
           return;
         }
         provisioningWarning = provisioningWarning
