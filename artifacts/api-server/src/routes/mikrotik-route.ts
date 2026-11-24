@@ -61,7 +61,11 @@ import { sbInsert, sbInsertStrict, sbSelect, sbSelectStrict, sbUpdate, sbUpdateS
 import { logger } from "../lib/logger";
 import { readVpnClients, vpnIpFor } from "../lib/vpn-status";
 import { ROUTER_VPN_GATEWAY } from "../lib/router-vpn-ip";
-import { routerManagementOvpnCredentials, routerManagementVpnContract } from "../lib/router-management-vpn";
+import {
+  routerManagementOvpnCredentials,
+  routerManagementVpnContract,
+  routerManagementVpnEndpoint,
+} from "../lib/router-management-vpn";
 import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-credentials.js";
 import { routerHealthApiAccountOrder } from "../lib/router-health-api-account-order.js";
 import {
@@ -3277,7 +3281,7 @@ router.get("/router/:id/vps-ovpn-setup", requireAdmin(), async (req, res): Promi
   const found = await getRouterCreds(id);
   if (!found) { res.status(404).json({ error: "Router not found" }); return; }
 
-  const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
+  const vpsIp = routerManagementVpnEndpoint(req.query.vpsIp);
   if (!vpsIp) {
     res.status(400).json({
       error: "VPS OpenVPN endpoint is not configured",
@@ -3346,7 +3350,7 @@ router.get("/router/:id/vpn-info", requireAdmin(), async (req, res): Promise<voi
   const found = await getRouterCreds(id, adminId);
   if (!found) { res.status(404).json({ error: "Router not found" }); return; }
 
-  const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
+  const vpsIp = routerManagementVpnEndpoint(req.query.vpsIp);
   const tunnelRouterIp = String(req.query.tunnelRouterIp ?? found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim();
   const openVpnCredentials = await ensureRouterManagementOvpnCredentials({
     routerId: id,
@@ -3414,7 +3418,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
     return;
   }
 
-  const vpsIp = vpnEndpointHost(req.query.vpsIp || process.env.VPS_HOST);
+  const vpsIp = routerManagementVpnEndpoint(req.query.vpsIp);
   if (!vpsIp) {
     res.status(400).json({ error: "VPS OpenVPN endpoint is not configured" });
     return;

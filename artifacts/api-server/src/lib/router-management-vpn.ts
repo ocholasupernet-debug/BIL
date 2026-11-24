@@ -159,20 +159,24 @@ export function routerManagementVpnPortForRouter(routerId: number): number {
   return port;
 }
 
-function configuredEndpoint(): string {
-  return (
-    process.env.ROUTER_OPENVPN_ENDPOINT?.trim()
-    || process.env.VPS_HOST?.trim()
-    || ""
-  );
-}
-
-function hasConfiguredEndpoint(): boolean {
-  const endpoint = configuredEndpoint()
+export function routerManagementVpnEndpoint(
+  override?: unknown,
+  configuredEndpointValue: unknown = process.env.ROUTER_OPENVPN_ENDPOINT,
+  vpsHostValue: unknown = process.env.VPS_HOST,
+): string {
+  return String(
+    String(override ?? "").trim()
+    || String(configuredEndpointValue ?? "").trim()
+    || String(vpsHostValue ?? "").trim(),
+  )
     .replace(/^https?:\/\//i, "")
     .split("/")[0]
     .replace(/:\d+$/, "")
     .trim();
+}
+
+function hasConfiguredEndpoint(): boolean {
+  const endpoint = routerManagementVpnEndpoint();
   return /^[A-Za-z0-9:._-]+$/.test(endpoint);
 }
 
