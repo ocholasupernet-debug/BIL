@@ -8,13 +8,13 @@ import { existsSync, readFileSync } from "fs";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { resolveVlanHotspotPortalRequest } from "./lib/api-auth.js";
-import { TENANT_BASE_DOMAIN, TENANT_BASE_DOMAINS } from "./lib/tenant-host.js";
+import { getTenantSubdomain, TENANT_BASE_DOMAIN, TENANT_BASE_DOMAINS } from "./lib/tenant-host.js";
 import {
   resolveCanonicalAdminLoginRedirect,
   resolveLegacyAdminEntry,
 } from "./lib/legacy-admin-entry.js";
 import { sbSelectStrict } from "./lib/supabase-client.js";
-import { injectHotspotHostConfig, isPlatformHostname, normalizeRequestHostname, resolveHotspotHostMapping, type HotspotHostMapping } from "./lib/hotspot-host-routing.js";
+import { injectHotspotHostConfig, isPlatformHostname, normalizeRequestHostname, resolveHotspotHostMapping, resolveTenantBaseDomain, resolveTenantMemberPortalMapping, type HotspotHostMapping, type TenantMemberPortalMapping } from "./lib/hotspot-host-routing.js";
 import routerosInstallerV2ApiRouter, { routerosInstallerV2PublicRouter } from "./routes/routeros-installer-v2-route.js";
 
 const app: Express = express();
@@ -196,9 +196,31 @@ if (shouldServeStatic) {
           : []);
       };
 
-      // A configured customer domain loads the hosted Hotspot portal at its
-      // root. The bootstrap contains only the mapped tenant ID and same-origin
-      // API base; the portal then loads that tenant's saved branding/layout.
+      const resolveTenantSubdomainPortal = async (
+        host: string,
+      ): Promise<TenantMemberPortalMapping | null> => {
+        const subdomain = getTenantSubdomain(host);
+        if (!subdomain) return null;
+        const admins = await sbSelectStrict<{
+          id: number;
+          subdomain: string | null;
+          is_active: boolean;
+          status: string;
+        }>(
+          "isp_admins",
+          `subdomain=eq.${encodeURIComponent(subdomain)}&is_active=is.true&status=eq.active&select=id,subdomain,is_active,status&limit=2`,
+        );
+        return resolveTenantMemberPortalMapping(host, admins.map(admin => ({
+          adminId: Number(admin.id),
+          subdomain: admin.subdomain,
+          isActive: admin.is_active,
+          status: admin.status,
+        })));
+      };
+
+      // Active tenant subdomains show the member Hotspot login at "/".
+      // Customer-owned portal domains use their saved hostname mapping below.
+      // Both receive only a server-resolved tenant ID and same-origin API URL.
       app.use(async (req, res, next) => {
         const isPortalEntry = req.method === "GET" && (
           req.path === "/"
@@ -213,7 +235,36 @@ if (shouldServeStatic) {
         const forwardedHost = String(req.headers["x-forwarded-host"] ?? "").split(",")[0].trim();
         const host = forwardedHost || req.get("host") || req.hostname || "";
         if (isPlatformHostname(host, TENANT_BASE_DOMAINS)) {
-          next();
+          if (req.path !== "/") {
+            next();
+            return;
+          }
+          try {
+            const mapping = await resolveTenantSubdomainPortal(host);
+            if (!mapping) {
+              next();
+              return;
+            }
+            const html = readFileSync(registerIndexPath, "utf8");
+            const tenantBaseDomain = resolveTenantBaseDomain(
+              host,
+              TENANT_BASE_DOMAINS,
+              TENANT_BASE_DOMAIN,
+            );
+            res.set("Cache-Control", "no-store")
+              .type("html")
+              .send(injectHotspotHostConfig(
+                html,
+                host,
+                mapping.adminId,
+                mapping.subdomain,
+                tenantBaseDomain,
+                "member-login",
+              ));
+          } catch (error) {
+            logger.error({ err: error }, "Tenant subdomain Hotspot portal lookup failed");
+            res.status(503).type("text").send("Hotspot portal is temporarily unavailable.\n");
+          }
           return;
         }
         try {

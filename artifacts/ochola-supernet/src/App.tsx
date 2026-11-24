@@ -8,7 +8,7 @@ import { BrandProvider } from "@/context/BrandContext";
 import { TypographyProvider } from "@/context/TypographyContext";
 import { AdminPageVisibilityProvider } from "@/context/AdminPageVisibilityContext";
 import { DashboardPreferencesProvider } from "@/context/DashboardPreferencesContext";
-import { getHostSubdomain } from "@/lib/subdomain";
+import { getHostSubdomain, shouldShowHotspotMemberLoginAtRoot } from "@/lib/subdomain";
 import { getAdminApiToken, getAdminRole, isImpersonating } from "@/lib/supabase";
 import { shouldRedirectPlatformAdminToStaffFinance } from "@/lib/employee-admin-host-boundary";
 
@@ -50,6 +50,7 @@ import PrepaidUsers from "./pages/admin/PrepaidUsers";
 import FreeHotspotAccess from "./pages/admin/FreeHotspotAccess";
 
 import HotspotLogin, { HotspotTroubleshootPage } from "./pages/portal/HotspotLogin";
+import HotspotMemberLogin from "./pages/portal/HotspotMemberLogin";
 import PPPoELogin  from "./pages/portal/PPPoELogin";
 import SuperAdminLogin from "./pages/super-admin/Login";
 import SuperAdminDashboard from "./pages/super-admin/Dashboard";
@@ -223,10 +224,10 @@ function ResellerBlockedPage() {
 }
 
 /* ── SubdomainGuard ──────────────────────────────────────────────
-   When the visitor arrives at a company subdomain (e.g. fastnet.isplatty.org),
-   the root "/" path redirects straight to that company's login page.
+   Active ISP subdomains show member username/password sign-in at "/".
+   The separate "/admin/login" route remains the administrator entry.
    The reserved registration host has its own public entry point.
-   On the bare domain (isplatty.org) the normal landing page is shown.
+   On the bare domain, the normal landing page is shown.
 ──────────────────────────────────────────────────────────────── */
 function SubdomainGuard() {
   const [, setLocation] = useLocation();
@@ -234,21 +235,31 @@ function SubdomainGuard() {
   const employeeAdminHost = hostname === "employee1088.isplatty.com";
   const isStaffPortalHost = hostname === "staff.isplatty.com";
   const hotspotConfig = typeof window !== "undefined"
-    ? (window as Window & { __HOTSPOT_CONFIG__?: { adminId?: unknown } }).__HOTSPOT_CONFIG__
+    ? (window as Window & {
+        __HOTSPOT_CONFIG__?: { adminId?: unknown; portalMode?: unknown };
+      }).__HOTSPOT_CONFIG__
     : undefined;
+  const memberPortalAtRoot = typeof window !== "undefined"
+    && shouldShowHotspotMemberLoginAtRoot(
+      window.location.pathname,
+      hotspotConfig?.adminId,
+      hotspotConfig?.portalMode,
+    );
   const customHotspotPortal = Number.isSafeInteger(Number(hotspotConfig?.adminId))
     && Number(hotspotConfig?.adminId) > 0;
   const isAdminEntryHost = typeof window !== "undefined"
     && /^admin\.isplatty\.(org|com)$/.test(window.location.hostname.toLowerCase());
 
   useEffect(() => {
+    if (memberPortalAtRoot) return;
     if (employeeAdminHost) { setLocation("/employee/admin"); return; }
     if (isStaffPortalHost) { setLocation("/staff/login"); return; }
     if (isAdminEntryHost) { setLocation("/admin/login"); return; }
     const sub = getHostSubdomain();
     if (sub && sub !== "register" && sub !== "latex") setLocation("/admin/login");
-  }, [employeeAdminHost, isStaffPortalHost, isAdminEntryHost, setLocation]);
+  }, [employeeAdminHost, isStaffPortalHost, isAdminEntryHost, memberPortalAtRoot, setLocation]);
 
+  if (memberPortalAtRoot) return <HotspotMemberLogin />;
   if (customHotspotPortal) return <HotspotLogin />;
   if (employeeAdminHost || isStaffPortalHost) return null;
   if (isAdminEntryHost) return null;

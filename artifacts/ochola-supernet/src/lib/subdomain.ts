@@ -45,3 +45,14 @@ export function getHostSubdomainFromHostname(value: string): string {
 export function getHostSubdomain(): string {
   return getHostSubdomainFromHostname(window.location.hostname);
 }
+
+export function shouldShowHotspotMemberLoginAtRoot(
+  pathname: string,
+  adminId: unknown,
+  portalMode: unknown,
+): boolean {
+  return pathname === "/"
+    && portalMode === "member-login"
+    && Number.isSafeInteger(Number(adminId))
+    && Number(adminId) > 0;
+}
