@@ -309,6 +309,7 @@ function CheckLine({
 export default function SelfInstall() {
   const [, navigate] = useLocation();
   const statusCheckInFlight = useRef(false);
+  const scriptResultRef = useRef<HTMLDivElement | null>(null);
   const [mode, setMode] = useState<InstallMode>("greenfield");
   const [routerName, setRouterName] = useState("");
   const [bridgeInterface, setBridgeInterface] = useState("bridge");
@@ -538,6 +539,9 @@ export default function SelfInstall() {
         : result.compactMode
           ? "Three smaller setup stages are ready. Run Network, VPN/API, and services in order."
           : "Download the authenticated bundle, upload it to the router, then import it.");
+      window.setTimeout(() => {
+        scriptResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install steps.");
     } finally {
@@ -832,7 +836,13 @@ export default function SelfInstall() {
                     style={{ display: "inline-flex", alignItems: "center", gap: "0.45rem", padding: "0.62rem 1rem", border: 0, borderRadius: 8, background: canGenerateSteps ? "var(--isp-accent)" : "var(--isp-section)", color: canGenerateSteps ? "#fff" : "var(--isp-text-muted)", fontFamily: "inherit", fontWeight: 750, fontSize: "0.8rem", cursor: canGenerateSteps ? "pointer" : "not-allowed" }}
                    >
                       {busy === "script" ? <Loader2 size={15} style={{ animation: "self-install-spin 1.1s linear infinite" }} /> : <TerminalSquare size={15} />}
-                         {mode === "zero-touch" ? "Script content pending" : compactMode ? "Generate compact stages" : "Generate mainhotspot.rsc"}
+                          {busy === "script"
+                            ? "Preparing files…"
+                            : mode === "zero-touch"
+                              ? "Script content pending"
+                              : compactMode
+                                ? "Generate compact stages"
+                                : "Generate mainhotspot.rsc"}
                    </button>
                      {mode !== "zero-touch" && <button
                       type="button"
@@ -844,6 +854,28 @@ export default function SelfInstall() {
                       Refresh script
                     </button>}
                  </div>
+                   {busy === "script" && (
+                     <div
+                       role="status"
+                       aria-live="polite"
+                       style={{
+                         marginTop: "0.7rem",
+                         padding: "0.7rem 0.8rem",
+                         borderRadius: 8,
+                         background: "rgba(37,99,235,0.07)",
+                         border: "1px solid rgba(37,99,235,0.18)",
+                         color: "var(--isp-text-muted)",
+                         display: "flex",
+                         gap: "0.5rem",
+                         alignItems: "center",
+                         fontSize: "0.72rem",
+                         lineHeight: 1.5,
+                       }}
+                     >
+                       <Loader2 size={15} style={{ flexShrink: 0, animation: "self-install-spin 1.1s linear infinite" }} />
+                       <span>Checking the VPS router-management VPN and preparing protected files. This can take up to three minutes; the files will appear here when ready.</span>
+                     </div>
+                   )}
                   {mode === "zero-touch" && (
                     <div role="status" style={{ marginTop: "0.75rem", color: "var(--isp-text-muted)", fontSize: "0.72rem" }}>
                       The command area is blank by design. No Zero-Touch script can be copied, downloaded, or sent to a router.
@@ -856,7 +888,7 @@ export default function SelfInstall() {
                     </div>
                   )}
                   {mode !== "zero-touch" && scriptSteps.length > 0 && (
-                    <div style={{ marginTop: "0.8rem" }}>
+                    <div ref={scriptResultRef} style={{ marginTop: "0.8rem", scrollMarginTop: "1rem" }}>
                       <SelfInstallStepsResult
                         steps={scriptSteps}
                         compactMode={compactMode}
