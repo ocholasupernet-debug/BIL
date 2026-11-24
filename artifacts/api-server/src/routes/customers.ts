@@ -96,6 +96,24 @@ import { ipv4InSubnet, isValidIpv4, isValidVlanTag } from "../lib/vlan-customer-
 import { saveCustomerEditWithRouter } from "../lib/customer-edit-consistency.js";
 import { withCustomerEditLock } from "../lib/customer-edit-lock.js";
 import { collectIdPages } from "../lib/prepaid-customer-pages.js";
+import { getTenantSubdomainFromRequest } from "../lib/tenant-host.js";
+import { isOtpChannelEnabled } from "../lib/platform-auth-security.js";
+import { getPlatformEmailStatus } from "../lib/platform-email.js";
+import {
+  getSmsSecretsStatus,
+  getSmsSettings,
+  isSmsFeatureEnabled,
+  normalizeSmsPhone,
+} from "../services/sms/sms-service.js";
+import {
+  allowHotspotPasswordRecoveryLookup,
+  allowHotspotRecoveryLookup,
+  consumeHotspotPasswordRecoveryToken,
+  issueHotspotPasswordRecovery,
+  maskRecoveryEmail,
+  maskRecoveryPhone,
+  verifyHotspotPasswordRecoveryCode,
+} from "../services/hotspot-password-recovery.js";
 import {
   calculateCustomerExtensionExpiry,
   customerStatusForExpiryEdit,
@@ -3265,6 +3283,374 @@ router.post("/customers/hotspot-voucher-activate", async (req, res): Promise<voi
     } else {
       res.status(500).json({ error: message });
     }
+  }
+});
+
+type HotspotRecoveryCustomer = {
+  id: number;
+  admin_id: number;
+  username: string | null;
+  email: string | null;
+  phone: string | null;
+  type: string | null;
+  status: string;
+};
+
+type HotspotRecoveryTenant = {
+  tenantAdminId: number;
+  customerAdminIds: number[];
+};
+
+async function resolveHotspotRecoveryTenant(req: Request): Promise<HotspotRecoveryTenant | null> {
+  const subdomain = getTenantSubdomainFromRequest(req);
+  if (!subdomain) return null;
+  const admins = await sbSelectStrict<{
+    id: number;
+    subdomain: string | null;
+    is_active: boolean;
+    status: string;
+    role: string | null;
+  }>(
+    "isp_admins",
+    `subdomain=eq.${encodeURIComponent(subdomain)}&is_active=is.true&status=eq.active&select=id,subdomain,is_active,status,role&limit=2`,
+  );
+  if (admins.length !== 1) return null;
+  const tenantAdminId = Number(admins[0].id);
+  if (
+    !Number.isSafeInteger(tenantAdminId)
+    || tenantAdminId < 1
+    || admins[0].subdomain?.trim().toLowerCase() !== subdomain
+  ) return null;
+
+  const children = await sbSelectStrict<{ id: number }>(
+    "isp_admins",
+    `parent_id=eq.${tenantAdminId}&role=eq.reseller&is_active=is.true&status=eq.active&select=id&limit=500`,
+  );
+  const customerAdminIds = [...new Set([
+    tenantAdminId,
+    ...children.map(child => Number(child.id)).filter(id => Number.isSafeInteger(id) && id > 0),
+  ])];
+  return { tenantAdminId, customerAdminIds };
+}
+
+async function findHotspotRecoveryCustomer(
+  tenant: HotspotRecoveryTenant,
+  username: string,
+): Promise<(HotspotRecoveryCustomer & CustomerRow) | null> {
+  const rows = await sbSelectStrict<HotspotRecoveryCustomer & CustomerRow>(
+    "isp_customers",
+    `admin_id=in.(${tenant.customerAdminIds.join(",")})&type=eq.hotspot&username=eq.${encodeURIComponent(username)}&select=*&limit=2`,
+  );
+  return rows.length === 1 ? rows[0] : null;
+}
+
+function validHotspotRecoveryUsername(value: unknown): value is string {
+  return typeof value === "string"
+    && value.trim().length <= 64
+    && /^[A-Za-z0-9_.:@-]{1,64}$/.test(value.trim());
+}
+
+async function hotspotRecoverySmsContext(): Promise<{
+  enabled: boolean;
+  defaultCountryCode: string;
+}> {
+  try {
+    const [settings, otpEnabled, secrets] = await Promise.all([
+      getSmsSettings(),
+      isOtpChannelEnabled("sms"),
+      getSmsSecretsStatus(),
+    ]);
+    return {
+      enabled: otpEnabled
+        && isSmsFeatureEnabled(settings, "passwordRecovery")
+        && secrets.apiKeyConfigured
+        && Boolean(settings.username),
+      defaultCountryCode: settings.defaultCountryCode,
+    };
+  } catch {
+    return { enabled: false, defaultCountryCode: "254" };
+  }
+}
+
+async function enforceHotspotRecoveryLookupLimit(req: Request, res: Response): Promise<boolean> {
+  const requestIp = req.ip || req.socket.remoteAddress || "unknown";
+  try {
+    if (!allowHotspotRecoveryLookup(requestIp) || !await allowHotspotPasswordRecoveryLookup(requestIp)) {
+      res.status(429).json({ ok: false, error: "Please wait before trying account recovery again." });
+      return false;
+    }
+    return true;
+  } catch (error) {
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[customers/hotspot-password-recovery] lookup limit check failed",
+    );
+    res.status(503).json({ ok: false, error: "Account recovery is temporarily unavailable." });
+    return false;
+  }
+}
+
+router.post("/customers/hotspot-password-recovery/options", async (req, res): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  if (!await enforceHotspotRecoveryLookupLimit(req, res)) return;
+  if (!validHotspotRecoveryUsername(req.body?.username)) {
+    res.json({ ok: true, options: {} });
+    return;
+  }
+
+  try {
+    const tenant = await resolveHotspotRecoveryTenant(req);
+    if (!tenant) {
+      res.json({ ok: true, options: {} });
+      return;
+    }
+    const customer = await findHotspotRecoveryCustomer(tenant, req.body.username.trim());
+    if (!customer || customer.status === "suspended") {
+      res.json({ ok: true, options: {} });
+      return;
+    }
+
+    const options: { email?: { masked: string }; phone?: { masked: string } } = {};
+    const email = typeof customer.email === "string" ? customer.email.trim() : "";
+    if (getPlatformEmailStatus().configured) {
+      const masked = maskRecoveryEmail(email);
+      if (masked) options.email = { masked };
+    }
+
+    const sms = await hotspotRecoverySmsContext();
+    const normalizedPhone = sms.enabled && customer.phone
+      ? normalizeSmsPhone(customer.phone, sms.defaultCountryCode)
+      : null;
+    const maskedPhone = normalizedPhone ? maskRecoveryPhone(normalizedPhone) : null;
+    if (maskedPhone) options.phone = { masked: maskedPhone };
+    res.json({ ok: true, options });
+  } catch (error) {
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[customers/hotspot-password-recovery] options lookup failed",
+    );
+    res.status(503).json({ ok: false, error: "Recovery options are temporarily unavailable." });
+  }
+});
+
+router.post("/customers/hotspot-password-recovery/request-code", async (req, res): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  const username = req.body?.username;
+  const requestedChannel = req.body?.channel;
+  if (
+    !validHotspotRecoveryUsername(username)
+    || (requestedChannel !== "email" && requestedChannel !== "phone")
+  ) {
+    res.status(400).json({ ok: false, error: "Enter your username and choose a recovery method." });
+    return;
+  }
+  const requestIp = req.ip || req.socket.remoteAddress || "unknown";
+  if (!await enforceHotspotRecoveryLookupLimit(req, res)) return;
+
+  try {
+    const tenant = await resolveHotspotRecoveryTenant(req);
+    const customer = tenant
+      ? await findHotspotRecoveryCustomer(tenant, username.trim())
+      : null;
+    const channel = requestedChannel;
+    const noAccountResponse = () => res.status(202).json({
+      ok: true,
+      challengeId: null,
+      message: "If the username and recovery method match an account, a reset code will be sent.",
+    });
+    if (!tenant || !customer || customer.status === "suspended") {
+      noAccountResponse();
+      return;
+    }
+
+    let destination = "";
+    if (channel === "email") {
+      destination = typeof customer.email === "string" ? customer.email.trim().toLowerCase() : "";
+      if (!maskRecoveryEmail(destination) || !getPlatformEmailStatus().configured) {
+        noAccountResponse();
+        return;
+      }
+    } else {
+      const sms = await hotspotRecoverySmsContext();
+      const normalizedPhone = sms.enabled && customer.phone
+        ? normalizeSmsPhone(customer.phone, sms.defaultCountryCode)
+        : null;
+      if (!normalizedPhone) {
+        noAccountResponse();
+        return;
+      }
+      destination = normalizedPhone;
+    }
+
+    const issued = await issueHotspotPasswordRecovery({
+      tenantAdminId: tenant.tenantAdminId,
+      customerAdminId: Number(customer.admin_id),
+      customerId: Number(customer.id),
+      channel,
+      destination,
+      requestIp,
+    });
+    if (issued.outcome !== "sent") {
+      const limited = issued.outcome === "limited";
+      res.status(limited ? 429 : 503).json({
+        ok: false,
+        error: limited
+          ? "Please wait before requesting another reset code."
+          : "The reset code could not be delivered. Try another method or contact your ISP administrator.",
+      });
+      return;
+    }
+
+    res.status(202).json({
+      ok: true,
+      challengeId: issued.challengeId,
+      expiresInSeconds: issued.expiresInSeconds,
+      maskedDestination: channel === "email"
+        ? maskRecoveryEmail(destination)
+        : maskRecoveryPhone(destination),
+      message: "A reset code was sent to the selected registered contact.",
+    });
+  } catch (error) {
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[customers/hotspot-password-recovery] code request failed",
+    );
+    res.status(503).json({ ok: false, error: "The reset code could not be delivered. Please try again later." });
+  }
+});
+
+router.post("/customers/hotspot-password-recovery/verify-code", async (req, res): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  try {
+    const resetToken = await verifyHotspotPasswordRecoveryCode({
+      challengeId: String(req.body?.challengeId ?? ""),
+      code: String(req.body?.code ?? ""),
+    });
+    if (!resetToken) {
+      res.status(401).json({ ok: false, error: "The code is invalid or expired. Request a new one." });
+      return;
+    }
+    res.json({ ok: true, resetToken });
+  } catch (error) {
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[customers/hotspot-password-recovery] code verification failed",
+    );
+    res.status(503).json({ ok: false, error: "The code could not be verified. Please try again." });
+  }
+});
+
+router.post("/customers/hotspot-password-recovery/reset-password", async (req, res): Promise<void> => {
+  res.set("Cache-Control", "no-store");
+  const newPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword : "";
+  if (newPassword.length < 6 || newPassword.length > 256) {
+    res.status(400).json({ ok: false, error: "Use a password between 6 and 256 characters." });
+    return;
+  }
+
+  try {
+    const tenant = await resolveHotspotRecoveryTenant(req);
+    if (!tenant) {
+      res.status(401).json({ ok: false, error: "The reset request is invalid or expired." });
+      return;
+    }
+    const target = await consumeHotspotPasswordRecoveryToken({
+      tenantAdminId: tenant.tenantAdminId,
+      resetToken: String(req.body?.resetToken ?? ""),
+    });
+    if (!target || !tenant.customerAdminIds.includes(target.customerAdminId)) {
+      res.status(401).json({ ok: false, error: "The reset request is invalid or expired." });
+      return;
+    }
+
+    const current = (await sbSelectStrict<CustomerRow>(
+      "isp_customers",
+      `id=eq.${target.customerId}&admin_id=eq.${target.customerAdminId}&type=eq.hotspot&select=*&limit=1`,
+    ))[0];
+    if (!current || current.status === "suspended" || !current.username) {
+      res.status(401).json({ ok: false, error: "The reset request is invalid or expired." });
+      return;
+    }
+
+    const updates: Record<string, unknown> = { password: newPassword };
+    await withCustomerEditLock(current.admin_id, current.id, async assertLock => {
+      let hadRadiusBefore = false;
+      let radiusMutationAttempted = false;
+      await saveCustomerEditWithRouter({
+        applyRouter: async markMutation => {
+          const result = await reconcileCustomerAccess(current, updates, current.admin_id, {
+            onRouterMutation: async () => {
+              markMutation();
+              await assertLock();
+            },
+            onRadiusIdentity: exists => { hadRadiusBefore = exists; },
+            onRadiusMutation: () => { radiusMutationAttempted = true; },
+            assertLock,
+            allowInactivePlan: true,
+          });
+          await assertLock();
+          if (!result.routerSynced) {
+            throw new Error("The customer's Hotspot access was not synchronized.");
+          }
+          return result;
+        },
+        restoreRouter: async () => {
+          await assertLock();
+          const attempted = { ...current, ...updates } as CustomerRow;
+          const restored = await reconcileCustomerAccess(
+            attempted,
+            { password: current.password },
+            current.admin_id,
+            {
+              allowInactivePlan: true,
+              restoreIdentity: true,
+              skipRadius: !radiusMutationAttempted || !hadRadiusBefore,
+              onRouterMutation: assertLock,
+              assertLock,
+            },
+          );
+          if (!restored.routerSynced) throw new Error("The customer's previous access was not restored.");
+          if (radiusMutationAttempted && !hadRadiusBefore) {
+            await assertLock();
+            await removeRadiusCustomerStrict(current.username!);
+          }
+        },
+        saveRecord: async () => {
+          const [row] = await sbUpdateStrict<CustomerRow>(
+            "isp_customers",
+            `id=eq.${current.id}&admin_id=eq.${current.admin_id}`,
+            updates,
+          );
+          if (!row) throw new Error("The customer password update was not confirmed.");
+          return row;
+        },
+        readRecord: async () => (await sbSelectStrict<CustomerRow>(
+          "isp_customers",
+          `id=eq.${current.id}&admin_id=eq.${current.admin_id}&select=*&limit=1`,
+        ))[0],
+        matchesRequested: row => row.password === newPassword,
+        matchesBefore: row => row.password === current.password,
+        confirmedRejected: error => error instanceof SupabaseHttpError
+          && [400, 401, 403, 404, 409, 422].includes(error.status),
+      });
+    });
+    void logActivity({
+      adminId: tenant.tenantAdminId,
+      type: "customer",
+      action: "hotspot_member_password_reset",
+      subject: `customer:${current.id}`,
+      details: { customerAdminId: current.admin_id, channel: "verified_recovery" },
+    });
+    res.json({ ok: true, message: "Your Hotspot password has been updated." });
+  } catch (error) {
+    logger.warn(
+      { errorType: error instanceof Error ? error.name : "unknown" },
+      "[customers/hotspot-password-recovery] password update failed",
+    );
+    res.status(503).json({
+      ok: false,
+      error: "Your password could not be updated safely. Request a fresh code or contact your ISP administrator.",
+    });
   }
 });
 

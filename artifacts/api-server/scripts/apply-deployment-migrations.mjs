@@ -149,6 +149,7 @@ const migrationPaths = [
   fileURLToPath(new URL("../migrations/2026_technician_learning_center.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_staff_signup_approval_ambiguous_email.sql", import.meta.url)),
   fileURLToPath(new URL("../migrations/2026_employee_credits_award_codes.sql", import.meta.url)),
+  fileURLToPath(new URL("../migrations/2026_hotspot_customer_password_recovery.sql", import.meta.url)),
 ];
 const client = new Client({ connectionString: normalizeConnectionString(databaseUrl) });
 

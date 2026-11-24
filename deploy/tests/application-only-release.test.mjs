@@ -29,6 +29,10 @@ test("manual application-only workflow does not forward runtime secrets to SSH",
     workflow,
     /application_only_release:\n\s+description: "Deploy app code while preserving VPS \.env and skipping database, Nginx, and router changes"\n\s+required: false\n\s+default: false\n\s+type: boolean/,
   );
+  assert.match(
+    workflow,
+    /verify_supabase_runtime_target:\n\s+description: "Read-check the existing VPS Supabase target before an app-only restart"\n\s+required: false\n\s+default: false\n\s+type: boolean/,
+  );
   const sshStart = workflow.indexOf("- name: Deploy via SSH");
   const sshEnd = workflow.indexOf("\n      - name:", sshStart + 1);
   const sshStep = workflow.slice(sshStart, sshEnd);
@@ -40,6 +44,7 @@ test("manual application-only workflow does not forward runtime secrets to SSH",
     "APP_ONLY_RELEASE",
     "DEPLOY_SKIP_ROUTER_MANAGEMENT_SETUP",
     "DEPLOY_SKIP_ROUTER_ONESHOTS",
+    "DEPLOY_VERIFY_SUPABASE_TARGET",
   ]);
   assert.match(
     envsExpression,
@@ -58,8 +63,16 @@ test("manual application-only workflow does not forward runtime secrets to SSH",
     /DEPLOY_SKIP_ROUTER_ONESHOTS: \$\{\{ github\.event_name == 'push' \|\| inputs\.skip_router_oneshots \|\| inputs\.application_only_release \|\| inputs\.supabase_target_cutover \}\}/,
   );
   assert.match(
+    sshStep,
+    /DEPLOY_VERIFY_SUPABASE_TARGET: \$\{\{ inputs\.verify_supabase_runtime_target \|\| inputs\.supabase_target_cutover \}\}/,
+  );
+  assert.match(
     workflow,
     /- name: Require app-only mode on scoped migration release branches\n\s+if: startsWith\(github\.ref, 'refs\/heads\/deploy\/supabase-migration-app-only-'\)\n\s+env:\n\s+APP_ONLY_RELEASE: \$\{\{ inputs\.application_only_release \}\}/,
+  );
+  assert.match(
+    workflow,
+    /- name: Require app-only mode for a VPS Supabase target check\n\s+if: inputs\.verify_supabase_runtime_target[\s\S]*?APP_ONLY_RELEASE: \$\{\{ inputs\.application_only_release \}\}/,
   );
 });
 
@@ -247,7 +260,11 @@ test("app-only release preserves the existing .env and skips infrastructure comm
   assert.doesNotMatch(calls, /nginx|systemctl|router|supabase|migration/i);
   assert.doesNotMatch(calls, /pm2 start|--update-env/);
   const releaseScript = await source("deploy/app-only-release.sh");
-  assert.doesNotMatch(releaseScript, /source .*\.env|pm2 start/);
+  assert.match(releaseScript, /if ! \. "\$PROJECT_DIR\/\.env" 2>\/dev\/null/);
+  assert.doesNotMatch(releaseScript, /pm2 start/);
+  const runtimeCheck = releaseScript.indexOf("verify-supabase-runtime-target.mjs");
+  const processReload = releaseScript.indexOf("pm2 reload ocholanet-api");
+  assert.ok(runtimeCheck >= 0 && runtimeCheck < processReload);
   assert.match(releaseScript, /DEPLOY_REFRESH_PM2_ENV:-false/);
   assert.match(releaseScript, /verify-supabase-runtime-target\.mjs/);
 });

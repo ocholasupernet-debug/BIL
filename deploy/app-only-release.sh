@@ -33,6 +33,17 @@ if ! pm2 describe ocholanet-api >/dev/null 2>&1; then
   exit 1
 fi
 
+if [ "${DEPLOY_VERIFY_SUPABASE_TARGET:-false}" = "true" ]; then
+  set -a
+  if ! . "$PROJECT_DIR/.env" 2>/dev/null; then
+    set +a
+    echo "Application-only release could not load the existing VPS environment for its read-only target check." >&2
+    exit 1
+  fi
+  set +a
+  node "$PROJECT_DIR/deploy/verify-supabase-runtime-target.mjs"
+fi
+
 mkdir -p "$PROJECT_DIR/logs"
 if [ "${DEPLOY_REFRESH_PM2_ENV:-false}" = "true" ]; then
   pm2 reload ecosystem.config.cjs --env standalone --update-env
@@ -55,10 +66,6 @@ if [ "$api_ready" != "true" ]; then
   echo "Application-only release API health check failed." >&2
   pm2 status || true
   exit 1
-fi
-
-if [ "${DEPLOY_VERIFY_SUPABASE_TARGET:-false}" = "true" ]; then
-  node "$PROJECT_DIR/deploy/verify-supabase-runtime-target.mjs"
 fi
 
 if [ "$(readlink -f "$BUILD_OUTPUT")" != "$(readlink -f "$PUBLIC_HTML")" ]; then
