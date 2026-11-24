@@ -1,5 +1,5 @@
 import React, { useCallback, useRef, useState, useEffect } from "react";
-import { Link, useLocation } from "wouter";
+import { useLocation } from "wouter";
 import { User, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Wifi } from "lucide-react";
 import { clearAdminAuth, clearPasswordSetupToken, setAdminAuth, setPasswordSetupToken } from "@/lib/supabase";
 import { apiUrl } from "@/lib/api-client";
@@ -44,14 +44,16 @@ export default function AdminLogin() {
   const [otpNotice, setOtpNotice] = useState("");
   const [resendWait, setResendWait] = useState(0);
   const turnstileTokenRef = useRef("");
+  const [turnstileVerified, setTurnstileVerified] = useState(false);
   const updateTurnstileToken = useCallback((token: string) => {
-    turnstileTokenRef.current = token.trim();
+    const normalizedToken = token.trim();
+    turnstileTokenRef.current = normalizedToken;
+    setTurnstileVerified(Boolean(normalizedToken));
   }, []);
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [resetToken, setResetToken] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
-  const [recoveryUsername, setRecoveryUsername] = useState("");
   const [recoveryOptions, setRecoveryOptions] = useState<AdminRecoveryOptions>({});
   const [recoveryChannel, setRecoveryChannel] = useState<"email" | "phone">("email");
   const [recoveryStage, setRecoveryStage] = useState<"request" | "verify" | "password">("request");
@@ -211,17 +213,16 @@ export default function AdminLogin() {
       setError(cause instanceof Error ? cause.message : "Phone verification failed.");
     } finally {
       setOtpLoading(false);
-      turnstileTokenRef.current = "";
+      updateTurnstileToken("");
       setTurnstileResetKey((key) => key + 1);
     }
   };
 
   const startAdminRecovery = () => {
     setLoginMethod("recovery");
-    turnstileTokenRef.current = "";
+    updateTurnstileToken("");
     setTurnstileResetKey(key => key + 1);
     setRecoveryStage("request");
-    setRecoveryUsername(username.trim());
     setRecoveryOptions({});
     setOtpChallengeId("");
     setOtpCode("");
@@ -235,10 +236,6 @@ export default function AdminLogin() {
   const loadAdminRecoveryOptions = async () => {
     setError("");
     setOtpNotice("");
-    if (!recoveryUsername.trim()) {
-      setError("Enter your administrator username.");
-      return;
-    }
     if (!turnstileTokenRef.current) {
       setError("Complete Cloudflare verification before checking recovery options.");
       return;
@@ -249,7 +246,7 @@ export default function AdminLogin() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: recoveryUsername.trim(),
+          username: INITIAL_ADMIN_USERNAME,
           subdomain: (hostSubdomain || companySubdomain).trim().toLowerCase(),
           turnstileToken: turnstileTokenRef.current,
         }),
@@ -265,13 +262,13 @@ export default function AdminLogin() {
       setRecoveryOptions(options);
       setRecoveryChannel(options.email ? "email" : "phone");
       if (!options.email && !options.phone) {
-        setOtpNotice("No recovery method is available for that username. Contact your system administrator.");
+        setOtpNotice("No recovery method is available for this administrator account. Contact your system administrator.");
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Recovery options are unavailable.");
     } finally {
       setOtpLoading(false);
-      turnstileTokenRef.current = "";
+      updateTurnstileToken("");
       setTurnstileResetKey(key => key + 1);
     }
   };
@@ -289,7 +286,7 @@ export default function AdminLogin() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username: recoveryUsername.trim(),
+          username: INITIAL_ADMIN_USERNAME,
           channel: recoveryChannel,
           subdomain: (hostSubdomain || companySubdomain).trim().toLowerCase(),
           turnstileToken: turnstileTokenRef.current,
@@ -305,7 +302,7 @@ export default function AdminLogin() {
       };
       if (!response.ok || !data.ok) throw new Error(data.error || "The reset code could not be sent.");
       if (!data.challengeId) {
-        setOtpNotice(data.message || "If the username and recovery method match an account, a reset code will be sent.");
+        setOtpNotice(data.message || "If the account and selected recovery method match, a reset code will be sent.");
         return;
       }
       setOtpChallengeId(data.challengeId);
@@ -318,7 +315,7 @@ export default function AdminLogin() {
       setError(cause instanceof Error ? cause.message : "The reset code could not be sent.");
     } finally {
       setOtpLoading(false);
-      turnstileTokenRef.current = "";
+      updateTurnstileToken("");
       setTurnstileResetKey(key => key + 1);
     }
   };
@@ -462,7 +459,7 @@ export default function AdminLogin() {
       setError("Login failed. Please try again.");
     } finally {
       setIsLoading(false);
-      turnstileTokenRef.current = "";
+      updateTurnstileToken("");
       setTurnstileResetKey((key) => key + 1);
     }
   };
@@ -748,6 +745,8 @@ export default function AdminLogin() {
                     type="button"
                     onClick={() => {
                       const channel = smsLoginEnabled && !whatsappLoginEnabled ? "sms" : "whatsapp";
+                      updateTurnstileToken("");
+                      setTurnstileResetKey(key => key + 1);
                       setOtpChannel(channel);
                       setLoginMethod(channel);
                       setOtpChallengeId("");
@@ -809,7 +808,7 @@ export default function AdminLogin() {
                       resetKey={turnstileResetKey}
                       onToken={updateTurnstileToken}
                     />
-                    <button type="button" onClick={() => void verifyWhatsappCode()} disabled={otpLoading || otpCode.length !== 6} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || otpCode.length !== 6 ? 0.6 : 1 }}>
+                    <button type="button" onClick={() => void verifyWhatsappCode()} disabled={otpLoading || otpCode.length !== 6 || !turnstileVerified} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || otpCode.length !== 6 || !turnstileVerified ? 0.6 : 1 }}>
                       {otpLoading ? "Verifying…" : "Verify code"}
                     </button>
                     <button type="button" onClick={() => void requestOtpCode("login", otpChannel)} disabled={otpLoading || resendWait > 0} style={{ border: 0, background: "none", color: "var(--isp-accent)", cursor: resendWait > 0 ? "default" : "pointer", fontSize: "0.82rem", opacity: resendWait > 0 ? 0.6 : 1 }}>
@@ -824,7 +823,7 @@ export default function AdminLogin() {
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <button type="button" onClick={() => {
                   setLoginMethod("password");
-                  turnstileTokenRef.current = "";
+                  updateTurnstileToken("");
                   setTurnstileResetKey(key => key + 1);
                   setRecoveryOptions({});
                   setOtpChallengeId("");
@@ -840,30 +839,15 @@ export default function AdminLogin() {
 
                 {recoveryStage === "request" && (
                   <>
-                    <label htmlFor="admin-recovery-username" style={{ display: "block", fontSize: "0.88rem", fontWeight: 600, color: "var(--isp-text)", marginBottom: -8 }}>
-                      Administrator username
-                    </label>
-                    <input
-                      id="admin-recovery-username"
-                      type="text"
-                      autoComplete="username"
-                      autoCapitalize="none"
-                      maxLength={64}
-                      value={recoveryUsername}
-                      onChange={event => {
-                        setRecoveryUsername(event.target.value);
-                        setRecoveryOptions({});
-                        setOtpNotice("");
-                      }}
-                      placeholder="Enter your username"
-                      style={inputStyle}
-                    />
                     <TurnstileCheck
                       action="admin_password_recovery"
                       resetKey={turnstileResetKey}
                       onToken={updateTurnstileToken}
+                      size="normal"
+                      appearance="always"
+                      theme="dark"
                     />
-                    <button type="button" onClick={() => void loadAdminRecoveryOptions()} disabled={otpLoading || !recoveryUsername.trim()} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || !recoveryUsername.trim() ? 0.6 : 1 }}>
+                    <button type="button" onClick={() => void loadAdminRecoveryOptions()} disabled={otpLoading || !turnstileVerified} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || !turnstileVerified ? 0.6 : 1 }}>
                       {otpLoading ? "Checking…" : "Find recovery options"}
                     </button>
                     {Object.keys(recoveryOptions).length > 0 && (
@@ -881,7 +865,7 @@ export default function AdminLogin() {
                             <span>Phone <strong>{recoveryOptions.phone.masked}</strong></span>
                           </label>
                         )}
-                        <button type="button" onClick={() => void requestAdminRecoveryCode()} disabled={otpLoading} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading ? 0.6 : 1 }}>
+                        <button type="button" onClick={() => void requestAdminRecoveryCode()} disabled={otpLoading || !turnstileVerified} className="btn btn-primary" style={{ width: "100%", padding: "12px 20px", borderRadius: 10, opacity: otpLoading || !turnstileVerified ? 0.6 : 1 }}>
                           {otpLoading ? "Sending…" : "Send reset code"}
                         </button>
                       </>
@@ -929,17 +913,19 @@ export default function AdminLogin() {
                   action="admin_login"
                   resetKey={turnstileResetKey}
                   onToken={updateTurnstileToken}
-                  size="flexible"
+                  size="normal"
+                  appearance="always"
+                  theme="dark"
                 />
                 <button
                   type="submit"
-                  disabled={isLoading || companyLoading}
+                  disabled={isLoading || companyLoading || !turnstileVerified}
                   className="btn btn-primary"
                   style={{
                     width: "auto", minWidth: 104, padding: "12px 8px",
                     borderRadius: 10,
-                    opacity: isLoading || companyLoading ? 0.5 : 1,
-                    cursor: isLoading || companyLoading ? "not-allowed" : "pointer",
+                    opacity: isLoading || companyLoading || !turnstileVerified ? 0.5 : 1,
+                    cursor: isLoading || companyLoading || !turnstileVerified ? "not-allowed" : "pointer",
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
                   }}
                 >
@@ -949,31 +935,6 @@ export default function AdminLogin() {
               </div>
             )}
           </form>
-
-          <p style={{ marginTop: 22, textAlign: "center", fontSize: "0.9rem", color: "#aebed0" }}>
-            {company ? (
-              <>Not the right portal?{" "}
-                  <a href="https://isplatty.com" style={{ color: "var(--isp-accent)", fontWeight: 700, textDecoration: "none" }}>
-                  Visit ISPLATTY.COM
-                </a>
-              </>
-            ) : (
-              <>Don't have an account?{" "}
-                <Link href="/admin/register" style={{ color: "var(--isp-accent)", fontWeight: 700, cursor: "pointer", textDecoration: "none" }}>Create an account</Link>
-              </>
-            )}
-          </p>
-
-          <div style={{ marginTop: 20, display: "flex", justifyContent: "center", alignItems: "center", gap: 7 }}>
-            <div style={{
-              width: 7, height: 7, borderRadius: "50%",
-              background: "var(--isp-green)",
-            }} />
-               <span style={{ fontSize: "0.8rem", color: "var(--isp-text-sub)", fontWeight: 500 }}>
-              ISP administrator access
-            </span>
-          </div>
-          <p className="customer-access-note">Membership and hotspot customers use their separate customer access page.</p>
         </div>
       </div>
 
@@ -1182,14 +1143,6 @@ export default function AdminLogin() {
           font-weight: 750;
         }
         .admin-login-card .btn-primary:not(:disabled):hover { transform: translateY(-1px); }
-        .customer-access-note {
-          margin: 12px auto 0;
-          max-width: 330px;
-          color: #8296ac;
-          font-size: .72rem;
-          line-height: 1.55;
-          text-align: center;
-        }
         @keyframes login-card-enter {
           from { opacity: 0; transform: translateY(12px); }
           to { opacity: 1; transform: translateY(0); }

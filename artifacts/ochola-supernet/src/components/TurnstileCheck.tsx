@@ -9,6 +9,8 @@ declare global {
           sitekey: string;
           action: string;
           size?: "normal" | "compact" | "flexible";
+          appearance?: "always" | "execute" | "interaction-only";
+          theme?: "auto" | "light" | "dark";
           callback: (token: string) => void;
           "expired-callback"?: () => void;
           "error-callback"?: () => void;
@@ -45,6 +47,8 @@ export function TurnstileCheck({
   resetKey,
   onToken,
   size = "normal",
+  appearance = "always",
+  theme = "auto",
 }: {
   action:
     | "admin_login"
@@ -58,6 +62,8 @@ export function TurnstileCheck({
   resetKey: number;
   onToken: (token: string) => void;
   size?: "normal" | "compact" | "flexible";
+  appearance?: "always" | "execute" | "interaction-only";
+  theme?: "auto" | "light" | "dark";
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loadError, setLoadError] = useState(false);
@@ -79,6 +85,8 @@ export function TurnstileCheck({
         sitekey: siteKey,
         action,
         size,
+          appearance,
+          theme,
         callback: (token) => {
           setVerificationExpired(false);
           setVerified(Boolean(token));
@@ -103,7 +111,7 @@ export function TurnstileCheck({
       disposed = true;
       if (widgetId && window.turnstile) window.turnstile.remove(widgetId);
     };
-  }, [action, onToken, resetKey, siteKey, size]);
+  }, [action, appearance, onToken, resetKey, siteKey, size, theme]);
 
   if (!siteKey) {
     return <p role="alert" className="text-sm text-red-600">Cloudflare verification is not configured.</p>;
