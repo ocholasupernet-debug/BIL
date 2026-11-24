@@ -41,31 +41,62 @@ rooted_path() {
   fi
 }
 
-if ! command -v apt-get >/dev/null 2>&1; then
-  echo "ERROR: OpenVPN bootstrap currently requires an apt-based VPS." >&2
-  exit 1
-fi
-
 OVPN_DIR="$(rooted_path /etc/openvpn)"
 SERVER_DIR="${OVPN_DIR}/server"
 
-echo "[vpn-bootstrap] Installing OpenVPN and Easy-RSA..."
-$SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-$SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-  openvpn easy-rsa iptables-persistent
+if [ "${VPN_SKIP_PACKAGE_INSTALL:-false}" = "true" ]; then
+  for required_command in openvpn openssl iptables systemctl; do
+    if ! command -v "$required_command" >/dev/null 2>&1; then
+      echo "ERROR: ${required_command} is required; package installation is disabled for this scoped VPN update." >&2
+      exit 1
+    fi
+  done
+  if [ ! -d "$(rooted_path /usr/share/easy-rsa)" ] &&
+     [ ! -e "${OVPN_DIR}/easy-rsa" ]
+  then
+    echo "ERROR: Easy-RSA is unavailable; package installation is disabled for this scoped VPN update." >&2
+    exit 1
+  fi
+  echo "[vpn-bootstrap] Package installation is disabled; required tools are present."
+else
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "ERROR: OpenVPN bootstrap currently requires an apt-based VPS." >&2
+    exit 1
+  fi
+  echo "[vpn-bootstrap] Installing OpenVPN and Easy-RSA..."
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+  $SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    openvpn easy-rsa iptables-persistent
+fi
 
 CERT_DIR=""
 CERT_FILE=""
 KEY_FILE=""
 CA_FILE=""
+DUAL_HOST_CERT="$(rooted_path /etc/letsencrypt/live/router-management-vpn-dual)"
 
-# Prefer the wildcard certificate when it exists. The production zone is
-# currently not Cloudflare-managed, so configure-nginx.sh may instead issue
-# the exact-name HTTP-01 certificate that covers vpn.isplatty.org.
+# Prefer the dedicated dual-host certificate after the staged hostname
+# cutover. Keep the former .org certificates as a rollback-compatible fallback
+# for ordinary bootstraps that run before the new certificate is issued.
+if [ -s "${DUAL_HOST_CERT}/fullchain.pem" ] &&
+   [ -s "${DUAL_HOST_CERT}/privkey.pem" ] &&
+   [ -s "${DUAL_HOST_CERT}/chain.pem" ] &&
+   openssl x509 -in "${DUAL_HOST_CERT}/fullchain.pem" -noout -ext subjectAltName 2>/dev/null |
+     grep -Fq "DNS:vpn.isplatty.org" &&
+   openssl x509 -in "${DUAL_HOST_CERT}/fullchain.pem" -noout -ext subjectAltName 2>/dev/null |
+     grep -Fq "DNS:vpn.isplatty.com"
+then
+  CERT_DIR="$DUAL_HOST_CERT"
+  CERT_FILE="${DUAL_HOST_CERT}/fullchain.pem"
+  KEY_FILE="${DUAL_HOST_CERT}/privkey.pem"
+  CA_FILE="${DUAL_HOST_CERT}/chain.pem"
+fi
+
 for candidate in \
   "$(rooted_path /etc/letsencrypt/live/isplatty.org-wildcard)" \
   "$(rooted_path /etc/letsencrypt/live/isplatty.org-required-hosts)"
 do
+  [ -z "$CERT_DIR" ] || break
   if [ -s "${candidate}/fullchain.pem" ] &&
      [ -s "${candidate}/privkey.pem" ] &&
      [ -s "${candidate}/chain.pem" ] &&
@@ -83,14 +114,17 @@ done
 if [ -z "$CERT_DIR" ]; then
   cat >&2 <<EOF
 ERROR: A public certificate for vpn.isplatty.org is not ready.
+After the staged hostname cutover, the preferred certificate is:
+  /etc/letsencrypt/live/router-management-vpn-dual/{fullchain.pem,privkey.pem,chain.pem}
+and must include both DNS:vpn.isplatty.org and DNS:vpn.isplatty.com.
 Expected either:
   /etc/letsencrypt/live/isplatty.org-wildcard/{fullchain.pem,privkey.pem,chain.pem}
 or:
   /etc/letsencrypt/live/isplatty.org-required-hosts/{fullchain.pem,privkey.pem,chain.pem}
 
 The MikroTik profile verifies the OpenVPN server against the public ISRG
-Root X1 trust anchor. Run deploy/configure-nginx.sh to reconcile the
-host-specific vpn.isplatty.org certificate, then run this bootstrap again.
+Root X1 trust anchor. Run the scoped router-management hostname cutover to
+issue the dual-host certificate; do not run the full Nginx setup for this.
 EOF
   exit 1
 fi
@@ -280,6 +314,36 @@ wait_for_management_tunnel() {
   return 1
 }
 
+update_legacy_certificate_paths() {
+  local config="$1"
+  local tmp mode
+  if [ ! -s "$config" ]; then
+    echo "ERROR: active compatibility config is missing: ${config}" >&2
+    return 1
+  fi
+  tmp="$(mktemp)"
+  mode="$($SUDO stat -c '%a' "$config")"
+  if ! awk \
+    -v ca="$CA_FILE" \
+    -v cert="$CERT_FILE" \
+    -v key="$KEY_FILE" '
+      $1 == "ca"   { print "ca " ca; count_ca++; next }
+      $1 == "cert" { print "cert " cert; count_cert++; next }
+      $1 == "key"  { print "key " key; count_key++; next }
+      { print }
+      END {
+        if (count_ca != 1 || count_cert != 1 || count_key != 1) exit 42
+      }
+    ' "$config" > "$tmp"
+  then
+    rm -f "$tmp"
+    echo "ERROR: compatibility config must contain exactly one ca, cert, and key directive: ${config}" >&2
+    return 1
+  fi
+  $SUDO install -m "$mode" "$tmp" "$config"
+  rm -f "$tmp"
+}
+
 save_applied_fingerprints() {
   local stem="$1"
   local config_fingerprint="$2"
@@ -372,6 +436,22 @@ ensure_management_service() {
       echo "ERROR: ${legacy} is active, but its config or live tunnel does not match the isolated management network; refusing to start a duplicate." >&2
       show_management_diagnostics "$stem" "$device"
       return 1
+    fi
+
+    if [ "${VPN_RESTART_ACTIVE_MANAGEMENT:-false}" = "true" ]; then
+      update_legacy_certificate_paths "$legacy_config"
+      if ! $SUDO systemctl restart "$legacy"; then
+        echo "ERROR: Could not restart active compatibility service ${legacy} with the validated certificate." >&2
+        show_management_diagnostics "$stem" "$device"
+        return 1
+      fi
+      if ! wait_for_management_tunnel "$device" "$address" "$port"; then
+        echo "ERROR: The compatibility management tunnel is not ready after the certificate update for ${stem}." >&2
+        show_management_diagnostics "$stem" "$device"
+        return 1
+      fi
+      echo "[vpn-bootstrap] Updated and restarted active compatibility service ${legacy} with the validated management certificate."
+      return 0
     fi
 
     # Keep the verified compatibility process alive for this deployment,
@@ -468,24 +548,28 @@ ensure_management_service \
   "ochola-router-backup" "tun-router-bkp" "10.8.6.0" "10.8.6.1" "1197" \
   "$BACKUP_CONFIG_FINGERPRINT" "$BACKUP_CONFIG_UNCHANGED"
 
-# Permit the two shared listeners and the stable per-router public range.
-$SUDO iptables -C INPUT -p tcp --dport 1196 -j ACCEPT 2>/dev/null || \
-  $SUDO iptables -I INPUT -p tcp --dport 1196 -j ACCEPT
-$SUDO iptables -C INPUT -p tcp --dport 1197 -j ACCEPT 2>/dev/null || \
-  $SUDO iptables -I INPUT -p tcp --dport 1197 -j ACCEPT
-$SUDO iptables -C FORWARD -i tun-router -j ACCEPT 2>/dev/null || \
-  $SUDO iptables -I FORWARD -i tun-router -j ACCEPT
-$SUDO iptables -C FORWARD -o tun-router -j ACCEPT 2>/dev/null || \
-  $SUDO iptables -I FORWARD -o tun-router -j ACCEPT
-$SUDO iptables -C FORWARD -i tun-router-bkp -j ACCEPT 2>/dev/null || \
-  $SUDO iptables -I FORWARD -i tun-router-bkp -j ACCEPT
-$SUDO iptables -C FORWARD -o tun-router-bkp -j ACCEPT 2>/dev/null || \
-  $SUDO iptables -I FORWARD -o tun-router-bkp -j ACCEPT
+if [ "${VPN_SKIP_FIREWALL_CHANGES:-false}" = "true" ]; then
+  echo "[vpn-bootstrap] Firewall changes are disabled for this scoped certificate and hostname update."
+else
+  # Permit the two shared listeners and the stable per-router public range.
+  $SUDO iptables -C INPUT -p tcp --dport 1196 -j ACCEPT 2>/dev/null || \
+    $SUDO iptables -I INPUT -p tcp --dport 1196 -j ACCEPT
+  $SUDO iptables -C INPUT -p tcp --dport 1197 -j ACCEPT 2>/dev/null || \
+    $SUDO iptables -I INPUT -p tcp --dport 1197 -j ACCEPT
+  $SUDO iptables -C FORWARD -i tun-router -j ACCEPT 2>/dev/null || \
+    $SUDO iptables -I FORWARD -i tun-router -j ACCEPT
+  $SUDO iptables -C FORWARD -o tun-router -j ACCEPT 2>/dev/null || \
+    $SUDO iptables -I FORWARD -o tun-router -j ACCEPT
+  $SUDO iptables -C FORWARD -i tun-router-bkp -j ACCEPT 2>/dev/null || \
+    $SUDO iptables -I FORWARD -i tun-router-bkp -j ACCEPT
+  $SUDO iptables -C FORWARD -o tun-router-bkp -j ACCEPT 2>/dev/null || \
+    $SUDO iptables -I FORWARD -o tun-router-bkp -j ACCEPT
 
-if command -v iptables-save >/dev/null 2>&1 &&
-   [ -d "$(rooted_path /etc/iptables)" ]
-then
-  $SUDO iptables-save | $SUDO tee "$(rooted_path /etc/iptables/rules.v4)" >/dev/null
+  if command -v iptables-save >/dev/null 2>&1 &&
+     [ -d "$(rooted_path /etc/iptables)" ]
+  then
+    $SUDO iptables-save | $SUDO tee "$(rooted_path /etc/iptables/rules.v4)" >/dev/null
+  fi
 fi
 
 for entry in \

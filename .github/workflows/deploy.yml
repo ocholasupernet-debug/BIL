@@ -65,6 +65,15 @@ on:
         required: false
         default: false
         type: boolean
+      vpn_management_host_cutover:
+        description: "Run only the approved, isolated router-management VPN hostname cutover"
+        required: false
+        default: false
+        type: boolean
+      confirm_vpn_management_host:
+        description: "Type vpn.isplatty.com to authorize the staged management VPN hostname cutover"
+        required: false
+        type: string
 
 concurrency:
   group: vps-deploy
@@ -75,8 +84,81 @@ permissions:
   contents: read
 
 jobs:
+  vpn-management-host-cutover:
+    name: Scoped router-management VPN hostname cutover
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.vpn_management_host_cutover == true }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the scoped release
+        uses: actions/checkout@v4
+
+      - name: Require the exact cutover branch and confirmation
+        shell: bash
+        env:
+          CONFIRM_HOST: ${{ inputs.confirm_vpn_management_host }}
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/deploy/vpn-management-host-cutover-* ||
+                "$CONFIRM_HOST" != "vpn.isplatty.com" ]]; then
+            echo "ERROR: use the scoped cutover branch and type vpn.isplatty.com exactly."
+            exit 1
+          fi
+          bash -n deploy/bootstrap-router-management-vpn.sh
+          bash -n deploy/activate-router-management-vpn-com.sh
+          bash deploy/tests/bootstrap-router-management-vpn.test.sh
+
+      - name: Package only the management VPN cutover helpers
+        run: |
+          tar -czf vpn-management-host-cutover.tgz \
+            deploy/bootstrap-router-management-vpn.sh \
+            deploy/activate-router-management-vpn-com.sh \
+            deploy/verify-router-management-vps.sh
+
+      - name: Copy the scoped helpers to the VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: 102.203.116.204
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          fingerprint: "SHA256:XlSA4l6O/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"
+          port: 22
+          source: vpn-management-host-cutover.tgz
+          target: /tmp
+          overwrite: true
+          timeout: 120s
+          command_timeout: 5m
+
+      - name: Run only the router-management hostname cutover
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          CONFIRM_VPN_MANAGEMENT_HOST: ${{ inputs.confirm_vpn_management_host }}
+        with:
+          host: 102.203.116.204
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          passphrase: ${{ secrets.VPS_SSH_PASSPHRASE }}
+          fingerprint: "SHA256:XlSA4l6O/lK6axMYwcViSVdoy2Z8i3DPDjJtQtQrtFc"
+          port: 22
+          timeout: 30s
+          command_timeout: 20m
+          envs: CONFIRM_VPN_MANAGEMENT_HOST
+          script: |
+            set -euo pipefail
+            test "${CONFIRM_VPN_MANAGEMENT_HOST:-}" = "vpn.isplatty.com"
+            helper_dir="$(mktemp -d /tmp/ochola-vpn-host-cutover.XXXXXX)"
+            trap 'rm -rf "$helper_dir" /tmp/vpn-management-host-cutover.tgz' EXIT
+            tar -xzf /tmp/vpn-management-host-cutover.tgz \
+              -C "$helper_dir"
+            chmod 700 "$helper_dir/deploy/activate-router-management-vpn-com.sh"
+            VPN_BOOTSTRAP_SCRIPT="$helper_dir/deploy/bootstrap-router-management-vpn.sh" \
+            VPN_VERIFY_SCRIPT="$helper_dir/deploy/verify-router-management-vps.sh" \
+              bash "$helper_dir/deploy/activate-router-management-vpn-com.sh"
+
   deploy:
     name: SSH Deploy
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.vpn_management_host_cutover == true) }}
     runs-on: ubuntu-latest
 
     steps:
@@ -468,7 +550,7 @@ jobs:
             upsert_env "TAWK_API_KEY"               "$TAWK_API_KEY"
             # Dedicated router-management VPN endpoint. Keep this separate
             # from any stale VPS_HOST value used by older deployments.
-            upsert_env "ROUTER_OPENVPN_ENDPOINT"  "vpn.isplatty.org"
+            upsert_env "ROUTER_OPENVPN_ENDPOINT"  "vpn.isplatty.com"
             # The deployment key used by this workflow is authorized for root
             # on the VPS. The API's SSH reconciliation helper must use the
             # same authenticated principal; a separate admin user is not

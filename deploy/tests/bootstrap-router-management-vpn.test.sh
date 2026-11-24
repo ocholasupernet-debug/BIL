@@ -103,7 +103,17 @@ case "$name" in
     ;;
   openssl)
     log_call "$@"
-    echo "X509v3 Subject Alternative Name: DNS:vpn.isplatty.org"
+    case "$*" in
+      *router-management-vpn-dual*)
+        if [ "$VPN_TEST_SCENARIO" = "dual-host-cert" ] ||
+           [ "$VPN_TEST_SCENARIO" = "legacy-certificate-cutover" ]; then
+          echo "X509v3 Subject Alternative Name: DNS:vpn.isplatty.org, DNS:vpn.isplatty.com"
+        else
+          echo "X509v3 Subject Alternative Name: DNS:vpn.isplatty.org"
+        fi
+        ;;
+      *) echo "X509v3 Subject Alternative Name: DNS:vpn.isplatty.org" ;;
+    esac
     ;;
   *)
     echo "Unexpected unmocked command: ${name}" >&2
@@ -113,7 +123,7 @@ esac
 MOCKEOF
 chmod +x "${MOCK_BIN}/mock-command"
 
-for command_name in sudo id systemctl ip ss apt-get iptables-save journalctl fuser iptables sleep openssl; do
+for command_name in sudo id systemctl ip ss apt-get iptables-save journalctl fuser iptables sleep openssl openvpn; do
   ln -s mock-command "${MOCK_BIN}/${command_name}"
 done
 
@@ -141,10 +151,19 @@ prepare_root() {
   local scenario="$1"
   local root="${WORK_DIR}/${scenario}/root"
   local cert_dir="${root}/etc/letsencrypt/live/isplatty.org-wildcard"
-  mkdir -p "$cert_dir" "${root}/etc/openvpn"
+  mkdir -p "$cert_dir" "${root}/etc/openvpn" "${root}/usr/share/easy-rsa"
   printf 'test certificate\n' > "${cert_dir}/fullchain.pem"
   printf 'test private key\n' > "${cert_dir}/privkey.pem"
   printf 'test chain\n' > "${cert_dir}/chain.pem"
+  if [ "$scenario" = "dual-host-cert" ] ||
+     [ "$scenario" = "incomplete-dual-host-cert" ] ||
+     [ "$scenario" = "legacy-certificate-cutover" ]; then
+    local dual_cert_dir="${root}/etc/letsencrypt/live/router-management-vpn-dual"
+    mkdir -p "$dual_cert_dir"
+    printf 'dual test certificate\n' > "${dual_cert_dir}/fullchain.pem"
+    printf 'dual test private key\n' > "${dual_cert_dir}/privkey.pem"
+    printf 'dual test chain\n' > "${dual_cert_dir}/chain.pem"
+  fi
   if [ "$scenario" = "compatibility" ]; then
     cat > "${root}/etc/openvpn/ochola-router.conf" <<'CONFEOF'
 port 1196
@@ -157,6 +176,22 @@ port 1196
 dev tun-router
 server 10.8.0.0 255.255.255.0
 CONFEOF
+  elif [ "$scenario" = "legacy-certificate-cutover" ]; then
+    for stem in ochola-router ochola-router-backup; do
+      case "$stem" in
+        ochola-router) port=1196; device=tun-router; network=10.8.5.0 ;;
+        *) port=1197; device=tun-router-bkp; network=10.8.6.0 ;;
+      esac
+      cat > "${root}/etc/openvpn/${stem}.conf" <<CONFEOF
+port ${port}
+proto tcp-server
+dev ${device}
+server ${network} 255.255.255.0
+ca /etc/letsencrypt/live/isplatty.org-wildcard/chain.pem
+cert /etc/letsencrypt/live/isplatty.org-wildcard/fullchain.pem
+key /etc/letsencrypt/live/isplatty.org-wildcard/privkey.pem
+CONFEOF
+    done
   fi
   printf '%s\n' "$root"
 }
@@ -176,6 +211,8 @@ run_scenario() {
     VPN_TEST_SCENARIO="$scenario" \
     VPN_TEST_LOG="$command_log" \
     VPN_TEST_STATE_FILE="$state_file" \
+    VPN_SKIP_PACKAGE_INSTALL="$([ "$scenario" = "legacy-certificate-cutover" ] && echo true || echo false)" \
+    VPN_RESTART_ACTIVE_MANAGEMENT="$([ "$scenario" = "legacy-certificate-cutover" ] && echo true || echo false)" \
     bash "$BOOTSTRAP" > "$output" 2>&1
   then
     SCENARIO_STATUS=0
@@ -354,6 +391,50 @@ assert_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn-server@ochola-rout
 assert_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn-server@ochola-router-backup>"
 assert_contains "${config_update_root}/etc/openvpn/server/ochola-router.conf" "$new_cert_dir/fullchain.pem"
 echo "PASS: changed modern config paths are applied by restarting both units"
+
+dual_root="$(prepare_root dual-host-cert)"
+run_scenario dual-host-cert "$dual_root"
+if [ "$SCENARIO_STATUS" -ne 0 ]; then
+  echo "FAIL: valid dual-host certificate was not accepted" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+assert_contains "$SCENARIO_OUTPUT" "${dual_root}/etc/letsencrypt/live/router-management-vpn-dual"
+assert_contains "${dual_root}/etc/openvpn/server/ochola-router.conf" \
+  "${dual_root}/etc/letsencrypt/live/router-management-vpn-dual/fullchain.pem"
+echo "PASS: valid .org+.com certificate is preferred for the isolated management VPN"
+
+incomplete_dual_root="$(prepare_root incomplete-dual-host-cert)"
+run_scenario incomplete-dual-host-cert "$incomplete_dual_root"
+if [ "$SCENARIO_STATUS" -ne 0 ]; then
+  echo "FAIL: incomplete dual-host certificate fallback scenario failed" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+assert_contains "$SCENARIO_OUTPUT" "${incomplete_dual_root}/etc/letsencrypt/live/isplatty.org-wildcard"
+assert_not_contains "${incomplete_dual_root}/etc/openvpn/server/ochola-router.conf" \
+  "router-management-vpn-dual"
+echo "PASS: a certificate missing the .com SAN is rejected by the bootstrap"
+
+legacy_cutover_root="$(prepare_root legacy-certificate-cutover)"
+legacy_state_file="${WORK_DIR}/legacy-certificate-cutover/states"
+mkdir -p "$(dirname "$legacy_state_file")"
+printf '%s\n' \
+  openvpn@ochola-router \
+  openvpn@ochola-router-backup > "$legacy_state_file"
+run_scenario legacy-certificate-cutover "$legacy_cutover_root"
+if [ "$SCENARIO_STATUS" -ne 0 ]; then
+  echo "FAIL: scoped active compatibility certificate update failed" >&2
+  cat "$SCENARIO_OUTPUT" >&2
+  exit 1
+fi
+assert_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn@ochola-router>"
+assert_contains "$SCENARIO_LOG" "systemctl <restart> <openvpn@ochola-router-backup>"
+assert_contains "${legacy_cutover_root}/etc/openvpn/ochola-router.conf" \
+  "${legacy_cutover_root}/etc/letsencrypt/live/router-management-vpn-dual/fullchain.pem"
+assert_not_contains "$SCENARIO_LOG" "systemctl <start> <openvpn-server@ochola-router>"
+assert_not_contains "$SCENARIO_LOG" "apt-get"
+echo "PASS: scoped cutover updates and restarts only verified active management compatibility units"
 
 cert_update_root="$(prepare_root modern-cert-update)"
 run_scenario modern-cert-update "$cert_update_root"

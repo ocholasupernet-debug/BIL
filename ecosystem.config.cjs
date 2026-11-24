@@ -80,7 +80,7 @@ module.exports = {
          WHATSAPP_WEBHOOK_VERIFY_TOKEN: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "",
          WHATSAPP_APP_SECRET: process.env.WHATSAPP_APP_SECRET || "",
          WHATSAPP_PHONE_NUMBER_ID: process.env.WHATSAPP_PHONE_NUMBER_ID || "",
-         ROUTER_OPENVPN_ENDPOINT: process.env.ROUTER_OPENVPN_ENDPOINT || "vpn.isplatty.org",
+         ROUTER_OPENVPN_ENDPOINT: process.env.ROUTER_OPENVPN_ENDPOINT || "vpn.isplatty.com",
          VPS_HOST:             process.env.VPS_HOST || "vpn.isplatty.org",
          VPS_USER:             process.env.VPS_USER || "",
          VPS_DEPLOYMENT_KEY:   process.env.VPS_DEPLOYMENT_KEY || "",
