@@ -538,8 +538,8 @@ export default function SelfInstall() {
       setNotice(result.warning
         ? "The authenticated bundle is ready. Resolve the VPS warning before importing it."
         : result.compactMode
-          ? "Three smaller setup stages are ready. Run Network, VPN/API, and services in order."
-          : "Download the authenticated bundle, upload it to the router, then import it.");
+          ? "The compact bootstrap is ready. Download and upload it, then import it to install and run the three stages."
+          : "The authenticated bundle is ready. Use the fetch/import command or download and upload the file.");
       window.setTimeout(() => {
         scriptResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 100);
@@ -576,7 +576,9 @@ export default function SelfInstall() {
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-        setNotice(`Downloaded ${step.fileName}. Keep it private and run the generated stages in order.`);
+        setNotice(compactMode
+          ? `Downloaded ${step.fileName}. Upload it to RouterOS Files, then run /import "${step.fileName}".`
+          : `Downloaded ${step.fileName}. Keep it private and follow the displayed import instructions.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not generate the Self Install script.");
     } finally {
@@ -788,8 +790,8 @@ export default function SelfInstall() {
                     {mode === "zero-touch"
                       ? "This script is intentionally empty while its replacement structure is being prepared."
                         : compactMode
-                          ? <>Generate three smaller, ordered files for limited-memory routers. Run Network, then VPN/API, then Hotspot/PPPoE; each stage stops on errors and can be retried independently.</>
-                          : <>Download the tagged <strong style={{ color: "var(--isp-text)" }}>mainhotspot.rsc</strong> file from this signed-in page, upload it to the router, then import its ordered network, VPN/API, and customer-service sections.</>}
+                          ? <>Generate one small bootstrap for limited-memory routers. Download it here, upload it to RouterOS Files, and import it. It installs HTTPS trust, adds the Network, VPN/API, and Hotspot/PPPoE files, then imports them in order.</>
+                          : <>Download the protected setup file, or copy the fetch/import command to let a router with trusted HTTPS download it directly.</>}
                  </div>
                   {mode !== "zero-touch" && (
                     <label style={{
@@ -813,7 +815,7 @@ export default function SelfInstall() {
                       <span>
                         <strong style={{ display: "block", fontSize: "0.74rem" }}>Compact staged setup for hAP lite / 32 MB routers</strong>
                         <span style={{ display: "block", marginTop: "0.2rem", color: "var(--isp-text-muted)", fontSize: "0.69rem", lineHeight: 1.5 }}>
-                          Imports one subsystem at a time to reduce peak script memory. For hAP lite (SMIPS), first import and trust the public ISRG Root X1 certificate through Winbox; its built-in CA store is unavailable. HTTPS verification remains enabled.
+                          The downloaded bootstrap imports the official ISRG Root X1 certificate before fetching the smaller stages over verified HTTPS. Upload the named bootstrap to RouterOS Files first; the stages are kept there for review and recovery.
                         </span>
                       </span>
                     </label>
@@ -829,7 +831,7 @@ export default function SelfInstall() {
                       fontSize: "0.69rem",
                       lineHeight: 1.5,
                     }}>
-                      hAP lite TLS prerequisite: upload the official ISRG Root X1 PEM in Winbox → Files, import it under Certificates, and mark it trusted for fetch before running the generated commands. Do not use <code>check-certificate=no</code>.
+                      hAP lite: download the generated <code>{`mainhotspot-${router?.id ?? "router-id"}.rsc`}</code> file, upload it to RouterOS Files, and import it. The bootstrap installs the official trust certificate before any staged HTTPS fetch. Do not use <code>check-certificate=no</code>.
                     </div>
                   )}
                  <div style={{ marginTop: "0.75rem", display: "flex", alignItems: "end", gap: "0.65rem", flexWrap: "wrap" }}>
@@ -938,8 +940,8 @@ export default function SelfInstall() {
                   </div>
                      <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.1rem", color: "var(--isp-text-muted)", fontSize: "0.72rem", lineHeight: 1.7 }}>
                        {compactMode
-                         ? <li>Run the Network, VPN/API, and Hotspot/PPPoE stage commands in order; wait for each stage to report completion.</li>
-                         : <li>Download and upload mainhotspot.rsc, then run <code>/import mainhotspot.rsc</code>.</li>}
+                         ? <li>Upload and import the mainhotspot bootstrap. It installs HTTPS trust, downloads the three stage files, and imports them in order; the files remain under Files for review.</li>
+                         : <li>Copy the fetch/import command for a direct setup, or download and upload <code>mainhotspot.rsc</code> and import it locally.</li>}
                        <li>The final services file creates the selected Hotspot bridge, DHCP, walled garden, PPPoE, and service NAT.</li>
                       <li>It waits for the management tunnel to reach a running state.</li>
                       <li>Return here after the VPN is up so the next configuration step can be added.</li>

@@ -70,7 +70,6 @@ import {
 } from "../lib/router-vpn-provisioning.js";
 import {
   buildRouterFileImportCommand,
-  buildSelfInstallStepCommand,
 } from "../lib/self-install-step-command.js";
 import {
   readRouterManagementCaCertificate,
@@ -93,6 +92,7 @@ import { ensureDefaultRouterPools } from "../lib/router-default-pools.js";
 import { PAYMENT_WALLED_GARDEN_HOSTNAMES } from "../lib/payment-walled-garden.js";
 import { buildSelfInstallBundle } from "../lib/self-install-bundle.js";
 import { buildCompactSelfInstallFiles } from "../lib/self-install-compact-plan.js";
+import { buildCompactSelfInstallBootstrap } from "../lib/self-install-compact-bootstrap.js";
 import { buildSelfInstallTenantOrigin, moveSelfInstallHostnameToCom } from "../lib/self-install-origin.js";
 import { authenticatedAccount, authenticatedAdminId, authenticatedTenantAdminId, requireAdmin } from "../lib/api-auth.js";
 import { isSafeRouterName } from "../lib/router-name-policy.js";
@@ -3647,32 +3647,42 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
           },
         ])
       : [];
-    const compactSteps = compactFiles.map(file => {
-      const token = createPendingRouterFileSource({
-        content: Buffer.from(file.content, "utf8"),
-        contentType: "text/plain; charset=utf-8",
-        fileName: file.fileName,
-        maxFetchAttempts: 3,
-      }, SELF_INSTALL_BUNDLE_SOURCE_TTL_MS);
-      const sourceUrl = `${bundleSourceOrigin}/api/router-file-source/${token}`;
-      return {
-        id: file.id,
-        order: file.order,
-        title: file.title,
-        fileName: file.fileName,
-        description: file.description,
-        content: file.content,
-        sizeBytes: Buffer.byteLength(file.content, "utf8"),
-        command: buildSelfInstallStepCommand({
-          routerId: id,
-          stepId: file.id,
-          stepOrder: file.order as 1 | 2 | 3,
-          sourceUrl,
-          fileName: file.fileName,
-          verified: true,
-        }),
-      };
-    });
+    const compactSteps = compactMode
+      ? (() => {
+          const generationId = randomBytes(4).toString("hex");
+          const stageFileNames = {
+            network: `networksetup-${id}-${generationId}.rsc`,
+            vpn: `vpnsetup-${id}-${generationId}.rsc`,
+            services: `servicessetup-${id}-${generationId}.rsc`,
+          };
+          const stageSources = compactFiles.map(file => {
+            const stageFileName = stageFileNames[file.id];
+            const token = createPendingRouterFileSource({
+              content: Buffer.from(file.content, "utf8"),
+              contentType: "text/plain; charset=utf-8",
+              fileName: stageFileName,
+              maxFetchAttempts: 3,
+            }, SELF_INSTALL_BUNDLE_SOURCE_TTL_MS);
+            return {
+              id: file.id,
+              fileName: stageFileName,
+              sourceUrl: `${bundleSourceOrigin}/api/router-file-source/${token}`,
+            };
+          });
+          const bootstrapFileName = `mainhotspot-${id}.rsc`;
+          const content = buildCompactSelfInstallBootstrap(stageSources);
+          return [{
+            id: "mainhotspot" as const,
+            order: 1,
+            title: "Compact Self Install bootstrap",
+            fileName: bootstrapFileName,
+            description: `Download this bootstrap, upload it to RouterOS Files, then import it soon (stage links expire after 10 minutes). It adds and runs the Network, VPN/API, and Hotspot/PPPoE files in order: ${stageSources.map(stage => stage.fileName).join(", ")}.`,
+            content,
+            sizeBytes: Buffer.byteLength(content, "utf8"),
+            command: `/import "${bootstrapFileName}"`,
+          }];
+        })()
+      : [];
     const bundle = compactMode
       ? ""
       : buildSelfInstallBundle([
