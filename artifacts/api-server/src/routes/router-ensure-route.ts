@@ -18,7 +18,7 @@ import { randomBytes } from "crypto";
 import { encryptRouterApiSecret, routerApiSecretLookupHash } from "../lib/router-api-secret.js";
 import { allocateRouterVpnIp, isRouterVpnIp } from "../lib/router-vpn-ip.js";
 import { readIppEntries } from "../lib/vpn-status.js";
-import { provisionRouterManagementOpenVpnPair } from "../lib/router-vpn-provisioning.js";
+import { startRouterManagementOpenVpnPair } from "../lib/router-vpn-provisioning.js";
 import { authenticatedAdminId, requireAdmin } from "../lib/api-auth.js";
 import { getTenantSubdomain } from "../lib/tenant-host.js";
 import { isSafeRouterName, nextOrdinalRouterName, routerNameBase } from "../lib/router-name-policy.js";
@@ -155,26 +155,15 @@ async function allocatePersistentVpnIp(): Promise<string> {
   return allocateRouterVpnIp(used);
 }
 
-async function reconcileRouterManagementVpn(input: {
+function scheduleRouterManagementVpn(input: {
   routerId: number;
   adminId: number;
   routerName: string;
   routerIp: string;
-}): Promise<"ready" | "pending"> {
+}): "ready" | "pending" {
   if (!isRouterVpnIp(input.routerIp)) return "pending";
-  try {
-    await provisionRouterManagementOpenVpnPair(input);
-    return "ready";
-  } catch (error) {
-    /* Keep router creation recoverable when the VPS is temporarily
-       unavailable. Profile generation retries this before releasing
-       the client configuration. */
-    console.warn(
-      `[router/ensure] management VPN provisioning deferred for router ${input.routerId}:`,
-      error instanceof Error ? error.message : String(error),
-    );
-    return "pending";
-  }
+  const status = startRouterManagementOpenVpnPair(input);
+  return status.status === "ready" ? "ready" : "pending";
 }
 
 router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<void> => {
@@ -238,7 +227,7 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
             console.warn("[router/ensure] persistent VPN IP allocation deferred:", error);
           }
         }
-        const managementVpn = await reconcileRouterManagementVpn({
+        const managementVpn = scheduleRouterManagementVpn({
           routerId: Number(existing.id),
           adminId,
           routerName: String(existing.name ?? name),
@@ -298,7 +287,7 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
         if (rows.length > 0) {
           console.log(`[router/ensure] Created router "${name}" for admin ${adminId} (key: ${key === SERVICE_KEY ? "service" : "anon"})`);
           const created = rows[0];
-          const managementVpn = await reconcileRouterManagementVpn({
+          const managementVpn = scheduleRouterManagementVpn({
             routerId: Number(created.id),
             adminId,
             routerName: String(created.name ?? name),
@@ -319,7 +308,7 @@ router.post("/admin/router/ensure", requireAdmin(), async (req, res): Promise<vo
           const rows2 = await existRes2.json() as Record<string, unknown>[];
           if (rows2.length > 0) {
             const existing = rows2[0];
-            const managementVpn = await reconcileRouterManagementVpn({
+            const managementVpn = scheduleRouterManagementVpn({
               routerId: Number(existing.id),
               adminId,
               routerName: String(existing.name ?? name),

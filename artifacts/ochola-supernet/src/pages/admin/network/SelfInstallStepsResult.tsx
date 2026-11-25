@@ -17,6 +17,8 @@ type SelfInstallStep = {
 type SelfInstallStepsResultProps = {
   steps: SelfInstallStep[];
   compactMode?: boolean;
+  managementVpnReady: boolean;
+  managementVpnMessage?: string;
   copiedStep: StepId | null;
   busy: string;
   onCopy: (stepId: StepId) => void;
@@ -26,6 +28,8 @@ type SelfInstallStepsResultProps = {
 export function SelfInstallStepsResult({
   steps,
   compactMode = false,
+  managementVpnReady,
+  managementVpnMessage,
   copiedStep,
   busy,
   onCopy,
@@ -43,11 +47,27 @@ export function SelfInstallStepsResult({
               : "Use the fetch/import command when the router trusts HTTPS, or download and upload the file manually."}
           </p>
         </div>
-        <span className="self-install-result__ready">
-          <CheckCircle2 size={15} aria-hidden="true" />
-          Generated · Ready
+        <span
+          className="self-install-result__ready"
+          style={!managementVpnReady ? {
+            color: "#fbbf24",
+            background: "rgba(245,158,11,.1)",
+            borderColor: "rgba(245,158,11,.28)",
+          } : undefined}
+        >
+          {managementVpnReady
+            ? <CheckCircle2 size={15} aria-hidden="true" />
+            : <AlertTriangle size={15} aria-hidden="true" />}
+          {managementVpnReady ? "Generated · Ready" : "Generated · VPS setup pending"}
         </span>
       </header>
+
+      {!managementVpnReady && (
+        <div className="self-install-result__warning" role="status" style={{ marginBottom: 14 }}>
+          <AlertTriangle size={16} aria-hidden="true" />
+          <span>{managementVpnMessage || "Wait for both VPS management VPN instances to be ready before downloading or importing."}</span>
+        </div>
+      )}
 
       <div className="self-install-result__banner" role="status">
         <span className="self-install-result__banner-icon">
@@ -94,7 +114,7 @@ export function SelfInstallStepsResult({
                     className="self-install-result__button"
                     type="button"
                     onClick={() => onDownload(step.id)}
-                    disabled={busy !== ""}
+                    disabled={busy !== "" || !managementVpnReady}
                     aria-label={`Download ${step.fileName}`}
                   >
                     <Download size={14} aria-hidden="true" />
@@ -104,7 +124,7 @@ export function SelfInstallStepsResult({
                     className="self-install-result__button self-install-result__button--primary"
                     type="button"
                     onClick={() => onCopy(step.id)}
-                    disabled={busy !== ""}
+                    disabled={busy !== "" || !managementVpnReady}
                     aria-label="Copy RouterOS import command"
                   >
                     {copiedStep === step.id

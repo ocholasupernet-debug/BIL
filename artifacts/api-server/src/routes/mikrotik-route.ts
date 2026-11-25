@@ -66,7 +66,8 @@ import { ensureRouterManagementOvpnCredentials } from "../lib/router-management-
 import { routerHealthApiAccountOrder } from "../lib/router-health-api-account-order.js";
 import {
   provisionRouterManagementOpenVpn,
-  provisionRouterManagementOpenVpnPair,
+  getRouterManagementOpenVpnPairStatus,
+  startRouterManagementOpenVpnPair,
 } from "../lib/router-vpn-provisioning.js";
 import {
   buildRouterFileImportCommand,
@@ -3383,6 +3384,37 @@ router.get("/router/:id/vpn-info", requireAdmin(), async (req, res): Promise<voi
   });
 });
 
+router.get("/router/:id/self-install-vpn-status", requireAdmin(), async (req, res): Promise<void> => {
+  const id = Number.parseInt(String(req.params.id), 10);
+  const adminId = authenticatedAdminId(req, req.query.adminId);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid router id" });
+    return;
+  }
+  if (!Number.isInteger(adminId) || adminId <= 0) {
+    res.status(403).json({ error: "A valid signed-in ISP account is required" });
+    return;
+  }
+
+  const found = await getRouterCreds(id, adminId);
+  if (!found) {
+    res.status(404).json({ error: "Router not found for this ISP account" });
+    return;
+  }
+  const input = {
+    routerId: id,
+    adminId,
+    routerName: found.row.name,
+    routerIp: String(found.row.vpn_ip ?? defaultTunnelRouterIp(id)).trim(),
+  };
+  const status = getRouterManagementOpenVpnPairStatus(input);
+  const current = status.status === "unknown"
+    ? startRouterManagementOpenVpnPair(input)
+    : status;
+
+  res.set("Cache-Control", "no-store").json(current);
+});
+
 /* ─── GET /api/router/:id/self-install-script ───────────────────────────── */
 /** Generates the credential-bearing Self Install bundle for an authenticated admin. */
 router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): Promise<void> => {
@@ -3442,6 +3474,12 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       found.row,
       found.creds.password,
     );
+    const managementVpnStatus = startRouterManagementOpenVpnPair({
+      routerId: id,
+      adminId,
+      routerName: found.row.name,
+      routerIp: tunnelRouterIp,
+    });
     let provisioningWarning = "";
     let openVpnCredentials: { username: string; password: string };
     try {
@@ -3464,42 +3502,13 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       provisioningWarning = `The router management VPN credentials could not be persisted yet. The Brownfield bundle was generated; finish VPS VPN readiness before importing it. (${reason})`;
       logger.warn({ routerId: id, error: reason }, "[self-install] Brownfield script generation continued without credential persistence");
     }
-    let backupTunnelRouterIp: string;
-    try {
-      const provisioning = await provisionRouterManagementOpenVpnPair({
-        adminId,
-        routerId: id,
-        routerName: found.row.name,
-        routerIp: tunnelRouterIp,
-      });
-      if (
-        !provisioning.primary.ready
-        || !provisioning.backup.ready
-        || provisioning.primary.endpoint !== vpsIp
-        || provisioning.backup.endpoint !== vpsIp
-      ) {
-        if (installationMode !== "coexist") {
-          res.status(503).json({
-                error: "The VPS management VPN endpoint does not match the configured endpoint.",
-                detail: "Refresh Self Install and confirm ROUTER_OPENVPN_ENDPOINT is the public hostname configured on the VPS.",
-              });
-          return;
-        }
-        provisioningWarning = provisioningWarning
-          ? `${provisioningWarning} The VPS management VPN is not fully reconciled yet.`
-          : "The VPS management VPN is not fully reconciled yet. The Brownfield bundle was generated, but its VPN section will work only after the VPS VPN services are ready.";
-        backupTunnelRouterIp = routerManagementBackupIp(tunnelRouterIp);
-      } else {
-        backupTunnelRouterIp = provisioning.backup.assignedIp;
-      }
-    } catch (error) {
-      if (installationMode !== "coexist") throw error;
-      const reason = error instanceof Error ? error.message : String(error);
+    const backupTunnelRouterIp = routerManagementBackupIp(tunnelRouterIp);
+    if (managementVpnStatus.status !== "ready") {
+      const statusMessage = managementVpnStatus.message
+        ?? "VPS management VPN provisioning is running. Wait until it is ready before importing the script.";
       provisioningWarning = provisioningWarning
-        ? `${provisioningWarning} The VPS management VPN could not be reconciled yet. (${reason})`
-        : `The VPS management VPN could not be reconciled yet. The Brownfield bundle was still generated; finish VPS VPN readiness before importing it. (${reason})`;
-      backupTunnelRouterIp = routerManagementBackupIp(tunnelRouterIp);
-      logger.warn({ routerId: id, error: reason }, "[self-install] Brownfield script generation continued without VPS reconciliation");
+        ? `${provisioningWarning} ${statusMessage}`
+        : statusMessage;
     }
     const managementCaCertificatePem = readRouterManagementCaCertificate();
     if (!managementCaCertificatePem) {
@@ -3730,6 +3739,7 @@ router.get("/router/:id/self-install-script", requireAdmin(), async (req, res): 
       .json({
       routerId: id,
       warning: provisioningWarning || undefined,
+      managementVpnStatus: managementVpnStatus.status,
       bundleContent: bundle,
       compactMode,
       steps: compactMode ? compactSteps : regularSteps,

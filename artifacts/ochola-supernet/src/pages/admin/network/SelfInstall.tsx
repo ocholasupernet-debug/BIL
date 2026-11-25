@@ -52,6 +52,12 @@ type VpnInfo = {
   };
 };
 
+type ManagementVpnProvisioningStatus = {
+  status: "unknown" | "pending" | "ready" | "failed";
+  updatedAt?: string;
+  message?: string;
+};
+
 type InstallStatus = {
   ok: boolean;
   ready: boolean;
@@ -101,6 +107,7 @@ type SelfInstallStep = {
 type SelfInstallStepsResponse = {
   routerId: number;
   warning?: string;
+  managementVpnStatus?: ManagementVpnProvisioningStatus["status"];
   bundleContent?: string;
   compactMode?: boolean;
   steps: SelfInstallStep[];
@@ -319,6 +326,9 @@ export default function SelfInstall() {
   const [router, setRouter] = useState<RouterProfile | null>(null);
   const [compactMode, setCompactMode] = useState(false);
   const [vpnInfo, setVpnInfo] = useState<VpnInfo | null>(null);
+  const [managementVpnStatus, setManagementVpnStatus] = useState<ManagementVpnProvisioningStatus>({
+    status: "unknown",
+  });
   const [installStatus, setInstallStatus] = useState<InstallStatus | null>(null);
   const [finished, setFinished] = useState<FinishResult["router"] | null>(null);
   const [busy, setBusy] = useState<"creating" | "loading" | "finishing" | "script" | "">("");
@@ -365,6 +375,34 @@ export default function SelfInstall() {
   useEffect(() => {
     if (reconfigureId) void loadRouter(reconfigureId);
   }, [loadRouter, reconfigureId]);
+
+  useEffect(() => {
+    if (!router) {
+      setManagementVpnStatus({ status: "unknown" });
+      return;
+    }
+    let active = true;
+    let timer: number | undefined;
+    const checkStatus = async () => {
+      try {
+        const next = await readJson<ManagementVpnProvisioningStatus>(
+          `/api/router/${router.id}/self-install-vpn-status?adminId=${ADMIN_ID}`,
+        );
+        if (!active) return;
+        setManagementVpnStatus(next);
+        if (next.status === "pending" || next.status === "unknown") {
+          timer = window.setTimeout(checkStatus, 2000);
+        }
+      } catch {
+        if (active) timer = window.setTimeout(checkStatus, 3000);
+      }
+    };
+    void checkStatus();
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [managementVpnStatus.status, router?.id]);
 
   useEffect(() => {
     setScriptSteps([]);
@@ -422,7 +460,11 @@ export default function SelfInstall() {
     setNotice("");
     setFinished(null);
     try {
-      const result = await readJson<{ ok: boolean; router: RouterProfile }>(
+      const result = await readJson<{
+        ok: boolean;
+        router: RouterProfile;
+        managementVpn?: "ready" | "pending";
+      }>(
         "/api/admin/router/ensure",
         {
           method: "POST",
@@ -433,10 +475,18 @@ export default function SelfInstall() {
         },
       );
       setRouter(result.router);
+      setManagementVpnStatus({
+        status: result.managementVpn ?? "pending",
+        message: result.managementVpn === "ready"
+          ? "Both VPS management VPN instances are ready."
+          : "VPS management VPN setup is running. Downloads unlock when both VPN instances are ready.",
+      });
       setRouterName(result.router.name);
       setBridgeInterface(result.router.bridge_interface || bridgeInterface || "bridge");
       await loadVpnInfo(result.router.id);
-      setNotice(result.router.status === "setup"
+      setNotice(result.managementVpn === "pending"
+        ? "The router profile is ready. VPS VPN setup is continuing in the background; script generation is no longer held open for that work."
+        : result.router.status === "setup"
         ? "The router profile is ready. Use the displayed VPS properties to connect the router, then verify it here."
         : "Existing router profile resumed.");
     } catch (cause) {
@@ -523,6 +573,14 @@ export default function SelfInstall() {
     setScriptSteps(steps);
     setBundleContent(bundleContent);
     setScriptWarning(payload.warning || "");
+    setManagementVpnStatus({
+      status: payload.managementVpnStatus ?? "unknown",
+      message: payload.managementVpnStatus === "ready"
+        ? "Both VPS management VPN instances are ready."
+        : payload.managementVpnStatus === "failed"
+          ? "VPS management VPN setup failed. Resolve the VPS issue, then regenerate the script to retry."
+          : "VPS management VPN setup is running. Downloads unlock when both VPN instances are ready.",
+    });
     setCopiedStep(null);
     return payload;
   };
@@ -535,7 +593,9 @@ export default function SelfInstall() {
     setScriptWarning("");
     try {
       const result = await fetchSelfInstallSteps();
-      setNotice(result.warning
+      setNotice(result.managementVpnStatus !== "ready"
+        ? "The script has been prepared. VPS VPN setup is continuing in the background; download and import unlock once it is ready."
+        : result.warning
         ? "The authenticated bundle is ready. Resolve the VPS warning before importing it."
         : result.compactMode
           ? "The compact bootstrap is ready. Download and upload it, then import it to install and run the three stages."
@@ -879,7 +939,7 @@ export default function SelfInstall() {
                        }}
                      >
                        <Loader2 size={15} style={{ flexShrink: 0, animation: "self-install-spin 1.1s linear infinite" }} />
-                       <span>Checking the VPS router-management VPN and preparing protected files. This can take up to three minutes; the files will appear here when ready.</span>
+                        <span>Preparing the script now. VPS VPN setup continues in the background, and download/import unlocks when it is ready.</span>
                      </div>
                    )}
                   {mode === "zero-touch" && (
@@ -898,6 +958,8 @@ export default function SelfInstall() {
                       <SelfInstallStepsResult
                         steps={scriptSteps}
                         compactMode={compactMode}
+                         managementVpnReady={managementVpnStatus.status === "ready"}
+                         managementVpnMessage={managementVpnStatus.message}
                         copiedStep={copiedStep}
                         busy={busy}
                         onCopy={stepId => void copySelfInstallStep(stepId)}

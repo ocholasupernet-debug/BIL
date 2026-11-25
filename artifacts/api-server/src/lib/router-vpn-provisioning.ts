@@ -36,6 +36,125 @@ const SUPABASE_URL = rawSupabaseUrl
   : "";
 const SUPABASE_KEY = getSupabaseServiceKey();
 const locks = new Map<number, Promise<RouterVpnProvisioningResult>>();
+type ManagementVpnPairState = {
+  fingerprint: string;
+  status: "pending" | "ready" | "failed";
+  updatedAt: string;
+};
+
+export type ManagementVpnPairStatus = {
+  status: "unknown" | "pending" | "ready" | "failed";
+  updatedAt?: string;
+  message?: string;
+};
+
+function managementVpnFingerprint(input: {
+  routerId: number;
+  adminId: number;
+  routerName: string;
+  routerIp: string;
+}): string {
+  return `${input.adminId}:${input.routerName}:${input.routerIp}`;
+}
+
+export function createManagementVpnPairScheduler(
+  provision: (input: {
+    routerId: number;
+    adminId: number;
+    routerName: string;
+    routerIp: string;
+  }) => Promise<unknown>,
+): {
+  start: (input: {
+    routerId: number;
+    adminId: number;
+    routerName: string;
+    routerIp: string;
+  }) => ManagementVpnPairStatus;
+  getStatus: (input: {
+    routerId: number;
+    adminId: number;
+    routerName: string;
+    routerIp: string;
+  }) => ManagementVpnPairStatus;
+} {
+  const states = new Map<number, ManagementVpnPairState>();
+  return {
+    start(input) {
+      const fingerprint = managementVpnFingerprint(input);
+      const current = states.get(input.routerId);
+      if (current?.fingerprint === fingerprint && (current.status === "pending" || current.status === "ready")) {
+        return publicManagementVpnPairStatus(current);
+      }
+      if (current?.status === "pending" && current.fingerprint !== fingerprint) {
+        return {
+          status: "pending",
+          updatedAt: current.updatedAt,
+          message: "A previous VPN setup is still finishing. This profile will retry as soon as it completes.",
+        };
+      }
+      const state: ManagementVpnPairState = {
+        fingerprint,
+        status: "pending",
+        updatedAt: new Date().toISOString(),
+      };
+      states.set(input.routerId, state);
+      void provision(input).then(() => {
+        const latest = states.get(input.routerId);
+        if (latest?.fingerprint !== fingerprint) return;
+        states.set(input.routerId, { ...latest, status: "ready", updatedAt: new Date().toISOString() });
+      }).catch(() => {
+        const latest = states.get(input.routerId);
+        if (latest?.fingerprint !== fingerprint) return;
+        states.set(input.routerId, { ...latest, status: "failed", updatedAt: new Date().toISOString() });
+        console.warn(`[router-vpn] Background management VPN provisioning failed for router ${input.routerId}.`);
+      });
+      return { status: "pending", updatedAt: state.updatedAt };
+    },
+    getStatus(input) {
+      const state = states.get(input.routerId);
+      if (!state || state.fingerprint !== managementVpnFingerprint(input)) return { status: "unknown" };
+      return publicManagementVpnPairStatus(state);
+    },
+  };
+}
+
+function publicManagementVpnPairStatus(state: ManagementVpnPairState): ManagementVpnPairStatus {
+  return {
+    status: state.status,
+    updatedAt: state.updatedAt,
+    ...(state.status === "pending"
+      ? { message: "VPS management VPN setup is running. Downloads unlock when both VPN instances are ready." }
+      : state.status === "failed"
+        ? { message: "VPS management VPN setup failed. Resolve the VPS issue, then regenerate the script to retry." }
+        : { message: "Both VPS management VPN instances are ready." }),
+  };
+}
+
+const managementVpnPairScheduler = createManagementVpnPairScheduler(provisionRouterManagementOpenVpnPair);
+
+/**
+ * Start management VPN setup without holding the profile/script HTTP request
+ * open for VPS SSH work. The RouterOS download remains gated by the status
+ * endpoint until both isolated OpenVPN instances are confirmed ready.
+ */
+export function startRouterManagementOpenVpnPair(input: {
+  routerId: number;
+  adminId: number;
+  routerName: string;
+  routerIp: string;
+}): ManagementVpnPairStatus {
+  return managementVpnPairScheduler.start(input);
+}
+
+export function getRouterManagementOpenVpnPairStatus(input: {
+  routerId: number;
+  adminId: number;
+  routerName: string;
+  routerIp: string;
+}): ManagementVpnPairStatus {
+  return managementVpnPairScheduler.getStatus(input);
+}
 
 function headers(extra: Record<string, string> = {}): Record<string, string> {
   return {
