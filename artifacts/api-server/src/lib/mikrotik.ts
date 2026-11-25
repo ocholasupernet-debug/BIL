@@ -6930,6 +6930,27 @@ ${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaHttpsCa", "        ")}
 }
 :put ("${tag}: detected RouterOS " . $ocholaRouterOsVersion . "; using cipher " . $ocholaOpenVpnCipher . ".")`
     : "";
+  const endpointDnsPreflight = `# Preserve existing static and DHCP-provided DNS settings.
+# Only add fallback resolvers when RouterOS has no resolver configured at all.
+:local ocholaStaticDns [/ip dns get servers]
+:local ocholaDynamicDns [/ip dns get dynamic-servers]
+:if (([:len $ocholaStaticDns] = 0) && ([:len $ocholaDynamicDns] = 0)) do={
+    :do { /ip dns set servers=1.1.1.1,8.8.8.8 } on-error={
+        :set ocholaVpnChildError "${tag}: no DNS resolver is configured and fallback DNS could not be set."
+        :error $ocholaVpnChildError
+    }
+    :put "${tag}: no DNS resolver was configured; added Cloudflare and Google DNS fallbacks."
+} else={
+    :put ("${tag}: preserving configured DNS servers (static=" . $ocholaStaticDns . ", DHCP=" . $ocholaDynamicDns . ").")
+}
+:local ocholaResolvedVpnHost ""
+:do {
+    :set ocholaResolvedVpnHost [:resolve ${routerOsString(endpoint)}]
+} on-error={
+    :set ocholaVpnChildError "${tag}: cannot resolve the management VPN hostname. Check WAN connectivity and the configured DNS servers; no VPN login was attempted."
+    :error $ocholaVpnChildError
+}
+:put ("${tag}: management VPN hostname resolved to " . $ocholaResolvedVpnHost . ".")`;
 
   return `# ===============================================================
 # OcholaSupernet - MikroTik ${routerOsPath} Router as OpenVPN CLIENT
@@ -6962,6 +6983,7 @@ ${routerOsTextVariableWriter(ISRG_ROOT_X1_PEM, "ocholaHttpsCa", "        ")}
 :local reuseExistingOvpn false
 ${hasBackupManagementVpn ? ":local reuseExistingBackupOvpn false" : ""}
 ${routerOsDetection}
+${endpointDnsPreflight}
 :if ([:len "$ocholaVpnChildError"] = 0) do={
 :put "${tag}: STEP 2/10 - Preparing management VPN resources."
 ${resourcePreparation}
